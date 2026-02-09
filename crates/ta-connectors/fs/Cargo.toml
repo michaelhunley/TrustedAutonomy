@@ -10,6 +10,11 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+ta-changeset = { path = "../../ta-changeset" }
+ta-workspace = { path = "../../ta-workspace" }
+ta-audit = { path = "../../ta-audit" }
 
 [dev-dependencies]
 tempfile = { workspace = true }

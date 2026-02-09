@@ -579,11 +579,16 @@ dependencies = [
 name = "ta-connector-fs"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "serde",
  "serde_json",
+ "ta-audit",
+ "ta-changeset",
+ "ta-workspace",
  "tempfile",
  "thiserror",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

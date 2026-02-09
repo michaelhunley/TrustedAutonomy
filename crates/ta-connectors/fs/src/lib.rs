@@ -5,13 +5,16 @@
 //! Bridges MCP-style tool operations (read, write_patch, diff) to the
 //! staging workspace and changeset model. All writes go to a staging
 //! directory; approved changes are applied to the real target via `apply()`.
+//!
+//! ## Flow
+//!
+//! 1. Agent calls [`FsConnector::write_patch`] → file staged, ChangeSet created
+//! 2. Agent calls [`FsConnector::build_pr_package`] → bundles all changes
+//! 3. Human reviews and approves the PR package
+//! 4. Agent calls [`FsConnector::apply`] → copies staged files to real filesystem
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {
-        // Stub test — will be replaced with real tests during implementation.
-        let result = 2 + 2;
-        assert_eq!(result, 4);
-    }
-}
+pub mod connector;
+pub mod error;
+
+pub use connector::FsConnector;
+pub use error::FsConnectorError;
