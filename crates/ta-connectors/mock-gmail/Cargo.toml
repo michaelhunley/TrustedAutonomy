@@ -1,0 +1,11 @@
+[package]
+name = "ta-connector-mock-gmail"
+version = "0.1.0"
+edition = "2021"
+description = "Mock Gmail staging connector for Trusted Autonomy"
+license = "Apache-2.0"
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }

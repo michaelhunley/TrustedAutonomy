@@ -1,0 +1,54 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/ta-audit",
+    "crates/ta-changeset",
+    "crates/ta-daemon",
+    "crates/ta-mcp-gateway",
+    "crates/ta-policy",
+    "crates/ta-sandbox",
+    "crates/ta-workspace",
+    "crates/ta-connectors/fs",
+    "crates/ta-connectors/web",
+    "crates/ta-connectors/mock-drive",
+    "crates/ta-connectors/mock-gmail",
+    "apps/ta-cli",
+]
+
+# Shared dependency versions — crate Cargo.tomls use `dep.workspace = true`
+# to inherit these versions, keeping everything in sync across all crates.
+[workspace.dependencies]
+# Serialization — serde is Rust's universal serialization framework.
+# The "derive" feature lets us annotate structs with #[derive(Serialize, Deserialize)].
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Error handling — thiserror generates Error trait implementations from enums.
+# anyhow is used in binaries for ergonomic error propagation with context.
+thiserror = "2"
+anyhow = "1"
+
+# Hashing — SHA-256 from the RustCrypto project (pure Rust, no C dependencies).
+sha2 = "0.10"
+
+# IDs — UUID v4 (random) for event/changeset identifiers.
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# Timestamps — timezone-aware date/time with serde support.
+chrono = { version = "0.4", features = ["serde"] }
+
+# Structured logging — tracing is the standard for async-aware structured logging in Rust.
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Glob pattern matching — used for capability resource patterns (e.g., "fs://workspace/**").
+glob = "0.3"
+
+# Async runtime — only needed by ta-daemon; library crates stay synchronous.
+tokio = { version = "1", features = ["full"] }
+
+# CLI argument parsing — derive macro for declarative CLI definitions.
+clap = { version = "4", features = ["derive"] }
+
+# Testing utilities
+tempfile = "3"

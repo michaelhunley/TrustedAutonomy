@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.org/schemas/capability.schema.json",
+  "title": "Capability Manifest",
+  "description": "Defines scoped capabilities granted to an agent for a specific goal iteration. Stub — will be fully defined when capability signing is implemented.",
+  "type": "object",
+  "required": ["manifest_id", "agent_id", "grants", "issued_at", "expires_at"],
+  "properties": {
+    "manifest_id": { "type": "string", "description": "Unique identifier (UUID)" },
+    "agent_id": { "type": "string" },
+    "grants": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["tool", "verb", "resource_pattern"],
+        "properties": {
+          "tool": { "type": "string", "description": "Tool name, e.g. 'fs', 'web', 'gmail'" },
+          "verb": { "type": "string", "description": "Action verb, e.g. 'read', 'write_patch', 'commit'" },
+          "resource_pattern": { "type": "string", "description": "Glob pattern for target URIs, e.g. 'fs://workspace/**'" }
+        }
+      }
+    },
+    "issued_at": { "type": "string", "format": "date-time" },
+    "expires_at": { "type": "string", "format": "date-time" }
+  }
+}

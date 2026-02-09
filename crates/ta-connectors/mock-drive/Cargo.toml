@@ -1,0 +1,11 @@
+[package]
+name = "ta-connector-mock-drive"
+version = "0.1.0"
+edition = "2021"
+description = "Mock Google Drive staging connector for Trusted Autonomy"
+license = "Apache-2.0"
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }

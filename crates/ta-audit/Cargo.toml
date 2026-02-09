@@ -1,0 +1,18 @@
+[package]
+name = "ta-audit"
+version = "0.1.0"
+edition = "2021"
+description = "Append-only event log and artifact hashing for Trusted Autonomy"
+license = "Apache-2.0"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

@@ -280,6 +280,106 @@ These are additive — not architectural rewrites.
 
 ---
 
+## Getting Started
+
+### Prerequisites
+
+**Option A: Using Nix (recommended)**
+
+Nix provides a reproducible dev environment with the exact Rust toolchain, formatter, linter, and test runner — identical on macOS, Linux, and WSL.
+
+1. Install Nix with flakes enabled:
+   ```bash
+   curl --proto '=https' --tlsv1.2 -sSf -L https://install.determinate.systems/nix | sh -s -- install
+   ```
+
+2. (Optional) Install direnv for automatic environment loading:
+   ```bash
+   nix profile install nixpkgs#direnv
+   ```
+   Then add the [direnv hook](https://direnv.net/docs/hook.html) to your shell config (`.bashrc`, `.zshrc`, etc.).
+
+3. Enter the dev environment:
+   ```bash
+   # With direnv (automatic — activates when you cd into the repo):
+   direnv allow
+
+   # Without direnv (manual):
+   nix develop
+   ```
+
+**Option B: Without Nix**
+
+1. Install Rust via [rustup](https://rustup.rs/):
+   ```bash
+   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+   ```
+   The `rust-toolchain.toml` in this repo will automatically select the correct Rust version.
+
+2. Install system dependencies:
+   - **macOS:** `brew install openssl pkg-config`
+   - **Ubuntu/Debian:** `apt install libssl-dev pkg-config`
+   - **Windows:** Use WSL2 with one of the above.
+
+3. Install dev tools (optional but recommended):
+   ```bash
+   cargo install cargo-nextest just
+   ```
+
+### Building
+
+```bash
+cargo build --workspace
+```
+
+### Running Tests
+
+```bash
+# All tests (with cargo-nextest for faster parallel execution)
+cargo nextest run --workspace
+
+# Or with standard cargo test
+cargo test --workspace
+```
+
+### Development Commands
+
+If you have `just` installed (included in the Nix devShell):
+
+```bash
+just           # run lint + format check + tests
+just build     # build all crates
+just test      # run all tests
+just check     # format check + clippy lint
+just fmt       # auto-format all code
+just verify    # full pre-commit check (format, lint, build, test)
+```
+
+### Project Structure
+
+```
+crates/
+  ta-audit/               Append-only event log + SHA-256 hashing
+  ta-changeset/           ChangeSet + PR Package data model
+  ta-policy/              Capability manifests + policy evaluation
+  ta-workspace/           Staging workspace manager + change store
+  ta-mcp-gateway/         In-process MCP gateway (trait-based)
+  ta-sandbox/             Allowlisted command execution (stub)
+  ta-connectors/
+    fs/                   Filesystem connector
+    web/                  Web fetch connector (stub)
+    mock-drive/           Mock Google Drive (stub)
+    mock-gmail/           Mock Gmail (stub)
+apps/
+  ta-cli/                 CLI for goals, PR review, approvals (stub)
+schema/
+  pr_package.schema.json  PR package JSON schema
+  capability.schema.json  Capability manifest schema
+  agent_setup.schema.json Agent setup proposal schema
+```
+
+---
+
 ## Status
 
 Trusted Autonomy is under active development.

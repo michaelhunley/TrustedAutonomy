@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.org/schemas/agent-setup.schema.json",
+  "title": "Agent Setup Proposal",
+  "description": "Proposed agent configuration requiring approval before activation. Stub — will be fully defined in Phase 4.",
+  "type": "object",
+  "required": ["proposal_id", "agents", "goal"],
+  "properties": {
+    "proposal_id": { "type": "string" },
+    "goal": {
+      "type": "object",
+      "required": ["goal_id", "title"],
+      "properties": {
+        "goal_id": { "type": "string" },
+        "title": { "type": "string" }
+      }
+    },
+    "agents": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["agent_id", "agent_type", "capabilities"],
+        "properties": {
+          "agent_id": { "type": "string" },
+          "agent_type": { "type": "string" },
+          "capabilities": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    }
+  }
+}
