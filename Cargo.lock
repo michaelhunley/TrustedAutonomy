@@ -661,6 +661,7 @@ dependencies = [
  "chrono",
  "serde",
  "serde_json",
+ "ta-changeset",
  "tempfile",
  "thiserror",
  "tracing",
