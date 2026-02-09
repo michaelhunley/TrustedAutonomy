@@ -584,6 +584,7 @@ dependencies = [
  "serde_json",
  "ta-audit",
  "ta-changeset",
+ "ta-policy",
  "ta-workspace",
  "tempfile",
  "thiserror",

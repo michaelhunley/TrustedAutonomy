@@ -18,3 +18,4 @@ ta-audit = { path = "../../ta-audit" }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+ta-policy = { path = "../../ta-policy" }
