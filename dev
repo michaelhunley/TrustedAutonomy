@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Helper script to run commands inside the Nix devShell.
+# Usage: ./dev cargo test --workspace
+# Usage: ./dev just verify
+set -euo pipefail
+
+export PATH="/nix/var/nix/profiles/default/bin:$HOME/.nix-profile/bin:$PATH"
+exec nix develop --command bash -c "$*"

@@ -6,13 +6,18 @@
 //! actions explicitly granted by a [`CapabilityManifest`]. The [`PolicyEngine`]
 //! evaluates each tool call request against the agent's grants and returns
 //! Allow, Deny, or RequireApproval.
+//!
+//! ## Key invariants
+//!
+//! - **Default deny**: no manifest → denied. No matching grant → denied.
+//! - **Side effects gated**: verbs like "apply", "commit", "send", "post"
+//!   always return RequireApproval, even when granted.
+//! - **Path traversal blocked**: URIs containing ".." are always denied.
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {
-        // Stub test — will be replaced with real tests during implementation.
-        let result = 2 + 2;
-        assert_eq!(result, 4);
-    }
-}
+pub mod capability;
+pub mod engine;
+pub mod error;
+
+pub use capability::{CapabilityGrant, CapabilityManifest};
+pub use engine::{PolicyDecision, PolicyEngine, PolicyRequest};
+pub use error::PolicyError;
