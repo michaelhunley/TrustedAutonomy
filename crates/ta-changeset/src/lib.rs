@@ -8,12 +8,12 @@
 //!
 //! The data model aligns with `schema/pr_package.schema.json`.
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {
-        // Stub test — will be replaced with real tests during implementation.
-        let result = 2 + 2;
-        assert_eq!(result, 4);
-    }
-}
+pub mod changeset;
+pub mod diff;
+pub mod error;
+pub mod pr_package;
+
+pub use changeset::{ChangeKind, ChangeSet, CommitIntent};
+pub use diff::DiffContent;
+pub use error::ChangeSetError;
+pub use pr_package::{PRPackage, PRStatus};

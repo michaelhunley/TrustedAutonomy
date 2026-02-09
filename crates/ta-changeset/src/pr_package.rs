@@ -1,0 +1,490 @@
+// pr_package.rs — PR Package: the milestone deliverable for human review.
+//
+// A PR Package bundles all staged changes (ChangeSets) from a goal iteration
+// into a single reviewable artifact. It includes:
+// - What changed and why (summary)
+// - The actual changes (artifacts + patch_sets)
+// - Risk assessment
+// - Provenance (where inputs came from)
+// - Review requests (what approvals are needed)
+//
+// The structure aligns with schema/pr_package.schema.json.
+
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+// ---- Goal ----
+
+/// The high-level goal this PR package contributes to.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Goal {
+    pub goal_id: String,
+    pub title: String,
+    pub objective: String,
+    pub success_criteria: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub constraints: Vec<String>,
+}
+
+// ---- Iteration ----
+
+/// Which iteration of the goal this package represents.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Iteration {
+    pub iteration_id: String,
+    pub sequence: u32,
+    pub workspace_ref: WorkspaceRef,
+}
+
+/// Reference to the workspace where changes were staged.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceRef {
+    #[serde(rename = "type")]
+    pub ref_type: String,
+    #[serde(rename = "ref")]
+    pub ref_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_ref: Option<String>,
+}
+
+// ---- Agent Identity ----
+
+/// Identity of the agent that produced this PR package.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentIdentity {
+    pub agent_id: String,
+    pub agent_type: String,
+    pub constitution_id: String,
+    pub capability_manifest_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub orchestrator_run_id: Option<String>,
+}
+
+// ---- Summary ----
+
+/// Human-readable summary of what changed and why.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Summary {
+    pub what_changed: String,
+    pub why: String,
+    pub impact: String,
+    pub rollback_plan: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub open_questions: Vec<String>,
+}
+
+// ---- Changes ----
+
+/// The changes section: artifacts (local FS changes) + patch_sets (external changes).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Changes {
+    pub artifacts: Vec<Artifact>,
+    pub patch_sets: Vec<PatchSet>,
+}
+
+/// A local filesystem change artifact.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Artifact {
+    pub resource_uri: String,
+    pub change_type: ChangeType,
+    pub diff_ref: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tests_run: Vec<String>,
+}
+
+/// The type of filesystem change.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ChangeType {
+    Add,
+    Modify,
+    Delete,
+    Rename,
+}
+
+/// A staged change to an external resource (Drive, Gmail, DB, etc.).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PatchSet {
+    pub patch_set_id: String,
+    pub target_uri: String,
+    pub action: PatchAction,
+    pub preview_ref: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub commit_intent: Option<String>,
+}
+
+/// Action types for external patch sets.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PatchAction {
+    WritePatch,
+    CreateDraft,
+    LabelChange,
+    PermissionChange,
+    DbPatch,
+    SchedulePost,
+}
+
+// ---- Risk ----
+
+/// Risk assessment for the PR package.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Risk {
+    pub risk_score: u32,
+    pub findings: Vec<RiskFinding>,
+    pub policy_decisions: Vec<PolicyDecisionRecord>,
+}
+
+/// A single risk finding.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RiskFinding {
+    pub category: RiskCategory,
+    pub severity: Severity,
+    pub description: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence_refs: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mitigation: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RiskCategory {
+    Pii,
+    Secrets,
+    Exfiltration,
+    ExternalComm,
+    PromptInjection,
+    PolicyViolation,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Severity {
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+/// A recorded policy decision relevant to this PR.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PolicyDecisionRecord {
+    pub rule_id: String,
+    pub effect: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
+}
+
+// ---- Provenance ----
+
+/// Provenance information: where inputs came from.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Provenance {
+    pub inputs: Vec<ProvenanceInput>,
+    pub tool_trace_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProvenanceInput {
+    pub source_type: String,
+    #[serde(rename = "ref")]
+    pub ref_uri: String,
+    pub trust_level: TrustLevel,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TrustLevel {
+    Trusted,
+    Untrusted,
+    Quarantined,
+}
+
+// ---- Review Requests ----
+
+/// What approvals this PR needs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReviewRequests {
+    pub requested_actions: Vec<RequestedAction>,
+    pub reviewers: Vec<String>,
+    #[serde(default = "default_required_approvals")]
+    pub required_approvals: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notes_to_reviewer: Option<String>,
+}
+
+fn default_required_approvals() -> u32 {
+    1
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RequestedAction {
+    pub action: String,
+    pub targets: Vec<String>,
+}
+
+// ---- Signatures ----
+
+/// Cryptographic signatures for the PR package.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Signatures {
+    pub package_hash: String,
+    pub agent_signature: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gateway_attestation: Option<String>,
+}
+
+// ---- PR Package (top level) ----
+
+/// The PR Package — a complete, reviewable milestone deliverable.
+///
+/// This is the central artifact of Trusted Autonomy. Every goal iteration
+/// produces one of these for human review.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PRPackage {
+    pub package_version: String,
+    pub package_id: Uuid,
+    pub created_at: DateTime<Utc>,
+    pub goal: Goal,
+    pub iteration: Iteration,
+    pub agent_identity: AgentIdentity,
+    pub summary: Summary,
+    pub plan: Plan,
+    pub changes: Changes,
+    pub risk: Risk,
+    pub provenance: Provenance,
+    pub review_requests: ReviewRequests,
+    pub signatures: Signatures,
+
+    /// Tracks the review status (not in the JSON schema — internal state).
+    #[serde(default)]
+    pub status: PRStatus,
+}
+
+/// Execution plan included in the PR package.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Plan {
+    pub completed_steps: Vec<String>,
+    pub next_steps: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub decision_log: Vec<DecisionLogEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DecisionLogEntry {
+    pub decision: String,
+    pub rationale: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub alternatives: Vec<String>,
+}
+
+/// Review status of a PR package (internal tracking, not in JSON schema).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum PRStatus {
+    #[default]
+    Draft,
+    PendingReview,
+    Approved {
+        approved_by: String,
+        approved_at: DateTime<Utc>,
+    },
+    Denied {
+        reason: String,
+        denied_by: String,
+    },
+    Applied {
+        applied_at: DateTime<Utc>,
+    },
+}
+
+impl std::fmt::Display for PRStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PRStatus::Draft => write!(f, "draft"),
+            PRStatus::PendingReview => write!(f, "pending_review"),
+            PRStatus::Approved { .. } => write!(f, "approved"),
+            PRStatus::Denied { .. } => write!(f, "denied"),
+            PRStatus::Applied { .. } => write!(f, "applied"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Helper to create a minimal valid PR package for testing.
+    fn test_package() -> PRPackage {
+        PRPackage {
+            package_version: "1.0.0".to_string(),
+            package_id: Uuid::new_v4(),
+            created_at: Utc::now(),
+            goal: Goal {
+                goal_id: "goal-1".to_string(),
+                title: "Test Goal".to_string(),
+                objective: "Test the system".to_string(),
+                success_criteria: vec!["tests pass".to_string()],
+                constraints: vec![],
+            },
+            iteration: Iteration {
+                iteration_id: "iter-1".to_string(),
+                sequence: 1,
+                workspace_ref: WorkspaceRef {
+                    ref_type: "staging_dir".to_string(),
+                    ref_name: "staging/goal-1/1".to_string(),
+                    base_ref: None,
+                },
+            },
+            agent_identity: AgentIdentity {
+                agent_id: "agent-1".to_string(),
+                agent_type: "research".to_string(),
+                constitution_id: "default".to_string(),
+                capability_manifest_hash: "abc123".to_string(),
+                orchestrator_run_id: None,
+            },
+            summary: Summary {
+                what_changed: "Added test file".to_string(),
+                why: "To verify the system works".to_string(),
+                impact: "No production impact".to_string(),
+                rollback_plan: "Delete the file".to_string(),
+                open_questions: vec![],
+            },
+            plan: Plan {
+                completed_steps: vec!["Created file".to_string()],
+                next_steps: vec![],
+                decision_log: vec![],
+            },
+            changes: Changes {
+                artifacts: vec![Artifact {
+                    resource_uri: "fs://workspace/test.txt".to_string(),
+                    change_type: ChangeType::Add,
+                    diff_ref: "diff-001".to_string(),
+                    tests_run: vec![],
+                }],
+                patch_sets: vec![],
+            },
+            risk: Risk {
+                risk_score: 10,
+                findings: vec![],
+                policy_decisions: vec![],
+            },
+            provenance: Provenance {
+                inputs: vec![],
+                tool_trace_hash: "trace-hash-123".to_string(),
+            },
+            review_requests: ReviewRequests {
+                requested_actions: vec![RequestedAction {
+                    action: "merge".to_string(),
+                    targets: vec!["fs://workspace/test.txt".to_string()],
+                }],
+                reviewers: vec!["human-reviewer".to_string()],
+                required_approvals: 1,
+                notes_to_reviewer: None,
+            },
+            signatures: Signatures {
+                package_hash: "pkg-hash-456".to_string(),
+                agent_signature: "sig-789".to_string(),
+                gateway_attestation: None,
+            },
+            status: PRStatus::Draft,
+        }
+    }
+
+    #[test]
+    fn pr_package_serialization_round_trip() {
+        let pkg = test_package();
+        let json = serde_json::to_string_pretty(&pkg).unwrap();
+        let restored: PRPackage = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(pkg.package_id, restored.package_id);
+        assert_eq!(pkg.package_version, restored.package_version);
+        assert_eq!(pkg.goal.goal_id, restored.goal.goal_id);
+        assert_eq!(
+            pkg.changes.artifacts.len(),
+            restored.changes.artifacts.len()
+        );
+    }
+
+    #[test]
+    fn pr_status_transitions() {
+        // Draft → PendingReview
+        let status = PRStatus::PendingReview;
+        assert_eq!(status.to_string(), "pending_review");
+
+        // PendingReview → Approved
+        let status = PRStatus::Approved {
+            approved_by: "reviewer".to_string(),
+            approved_at: Utc::now(),
+        };
+        assert_eq!(status.to_string(), "approved");
+
+        // PendingReview → Denied
+        let status = PRStatus::Denied {
+            reason: "needs changes".to_string(),
+            denied_by: "reviewer".to_string(),
+        };
+        assert_eq!(status.to_string(), "denied");
+
+        // Approved → Applied
+        let status = PRStatus::Applied {
+            applied_at: Utc::now(),
+        };
+        assert_eq!(status.to_string(), "applied");
+    }
+
+    #[test]
+    fn pr_status_default_is_draft() {
+        let status = PRStatus::default();
+        assert_eq!(status, PRStatus::Draft);
+    }
+
+    #[test]
+    fn pr_package_json_contains_required_fields() {
+        // Verify the serialized JSON includes all required fields from the schema.
+        let pkg = test_package();
+        let json = serde_json::to_string(&pkg).unwrap();
+
+        // Check required top-level fields from pr_package.schema.json
+        assert!(json.contains("\"package_version\""));
+        assert!(json.contains("\"package_id\""));
+        assert!(json.contains("\"created_at\""));
+        assert!(json.contains("\"goal\""));
+        assert!(json.contains("\"iteration\""));
+        assert!(json.contains("\"agent_identity\""));
+        assert!(json.contains("\"summary\""));
+        assert!(json.contains("\"changes\""));
+        assert!(json.contains("\"risk\""));
+        assert!(json.contains("\"provenance\""));
+        assert!(json.contains("\"review_requests\""));
+        assert!(json.contains("\"signatures\""));
+    }
+
+    #[test]
+    fn risk_finding_serialization() {
+        let finding = RiskFinding {
+            category: RiskCategory::Secrets,
+            severity: Severity::High,
+            description: "API key detected in file".to_string(),
+            evidence_refs: vec!["line 42".to_string()],
+            mitigation: Some("Remove the key".to_string()),
+        };
+        let json = serde_json::to_string(&finding).unwrap();
+        assert!(json.contains("\"secrets\""));
+        assert!(json.contains("\"high\""));
+    }
+
+    #[test]
+    fn change_type_serialization() {
+        assert_eq!(serde_json::to_string(&ChangeType::Add).unwrap(), "\"add\"");
+        assert_eq!(
+            serde_json::to_string(&ChangeType::Modify).unwrap(),
+            "\"modify\""
+        );
+    }
+}
