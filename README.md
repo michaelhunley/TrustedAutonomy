@@ -83,25 +83,27 @@ Agents should be able to **read, write, and modify files normally**, without lea
 
 ### How it works
 - Agents interact with filesystem tools exposed via MCP
-- Those tools operate on a **virtualized workspace**
-- The workspace is implemented using **Git worktrees + sparse checkout**
-- All writes become **patches**, not commits
+- Those tools operate on a **staging workspace** (isolated directory per goal)
+- Reads snapshot the original file; writes create diffs against the snapshot
+- All writes become **ChangeSets with diffs**, bundled into PR packages
 
+```
 Agent
-↓
-MCP fs.read / fs.write_patch
-↓
-Virtual Workspace (Git worktree)
-↓
-ChangeSet → Diff → PR Package
+  ↓
+MCP ta_fs_read / ta_fs_write
+  ↓
+StagingWorkspace (isolated temp directory)
+  ↓
+ChangeSet → Diff → PR Package → Human Review → Apply
+```
 
-
-### Why Git worktrees?
+### Why staging directories?
 - cross-platform (Windows/macOS/Linux)
-- no kernel drivers or FUSE mounts
+- no kernel drivers, FUSE mounts, or Git dependency
 - native diff/rollback semantics
 - binary changes can be summarized and hashed
 - maps cleanly to PR-style review
+- each GoalRun gets complete isolation
 
 ### Why not a mounted VFS?
 Kernel-level VFS (FUSE, sandboxfs, etc.) introduces:
@@ -109,7 +111,7 @@ Kernel-level VFS (FUSE, sandboxfs, etc.) introduces:
 - permissions complexity
 - platform inconsistencies
 
-Those can be added later, but Git worktrees keep the system **portable and maintainable**.
+Those can be added later, but staging workspaces keep the system **portable and maintainable**.
 
 ---
 
@@ -359,19 +361,23 @@ just verify    # full pre-commit check (format, lint, build, test)
 
 ```
 crates/
-  ta-audit/               Append-only event log + SHA-256 hashing
-  ta-changeset/           ChangeSet + PR Package data model
-  ta-policy/              Capability manifests + policy evaluation
-  ta-workspace/           Staging workspace manager + change store
-  ta-mcp-gateway/         In-process MCP gateway (trait-based)
+  ta-audit/               Append-only event log + SHA-256 hash chain (13 tests)
+  ta-changeset/           ChangeSet + PR Package data model (14 tests)
+  ta-policy/              Capability manifests + default-deny policy engine (16 tests)
+  ta-workspace/           Staging workspace manager + JSON change store (18 tests)
+  ta-goal/                GoalRun lifecycle state machine + event dispatch (20 tests)
+  ta-mcp-gateway/         MCP server (rmcp) — 9 tools, policy enforcement (15 tests)
+  ta-daemon/              MCP server binary (stdio transport)
   ta-sandbox/             Allowlisted command execution (stub)
   ta-connectors/
-    fs/                   Filesystem connector
+    fs/                   Filesystem connector: staging + diffs + apply (11 tests)
     web/                  Web fetch connector (stub)
     mock-drive/           Mock Google Drive (stub)
     mock-gmail/           Mock Gmail (stub)
 apps/
-  ta-cli/                 CLI for goals, PR review, approvals (stub)
+  ta-cli/                 CLI: goals, PR review/approve/deny/apply, audit, adapters (5 tests)
+tests/
+  vertical_slice          End-to-end integration test (1 test)
 schema/
   pr_package.schema.json  PR package JSON schema
   capability.schema.json  Capability manifest schema
@@ -380,16 +386,101 @@ schema/
 
 ---
 
+## Using Trusted Autonomy with Claude Code
+
+The fastest way to try TA is with Claude Code as the mediated agent.
+
+### Quick start
+
+```bash
+# 1. Build everything
+cargo build --workspace
+
+# 2. Install the Claude Code adapter (generates .mcp.json + .ta/config.toml)
+cargo run -p ta-cli -- adapter install claude-code
+
+# 3. Start Claude Code in this directory — TA tools appear automatically
+claude
+```
+
+### How it works
+
+Once connected, Claude Code sees TA tools alongside its built-in tools:
+
+| Tool | What it does |
+|------|-------------|
+| `ta_goal_start` | Create a GoalRun (allocates staging workspace + capabilities) |
+| `ta_fs_read` | Read a source file (snapshots the original) |
+| `ta_fs_write` | Write to staging (creates a ChangeSet with diff) |
+| `ta_fs_list` | List staged files |
+| `ta_fs_diff` | Show diff for a staged file |
+| `ta_pr_build` | Bundle staged changes into a PR package for review |
+| `ta_pr_status` | Check PR package status |
+| `ta_goal_status` | Check GoalRun state |
+| `ta_goal_list` | List all GoalRuns |
+
+### Review workflow
+
+```bash
+# List pending PR packages
+cargo run -p ta-cli -- pr list
+
+# View details + diffs
+cargo run -p ta-cli -- pr view <package-id>
+
+# Approve
+cargo run -p ta-cli -- pr approve <package-id>
+
+# Apply approved changes to the project
+cargo run -p ta-cli -- pr apply <package-id>
+```
+
+### Architecture
+
+```
+Agent (Claude Code / Codex / any MCP client)
+  |  MCP stdio
+  v
+TaGatewayServer (ta-mcp-gateway)
+  |-- PolicyEngine (ta-policy)        default deny
+  |-- StagingWorkspace (ta-workspace)  all writes staged
+  |-- ChangeStore (ta-workspace)       JSONL persistence
+  |-- AuditLog (ta-audit)             tamper-evident trail
+  '-- GoalRunStore (ta-goal)          lifecycle management
+  |
+  v
+PR Package --> Human Review (CLI) --> Approve --> Apply
+```
+
+### Agent teams
+
+Multiple Claude Code teammates can connect to the same TA MCP server. Each calls `ta_goal_start` with its own agent identity and gets an isolated GoalRun with separate staging workspace and capabilities.
+
+---
+
 ## Status
 
-Trusted Autonomy is under active development.
+Trusted Autonomy is under active development. **120 tests** across 12 crates.
 
-The first milestones focus on:
-- filesystem PR workflow
-- execution sandbox
-- MCP gateway and policy core
+### Implemented
+- Append-only audit log with SHA-256 hash chain
+- Default-deny capability engine with glob pattern matching
+- ChangeSet + PR Package data model (aligned with JSON schema)
+- Staging workspace with snapshot-and-diff
+- Filesystem connector bridging MCP to staging
+- GoalRun lifecycle state machine with event dispatch
+- Real MCP server (rmcp 0.14) with 9 tools and policy enforcement
+- CLI for goal/PR/audit management
+- Agent adapter framework (Claude Code + generic MCP)
+- End-to-end vertical slice: agent writes -> staged -> PR package -> approve -> apply
 
-UI comes later — once the trust model is proven.
+### Coming next
+- OCI/gVisor sandbox runner
+- Plugin trait registry
+- Web UI for review/approval
+- ed25519 capability signing
+- SQLite change store
+- Real connectors: Gmail, Drive, databases
 
 ---
 
