@@ -629,6 +629,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ta-goal"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "ta-mcp-gateway"
 version = "0.1.0"
 dependencies = [
