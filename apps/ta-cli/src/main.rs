@@ -2,12 +2,57 @@
 //!
 //! Command-line interface for Trusted Autonomy.
 //!
-//! Commands: `ta goal start`, `ta pr status`, `ta pr view`,
-//! `ta pr approve`, `ta pr deny`.
-//!
-//! **Status: stub** — implementation planned as a fast-follow.
+//! Provides human review and approval workflow for agent-staged changes:
+//! - `ta goal list/status` — inspect active goal runs
+//! - `ta pr list/view/approve/deny/apply` — review and manage PR packages
+//! - `ta audit verify/tail` — inspect the tamper-evident audit trail
 
-fn main() {
-    println!("ta-cli: not yet implemented");
-    println!("Run `cargo test --workspace` to verify the substrate.");
+mod commands;
+
+use std::path::PathBuf;
+
+use clap::{Parser, Subcommand};
+use ta_mcp_gateway::GatewayConfig;
+
+/// Trusted Autonomy CLI — review and approve agent changes.
+#[derive(Parser)]
+#[command(name = "ta", version, about)]
+struct Cli {
+    /// Project root directory (defaults to current directory).
+    #[arg(long, default_value = ".")]
+    project_root: PathBuf,
+
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Manage goal runs.
+    Goal {
+        #[command(subcommand)]
+        command: commands::goal::GoalCommands,
+    },
+    /// Review and manage PR packages.
+    Pr {
+        #[command(subcommand)]
+        command: commands::pr::PrCommands,
+    },
+    /// Inspect the audit trail.
+    Audit {
+        #[command(subcommand)]
+        command: commands::audit::AuditCommands,
+    },
+}
+
+fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
+    let project_root = cli.project_root.canonicalize().unwrap_or(cli.project_root);
+    let config = GatewayConfig::for_project(&project_root);
+
+    match &cli.command {
+        Commands::Goal { command } => commands::goal::execute(command, &config),
+        Commands::Pr { command } => commands::pr::execute(command, &config),
+        Commands::Audit { command } => commands::audit::execute(command, &config),
+    }
 }

@@ -229,6 +229,24 @@ impl GatewayState {
         Ok(self.policy_engine.evaluate(&request))
     }
 
+    /// Save a PR package to both in-memory cache and disk.
+    pub fn save_pr_package(&mut self, pkg: PRPackage) -> Result<(), GatewayError> {
+        let package_id = pkg.package_id;
+
+        // Persist to disk so the CLI can read it.
+        std::fs::create_dir_all(&self.config.pr_packages_dir)?;
+        let path = self
+            .config
+            .pr_packages_dir
+            .join(format!("{}.json", package_id));
+        let json =
+            serde_json::to_string_pretty(&pkg).map_err(|e| GatewayError::Other(e.to_string()))?;
+        std::fs::write(&path, json)?;
+
+        self.pr_packages.insert(package_id, pkg);
+        Ok(())
+    }
+
     /// Get the agent_id for a goal run.
     fn agent_for_goal(&self, goal_run_id: Uuid) -> Result<String, GatewayError> {
         let goal = self
@@ -560,7 +578,9 @@ impl TaGatewayServer {
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
         let package_id = pr_package.package_id;
-        state.pr_packages.insert(package_id, pr_package);
+        state
+            .save_pr_package(pr_package)
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
         // Transition goal to PrReady.
         let mut updated_goal = goal;

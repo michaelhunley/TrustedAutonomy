@@ -29,6 +29,9 @@ pub struct GatewayConfig {
 
     /// Path to the event notification log.
     pub events_log: PathBuf,
+
+    /// Directory for PR package JSON files.
+    pub pr_packages_dir: PathBuf,
 }
 
 impl GatewayConfig {
@@ -43,6 +46,7 @@ impl GatewayConfig {
             goals_dir: ta_dir.join("goals"),
             audit_log: ta_dir.join("audit.jsonl"),
             events_log: ta_dir.join("events.jsonl"),
+            pr_packages_dir: ta_dir.join("pr_packages"),
         }
     }
 }

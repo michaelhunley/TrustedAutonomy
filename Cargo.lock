@@ -1001,10 +1001,21 @@ dependencies = [
 name = "ta-cli"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "chrono",
  "clap",
  "serde",
  "serde_json",
+ "ta-audit",
+ "ta-changeset",
+ "ta-connector-fs",
+ "ta-goal",
+ "ta-mcp-gateway",
+ "ta-policy",
+ "ta-workspace",
+ "tempfile",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
