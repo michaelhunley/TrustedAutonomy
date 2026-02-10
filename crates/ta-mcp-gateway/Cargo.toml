@@ -2,7 +2,7 @@
 name = "ta-mcp-gateway"
 version = "0.1.0"
 edition = "2021"
-description = "In-process MCP gateway with policy enforcement for Trusted Autonomy"
+description = "MCP gateway server with policy enforcement for Trusted Autonomy"
 license = "Apache-2.0"
 
 [dependencies]
@@ -10,3 +10,20 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+rmcp = { workspace = true }
+schemars = { workspace = true }
+tokio = { workspace = true }
+
+# Internal crates
+ta-audit = { path = "../ta-audit" }
+ta-changeset = { path = "../ta-changeset" }
+ta-connector-fs = { path = "../ta-connectors/fs" }
+ta-goal = { path = "../ta-goal" }
+ta-policy = { path = "../ta-policy" }
+ta-workspace = { path = "../ta-workspace" }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true }

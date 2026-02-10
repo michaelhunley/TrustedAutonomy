@@ -51,5 +51,11 @@ tokio = { version = "1", features = ["full"] }
 # CLI argument parsing — derive macro for declarative CLI definitions.
 clap = { version = "4", features = ["derive"] }
 
+# MCP SDK — Model Context Protocol server implementation (official Rust SDK).
+rmcp = { version = "0.14", features = ["server", "transport-io"] }
+
+# JSON Schema generation — used by rmcp for MCP tool parameter schemas.
+schemars = "1"
+
 # Testing utilities
 tempfile = "3"
