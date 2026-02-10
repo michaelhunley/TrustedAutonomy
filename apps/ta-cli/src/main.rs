@@ -6,6 +6,8 @@
 //! - `ta goal list/status` — inspect active goal runs
 //! - `ta pr list/view/approve/deny/apply` — review and manage PR packages
 //! - `ta audit verify/tail` — inspect the tamper-evident audit trail
+//! - `ta adapter list/install` — manage agent adapter integrations
+//! - `ta serve` — start MCP server on stdio
 
 mod commands;
 
@@ -43,6 +45,13 @@ enum Commands {
         #[command(subcommand)]
         command: commands::audit::AuditCommands,
     },
+    /// Manage agent adapter integrations.
+    Adapter {
+        #[command(subcommand)]
+        command: commands::adapter::AdapterCommands,
+    },
+    /// Start the MCP server on stdio.
+    Serve,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -54,5 +63,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Goal { command } => commands::goal::execute(command, &config),
         Commands::Pr { command } => commands::pr::execute(command, &config),
         Commands::Audit { command } => commands::audit::execute(command, &config),
+        Commands::Adapter { command } => commands::adapter::execute(command, &project_root),
+        Commands::Serve => commands::serve::execute(&project_root),
     }
 }

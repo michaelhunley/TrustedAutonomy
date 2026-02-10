@@ -1004,6 +1004,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
+ "rmcp",
  "serde",
  "serde_json",
  "ta-audit",
@@ -1014,6 +1015,7 @@ dependencies = [
  "ta-policy",
  "ta-workspace",
  "tempfile",
+ "tokio",
  "tracing",
  "uuid",
 ]
