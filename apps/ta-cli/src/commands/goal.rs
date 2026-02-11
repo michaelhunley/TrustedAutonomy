@@ -22,6 +22,9 @@ pub enum GoalCommands {
         /// Agent identity.
         #[arg(long, default_value = "claude-code")]
         agent: String,
+        /// Plan phase this goal implements (e.g., "4b").
+        #[arg(long)]
+        phase: Option<String>,
     },
     /// List all goal runs.
     List {
@@ -50,7 +53,16 @@ pub fn execute(cmd: &GoalCommands, config: &GatewayConfig) -> anyhow::Result<()>
             source,
             objective,
             agent,
-        } => start_goal(config, &store, title, source.as_deref(), objective, agent),
+            phase,
+        } => start_goal(
+            config,
+            &store,
+            title,
+            source.as_deref(),
+            objective,
+            agent,
+            phase.as_deref(),
+        ),
         GoalCommands::List { state } => list_goals(&store, state.as_deref()),
         GoalCommands::Status { id } => show_status(&store, id),
         GoalCommands::Delete { id } => delete_goal(&store, id),
@@ -64,6 +76,7 @@ fn start_goal(
     source: Option<&std::path::Path>,
     objective: &str,
     agent: &str,
+    phase: Option<&str>,
 ) -> anyhow::Result<()> {
     let source_dir = match source {
         Some(p) => p.canonicalize()?,
@@ -94,6 +107,7 @@ fn start_goal(
     goal.workspace_path = overlay.staging_dir().to_path_buf();
     goal.store_path = config.store_dir.join(&goal_id);
     goal.source_dir = Some(source_dir);
+    goal.plan_phase = phase.map(|p| p.to_string());
 
     // Transition: Created → Configured → Running.
     goal.transition(GoalRunState::Configured)?;
@@ -156,6 +170,9 @@ fn show_status(store: &GoalRunStore, id: &str) -> anyhow::Result<()> {
             println!("Updated:  {}", g.updated_at.to_rfc3339());
             if let Some(ref src) = g.source_dir {
                 println!("Source:   {}", src.display());
+            }
+            if let Some(ref phase) = g.plan_phase {
+                println!("Phase:    {}", phase);
             }
             println!("Staging:  {}", g.workspace_path.display());
             if let Some(pr_id) = g.pr_package_id {
@@ -227,6 +244,7 @@ mod tests {
             Some(project.path()),
             "Test objective",
             "test-agent",
+            None,
         )
         .unwrap();
 
@@ -259,6 +277,7 @@ mod tests {
             Some(project.path()),
             "Will be deleted",
             "test-agent",
+            None,
         )
         .unwrap();
 

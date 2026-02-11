@@ -58,9 +58,17 @@ enum Commands {
         /// Detailed objective for the goal.
         #[arg(long, default_value = "")]
         objective: String,
+        /// Plan phase this goal implements (e.g., "4b").
+        #[arg(long)]
+        phase: Option<String>,
         /// Don't launch the agent — just set up the workspace.
         #[arg(long)]
         no_launch: bool,
+    },
+    /// View and track the project development plan.
+    Plan {
+        #[command(subcommand)]
+        command: commands::plan::PlanCommands,
     },
     /// Manage agent adapter integrations.
     Adapter {
@@ -85,6 +93,7 @@ fn main() -> anyhow::Result<()> {
             agent,
             source,
             objective,
+            phase,
             no_launch,
         } => commands::run::execute(
             &config,
@@ -92,8 +101,10 @@ fn main() -> anyhow::Result<()> {
             agent,
             source.as_deref(),
             objective,
+            phase.as_deref(),
             *no_launch,
         ),
+        Commands::Plan { command } => commands::plan::execute(command, &config),
         Commands::Adapter { command } => commands::adapter::execute(command, &project_root),
         Commands::Serve => commands::serve::execute(&project_root),
     }

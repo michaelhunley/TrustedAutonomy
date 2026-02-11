@@ -134,6 +134,10 @@ pub struct GoalRun {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_dir: Option<PathBuf>,
 
+    /// Optional plan phase this goal is working on (e.g., "4b").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_phase: Option<String>,
+
     /// The PR package ID, if one has been built.
     pub pr_package_id: Option<Uuid>,
 
@@ -164,6 +168,7 @@ impl GoalRun {
             workspace_path,
             store_path,
             source_dir: None,
+            plan_phase: None,
             pr_package_id: None,
             created_at: now,
             updated_at: now,
@@ -262,6 +267,27 @@ mod tests {
         assert_eq!(gr.goal_run_id, restored.goal_run_id);
         assert_eq!(gr.title, restored.title);
         assert_eq!(gr.state, restored.state);
+    }
+
+    #[test]
+    fn plan_phase_serialization_round_trip() {
+        let mut gr = test_goal_run();
+        gr.plan_phase = Some("4b".to_string());
+        let json = serde_json::to_string_pretty(&gr).unwrap();
+        assert!(json.contains("\"plan_phase\""));
+        let restored: GoalRun = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.plan_phase, Some("4b".to_string()));
+    }
+
+    #[test]
+    fn plan_phase_none_omitted_from_json() {
+        let gr = test_goal_run();
+        assert!(gr.plan_phase.is_none());
+        let json = serde_json::to_string_pretty(&gr).unwrap();
+        assert!(!json.contains("plan_phase"));
+        // Deserializing JSON without plan_phase should produce None (backward compat).
+        let restored: GoalRun = serde_json::from_str(&json).unwrap();
+        assert!(restored.plan_phase.is_none());
     }
 
     #[test]

@@ -601,6 +601,18 @@ fn apply_package(
     };
     save_package(config, &pkg)?;
 
+    // If the goal has a plan_phase, mark it done in PLAN.md.
+    if let Some(ref phase) = goal.plan_phase {
+        let plan_path = target_dir.join("PLAN.md");
+        if plan_path.exists() {
+            let content = std::fs::read_to_string(&plan_path)?;
+            let updated =
+                super::plan::update_phase_status(&content, phase, super::plan::PlanStatus::Done);
+            std::fs::write(&plan_path, updated)?;
+            println!("Updated PLAN.md: Phase {} -> done", phase);
+        }
+    }
+
     Ok(())
 }
 
@@ -679,6 +691,7 @@ mod tests {
                 source: Some(project.path().to_path_buf()),
                 objective: "Test PR building from overlay".to_string(),
                 agent: "test-agent".to_string(),
+                phase: None,
             },
             &config,
         )
@@ -746,6 +759,7 @@ mod tests {
                 source: Some(project.path().to_path_buf()),
                 objective: "Test apply".to_string(),
                 agent: "test-agent".to_string(),
+                phase: None,
             },
             &config,
         )
@@ -826,6 +840,7 @@ mod tests {
                 source: Some(project.path().to_path_buf()),
                 objective: "Test git commit".to_string(),
                 agent: "test-agent".to_string(),
+                phase: None,
             },
             &config,
         )
@@ -870,6 +885,7 @@ mod tests {
                 source: Some(project.path().to_path_buf()),
                 objective: "Nothing".to_string(),
                 agent: "test-agent".to_string(),
+                phase: None,
             },
             &config,
         )

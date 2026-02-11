@@ -13,6 +13,8 @@ use std::path::Path;
 use ta_goal::GoalRunStore;
 use ta_mcp_gateway::GatewayConfig;
 
+use super::plan;
+
 // ── Per-agent launch configuration ──────────────────────────────
 
 /// Built-in agent launch descriptor.
@@ -55,6 +57,7 @@ pub fn execute(
     agent: &str,
     source: Option<&Path>,
     objective: &str,
+    phase: Option<&str>,
     no_launch: bool,
 ) -> anyhow::Result<()> {
     let agent_config = agent_launch_config(agent);
@@ -68,6 +71,7 @@ pub fn execute(
             source: source.map(|p| p.to_path_buf()),
             objective: objective.to_string(),
             agent: agent.to_string(),
+            phase: phase.map(|p| p.to_string()),
         },
         config,
     )?;
@@ -82,7 +86,13 @@ pub fn execute(
 
     // 2. Inject context file (e.g., CLAUDE.md) if the agent supports it.
     if agent_config.injects_context_file {
-        inject_claude_md(&staging_path, title, &goal_id)?;
+        inject_claude_md(
+            &staging_path,
+            title,
+            &goal_id,
+            goal.plan_phase.as_deref(),
+            goal.source_dir.as_deref(),
+        )?;
     }
 
     // Build the prompt string.
@@ -202,9 +212,53 @@ fn shell_quote(s: &str) -> String {
 const CLAUDE_MD_BACKUP: &str = ".ta/claude_md_original";
 const NO_ORIGINAL_SENTINEL: &str = "__TA_NO_ORIGINAL__";
 
+/// Build a plan context section for CLAUDE.md injection.
+/// Returns empty string if no PLAN.md or no phase specified.
+fn build_plan_section(plan_phase: Option<&str>, source_dir: Option<&Path>) -> String {
+    let source = match source_dir {
+        Some(s) => s,
+        None => return String::new(),
+    };
+
+    let phases = match plan::load_plan(source) {
+        Ok(p) => p,
+        Err(_) => return String::new(),
+    };
+
+    if phases.is_empty() {
+        return String::new();
+    }
+
+    let checklist = plan::format_plan_checklist(&phases, plan_phase);
+
+    let current_line = if let Some(phase_id) = plan_phase {
+        if let Some(phase) = phases.iter().find(|p| p.id == phase_id) {
+            format!(
+                "\n**You are working on Phase {} — {}.**\n",
+                phase.id, phase.title
+            )
+        } else {
+            String::new()
+        }
+    } else {
+        String::new()
+    };
+
+    format!(
+        "\n## Plan Context\n{}\nPlan progress:\n{}\n",
+        current_line, checklist
+    )
+}
+
 /// Inject a CLAUDE.md file into the staging workspace to orient the agent.
 /// Saves the original content to `.ta/claude_md_original` for later restoration.
-fn inject_claude_md(staging_path: &Path, title: &str, goal_id: &str) -> anyhow::Result<()> {
+fn inject_claude_md(
+    staging_path: &Path,
+    title: &str,
+    goal_id: &str,
+    plan_phase: Option<&str>,
+    source_dir: Option<&Path>,
+) -> anyhow::Result<()> {
     let claude_md_path = staging_path.join("CLAUDE.md");
 
     // Read and save original content.
@@ -226,6 +280,9 @@ fn inject_claude_md(staging_path: &Path, title: &str, goal_id: &str) -> anyhow::
         original_content
     };
 
+    // Build plan context section if PLAN.md exists in source.
+    let plan_section = build_plan_section(plan_phase, source_dir);
+
     let injected = format!(
         r#"# Trusted Autonomy — Mediated Goal
 
@@ -233,7 +290,7 @@ You are working on a TA-mediated goal in a staging workspace.
 
 **Goal:** {}
 **Goal ID:** {}
-
+{}
 ## How this works
 
 - This directory is a copy of the original project
@@ -246,11 +303,37 @@ You are working on a TA-mediated goal in a staging workspace.
 - Do NOT modify files outside this directory
 - All your changes will be captured as a PR for review
 
+## Before You Exit — Change Summary
+
+Before exiting, create a file `.ta/change_summary.json` with this structure:
+```json
+{{
+  "summary": "Brief description of all changes",
+  "changes": [
+    {{
+      "path": "relative/path/to/file",
+      "action": "modified|created|deleted",
+      "why": "Why this change was needed",
+      "independent": true,
+      "depends_on": [],
+      "depended_by": []
+    }}
+  ],
+  "dependency_notes": "Human-readable explanation of which changes are coupled and why"
+}}
+```
+
+Rules for the summary:
+- `independent`: true if this change can be applied or reverted without affecting other changes
+- `depends_on`: list of other file paths this change requires (e.g., if you add a function call, it depends on the file where the function is defined)
+- `depended_by`: list of other file paths that would break if this change is reverted
+- Be honest about dependencies — the reviewer uses this to decide which changes to accept individually
+
 ---
 
 {}
 "#,
-        title, goal_id, existing_section
+        title, goal_id, plan_section, existing_section
     );
 
     std::fs::write(&claude_md_path, injected)?;
@@ -306,6 +389,7 @@ mod tests {
             "claude-code",
             Some(project.path()),
             "Test objective",
+            None,
             true,
         )
         .unwrap();
@@ -333,7 +417,7 @@ mod tests {
         let original = "# My Project\nExisting instructions.\n";
         std::fs::write(staging.path().join("CLAUDE.md"), original).unwrap();
 
-        inject_claude_md(staging.path(), "Fix bug", "goal-123").unwrap();
+        inject_claude_md(staging.path(), "Fix bug", "goal-123", None, None).unwrap();
 
         // Verify injection happened.
         let injected = std::fs::read_to_string(staging.path().join("CLAUDE.md")).unwrap();
@@ -354,7 +438,7 @@ mod tests {
         let staging = TempDir::new().unwrap();
         // No CLAUDE.md exists initially.
 
-        inject_claude_md(staging.path(), "New goal", "goal-456").unwrap();
+        inject_claude_md(staging.path(), "New goal", "goal-456", None, None).unwrap();
 
         // CLAUDE.md was created by injection.
         assert!(staging.path().join("CLAUDE.md").exists());
