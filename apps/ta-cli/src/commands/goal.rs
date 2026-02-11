@@ -34,6 +34,11 @@ pub enum GoalCommands {
         /// Goal run ID.
         id: String,
     },
+    /// Delete a goal run and its staging directory.
+    Delete {
+        /// Goal run ID.
+        id: String,
+    },
 }
 
 pub fn execute(cmd: &GoalCommands, config: &GatewayConfig) -> anyhow::Result<()> {
@@ -48,6 +53,7 @@ pub fn execute(cmd: &GoalCommands, config: &GatewayConfig) -> anyhow::Result<()>
         } => start_goal(config, &store, title, source.as_deref(), objective, agent),
         GoalCommands::List { state } => list_goals(&store, state.as_deref()),
         GoalCommands::Status { id } => show_status(&store, id),
+        GoalCommands::Delete { id } => delete_goal(&store, id),
     }
 }
 
@@ -165,6 +171,32 @@ fn show_status(store: &GoalRunStore, id: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn delete_goal(store: &GoalRunStore, id: &str) -> anyhow::Result<()> {
+    let goal_run_id = uuid::Uuid::parse_str(id)?;
+    let goal = store.get(goal_run_id)?;
+
+    match goal {
+        Some(g) => {
+            // Remove the staging directory if it exists.
+            let workspace = &g.workspace_path;
+            if workspace.exists() {
+                std::fs::remove_dir_all(workspace)?;
+                println!("Removed staging directory: {}", workspace.display());
+            }
+
+            // Remove goal metadata from the store.
+            store.delete(goal_run_id)?;
+            println!("Deleted goal: {} ({})", g.title, goal_run_id);
+        }
+        None => {
+            eprintln!("Goal run not found: {}", id);
+            std::process::exit(1);
+        }
+    }
+
+    Ok(())
+}
+
 fn truncate(s: &str, max: usize) -> String {
     if s.len() > max {
         format!("{}...", &s[..max - 3])
@@ -209,5 +241,40 @@ mod tests {
         assert!(goals[0].workspace_path.exists());
         assert!(goals[0].workspace_path.join("README.md").exists());
         assert!(goals[0].workspace_path.join("src/main.rs").exists());
+    }
+
+    #[test]
+    fn delete_goal_removes_metadata_and_staging() {
+        let project = TempDir::new().unwrap();
+        std::fs::write(project.path().join("README.md"), "# Test\n").unwrap();
+
+        let config = GatewayConfig::for_project(project.path());
+        let store = GoalRunStore::new(&config.goals_dir).unwrap();
+
+        // Create a goal to delete.
+        start_goal(
+            &config,
+            &store,
+            "Doomed goal",
+            Some(project.path()),
+            "Will be deleted",
+            "test-agent",
+        )
+        .unwrap();
+
+        let goals = store.list().unwrap();
+        assert_eq!(goals.len(), 1);
+        let goal_id = goals[0].goal_run_id;
+        let staging_path = goals[0].workspace_path.clone();
+        assert!(staging_path.exists());
+
+        // Delete the goal.
+        delete_goal(&store, &goal_id.to_string()).unwrap();
+
+        // Verify metadata is removed.
+        assert!(store.get(goal_id).unwrap().is_none());
+
+        // Verify staging directory is removed.
+        assert!(!staging_path.exists());
     }
 }
