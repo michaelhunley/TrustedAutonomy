@@ -130,6 +130,10 @@ pub struct GoalRun {
     /// Path to the change store directory.
     pub store_path: PathBuf,
 
+    /// Path to the original source project (for overlay-based goals).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_dir: Option<PathBuf>,
+
     /// The PR package ID, if one has been built.
     pub pr_package_id: Option<Uuid>,
 
@@ -159,6 +163,7 @@ impl GoalRun {
             manifest_id: Uuid::new_v4(),
             workspace_path,
             store_path,
+            source_dir: None,
             pr_package_id: None,
             created_at: now,
             updated_at: now,

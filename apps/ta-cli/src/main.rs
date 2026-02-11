@@ -45,6 +45,11 @@ enum Commands {
         #[command(subcommand)]
         command: commands::audit::AuditCommands,
     },
+    /// Run an agent in a TA-mediated staging workspace.
+    Run {
+        #[command(subcommand)]
+        command: commands::run::RunCommands,
+    },
     /// Manage agent adapter integrations.
     Adapter {
         #[command(subcommand)]
@@ -63,6 +68,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Goal { command } => commands::goal::execute(command, &config),
         Commands::Pr { command } => commands::pr::execute(command, &config),
         Commands::Audit { command } => commands::audit::execute(command, &config),
+        Commands::Run { command } => commands::run::execute(command, &config),
         Commands::Adapter { command } => commands::adapter::execute(command, &project_root),
         Commands::Serve => commands::serve::execute(&project_root),
     }

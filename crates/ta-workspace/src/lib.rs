@@ -17,9 +17,11 @@
 //!   append-optimized, survives process restarts.
 
 pub mod error;
+pub mod overlay;
 pub mod staging;
 pub mod store;
 
 pub use error::WorkspaceError;
+pub use overlay::{ExcludePatterns, OverlayWorkspace};
 pub use staging::StagingWorkspace;
 pub use store::{ChangeStore, JsonFileStore};

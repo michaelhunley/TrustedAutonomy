@@ -5,7 +5,7 @@
 It is not an agent framework.  
 It is not an orchestrator.  
 
-It is a **trust and control layer** that sits underneath *any* agent or multi-agent system and ensures:
+It is a **trust and control plane** that sits underneath *any* agent or multi-agent system and ensures:
 
 - agents can operate autonomously inside a defined charter
 - all real-world effects are staged, reviewable, and auditable
@@ -22,7 +22,7 @@ Trusted Autonomy achieves this by:
 - mediating *all* filesystem, network, execution, and external-service access through MCP tools
 - defaulting **mutations** to *collection* (staging), not execution
 - defaulting **capabilities** to deny unless explicitly granted
-- representing each milestone as a **Pull Request–like package** for review
+- representing each milestone within a goal as a **Pull Request–like package** for review
 
 ---
 
@@ -51,7 +51,7 @@ Trusted Autonomy achieves this by:
 - Replaceable orchestration: the substrate is the trust layer; planners/swarms are pluggable.
 
 ## “default deny” vs “default collect”
-Trusted Autonomy uses two distinct defaults: 
+Trusted Autonomy uses two distinct defaults:
 1. Capability default (security boundary): default deny. If an agent lacks an explicit capability, the gateway rejects it.
 2.  Mutation default (operational workflow): default collect. If the agent is allowed to write, the gateway routes writes into staging (patches/drafts) and queues them for review. Commit/send/post are gated.
 
@@ -364,7 +364,7 @@ crates/
   ta-audit/               Append-only event log + SHA-256 hash chain (13 tests)
   ta-changeset/           ChangeSet + PR Package data model (14 tests)
   ta-policy/              Capability manifests + default-deny policy engine (16 tests)
-  ta-workspace/           Staging workspace manager + JSON change store (18 tests)
+  ta-workspace/           Staging + overlay workspace manager + JSON change store (29 tests)
   ta-goal/                GoalRun lifecycle state machine + event dispatch (20 tests)
   ta-mcp-gateway/         MCP server (rmcp) — 9 tools, policy enforcement (15 tests)
   ta-daemon/              MCP server binary (stdio transport)
@@ -375,7 +375,7 @@ crates/
     mock-drive/           Mock Google Drive (stub)
     mock-gmail/           Mock Gmail (stub)
 apps/
-  ta-cli/                 CLI: goals, PR review/approve/deny/apply, audit, adapters (5 tests)
+  ta-cli/                 CLI: goals, PR review/approve/apply, run, audit, adapters (12 tests + 1 integration)
 tests/
   vertical_slice          End-to-end integration test (1 test)
 schema/
@@ -386,26 +386,93 @@ schema/
 
 ---
 
-## Using Trusted Autonomy with Claude Code
+## Local Build and Dogfood
 
-The fastest way to try TA is with Claude Code as the mediated agent.
-
-### Quick start
+### Build
 
 ```bash
-# 1. Build everything
+# Option A: With Nix (recommended)
+./dev "cargo build --workspace"
+
+# Option B: Without Nix
 cargo build --workspace
-
-# 2. Install the Claude Code adapter (generates .mcp.json + .ta/config.toml)
-cargo run -p ta-cli -- adapter install claude-code
-
-# 3. Start Claude Code in this directory — TA tools appear automatically
-claude
 ```
 
-### How it works
+### Dogfood workflow (transparent overlay)
 
-Once connected, Claude Code sees TA tools alongside its built-in tools:
+This is the primary workflow. TA copies your project to a staging directory, the agent works normally in the copy, and TA diffs the result into a PR package for review.
+
+```bash
+# 1. Start a goal — creates a staging copy of your project
+cargo run -p ta-cli -- goal start "Fix the auth bug" --source .
+
+# 2. Note the staging path and goal ID from the output, then enter staging
+cd .ta/staging/<goal-id>/
+
+# 3. Launch your agent (Claude Code, or any tool)
+claude
+
+# 4. Agent works normally — reads, writes, runs tests, etc.
+#    It doesn't know it's in a staging workspace.
+#    When done, exit the agent.
+
+# 5. Build a PR package from the diff
+cargo run -p ta-cli -- pr build <goal-id> --summary "Fixed the auth bug"
+
+# 6. Review the changes
+cargo run -p ta-cli -- pr view <package-id>
+
+# 7. Approve and apply back to your project (with optional git commit)
+cargo run -p ta-cli -- pr approve <package-id>
+cargo run -p ta-cli -- pr apply <package-id> --git-commit
+```
+
+### One-command shortcut
+
+`ta run claude-code` wraps steps 1-5 into a single command:
+
+```bash
+cargo run -p ta-cli -- run claude-code "Fix the auth bug" --source .
+# TA creates the staging workspace, injects context into CLAUDE.md,
+# launches Claude Code, and auto-builds the PR when Claude exits.
+# Then review + approve + apply as above.
+```
+
+### Exclude patterns (.taignore)
+
+By default, TA excludes common build artifacts from the staging copy (`target/`, `node_modules/`, `__pycache__/`, etc.) to keep copies fast. To customize, create a `.taignore` file in your project root:
+
+```
+# .taignore — one pattern per line
+# Lines starting with # are comments
+
+# Rust
+target/
+
+# Custom project-specific excludes
+large-data/
+*.sqlite
+```
+
+If no `.taignore` exists, sensible defaults are used. The `.ta/` directory is always excluded.
+
+## Using Trusted Autonomy with Claude Code
+
+### Primary: Transparent overlay (recommended)
+
+See **Local Build and Dogfood** above. The agent works in a normal-looking project directory and never knows TA exists. This works with Claude Code, Codex, or any tool.
+
+### Alternative: MCP-native tools
+
+For agents that support MCP tool integration directly, TA can also expose tools via MCP:
+
+```bash
+# Install the Claude Code adapter (generates .mcp.json + .ta/config.toml)
+cargo run -p ta-cli -- adapter install claude-code
+
+# Start Claude Code — TA tools appear alongside built-in tools
+claude
+```
 
 | Tool | What it does |
 |------|-------------|
@@ -419,62 +486,66 @@ Once connected, Claude Code sees TA tools alongside its built-in tools:
 | `ta_goal_status` | Check GoalRun state |
 | `ta_goal_list` | List all GoalRuns |
 
-### Review workflow
+### Review workflow (both modes)
 
 ```bash
-# List pending PR packages
-cargo run -p ta-cli -- pr list
-
-# View details + diffs
-cargo run -p ta-cli -- pr view <package-id>
-
-# Approve
-cargo run -p ta-cli -- pr approve <package-id>
-
-# Apply approved changes to the project
-cargo run -p ta-cli -- pr apply <package-id>
+cargo run -p ta-cli -- pr list                          # List pending PRs
+cargo run -p ta-cli -- pr view <package-id>             # View details + diffs
+cargo run -p ta-cli -- pr approve <package-id>          # Approve
+cargo run -p ta-cli -- pr apply <package-id> --git-commit  # Apply + commit
 ```
 
 ### Architecture
 
 ```
-Agent (Claude Code / Codex / any MCP client)
-  |  MCP stdio
-  v
-TaGatewayServer (ta-mcp-gateway)
-  |-- PolicyEngine (ta-policy)        default deny
-  |-- StagingWorkspace (ta-workspace)  all writes staged
-  |-- ChangeStore (ta-workspace)       JSONL persistence
-  |-- AuditLog (ta-audit)             tamper-evident trail
-  '-- GoalRunStore (ta-goal)          lifecycle management
-  |
-  v
-PR Package --> Human Review (CLI) --> Approve --> Apply
+Transparent overlay mode:
+  Agent works in staging copy (native tools)
+    → TA diffs staging vs source
+    → PR Package → Human Review → Approve → Apply
+
+MCP-native mode:
+  Agent (Claude Code / Codex / any MCP client)
+    |  MCP stdio
+    v
+  TaGatewayServer (ta-mcp-gateway)
+    |-- PolicyEngine (ta-policy)        default deny
+    |-- StagingWorkspace (ta-workspace)  all writes staged
+    |-- ChangeStore (ta-workspace)       JSONL persistence
+    |-- AuditLog (ta-audit)             tamper-evident trail
+    '-- GoalRunStore (ta-goal)          lifecycle management
+    |
+    v
+  PR Package → Human Review (CLI) → Approve → Apply
 ```
 
 ### Agent teams
 
-Multiple Claude Code teammates can connect to the same TA MCP server. Each calls `ta_goal_start` with its own agent identity and gets an isolated GoalRun with separate staging workspace and capabilities.
+Multiple agents can work simultaneously. Each gets an isolated GoalRun with its own staging workspace and capabilities.
 
 ---
 
 ## Status
 
-Trusted Autonomy is under active development. **120 tests** across 12 crates.
+Trusted Autonomy is under active development. **138 tests** across 12 crates.
 
 ### Implemented
+- **Transparent overlay mediation** — agents work in staging copies using native tools, TA is invisible
 - Append-only audit log with SHA-256 hash chain
 - Default-deny capability engine with glob pattern matching
 - ChangeSet + PR Package data model (aligned with JSON schema)
 - Staging workspace with snapshot-and-diff
+- Overlay workspace with full-copy and exclude patterns (`.taignore`)
 - Filesystem connector bridging MCP to staging
 - GoalRun lifecycle state machine with event dispatch
 - Real MCP server (rmcp 0.14) with 9 tools and policy enforcement
-- CLI for goal/PR/audit management
+- CLI: `goal start/list/status`, `pr build/list/view/approve/deny/apply`, `run claude-code`, `audit`, `adapter`
 - Agent adapter framework (Claude Code + generic MCP)
-- End-to-end vertical slice: agent writes -> staged -> PR package -> approve -> apply
+- Git integration (`ta pr apply --git-commit`)
+- End-to-end: agent works in staging → TA diffs → PR package → review → approve → apply → git commit
 
 ### Coming next
+- V2: Lazy copy-on-write VFS (reflinks/FUSE) — replaces full copy
+- Supervisor agent for PR summary generation
 - OCI/gVisor sandbox runner
 - Plugin trait registry
 - Web UI for review/approval
