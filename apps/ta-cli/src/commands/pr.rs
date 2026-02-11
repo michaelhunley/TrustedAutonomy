@@ -22,11 +22,15 @@ use uuid::Uuid;
 pub enum PrCommands {
     /// Build a PR package from overlay workspace diffs.
     Build {
-        /// Goal run ID.
+        /// Goal run ID (omit with --latest to use most recent running goal).
+        #[arg(default_value = "")]
         goal_id: String,
         /// Summary of what changed and why.
         #[arg(long, default_value = "Changes from agent work")]
         summary: String,
+        /// Use the most recent running goal instead of specifying an ID.
+        #[arg(long)]
+        latest: bool,
     },
     /// List all PR packages.
     List {
@@ -76,7 +80,11 @@ pub enum PrCommands {
 
 pub fn execute(cmd: &PrCommands, config: &GatewayConfig) -> anyhow::Result<()> {
     match cmd {
-        PrCommands::Build { goal_id, summary } => build_package(config, goal_id, summary),
+        PrCommands::Build {
+            goal_id,
+            summary,
+            latest,
+        } => build_package(config, goal_id, summary, *latest),
         PrCommands::List { goal } => list_packages(config, goal.as_deref()),
         PrCommands::View { id } => view_package(config, id),
         PrCommands::Approve { id, reviewer } => approve_package(config, id, reviewer),
@@ -100,13 +108,30 @@ pub fn execute(cmd: &PrCommands, config: &GatewayConfig) -> anyhow::Result<()> {
     }
 }
 
-fn build_package(config: &GatewayConfig, goal_id: &str, summary: &str) -> anyhow::Result<()> {
-    let goal_uuid = Uuid::parse_str(goal_id)?;
+fn build_package(
+    config: &GatewayConfig,
+    goal_id: &str,
+    summary: &str,
+    latest: bool,
+) -> anyhow::Result<()> {
     let goal_store = GoalRunStore::new(&config.goals_dir)?;
 
-    let goal = goal_store
-        .get(goal_uuid)?
-        .ok_or_else(|| anyhow::anyhow!("Goal run not found: {}", goal_id))?;
+    // Resolve the goal — either by ID or by finding the latest running goal.
+    let goal = if latest || goal_id.is_empty() {
+        let goals = goal_store.list()?;
+        goals
+            .into_iter()
+            .find(|g| matches!(g.state, GoalRunState::Running))
+            .ok_or_else(|| {
+                anyhow::anyhow!("No running goal found (use a goal ID or start a goal first)")
+            })?
+    } else {
+        let goal_uuid = Uuid::parse_str(goal_id)?;
+        goal_store
+            .get(goal_uuid)?
+            .ok_or_else(|| anyhow::anyhow!("Goal run not found: {}", goal_id))?
+    };
+    let goal_id = goal.goal_run_id.to_string();
 
     if !matches!(goal.state, GoalRunState::Running) {
         anyhow::bail!(
@@ -123,7 +148,8 @@ fn build_package(config: &GatewayConfig, goal_id: &str, summary: &str) -> anyhow
     // Open the overlay workspace and compute diffs.
     // V1 TEMPORARY: Load exclude patterns for diff filtering.
     let excludes = ExcludePatterns::load(source_dir);
-    let overlay = OverlayWorkspace::open(goal_id, source_dir, &goal.workspace_path, excludes);
+    let overlay =
+        OverlayWorkspace::open(goal_id.clone(), source_dir, &goal.workspace_path, excludes);
     let changes = overlay.diff_all().map_err(|e| anyhow::anyhow!("{}", e))?;
 
     if changes.is_empty() {
@@ -194,7 +220,7 @@ fn build_package(config: &GatewayConfig, goal_id: &str, summary: &str) -> anyhow
     // Persist changesets to the store.
     let mut store = JsonFileStore::new(goal.store_path.clone())?;
     for cs in &changesets {
-        store.save(goal_id, cs)?;
+        store.save(&goal_id, cs)?;
     }
 
     // Build the PR package.
@@ -275,7 +301,7 @@ fn build_package(config: &GatewayConfig, goal_id: &str, summary: &str) -> anyhow
     let mut goal = goal;
     goal.pr_package_id = Some(package_id);
     goal_store.save(&goal)?;
-    goal_store.transition(goal_uuid, GoalRunState::PrReady)?;
+    goal_store.transition(goal.goal_run_id, GoalRunState::PrReady)?;
 
     println!("PR package built: {}", package_id);
     println!("  Goal:    {} ({})", goal.title, goal_id);
@@ -676,7 +702,7 @@ mod tests {
         std::fs::remove_file(goal.workspace_path.join("src/lib.rs")).unwrap();
 
         // Build PR package.
-        build_package(&config, &goal_id, "Test changes").unwrap();
+        build_package(&config, &goal_id, "Test changes", false).unwrap();
 
         // Verify PR package was created.
         let packages = load_all_packages(&config).unwrap();
@@ -735,7 +761,7 @@ mod tests {
         std::fs::write(goal.workspace_path.join("NEW.md"), "new file\n").unwrap();
 
         // Build PR.
-        build_package(&config, &goal_id, "Test apply changes").unwrap();
+        build_package(&config, &goal_id, "Test apply changes", false).unwrap();
 
         // Approve the PR.
         let packages = load_all_packages(&config).unwrap();
@@ -814,7 +840,7 @@ mod tests {
         std::fs::write(goal.workspace_path.join("README.md"), "# Modified\n").unwrap();
 
         // Build + approve + apply with git commit.
-        build_package(&config, &goal_id, "Modified README").unwrap();
+        build_package(&config, &goal_id, "Modified README", false).unwrap();
         let packages = load_all_packages(&config).unwrap();
         let pkg_id = packages[0].package_id.to_string();
         approve_package(&config, &pkg_id, "tester").unwrap();
@@ -854,7 +880,7 @@ mod tests {
         let goal_id = goals[0].goal_run_id.to_string();
 
         // Build PR should fail — no changes.
-        let result = build_package(&config, &goal_id, "No changes");
+        let result = build_package(&config, &goal_id, "No changes", false);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("No changes"));
     }

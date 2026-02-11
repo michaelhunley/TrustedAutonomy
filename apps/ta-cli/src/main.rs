@@ -47,8 +47,20 @@ enum Commands {
     },
     /// Run an agent in a TA-mediated staging workspace.
     Run {
-        #[command(subcommand)]
-        command: commands::run::RunCommands,
+        /// Goal title describing what to accomplish.
+        title: String,
+        /// Agent system to use (claude-code, codex, etc.).
+        #[arg(long, default_value = "claude-code")]
+        agent: String,
+        /// Source directory to overlay (defaults to project root).
+        #[arg(long)]
+        source: Option<PathBuf>,
+        /// Detailed objective for the goal.
+        #[arg(long, default_value = "")]
+        objective: String,
+        /// Don't launch the agent — just set up the workspace.
+        #[arg(long)]
+        no_launch: bool,
     },
     /// Manage agent adapter integrations.
     Adapter {
@@ -68,7 +80,20 @@ fn main() -> anyhow::Result<()> {
         Commands::Goal { command } => commands::goal::execute(command, &config),
         Commands::Pr { command } => commands::pr::execute(command, &config),
         Commands::Audit { command } => commands::audit::execute(command, &config),
-        Commands::Run { command } => commands::run::execute(command, &config),
+        Commands::Run {
+            title,
+            agent,
+            source,
+            objective,
+            no_launch,
+        } => commands::run::execute(
+            &config,
+            title,
+            agent,
+            source.as_deref(),
+            objective,
+            *no_launch,
+        ),
         Commands::Adapter { command } => commands::adapter::execute(command, &project_root),
         Commands::Serve => commands::serve::execute(&project_root),
     }
