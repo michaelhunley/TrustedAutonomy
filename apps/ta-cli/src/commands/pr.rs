@@ -168,6 +168,9 @@ fn build_package(
                     change_type: ChangeType::Modify,
                     diff_ref: format!("changeset:{}", changesets.len()),
                     tests_run: vec![],
+                    disposition: Default::default(),
+                    rationale: None,
+                    dependencies: vec![],
                 });
                 changesets.push(
                     ChangeSet::new(
@@ -186,6 +189,9 @@ fn build_package(
                     change_type: ChangeType::Add,
                     diff_ref: format!("changeset:{}", changesets.len()),
                     tests_run: vec![],
+                    disposition: Default::default(),
+                    rationale: None,
+                    dependencies: vec![],
                 });
                 changesets.push(
                     ChangeSet::new(
@@ -204,6 +210,9 @@ fn build_package(
                     change_type: ChangeType::Delete,
                     diff_ref: format!("changeset:{}", changesets.len()),
                     tests_run: vec![],
+                    disposition: Default::default(),
+                    rationale: None,
+                    dependencies: vec![],
                 });
                 changesets.push(
                     ChangeSet::new(

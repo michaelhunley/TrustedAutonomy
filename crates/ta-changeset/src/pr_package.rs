@@ -10,6 +10,8 @@
 //
 // The structure aligns with schema/pr_package.schema.json.
 
+use std::fmt;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -91,6 +93,66 @@ pub struct Artifact {
     pub diff_ref: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tests_run: Vec<String>,
+    /// Per-artifact review disposition (defaults to Pending).
+    #[serde(default)]
+    pub disposition: ArtifactDisposition,
+    /// Why this change was made (from agent's change_summary.json).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rationale: Option<String>,
+    /// Dependencies: other artifacts this one requires or is required by.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dependencies: Vec<ChangeDependency>,
+}
+
+/// Per-artifact review disposition.
+///
+/// Tracks the reviewer's decision on each individual artifact,
+/// enabling selective approval (approve some, reject others, discuss the rest).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ArtifactDisposition {
+    /// Not yet reviewed.
+    #[default]
+    Pending,
+    /// Approved — will be applied.
+    Approved,
+    /// Rejected — will not be applied.
+    Rejected,
+    /// Needs discussion before deciding.
+    Discuss,
+}
+
+impl fmt::Display for ArtifactDisposition {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ArtifactDisposition::Pending => write!(f, "pending"),
+            ArtifactDisposition::Approved => write!(f, "approved"),
+            ArtifactDisposition::Rejected => write!(f, "rejected"),
+            ArtifactDisposition::Discuss => write!(f, "discuss"),
+        }
+    }
+}
+
+/// A dependency relationship between artifacts.
+///
+/// Reported by the agent via .ta/change_summary.json, used by the
+/// reviewer to understand which changes can be independently accepted/rejected.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ChangeDependency {
+    /// The resource_uri of the related artifact.
+    pub target_uri: String,
+    /// The nature of the dependency.
+    pub kind: DependencyKind,
+}
+
+/// How two artifacts are related.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DependencyKind {
+    /// This artifact requires the target (can't apply without it).
+    DependsOn,
+    /// The target requires this artifact (target breaks if this is reverted).
+    DependedBy,
 }
 
 /// The type of filesystem change.
@@ -366,6 +428,9 @@ mod tests {
                     change_type: ChangeType::Add,
                     diff_ref: "diff-001".to_string(),
                     tests_run: vec![],
+                    disposition: Default::default(),
+                    rationale: None,
+                    dependencies: vec![],
                 }],
                 patch_sets: vec![],
             },
@@ -485,6 +550,77 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&ChangeType::Modify).unwrap(),
             "\"modify\""
+        );
+    }
+
+    #[test]
+    fn artifact_disposition_default_is_pending() {
+        let d = ArtifactDisposition::default();
+        assert_eq!(d, ArtifactDisposition::Pending);
+        assert_eq!(d.to_string(), "pending");
+    }
+
+    #[test]
+    fn artifact_disposition_serialization() {
+        assert_eq!(
+            serde_json::to_string(&ArtifactDisposition::Approved).unwrap(),
+            "\"approved\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ArtifactDisposition::Rejected).unwrap(),
+            "\"rejected\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ArtifactDisposition::Discuss).unwrap(),
+            "\"discuss\""
+        );
+    }
+
+    #[test]
+    fn artifact_with_disposition_round_trip() {
+        let artifact = Artifact {
+            resource_uri: "fs://workspace/src/main.rs".to_string(),
+            change_type: ChangeType::Modify,
+            diff_ref: "changeset:0".to_string(),
+            tests_run: vec![],
+            disposition: ArtifactDisposition::Approved,
+            rationale: Some("Fixed the bug".to_string()),
+            dependencies: vec![ChangeDependency {
+                target_uri: "fs://workspace/src/lib.rs".to_string(),
+                kind: DependencyKind::DependsOn,
+            }],
+        };
+        let json = serde_json::to_string(&artifact).unwrap();
+        let restored: Artifact = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.disposition, ArtifactDisposition::Approved);
+        assert_eq!(restored.rationale, Some("Fixed the bug".to_string()));
+        assert_eq!(restored.dependencies.len(), 1);
+        assert_eq!(restored.dependencies[0].kind, DependencyKind::DependsOn);
+    }
+
+    #[test]
+    fn artifact_without_new_fields_deserializes_with_defaults() {
+        // Backward compatibility: old JSON without disposition/rationale/dependencies.
+        let json = r#"{
+            "resource_uri": "fs://workspace/test.txt",
+            "change_type": "add",
+            "diff_ref": "changeset:0"
+        }"#;
+        let artifact: Artifact = serde_json::from_str(json).unwrap();
+        assert_eq!(artifact.disposition, ArtifactDisposition::Pending);
+        assert!(artifact.rationale.is_none());
+        assert!(artifact.dependencies.is_empty());
+    }
+
+    #[test]
+    fn dependency_kind_serialization() {
+        assert_eq!(
+            serde_json::to_string(&DependencyKind::DependsOn).unwrap(),
+            "\"depends_on\""
+        );
+        assert_eq!(
+            serde_json::to_string(&DependencyKind::DependedBy).unwrap(),
+            "\"depended_by\""
         );
     }
 }

@@ -49,7 +49,7 @@ Workspace structure with 12 crates under `crates/` and `apps/`. Resource URIs (`
 - `ta pr apply` auto-updates PLAN.md when phase completes
 
 ## Phase 4b — Per-Artifact Review Model
-<!-- status: pending -->
+<!-- status: in_progress -->
 - ArtifactDisposition enum: Pending / Approved / Rejected / Discuss (per artifact, not per package)
 - ChangeDependency struct for agent-reported inter-file dependencies
 - URI-aware pattern matching: scheme-scoped glob (fs:// patterns can't match gmail:// URIs)

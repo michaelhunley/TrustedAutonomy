@@ -222,6 +222,9 @@ impl<S: ChangeStore> FsConnector<S> {
                     change_type,
                     diff_ref: cs.changeset_id.to_string(),
                     tests_run: vec![],
+                    disposition: Default::default(),
+                    rationale: None,
+                    dependencies: vec![],
                 }
             })
             .collect();
