@@ -41,7 +41,7 @@ Workspace structure with 12 crates under `crates/` and `apps/`. Resource URIs (`
 - Foundation for selective approval (Phase 4c)
 
 ## Phase 4a.1 — Plan Tracking & Lifecycle
-<!-- status: in_progress -->
+<!-- status: done -->
 - Canonical PLAN.md with machine-parseable status markers
 - GoalRun.plan_phase links goals to plan phases
 - `ta plan list/status` CLI commands
@@ -62,6 +62,37 @@ Workspace structure with 12 crates under `crates/` and `apps/`. Resource URIs (`
 - Special values: `all` (everything), `rest` (everything not explicitly listed)
 - Selective apply: only copies approved artifacts; tracks partial application state
 - Coupled-change warnings: reject B also requires rejecting A if dependent
+
+## Phase v0.1 — Public Preview & Call for Feedback
+<!-- status: pending -->
+**Goal**: Get TA in front of early adopters for feedback. Not production-ready — explicitly disclaimed.
+
+### Required for v0.1
+- **Simple install**: `cargo install ta-cli` or single binary download (cross-compile for macOS/Linux)
+- **Agent setup guides**: Step-by-step for Claude Code, Claude Flow (when available), Codex/similar
+- **README rewrite**: Quick-start in <5 minutes, architecture overview, what works / what doesn't
+- **`ta adapter install claude-code`** works end-to-end (already partially implemented)
+- **Smoke-tested happy path**: `ta run "task" --source .` → review → approve → apply works reliably
+- **Error messages**: Graceful failures with actionable guidance (not panics or cryptic errors)
+- **.taignore defaults** cover common project types (Rust, Node, Python, Go)
+
+### Disclaimers to include
+- "Alpha — not production-ready. Do not use for critical/irreversible operations"
+- "The security model is not yet audited. Do not trust it with secrets or sensitive data"
+- "Selective approval (Phase 4b-4c) is not yet implemented — review is all-or-nothing"
+- "No sandbox isolation yet — agent runs with your permissions in a staging copy"
+
+### Nice-to-have for v0.1
+- `ta pr view` shows colored diffs in terminal
+- Basic telemetry opt-in (anonymous usage stats for prioritization)
+- GitHub repo with issues template for feedback
+- Short demo video / animated GIF in README
+
+### What feedback to solicit
+- "Does the staging → PR → review → apply flow make sense for your use case?"
+- "What agents do you want to use with this? What's missing for your agent?"
+- "What connectors matter most? (Gmail, Drive, DB, Slack, etc.)"
+- "Would you pay for a hosted version? What would that need to include?"
 
 ## Phase 4d — Review Sessions
 <!-- status: pending -->
