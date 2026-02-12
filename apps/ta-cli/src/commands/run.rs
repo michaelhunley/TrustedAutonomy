@@ -41,6 +41,17 @@ fn agent_launch_config(agent_id: &str) -> AgentLaunchConfig {
             args_template: &["--approval-mode", "full-auto", "{prompt}"],
             injects_context_file: false,
         },
+        "claude-flow" => AgentLaunchConfig {
+            command: "npx".to_string(),
+            args_template: &[
+                "claude-flow@alpha",
+                "hive-mind",
+                "spawn",
+                "{prompt}",
+                "--claude",
+            ],
+            injects_context_file: true,
+        },
         _ => AgentLaunchConfig {
             command: agent_id.to_string(),
             args_template: &[],
@@ -460,6 +471,13 @@ mod tests {
         let codex = agent_launch_config("codex");
         assert_eq!(codex.command, "codex");
         assert!(!codex.injects_context_file);
+
+        let flow = agent_launch_config("claude-flow");
+        assert_eq!(flow.command, "npx");
+        assert!(flow.injects_context_file);
+        assert!(flow.args_template.contains(&"claude-flow@alpha"));
+        assert!(flow.args_template.contains(&"hive-mind"));
+        assert!(flow.args_template.contains(&"--claude"));
 
         let unknown = agent_launch_config("my-custom-agent");
         assert_eq!(unknown.command, "my-custom-agent");
