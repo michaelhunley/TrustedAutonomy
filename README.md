@@ -354,17 +354,15 @@ export OPENAI_API_KEY="sk-..."
 
 **Per-project** (recommended — uses [direnv](https://direnv.net/)):
 ```bash
-# Create a .envrc in your project root
-echo 'export ANTHROPIC_API_KEY="sk-ant-..."' >> .envrc
+# Copy the example and add your key
+cp .envrc.example .envrc
+# Edit .envrc — uncomment and set your API key
 direnv allow
 ```
 
-The key activates when you `cd` into the project and deactivates when you leave. If you're using Nix (Option A above), direnv is already available.
+The key activates when you `cd` into the project and deactivates when you leave. The `.envrc` also contains `use flake` which auto-activates the Nix dev shell (cargo, rustc, etc.).
 
-**Important:** Never commit API keys. Add `.envrc` to your `.gitignore`:
-```bash
-echo ".envrc" >> .gitignore
-```
+**Important:** `.envrc` is already in `.gitignore` — your keys will never be committed. Only `.envrc.example` (with placeholder values) is tracked in git.
 
 ### 3. Run your first mediated task
 
@@ -454,24 +452,131 @@ ta run claude-code "Fix the auth bug" --source .
 # Then review + approve + apply as above.
 ```
 
-### Using with Claude Flow
+### Using with Claude Flow (detailed setup)
 
-Claude Flow orchestrates multiple Claude Code agents. Each agent gets its own TA-mediated workspace:
+[Claude Flow](https://github.com/ruvnet/claude-flow) adds multi-agent orchestration on top of Claude Code. It can run as an MCP server (giving Claude Code extra tools for swarm coordination, memory, and task routing) or launch Claude Code processes directly via its hive-mind command. Both approaches work inside a TA staging workspace.
+
+**Prerequisites:**
+- Node.js 20+, npm 9+
+- Claude Code installed (`npm install -g @anthropic-ai/claude-code`)
+- An `ANTHROPIC_API_KEY` set in your environment
+
+#### Step 1: Install claude-flow
 
 ```bash
-# Start a TA goal for the overall task
+# Option A: Use via npx (no global install needed)
+npx claude-flow@alpha --version
+
+# Option B: Global install
+npm install -g claude-flow@alpha
+```
+
+#### Step 2: Register claude-flow as an MCP server for Claude Code
+
+This is the primary integration — it gives Claude Code access to claude-flow's swarm, memory, and task-routing tools:
+
+```bash
+claude mcp add claude-flow -- npx claude-flow@alpha mcp start
+```
+
+Or add it to your project's `.mcp.json` (TA will copy this into staging):
+
+```json
+{
+  "mcpServers": {
+    "claude-flow": {
+      "command": "npx",
+      "args": ["claude-flow@alpha", "mcp", "start"]
+    }
+  }
+}
+```
+
+#### Step 3: Create a TA goal and staging workspace
+
+```bash
+cd your-project/
 ta goal start "Refactor auth system" --source .
+# Note the goal ID from the output
+```
 
-# Launch Claude Flow in the staging directory
+#### Step 4: Launch — pick one approach
+
+**Approach A: TA run + MCP tools (recommended)**
+
+Use `ta run` to launch Claude Code inside the staging workspace. Because claude-flow is registered as an MCP server, Claude Code can call swarm/memory/task tools automatically:
+
+```bash
+ta run claude-code "Refactor auth system" --source .
+
+# Claude Code launches in .ta/staging/<goal-id>/
+# It can use mcp__claude-flow__swarm_init, mcp__claude-flow__task_orchestrate,
+# etc. alongside its normal tools.
+# When Claude exits, TA diffs and builds the PR package.
+```
+
+**Approach B: Hive-mind (spawns Claude Code directly)**
+
+Claude-flow's `hive-mind` command spawns a real Claude Code process with the task prompt:
+
+```bash
 cd .ta/staging/<goal-id>/
-npx claude-flow@alpha
+npx claude-flow@alpha hive-mind spawn "Refactor auth system" --claude
+# Spawns Claude Code with --dangerously-skip-permissions in the staging dir.
+# When done, return to project root and build the PR:
+cd your-project/
+ta pr build <goal-id> --summary "Auth system refactored"
+```
 
-# Claude Flow spawns sub-agents — each works in the same staging copy.
-# When done, build and review the combined PR.
-ta pr build <goal-id> --summary "Auth system refactored by agent swarm"
+**Approach C: Headless swarm (no interactive session)**
+
+For fully automated runs:
+
+```bash
+cd .ta/staging/<goal-id>/
+npx claude-flow@alpha swarm "Refactor auth system" --headless
+# Runs to completion without interaction.
+cd your-project/
+ta pr build <goal-id> --summary "Auth system refactored by swarm"
+```
+
+#### Step 5: Review and apply
+
+```bash
+ta pr list
 ta pr view <package-id>
 ta pr approve <package-id>
 ta pr apply <package-id> --git-commit
+```
+
+#### CLAUDE.md conflict note
+
+Both TA and claude-flow write to `CLAUDE.md`. TA injects goal context and plan progress into CLAUDE.md when launching via `ta run`. If you use claude-flow's `init` command inside a staging directory, use `--skip-claude` to avoid overwriting TA's injected context:
+
+```bash
+cd .ta/staging/<goal-id>/
+npx claude-flow@alpha init --minimal --skip-claude
+# Sets up .claude-flow/ config without touching CLAUDE.md
+```
+
+If you need claude-flow's CLAUDE.md content (governance rules, skill definitions), append it to the existing file rather than replacing it:
+
+```bash
+npx claude-flow@alpha init --minimal --skip-claude
+# Then manually merge any needed claude-flow instructions into CLAUDE.md
+```
+
+#### Environment variables
+
+```bash
+# Required
+export ANTHROPIC_API_KEY="sk-ant-..."
+
+# Optional claude-flow tuning
+export CLAUDE_FLOW_LOG_LEVEL=info          # debug, info, warn, error
+export CLAUDE_FLOW_MAX_AGENTS=12           # max concurrent agents
+export CLAUDE_FLOW_NON_INTERACTIVE=true    # for CI/headless runs
+export CLAUDE_FLOW_MEMORY_BACKEND=hybrid   # memory persistence backend
 ```
 
 ### Using with OpenAI Codex
@@ -603,8 +708,31 @@ schema/
 **Option A: Using Nix (recommended)**
 
 ```bash
+# 1. Install Nix (Determinate Systems installer — adds shell integration automatically)
 curl --proto '=https' --tlsv1.2 -sSf -L https://install.determinate.systems/nix | sh -s -- install
-nix develop   # enters dev shell with Rust, just, etc.
+
+# 2. Open a NEW terminal (so nix-daemon.sh is sourced), then:
+cd path/to/TrustedAutonomy
+nix develop   # enters dev shell with Rust 1.93, cargo, just, clippy, rustfmt
+```
+
+> **Note:** Nix provides `cargo`, `rustc`, `clippy`, and `rustfmt` inside the dev shell only — they are not installed globally. You must either run `nix develop` first or use the `./dev` wrapper script.
+
+**Option A+ (automatic dev shell with direnv)**
+
+If you install [direnv](https://direnv.net/), the dev shell activates automatically when you `cd` into the project:
+
+```bash
+# macOS
+brew install direnv
+
+# Add to ~/.zshrc (or ~/.bashrc):
+eval "$(direnv hook zsh)"
+
+# Then allow the project's .envrc:
+cd path/to/TrustedAutonomy
+direnv allow
+# Now cargo, rustc, just, etc. are available automatically in this directory
 ```
 
 **Option B: Without Nix**
@@ -618,13 +746,16 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ### Build and test
 
 ```bash
+# Inside nix develop (or with direnv active):
 cargo build --workspace
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
-```
 
-Or with the Nix wrapper: `./dev "cargo test --workspace"`
+# Or without entering the dev shell (one-shot wrapper):
+./dev cargo test --workspace
+./dev cargo clippy --workspace --all-targets -- -D warnings
+```
 
 ---
 

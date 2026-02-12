@@ -36,3 +36,9 @@ result-*
 
 # Claude Code local settings
 .claude/
+
+# Claude Flow runtime state
+.claude-flow/
+.swarm/
+.hive-mind/
+.mcp.json
