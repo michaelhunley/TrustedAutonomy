@@ -92,6 +92,7 @@ Workspace structure with 12 crates under `crates/` and `apps/`. Resource URIs (`
 - Basic telemetry opt-in (anonymous usage stats for prioritization)
 - GitHub repo with issues template for feedback
 - Short demo video / animated GIF in README
+- **Git workflow config** (`.ta/workflow.toml`): branch naming, auto-PR on apply — see Phase v0.2
 
 ### What feedback to solicit
 - "Does the staging → PR → review → apply flow make sense for your use case?"
@@ -109,6 +110,20 @@ Workspace structure with 12 crates under `crates/` and `apps/`. Resource URIs (`
 - **Version bumping**: `cargo release` or manual Cargo.toml + git tag workflow
 - **Nix flake output**: `nix run github:trustedautonomy/ta` for Nix users
 - **Homebrew formula**: Future — tap for macOS users (`brew install trustedautonomy/tap/ta`)
+
+## Phase v0.2 — Git Workflow Automation
+<!-- status: pending -->
+- **Workflow config** (`.ta/workflow.toml`): user-defined git workflow preferences
+  - `branch_prefix`: naming convention for auto-created branches (e.g., `ta/`, `feature/`)
+  - `auto_branch`: create a feature branch automatically on `ta goal start`
+  - `auto_pr`: open a GitHub/GitLab PR automatically after `ta pr apply --git-commit`
+  - `pr_template`: path to PR body template with `{summary}`, `{artifacts}`, `{plan_phase}` substitution
+  - `merge_strategy`: `squash` | `merge` | `rebase` (default: `squash`)
+  - `target_branch`: base branch for PRs (default: `main`)
+- **`ta pr apply --git-commit --push`** creates branch + commit + push + PR in one command
+- **Branch lifecycle**: `ta goal start` creates `ta/<goal-id-short>-<slug>`, `ta pr apply` pushes and opens PR
+- **CLAUDE.md injection**: injects branch workflow instructions so agents commit to feature branches, not `main`
+- **Backwards-compatible**: workflow config is optional; without it, current behavior is preserved
 
 ## Phase 4c.1 — Concurrent Session Conflict Detection
 <!-- status: pending -->
