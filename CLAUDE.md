@@ -26,8 +26,31 @@ Run these four checks (all must pass):
 ./dev cargo fmt --all -- --check
 ```
 
+## Git Workflow — Feature Branches + Pull Requests
+
+All work MUST happen on feature branches. Never commit directly to `main`.
+
+1. **Create a feature branch** before starting work:
+   ```bash
+   git checkout -b feature/<short-description>
+   ```
+   Use prefixes: `feature/`, `fix/`, `refactor/`, `docs/` as appropriate.
+
+2. **Commit to the feature branch** in logical working units as you go.
+
+3. **When the goal is complete**, push and open a pull request:
+   ```bash
+   git push -u origin feature/<short-description>
+   gh pr create --title "Short description" --body "## Summary\n- what changed and why\n\n## Test plan\n- verification steps"
+   ```
+
+4. **The PR is reviewed and merged** into `main` (squash or merge commit).
+
+This applies to both manual work and TA-mediated goals. When `ta pr apply --git-commit` runs, the commit should land on a feature branch, not `main`.
+
 ## Rules
 
+- Never commit directly to `main` — always use a feature branch + PR
 - Never disable or skip tests
 - Run tests after every code change, before committing
 - Commit in logical working units
@@ -36,7 +59,7 @@ Run these four checks (all must pass):
 
 ## Current State
 
-- **158 tests passing** across 12 crates (run `ta plan list` for full status)
+- **161 tests passing** across 12 crates (run `ta plan list` for full status)
 - See **PLAN.md** for the canonical development roadmap with per-phase status
 - `ta plan list` / `ta plan status` show current progress
 - Goals can link to plan phases: `ta run "title" --source . --phase 4b`
