@@ -7,8 +7,9 @@ use clap::Subcommand;
 use ta_changeset::changeset::{ChangeKind, ChangeSet, CommitIntent};
 use ta_changeset::diff::DiffContent;
 use ta_changeset::pr_package::{
-    AgentIdentity, Artifact, ChangeType, Changes, Goal, Iteration, PRPackage, PRStatus, Plan,
-    Provenance, RequestedAction, ReviewRequests, Risk, Signatures, Summary, WorkspaceRef,
+    AgentIdentity, Artifact, ChangeDependency, ChangeType, Changes, DependencyKind, Goal,
+    Iteration, PRPackage, PRStatus, Plan, Provenance, RequestedAction, ReviewRequests, Risk,
+    Signatures, Summary, WorkspaceRef,
 };
 use ta_connector_fs::FsConnector;
 use ta_goal::{GoalRunState, GoalRunStore};
@@ -105,6 +106,72 @@ pub fn execute(cmd: &PrCommands, config: &GatewayConfig) -> anyhow::Result<()> {
             *git_commit || *git_push,
             *git_push,
         ),
+    }
+}
+
+// ── Agent-generated change summary (.ta/change_summary.json) ──
+
+/// Agent-provided change summary with per-file rationale and dependency info.
+/// Written by the agent to `.ta/change_summary.json` before exiting.
+#[derive(Debug, serde::Deserialize)]
+struct ChangeSummary {
+    summary: Option<String>,
+    #[serde(default)]
+    changes: Vec<ChangeSummaryEntry>,
+    dependency_notes: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ChangeSummaryEntry {
+    path: String,
+    #[allow(dead_code)]
+    action: Option<String>,
+    why: Option<String>,
+    #[allow(dead_code)]
+    #[serde(default)]
+    independent: bool,
+    #[serde(default)]
+    depends_on: Vec<String>,
+    #[serde(default)]
+    depended_by: Vec<String>,
+}
+
+/// Try to load the agent's change summary from the staging workspace.
+fn load_change_summary(staging_path: &std::path::Path) -> Option<ChangeSummary> {
+    let path = staging_path.join(".ta/change_summary.json");
+    let content = std::fs::read_to_string(&path).ok()?;
+    match serde_json::from_str::<ChangeSummary>(&content) {
+        Ok(summary) => Some(summary),
+        Err(e) => {
+            eprintln!("Warning: could not parse .ta/change_summary.json: {}", e);
+            None
+        }
+    }
+}
+
+/// Look up a change summary entry by path and populate artifact fields.
+fn enrich_artifact(artifact: &mut Artifact, summary: &ChangeSummary) {
+    // Extract the relative path from fs://workspace/<path>.
+    let rel_path = artifact
+        .resource_uri
+        .strip_prefix("fs://workspace/")
+        .unwrap_or(&artifact.resource_uri);
+
+    if let Some(entry) = summary.changes.iter().find(|c| c.path == rel_path) {
+        artifact.rationale = entry.why.clone();
+
+        for dep_path in &entry.depends_on {
+            artifact.dependencies.push(ChangeDependency {
+                target_uri: format!("fs://workspace/{}", dep_path),
+                kind: DependencyKind::DependsOn,
+            });
+        }
+        for dep_path in &entry.depended_by {
+            artifact.dependencies.push(ChangeDependency {
+                target_uri: format!("fs://workspace/{}", dep_path),
+                kind: DependencyKind::DependedBy,
+            });
+        }
     }
 }
 
@@ -232,6 +299,36 @@ fn build_package(
         store.save(&goal_id, cs)?;
     }
 
+    // Enrich artifacts with agent-provided rationale and dependency info.
+    let change_summary = load_change_summary(&goal.workspace_path);
+    if let Some(ref cs) = change_summary {
+        for artifact in &mut artifacts {
+            enrich_artifact(artifact, cs);
+        }
+        let enriched_count = artifacts.iter().filter(|a| a.rationale.is_some()).count();
+        if enriched_count > 0 {
+            println!(
+                "Loaded change_summary.json: {}/{} artifacts enriched with rationale",
+                enriched_count,
+                artifacts.len()
+            );
+        }
+    }
+
+    // Use agent summary if available and user didn't provide a custom one.
+    let effective_summary = if summary == "Changes from agent work" {
+        change_summary
+            .as_ref()
+            .and_then(|cs| cs.summary.clone())
+            .unwrap_or_else(|| summary.to_string())
+    } else {
+        summary.to_string()
+    };
+
+    let dependency_notes = change_summary
+        .as_ref()
+        .and_then(|cs| cs.dependency_notes.clone());
+
     // Build the PR package.
     let package_id = Uuid::new_v4();
     let pkg = PRPackage {
@@ -262,11 +359,11 @@ fn build_package(
             orchestrator_run_id: None,
         },
         summary: Summary {
-            what_changed: summary.to_string(),
+            what_changed: effective_summary,
             why: goal.objective.clone(),
             impact: format!("{} file(s) changed", artifacts.len()),
             rollback_plan: "Revert changes from staging".to_string(),
-            open_questions: vec![],
+            open_questions: dependency_notes.into_iter().collect(),
         },
         plan: Plan {
             completed_steps: vec!["Agent completed work in staging".to_string()],
@@ -382,6 +479,14 @@ fn view_package(config: &GatewayConfig, id: &str) -> anyhow::Result<()> {
     println!("Changes ({} file(s)):", pkg.changes.artifacts.len());
     for artifact in &pkg.changes.artifacts {
         println!("  {:?}  {}", artifact.change_type, artifact.resource_uri);
+        if let Some(ref rationale) = artifact.rationale {
+            println!("         Why: {}", rationale);
+        }
+        if !artifact.dependencies.is_empty() {
+            for dep in &artifact.dependencies {
+                println!("         {:?}: {}", dep.kind, dep.target_uri);
+            }
+        }
     }
     println!();
     println!(
@@ -878,6 +983,121 @@ mod tests {
             .unwrap();
         let log_output = String::from_utf8_lossy(&log.stdout);
         assert!(log_output.contains("Modified README"));
+    }
+
+    #[test]
+    fn build_pr_enriches_from_change_summary() {
+        let project = TempDir::new().unwrap();
+        std::fs::write(project.path().join("README.md"), "# Original\n").unwrap();
+        std::fs::create_dir_all(project.path().join("src")).unwrap();
+        std::fs::write(project.path().join("src/main.rs"), "fn main() {}\n").unwrap();
+
+        let config = GatewayConfig::for_project(project.path());
+        let goal_store = GoalRunStore::new(&config.goals_dir).unwrap();
+
+        super::super::goal::execute(
+            &super::super::goal::GoalCommands::Start {
+                title: "Summary test".to_string(),
+                source: Some(project.path().to_path_buf()),
+                objective: "Test change_summary ingestion".to_string(),
+                agent: "test-agent".to_string(),
+                phase: None,
+            },
+            &config,
+        )
+        .unwrap();
+
+        let goals = goal_store.list().unwrap();
+        let goal = &goals[0];
+        let goal_id = goal.goal_run_id.to_string();
+
+        // Make changes in staging.
+        std::fs::write(goal.workspace_path.join("README.md"), "# Updated README\n").unwrap();
+        std::fs::write(
+            goal.workspace_path.join("src/main.rs"),
+            "fn main() { println!(\"hello\"); }\n",
+        )
+        .unwrap();
+
+        // Write a change_summary.json in staging .ta/.
+        std::fs::create_dir_all(goal.workspace_path.join(".ta")).unwrap();
+        std::fs::write(
+            goal.workspace_path.join(".ta/change_summary.json"),
+            r#"{
+                "summary": "Updated README and main entry point",
+                "changes": [
+                    {
+                        "path": "README.md",
+                        "action": "modified",
+                        "why": "Updated project description",
+                        "independent": true,
+                        "depends_on": [],
+                        "depended_by": []
+                    },
+                    {
+                        "path": "src/main.rs",
+                        "action": "modified",
+                        "why": "Added hello world output",
+                        "independent": false,
+                        "depends_on": [],
+                        "depended_by": ["README.md"]
+                    }
+                ],
+                "dependency_notes": "main.rs change is referenced in README"
+            }"#,
+        )
+        .unwrap();
+
+        // Build PR with default summary (triggers agent summary usage).
+        build_package(&config, &goal_id, "Changes from agent work", false).unwrap();
+
+        let packages = load_all_packages(&config).unwrap();
+        let pkg = &packages[0];
+
+        // Summary should come from change_summary.json.
+        assert_eq!(
+            pkg.summary.what_changed,
+            "Updated README and main entry point"
+        );
+
+        // Dependency notes in open_questions.
+        assert!(pkg
+            .summary
+            .open_questions
+            .contains(&"main.rs change is referenced in README".to_string()));
+
+        // Artifacts should have rationale populated.
+        let readme_artifact = pkg
+            .changes
+            .artifacts
+            .iter()
+            .find(|a| a.resource_uri.contains("README.md"))
+            .unwrap();
+        assert_eq!(
+            readme_artifact.rationale.as_deref(),
+            Some("Updated project description")
+        );
+        assert!(readme_artifact.dependencies.is_empty());
+
+        let main_artifact = pkg
+            .changes
+            .artifacts
+            .iter()
+            .find(|a| a.resource_uri.contains("main.rs"))
+            .unwrap();
+        assert_eq!(
+            main_artifact.rationale.as_deref(),
+            Some("Added hello world output")
+        );
+        assert_eq!(main_artifact.dependencies.len(), 1);
+        assert_eq!(
+            main_artifact.dependencies[0].target_uri,
+            "fs://workspace/README.md"
+        );
+        assert_eq!(
+            main_artifact.dependencies[0].kind,
+            DependencyKind::DependedBy
+        );
     }
 
     #[test]

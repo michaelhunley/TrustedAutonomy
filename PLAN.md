@@ -49,12 +49,13 @@ Workspace structure with 12 crates under `crates/` and `apps/`. Resource URIs (`
 - `ta pr apply` auto-updates PLAN.md when phase completes
 
 ## Phase 4b — Per-Artifact Review Model
-<!-- status: in_progress -->
+<!-- status: done -->
 - [x] ArtifactDisposition enum: Pending / Approved / Rejected / Discuss (per artifact, not per package)
 - [x] ChangeDependency struct for agent-reported inter-file dependencies
 - [x] URI-aware pattern matching: scheme-scoped glob (fs:// patterns can't match gmail:// URIs)
 - [x] Bare patterns auto-prefix with `fs://workspace/` for convenience; `*` respects `/`, `**` for deep
-- [ ] `ta pr build` reads `.ta/change_summary.json` into PRPackage dependency metadata
+- [x] `ta pr build` reads `.ta/change_summary.json` into PRPackage (rationale, dependencies, summary)
+- [x] `ta pr view` displays per-artifact rationale and dependencies
 
 ## Phase 4c — Selective Review CLI
 <!-- status: pending -->
