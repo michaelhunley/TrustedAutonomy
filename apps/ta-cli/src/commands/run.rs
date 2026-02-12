@@ -26,6 +26,8 @@ struct AgentLaunchConfig {
     args_template: &'static [&'static str],
     /// Whether this agent reads CLAUDE.md for context injection.
     injects_context_file: bool,
+    /// Whether to inject .claude/settings.local.json with TA permissions.
+    injects_settings: bool,
     /// Optional command to run before the main agent launch (e.g., init).
     /// (command, args) — runs in the staging directory.
     pre_launch: Option<(&'static str, &'static [&'static str])>,
@@ -36,14 +38,16 @@ fn agent_launch_config(agent_id: &str) -> AgentLaunchConfig {
     match agent_id {
         "claude-code" => AgentLaunchConfig {
             command: "claude".to_string(),
-            args_template: &["--dangerously-skip-permissions", "{prompt}"],
+            args_template: &["{prompt}"],
             injects_context_file: true,
+            injects_settings: true,
             pre_launch: None,
         },
         "codex" => AgentLaunchConfig {
             command: "codex".to_string(),
             args_template: &["--approval-mode", "full-auto", "{prompt}"],
             injects_context_file: false,
+            injects_settings: false,
             pre_launch: None,
         },
         "claude-flow" => AgentLaunchConfig {
@@ -56,12 +60,14 @@ fn agent_launch_config(agent_id: &str) -> AgentLaunchConfig {
                 "--claude",
             ],
             injects_context_file: true,
+            injects_settings: true,
             pre_launch: Some(("npx", &["claude-flow@alpha", "hive-mind", "init"])),
         },
         _ => AgentLaunchConfig {
             command: agent_id.to_string(),
             args_template: &[],
             injects_context_file: false,
+            injects_settings: false,
             pre_launch: None,
         },
     }
@@ -102,7 +108,7 @@ pub fn execute(
     let goal_id = goal.goal_run_id.to_string();
     let staging_path = goal.workspace_path.clone();
 
-    // 2. Inject context file (e.g., CLAUDE.md) if the agent supports it.
+    // 2. Inject context and settings into the staging workspace.
     if agent_config.injects_context_file {
         inject_claude_md(
             &staging_path,
@@ -111,6 +117,9 @@ pub fn execute(
             goal.plan_phase.as_deref(),
             goal.source_dir.as_deref(),
         )?;
+    }
+    if agent_config.injects_settings {
+        inject_claude_settings(&staging_path, source)?;
     }
 
     // Build the prompt string.
@@ -201,9 +210,12 @@ pub fn execute(
         }
     }
 
-    // 5. Restore original CLAUDE.md before diffing (removes TA injection).
+    // 5. Restore injected files before diffing (removes TA injection).
     if agent_config.injects_context_file {
         restore_claude_md(&staging_path)?;
+    }
+    if agent_config.injects_settings {
+        restore_claude_settings(&staging_path)?;
     }
 
     // 6. Build PR package from the diff.
@@ -251,6 +263,143 @@ fn shell_quote(s: &str) -> String {
     } else {
         s.to_string()
     }
+}
+
+// ── Claude Code settings injection ──────────────────────────────
+//
+// Instead of --dangerously-skip-permissions, TA injects a
+// .claude/settings.local.json that allows all standard tools but
+// denies patterns from the forbidden-tools list. This makes the
+// agent work uninterrupted in the staging sandbox while keeping
+// community-maintained safety rails.
+
+const SETTINGS_BACKUP: &str = ".ta/claude_settings_original";
+const SETTINGS_REL_PATH: &str = ".claude/settings.local.json";
+const FORBIDDEN_TOOLS_FILE: &str = ".ta-forbidden-tools";
+
+/// Tools to allow in the injected Claude Code settings.
+const DEFAULT_ALLOWED_TOOLS: &[&str] = &[
+    "Bash(*)",
+    "Read(*)",
+    "Write(*)",
+    "Edit(*)",
+    "MultiEdit(*)",
+    "Glob(*)",
+    "Grep(*)",
+    "WebFetch(*)",
+    "WebSearch(*)",
+    "NotebookEdit(*)",
+    "Task(*)",
+    "Skill(*)",
+    "TodoRead(*)",
+    "TodoWrite(*)",
+];
+
+/// Built-in forbidden tool patterns — community-maintained deny list.
+/// These are always denied even in TA staging workspaces.
+/// Add patterns here as the community identifies dangerous tools/commands.
+const DEFAULT_FORBIDDEN_TOOLS: &[&str] = &[];
+
+/// Load forbidden tool patterns from the project's `.ta-forbidden-tools` file.
+/// Returns an empty vec if the file doesn't exist.
+fn load_forbidden_tools(source_dir: Option<&Path>) -> Vec<String> {
+    let mut patterns: Vec<String> = DEFAULT_FORBIDDEN_TOOLS
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+
+    if let Some(source) = source_dir {
+        let path = source.join(FORBIDDEN_TOOLS_FILE);
+        if path.exists() {
+            if let Ok(contents) = std::fs::read_to_string(&path) {
+                for line in contents.lines() {
+                    let trimmed = line.trim();
+                    if !trimmed.is_empty() && !trimmed.starts_with('#') {
+                        patterns.push(trimmed.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    patterns
+}
+
+/// Inject .claude/settings.local.json with TA permissions.
+/// Allows all standard tools, denies forbidden patterns.
+fn inject_claude_settings(staging_path: &Path, source_dir: Option<&Path>) -> anyhow::Result<()> {
+    let settings_path = staging_path.join(SETTINGS_REL_PATH);
+
+    // Read and save original content.
+    let original_content = if settings_path.exists() {
+        std::fs::read_to_string(&settings_path)?
+    } else {
+        NO_ORIGINAL_SENTINEL.to_string()
+    };
+
+    // Save backup.
+    let backup_dir = staging_path.join(".ta");
+    std::fs::create_dir_all(&backup_dir)?;
+    std::fs::write(staging_path.join(SETTINGS_BACKUP), &original_content)?;
+
+    // Build allow and deny lists.
+    let allow: Vec<String> = DEFAULT_ALLOWED_TOOLS
+        .iter()
+        .map(|s| format!("\"{}\"", s))
+        .collect();
+    let forbidden = load_forbidden_tools(source_dir);
+    let deny: Vec<String> = forbidden.iter().map(|s| format!("\"{}\"", s)).collect();
+
+    let settings_json = format!(
+        r#"{{
+  "_comment": "Injected by Trusted Autonomy. Agent works in a staging sandbox — all changes require human review before applying. See .ta-forbidden-tools to deny specific patterns.",
+  "permissions": {{
+    "allow": [
+      {}
+    ],
+    "deny": [
+      {}
+    ]
+  }}
+}}"#,
+        allow.join(",\n      "),
+        deny.join(",\n      ")
+    );
+
+    // Ensure .claude/ directory exists.
+    if let Some(parent) = settings_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    std::fs::write(&settings_path, settings_json)?;
+    Ok(())
+}
+
+/// Restore original .claude/settings.local.json before diffing.
+fn restore_claude_settings(staging_path: &Path) -> anyhow::Result<()> {
+    let backup_path = staging_path.join(SETTINGS_BACKUP);
+    let settings_path = staging_path.join(SETTINGS_REL_PATH);
+
+    if !backup_path.exists() {
+        return Ok(());
+    }
+
+    let original = std::fs::read_to_string(&backup_path)?;
+
+    if original == NO_ORIGINAL_SENTINEL {
+        // Settings file didn't exist originally — remove it and the .claude/ dir if empty.
+        if settings_path.exists() {
+            std::fs::remove_file(&settings_path)?;
+        }
+        if let Some(parent) = settings_path.parent() {
+            // Only remove .claude/ if it's empty (don't delete user's other configs).
+            let _ = std::fs::remove_dir(parent);
+        }
+    } else {
+        std::fs::write(&settings_path, original)?;
+    }
+
+    Ok(())
 }
 
 // ── CLAUDE.md injection and restoration ─────────────────────────
@@ -455,6 +604,12 @@ mod tests {
         let backup =
             std::fs::read_to_string(goals[0].workspace_path.join(CLAUDE_MD_BACKUP)).unwrap();
         assert_eq!(backup, "# Existing project instructions\n");
+
+        // Verify settings.local.json was injected.
+        let settings =
+            std::fs::read_to_string(goals[0].workspace_path.join(SETTINGS_REL_PATH)).unwrap();
+        assert!(settings.contains("Trusted Autonomy"));
+        assert!(settings.contains("Bash(*)"));
     }
 
     #[test]
@@ -499,17 +654,21 @@ mod tests {
         let claude = agent_launch_config("claude-code");
         assert_eq!(claude.command, "claude");
         assert!(claude.injects_context_file);
-        assert!(claude
+        assert!(claude.injects_settings);
+        // No --dangerously-skip-permissions — TA injects settings instead.
+        assert!(!claude
             .args_template
             .contains(&"--dangerously-skip-permissions"));
 
         let codex = agent_launch_config("codex");
         assert_eq!(codex.command, "codex");
         assert!(!codex.injects_context_file);
+        assert!(!codex.injects_settings);
 
         let flow = agent_launch_config("claude-flow");
         assert_eq!(flow.command, "npx");
         assert!(flow.injects_context_file);
+        assert!(flow.injects_settings);
         assert!(flow.args_template.contains(&"claude-flow@alpha"));
         assert!(flow.args_template.contains(&"hive-mind"));
         assert!(flow.args_template.contains(&"--claude"));
@@ -522,5 +681,79 @@ mod tests {
         assert_eq!(unknown.command, "my-custom-agent");
         assert!(unknown.args_template.is_empty());
         assert!(unknown.pre_launch.is_none());
+        assert!(!unknown.injects_settings);
+    }
+
+    #[test]
+    fn inject_and_restore_settings_roundtrip() {
+        let staging = TempDir::new().unwrap();
+
+        inject_claude_settings(staging.path(), None).unwrap();
+
+        let settings_path = staging.path().join(SETTINGS_REL_PATH);
+        assert!(settings_path.exists());
+        let content = std::fs::read_to_string(&settings_path).unwrap();
+        assert!(content.contains("Trusted Autonomy"));
+        assert!(content.contains("Bash(*)"));
+        assert!(content.contains("\"deny\": ["));
+
+        restore_claude_settings(staging.path()).unwrap();
+        assert!(!settings_path.exists());
+    }
+
+    #[test]
+    fn inject_settings_preserves_existing() {
+        let staging = TempDir::new().unwrap();
+        let claude_dir = staging.path().join(".claude");
+        std::fs::create_dir_all(&claude_dir).unwrap();
+        let original = r#"{"customSetting": true}"#;
+        std::fs::write(claude_dir.join("settings.local.json"), original).unwrap();
+
+        inject_claude_settings(staging.path(), None).unwrap();
+
+        let injected = std::fs::read_to_string(staging.path().join(SETTINGS_REL_PATH)).unwrap();
+        assert!(injected.contains("Trusted Autonomy"));
+
+        restore_claude_settings(staging.path()).unwrap();
+        let restored = std::fs::read_to_string(staging.path().join(SETTINGS_REL_PATH)).unwrap();
+        assert_eq!(restored, original);
+    }
+
+    #[test]
+    fn forbidden_tools_loaded_from_file() {
+        let project = TempDir::new().unwrap();
+        std::fs::write(
+            project.path().join(FORBIDDEN_TOOLS_FILE),
+            "# Comment line\nBash(rm -rf /*)\n\nBash(curl * | sh)\n",
+        )
+        .unwrap();
+
+        let forbidden = load_forbidden_tools(Some(project.path()));
+        assert_eq!(forbidden.len(), 2);
+        assert_eq!(forbidden[0], "Bash(rm -rf /*)");
+        assert_eq!(forbidden[1], "Bash(curl * | sh)");
+    }
+
+    #[test]
+    fn forbidden_tools_empty_when_no_file() {
+        let project = TempDir::new().unwrap();
+        let forbidden = load_forbidden_tools(Some(project.path()));
+        assert!(forbidden.is_empty());
+    }
+
+    #[test]
+    fn inject_settings_includes_forbidden_tools() {
+        let staging = TempDir::new().unwrap();
+        let source = TempDir::new().unwrap();
+        std::fs::write(
+            source.path().join(FORBIDDEN_TOOLS_FILE),
+            "Bash(rm -rf /*)\n",
+        )
+        .unwrap();
+
+        inject_claude_settings(staging.path(), Some(source.path())).unwrap();
+
+        let content = std::fs::read_to_string(staging.path().join(SETTINGS_REL_PATH)).unwrap();
+        assert!(content.contains("Bash(rm -rf /*)"));
     }
 }

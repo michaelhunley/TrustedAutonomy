@@ -44,6 +44,12 @@ pub enum PrCommands {
     View {
         /// PR package ID.
         id: String,
+        /// Show summary and file list only (skip diffs).
+        #[arg(long)]
+        summary: bool,
+        /// Show diff for a single file only (path relative to workspace root).
+        #[arg(long)]
+        file: Option<String>,
     },
     /// Approve a PR package for application.
     Approve {
@@ -98,7 +104,9 @@ pub fn execute(cmd: &PrCommands, config: &GatewayConfig) -> anyhow::Result<()> {
             latest,
         } => build_package(config, goal_id, summary, *latest),
         PrCommands::List { goal } => list_packages(config, goal.as_deref()),
-        PrCommands::View { id } => view_package(config, id),
+        PrCommands::View { id, summary, file } => {
+            view_package(config, id, *summary, file.as_deref())
+        }
         PrCommands::Approve { id, reviewer } => approve_package(config, id, reviewer),
         PrCommands::Deny {
             id,
@@ -477,7 +485,40 @@ fn list_packages(config: &GatewayConfig, goal_filter: Option<&str>) -> anyhow::R
     Ok(())
 }
 
-fn view_package(config: &GatewayConfig, id: &str) -> anyhow::Result<()> {
+/// Check if a file appears to be binary by looking for null bytes in the first 8KB.
+fn is_binary_file(path: &std::path::Path) -> bool {
+    use std::io::Read;
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut buf = [0u8; 8192];
+    let Ok(n) = file.read(&mut buf) else {
+        return false;
+    };
+    buf[..n].contains(&0)
+}
+
+/// Human-readable file size display.
+fn file_size_display(path: &std::path::Path) -> String {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return "unknown size".to_string();
+    };
+    let bytes = meta.len();
+    if bytes < 1024 {
+        format!("{} B", bytes)
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    }
+}
+
+fn view_package(
+    config: &GatewayConfig,
+    id: &str,
+    summary_only: bool,
+    file_filter: Option<&str>,
+) -> anyhow::Result<()> {
     let package_id = Uuid::parse_str(id)?;
     let pkg = load_package(config, package_id)?;
 
@@ -494,6 +535,9 @@ fn view_package(config: &GatewayConfig, id: &str) -> anyhow::Result<()> {
     println!("  What: {}", pkg.summary.what_changed);
     println!("  Why:  {}", pkg.summary.why);
     println!("  Impact: {}", pkg.summary.impact);
+    if !pkg.summary.open_questions.is_empty() {
+        println!("  Notes: {}", pkg.summary.open_questions.join("; "));
+    }
     println!();
     println!("Changes ({} file(s)):", pkg.changes.artifacts.len());
     for artifact in &pkg.changes.artifacts {
@@ -513,6 +557,11 @@ fn view_package(config: &GatewayConfig, id: &str) -> anyhow::Result<()> {
         pkg.review_requests.required_approvals, pkg.review_requests.reviewers
     );
 
+    // Skip diffs if --summary was passed.
+    if summary_only {
+        return Ok(());
+    }
+
     // Show diffs from staging if available.
     let goal_store = GoalRunStore::new(&config.goals_dir)?;
     let goals = goal_store.list()?;
@@ -524,10 +573,41 @@ fn view_package(config: &GatewayConfig, id: &str) -> anyhow::Result<()> {
         let staging = StagingWorkspace::new(goal.goal_run_id.to_string(), &config.staging_dir)?;
         let staged_files = staging.list_files()?;
 
-        if !staged_files.is_empty() {
+        // Filter to a single file if --file was passed.
+        let files_to_show: Vec<&String> = if let Some(filter) = file_filter {
+            staged_files
+                .iter()
+                .filter(|f| f.as_str() == filter)
+                .collect()
+        } else {
+            staged_files.iter().collect()
+        };
+
+        if let Some(filter) = file_filter {
+            if files_to_show.is_empty() {
+                println!("\nFile '{}' not found in staged changes.", filter);
+                println!("Available files:");
+                for f in &staged_files {
+                    println!("  {}", f);
+                }
+                return Ok(());
+            }
+        }
+
+        if !files_to_show.is_empty() {
             println!("\nDiffs:");
             println!("{}", "=".repeat(60));
-            for file in &staged_files {
+            for file in &files_to_show {
+                // Check for binary files.
+                let staged_path = goal.workspace_path.join(file);
+                if is_binary_file(&staged_path) {
+                    let size = file_size_display(&staged_path);
+                    println!("--- {}", file);
+                    println!("[binary: {}]", size);
+                    println!();
+                    continue;
+                }
+
                 if let Some(diff) = staging.diff_file(file)? {
                     println!("--- {}", file);
                     println!("{}", diff);

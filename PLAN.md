@@ -30,7 +30,8 @@ Workspace structure with 12 crates under `crates/` and `apps/`. Resource URIs (`
 - ExcludePatterns (V1 TEMPORARY): .taignore or defaults (target/, node_modules/, etc.)
 - Flow: `ta goal start` → copy source → agent works in staging → `ta pr build` → diff → PRPackage → approve → apply
 - CLAUDE.md injection: `ta run` prepends TA context, saves backup, restores before diff
-- AgentLaunchConfig: per-agent configs (claude-code uses --dangerously-skip-permissions)
+- AgentLaunchConfig: per-agent configs with settings injection (replaces --dangerously-skip-permissions)
+- Settings injection: `.claude/settings.local.json` with allow/deny lists + community `.ta-forbidden-tools` deny file
 - Git integration: `ta pr apply --git-commit` runs git add + commit after applying
 - Dogfooding validated: 1.6MB staging copy with exclude patterns
 
@@ -83,6 +84,7 @@ Workspace structure with 12 crates under `crates/` and `apps/`. Resource URIs (`
 - "The security model is not yet audited. Do not trust it with secrets or sensitive data"
 - "Selective approval (Phase 4b-4c) is not yet implemented — review is all-or-nothing"
 - "No sandbox isolation yet — agent runs with your permissions in a staging copy"
+- "No conflict detection yet — editing source files while a TA session is active may lose changes on apply (git protects committed work)"
 
 ### Nice-to-have for v0.1
 - `ta pr view` shows colored diffs in terminal
@@ -95,6 +97,23 @@ Workspace structure with 12 crates under `crates/` and `apps/`. Resource URIs (`
 - "What agents do you want to use with this? What's missing for your agent?"
 - "What connectors matter most? (Gmail, Drive, DB, Slack, etc.)"
 - "Would you pay for a hosted version? What would that need to include?"
+
+## Phase 4c.1 — Concurrent Session Conflict Detection
+<!-- status: pending -->
+- Detect when source files have changed since staging copy was made (stale overlay)
+- On `ta pr apply`: compare source file mtime/hash against snapshot taken at `ta goal start`
+- Conflict resolution strategies: abort, merge (delegate to git merge), force-overwrite
+- **Current limitation**: if you edit source files while a TA session is active, `ta pr apply` will silently overwrite those changes. Git handles this for committed code, but uncommitted edits can be lost.
+- Display warnings at PR review time if source has diverged
+- Future: lock files or advisory locks for active goals
+
+## Phase 4c.2 — External Diff Routing
+<!-- status: pending -->
+- Config file (`.ta/diff-handlers.toml` or similar) maps file patterns to external applications
+- Examples: `*.uasset` → Unreal Editor, `*.png` → image diff tool, `*.blend` → Blender
+- `ta pr view <id> --file model.uasset` opens the file in the configured handler
+- Default handlers: text → inline diff (current), binary → byte count summary
+- Integration with OS `open` / `xdg-open` as fallback
 
 ## Phase 4d — Review Sessions
 <!-- status: pending -->
