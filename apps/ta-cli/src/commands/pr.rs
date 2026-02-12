@@ -778,10 +778,6 @@ fn assign_dispositions(
     reject_patterns: &[String],
     discuss_patterns: &[String],
 ) -> (usize, usize, usize) {
-    let mut approved: usize = 0;
-    let mut rejected: usize = 0;
-    let mut discussed: usize = 0;
-
     // Helper: check if a pattern matches an artifact.
     let matches = |pattern: &str, artifact: &Artifact| -> bool {
         if pattern == "all" {
@@ -793,43 +789,45 @@ fn assign_dispositions(
         }
     };
 
-    // Apply --approve patterns.
+    // Apply patterns in order: approve → reject → discuss.
+    // Later patterns override earlier ones (last writer wins per artifact).
     for pattern in approve_patterns {
         for artifact in artifacts.iter_mut() {
             if matches(pattern, artifact) {
                 artifact.disposition = ArtifactDisposition::Approved;
-                approved += 1;
             }
         }
     }
 
-    // Apply --reject patterns (can override approve).
     for pattern in reject_patterns {
         for artifact in artifacts.iter_mut() {
             if matches(pattern, artifact) {
-                if artifact.disposition == ArtifactDisposition::Approved {
-                    approved = approved.saturating_sub(1);
-                }
                 artifact.disposition = ArtifactDisposition::Rejected;
-                rejected += 1;
             }
         }
     }
 
-    // Apply --discuss patterns (can override approve/reject).
     for pattern in discuss_patterns {
         for artifact in artifacts.iter_mut() {
             if matches(pattern, artifact) {
-                match artifact.disposition {
-                    ArtifactDisposition::Approved => approved = approved.saturating_sub(1),
-                    ArtifactDisposition::Rejected => rejected = rejected.saturating_sub(1),
-                    _ => {}
-                }
                 artifact.disposition = ArtifactDisposition::Discuss;
-                discussed += 1;
             }
         }
     }
+
+    // Count final dispositions from actual artifact state (not incrementally).
+    let approved = artifacts
+        .iter()
+        .filter(|a| a.disposition == ArtifactDisposition::Approved)
+        .count();
+    let rejected = artifacts
+        .iter()
+        .filter(|a| a.disposition == ArtifactDisposition::Rejected)
+        .count();
+    let discussed = artifacts
+        .iter()
+        .filter(|a| a.disposition == ArtifactDisposition::Discuss)
+        .count();
 
     (approved, rejected, discussed)
 }
@@ -868,14 +866,18 @@ fn apply_package(
             patterns.discuss,
         );
 
+        let pending = pkg
+            .changes
+            .artifacts
+            .iter()
+            .filter(|a| a.disposition == ArtifactDisposition::Pending)
+            .count();
+
         println!("Selective review disposition summary:");
         println!("  Approved: {} artifact(s)", approved);
         println!("  Rejected: {} artifact(s)", rejected);
         println!("  Discuss:  {} artifact(s)", discussed);
-        println!(
-            "  Pending:  {} artifact(s)",
-            pkg.changes.artifacts.len() - approved - rejected - discussed
-        );
+        println!("  Pending:  {} artifact(s)", pending);
         println!();
 
         // Validate dependencies.
