@@ -7,10 +7,11 @@ use clap::Subcommand;
 use ta_changeset::changeset::{ChangeKind, ChangeSet, CommitIntent};
 use ta_changeset::diff::DiffContent;
 use ta_changeset::pr_package::{
-    AgentIdentity, Artifact, ChangeDependency, ChangeType, Changes, DependencyKind, Goal,
-    Iteration, PRPackage, PRStatus, Plan, Provenance, RequestedAction, ReviewRequests, Risk,
-    Signatures, Summary, WorkspaceRef,
+    AgentIdentity, Artifact, ArtifactDisposition, ChangeDependency, ChangeType, Changes,
+    DependencyKind, Goal, Iteration, PRPackage, PRStatus, Plan, Provenance, RequestedAction,
+    ReviewRequests, Risk, Signatures, Summary, WorkspaceRef,
 };
+use ta_changeset::uri_pattern;
 use ta_connector_fs::FsConnector;
 use ta_goal::{GoalRunState, GoalRunStore};
 use ta_mcp_gateway::GatewayConfig;
@@ -76,6 +77,16 @@ pub enum PrCommands {
         /// Push to remote after committing (implies --git-commit).
         #[arg(long)]
         git_push: bool,
+        /// Approve artifacts matching these patterns (repeatable).
+        /// Special values: "all" (everything), "rest" (everything not explicitly matched).
+        #[arg(long = "approve")]
+        approve_patterns: Vec<String>,
+        /// Reject artifacts matching these patterns (repeatable).
+        #[arg(long = "reject")]
+        reject_patterns: Vec<String>,
+        /// Mark artifacts for discussion matching these patterns (repeatable).
+        #[arg(long = "discuss")]
+        discuss_patterns: Vec<String>,
     },
 }
 
@@ -99,12 +110,20 @@ pub fn execute(cmd: &PrCommands, config: &GatewayConfig) -> anyhow::Result<()> {
             target,
             git_commit,
             git_push,
+            approve_patterns,
+            reject_patterns,
+            discuss_patterns,
         } => apply_package(
             config,
             id,
             target.as_deref(),
             *git_commit || *git_push,
             *git_push,
+            SelectiveReviewPatterns {
+                approve: approve_patterns,
+                reject: reject_patterns,
+                discuss: discuss_patterns,
+            },
         ),
     }
 }
@@ -581,21 +600,239 @@ fn deny_package(
     Ok(())
 }
 
+/// Selective review patterns for artifact disposition.
+#[derive(Default)]
+struct SelectiveReviewPatterns<'a> {
+    approve: &'a [String],
+    reject: &'a [String],
+    discuss: &'a [String],
+}
+
+impl<'a> SelectiveReviewPatterns<'a> {
+    fn is_enabled(&self) -> bool {
+        !self.approve.is_empty() || !self.reject.is_empty() || !self.discuss.is_empty()
+    }
+}
+
+/// Validate that approved artifacts don't have broken dependencies.
+///
+/// Returns warnings for:
+/// - Approved artifacts that depend on rejected artifacts
+/// - Rejected artifacts that are depended upon by approved artifacts
+///
+/// Each warning includes the source artifact, target artifact, and dependency type.
+fn validate_dependencies(artifacts: &[Artifact]) -> Vec<String> {
+    let mut warnings = Vec::new();
+
+    // Build a URI -> Artifact map for quick lookups.
+    let artifact_map: std::collections::HashMap<&str, &Artifact> = artifacts
+        .iter()
+        .map(|a| (a.resource_uri.as_str(), a))
+        .collect();
+
+    for artifact in artifacts {
+        if artifact.disposition != ArtifactDisposition::Approved {
+            continue;
+        }
+
+        // Check if any dependencies are rejected.
+        for dep in &artifact.dependencies {
+            if dep.kind != DependencyKind::DependsOn {
+                continue;
+            }
+            if let Some(target) = artifact_map.get(dep.target_uri.as_str()) {
+                if target.disposition == ArtifactDisposition::Rejected {
+                    warnings.push(format!(
+                        "Warning: Approved artifact {} depends on rejected artifact {}",
+                        artifact.resource_uri, target.resource_uri
+                    ));
+                } else if target.disposition == ArtifactDisposition::Pending {
+                    warnings.push(format!(
+                        "Warning: Approved artifact {} depends on pending artifact {} (not explicitly approved)",
+                        artifact.resource_uri, target.resource_uri
+                    ));
+                }
+            }
+        }
+    }
+
+    // Check for rejected artifacts that are depended upon by approved artifacts.
+    for artifact in artifacts {
+        if artifact.disposition != ArtifactDisposition::Rejected {
+            continue;
+        }
+
+        for dep in &artifact.dependencies {
+            if dep.kind != DependencyKind::DependedBy {
+                continue;
+            }
+            if let Some(dependent) = artifact_map.get(dep.target_uri.as_str()) {
+                if dependent.disposition == ArtifactDisposition::Approved {
+                    warnings.push(format!(
+                        "Warning: Approved artifact {} will break because its dependency {} is rejected",
+                        dependent.resource_uri, artifact.resource_uri
+                    ));
+                }
+            }
+        }
+    }
+
+    warnings
+}
+
+/// Assign dispositions to artifacts based on user-provided patterns.
+///
+/// Processing order:
+/// 1. --approve patterns are applied first
+/// 2. --reject patterns are applied second
+/// 3. --discuss patterns are applied last
+///
+/// Special values:
+/// - "all": matches all artifacts
+/// - "rest": matches all artifacts not yet assigned a disposition
+///
+/// Returns the count of artifacts assigned to each disposition.
+fn assign_dispositions(
+    artifacts: &mut [Artifact],
+    approve_patterns: &[String],
+    reject_patterns: &[String],
+    discuss_patterns: &[String],
+) -> (usize, usize, usize) {
+    let mut approved: usize = 0;
+    let mut rejected: usize = 0;
+    let mut discussed: usize = 0;
+
+    // Helper: check if a pattern matches an artifact.
+    let matches = |pattern: &str, artifact: &Artifact| -> bool {
+        if pattern == "all" {
+            true
+        } else if pattern == "rest" {
+            artifact.disposition == ArtifactDisposition::Pending
+        } else {
+            uri_pattern::matches_uri(pattern, &artifact.resource_uri)
+        }
+    };
+
+    // Apply --approve patterns.
+    for pattern in approve_patterns {
+        for artifact in artifacts.iter_mut() {
+            if matches(pattern, artifact) {
+                artifact.disposition = ArtifactDisposition::Approved;
+                approved += 1;
+            }
+        }
+    }
+
+    // Apply --reject patterns (can override approve).
+    for pattern in reject_patterns {
+        for artifact in artifacts.iter_mut() {
+            if matches(pattern, artifact) {
+                if artifact.disposition == ArtifactDisposition::Approved {
+                    approved = approved.saturating_sub(1);
+                }
+                artifact.disposition = ArtifactDisposition::Rejected;
+                rejected += 1;
+            }
+        }
+    }
+
+    // Apply --discuss patterns (can override approve/reject).
+    for pattern in discuss_patterns {
+        for artifact in artifacts.iter_mut() {
+            if matches(pattern, artifact) {
+                match artifact.disposition {
+                    ArtifactDisposition::Approved => approved = approved.saturating_sub(1),
+                    ArtifactDisposition::Rejected => rejected = rejected.saturating_sub(1),
+                    _ => {}
+                }
+                artifact.disposition = ArtifactDisposition::Discuss;
+                discussed += 1;
+            }
+        }
+    }
+
+    (approved, rejected, discussed)
+}
+
 fn apply_package(
     config: &GatewayConfig,
     id: &str,
     target: Option<&str>,
     git_commit: bool,
     git_push: bool,
+    patterns: SelectiveReviewPatterns,
 ) -> anyhow::Result<()> {
     let package_id = Uuid::parse_str(id)?;
     let mut pkg = load_package(config, package_id)?;
 
-    if !matches!(pkg.status, PRStatus::Approved { .. }) {
-        anyhow::bail!(
-            "Cannot apply package in {:?} state (must be Approved)",
-            pkg.status
+    // Check if selective review is enabled.
+    let selective_review = patterns.is_enabled();
+
+    if selective_review {
+        // Selective review mode: allow PendingReview or Approved packages.
+        if !matches!(
+            pkg.status,
+            PRStatus::PendingReview | PRStatus::Approved { .. }
+        ) {
+            anyhow::bail!(
+                "Cannot apply package in {:?} state (must be PendingReview or Approved for selective review)",
+                pkg.status
+            );
+        }
+
+        // Assign dispositions based on patterns.
+        let (approved, rejected, discussed) = assign_dispositions(
+            &mut pkg.changes.artifacts,
+            patterns.approve,
+            patterns.reject,
+            patterns.discuss,
         );
+
+        println!("Selective review disposition summary:");
+        println!("  Approved: {} artifact(s)", approved);
+        println!("  Rejected: {} artifact(s)", rejected);
+        println!("  Discuss:  {} artifact(s)", discussed);
+        println!(
+            "  Pending:  {} artifact(s)",
+            pkg.changes.artifacts.len() - approved - rejected - discussed
+        );
+        println!();
+
+        // Validate dependencies.
+        let warnings = validate_dependencies(&pkg.changes.artifacts);
+        if !warnings.is_empty() {
+            println!("Dependency warnings:");
+            for warning in &warnings {
+                println!("  {}", warning);
+            }
+            println!();
+            anyhow::bail!(
+                "Cannot apply: {} dependency conflict(s) detected. Resolve conflicts and try again.",
+                warnings.len()
+            );
+        }
+
+        // Count approved artifacts.
+        let approved_count = pkg
+            .changes
+            .artifacts
+            .iter()
+            .filter(|a| a.disposition == ArtifactDisposition::Approved)
+            .count();
+
+        if approved_count == 0 {
+            anyhow::bail!("No artifacts approved for application");
+        }
+
+        println!("Applying {} approved artifact(s)...", approved_count);
+    } else {
+        // Legacy all-or-nothing mode: require Approved status.
+        if !matches!(pkg.status, PRStatus::Approved { .. }) {
+            anyhow::bail!(
+                "Cannot apply package in {:?} state (must be Approved)",
+                pkg.status
+            );
+        }
     }
 
     // Find the goal for this package.
@@ -625,15 +862,37 @@ fn apply_package(
             &goal.workspace_path,
             excludes,
         );
-        let applied = overlay
-            .apply_to(&target_dir)
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
+
+        let applied = if selective_review {
+            // Selective mode: only apply approved artifacts.
+            let approved_uris: Vec<String> = pkg
+                .changes
+                .artifacts
+                .iter()
+                .filter(|a| a.disposition == ArtifactDisposition::Approved)
+                .map(|a| a.resource_uri.clone())
+                .collect();
+            overlay
+                .apply_selective(&target_dir, &approved_uris)
+                .map_err(|e| anyhow::anyhow!("{}", e))?
+        } else {
+            // Legacy mode: apply all changes.
+            overlay
+                .apply_to(&target_dir)
+                .map_err(|e| anyhow::anyhow!("{}", e))?
+        };
+
         applied
             .into_iter()
             .map(|(path, kind)| format!("{} ({})", path, kind))
             .collect()
     } else {
         // Legacy MCP-based goal: use FsConnector.
+        if selective_review {
+            anyhow::bail!(
+                "Selective review is not supported for MCP-based goals (only overlay-based goals)"
+            );
+        }
         let staging = StagingWorkspace::new(goal.goal_run_id.to_string(), &config.staging_dir)?;
         let store = JsonFileStore::new(config.store_dir.join(goal.goal_run_id.to_string()))?;
         let mut connector =
@@ -897,7 +1156,15 @@ mod tests {
         approve_package(&config, &pkg_id, "tester").unwrap();
 
         // Apply (no git).
-        apply_package(&config, &pkg_id, None, false, false).unwrap();
+        apply_package(
+            &config,
+            &pkg_id,
+            None,
+            false,
+            false,
+            SelectiveReviewPatterns::default(),
+        )
+        .unwrap();
 
         // Verify files changed in source.
         let readme = std::fs::read_to_string(project.path().join("README.md")).unwrap();
@@ -973,7 +1240,15 @@ mod tests {
         let packages = load_all_packages(&config).unwrap();
         let pkg_id = packages[0].package_id.to_string();
         approve_package(&config, &pkg_id, "tester").unwrap();
-        apply_package(&config, &pkg_id, None, true, false).unwrap();
+        apply_package(
+            &config,
+            &pkg_id,
+            None,
+            true,
+            false,
+            SelectiveReviewPatterns::default(),
+        )
+        .unwrap();
 
         // Verify git log has new commit.
         let log = std::process::Command::new("git")
@@ -1128,5 +1403,332 @@ mod tests {
         let result = build_package(&config, &goal_id, "No changes", false);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("No changes"));
+    }
+
+    // ── Selective Review Tests ──────────────────────────────────────
+
+    #[test]
+    fn selective_apply_with_approve_pattern() {
+        let project = TempDir::new().unwrap();
+        std::fs::write(project.path().join("README.md"), "# Test\n").unwrap();
+        std::fs::create_dir_all(project.path().join("src")).unwrap();
+        std::fs::write(project.path().join("src/main.rs"), "fn main() {}\n").unwrap();
+        std::fs::write(project.path().join("src/lib.rs"), "pub fn lib() {}\n").unwrap();
+
+        let config = GatewayConfig::for_project(project.path());
+
+        // Start goal + modify files + build PR.
+        super::super::goal::execute(
+            &super::super::goal::GoalCommands::Start {
+                title: "Selective test".to_string(),
+                source: Some(project.path().to_path_buf()),
+                objective: "Test selective approval".to_string(),
+                agent: "test-agent".to_string(),
+                phase: None,
+            },
+            &config,
+        )
+        .unwrap();
+
+        let goal_store = GoalRunStore::new(&config.goals_dir).unwrap();
+        let goals = goal_store.list().unwrap();
+        let goal = &goals[0];
+        let goal_id = goal.goal_run_id.to_string();
+
+        // Modify all files.
+        std::fs::write(goal.workspace_path.join("README.md"), "# Updated\n").unwrap();
+        std::fs::write(
+            goal.workspace_path.join("src/main.rs"),
+            "fn main() { println!(\"hi\"); }\n",
+        )
+        .unwrap();
+        std::fs::write(
+            goal.workspace_path.join("src/lib.rs"),
+            "pub fn lib() { println!(\"lib\"); }\n",
+        )
+        .unwrap();
+
+        // Build PR.
+        build_package(&config, &goal_id, "Test changes", false).unwrap();
+        let packages = load_all_packages(&config).unwrap();
+        let pkg_id = packages[0].package_id.to_string();
+
+        // Apply with selective approval: only approve src/**
+        apply_package(
+            &config,
+            &pkg_id,
+            None,
+            false,
+            false,
+            SelectiveReviewPatterns {
+                approve: &["src/**".to_string()],
+                reject: &[],
+                discuss: &[],
+            },
+        )
+        .unwrap();
+
+        // Verify only src files changed.
+        let readme = std::fs::read_to_string(project.path().join("README.md")).unwrap();
+        assert_eq!(readme, "# Test\n"); // unchanged
+
+        let main = std::fs::read_to_string(project.path().join("src/main.rs")).unwrap();
+        assert!(main.contains("println")); // changed
+
+        let lib = std::fs::read_to_string(project.path().join("src/lib.rs")).unwrap();
+        assert!(lib.contains("println")); // changed
+    }
+
+    #[test]
+    fn selective_apply_with_reject_pattern() {
+        let project = TempDir::new().unwrap();
+        std::fs::write(project.path().join("README.md"), "# Test\n").unwrap();
+        std::fs::write(project.path().join("config.toml"), "[config]\n").unwrap();
+
+        let config = GatewayConfig::for_project(project.path());
+
+        super::super::goal::execute(
+            &super::super::goal::GoalCommands::Start {
+                title: "Reject test".to_string(),
+                source: Some(project.path().to_path_buf()),
+                objective: "Test rejection".to_string(),
+                agent: "test-agent".to_string(),
+                phase: None,
+            },
+            &config,
+        )
+        .unwrap();
+
+        let goal_store = GoalRunStore::new(&config.goals_dir).unwrap();
+        let goals = goal_store.list().unwrap();
+        let goal = &goals[0];
+        let goal_id = goal.goal_run_id.to_string();
+
+        std::fs::write(goal.workspace_path.join("README.md"), "# Updated\n").unwrap();
+        std::fs::write(goal.workspace_path.join("config.toml"), "[config]\nfoo=1\n").unwrap();
+
+        build_package(&config, &goal_id, "Test changes", false).unwrap();
+        let packages = load_all_packages(&config).unwrap();
+        let pkg_id = packages[0].package_id.to_string();
+
+        // Approve all, then reject config.toml.
+        apply_package(
+            &config,
+            &pkg_id,
+            None,
+            false,
+            false,
+            SelectiveReviewPatterns {
+                approve: &["all".to_string()],
+                reject: &["config.toml".to_string()],
+                discuss: &[],
+            },
+        )
+        .unwrap();
+
+        // Only README should be updated.
+        let readme = std::fs::read_to_string(project.path().join("README.md")).unwrap();
+        assert_eq!(readme, "# Updated\n");
+
+        let config_content = std::fs::read_to_string(project.path().join("config.toml")).unwrap();
+        assert_eq!(config_content, "[config]\n"); // unchanged
+    }
+
+    #[test]
+    fn selective_apply_special_value_all() {
+        let project = TempDir::new().unwrap();
+        std::fs::write(project.path().join("file1.txt"), "a\n").unwrap();
+        std::fs::write(project.path().join("file2.txt"), "b\n").unwrap();
+
+        let config = GatewayConfig::for_project(project.path());
+
+        super::super::goal::execute(
+            &super::super::goal::GoalCommands::Start {
+                title: "All test".to_string(),
+                source: Some(project.path().to_path_buf()),
+                objective: "Test all".to_string(),
+                agent: "test-agent".to_string(),
+                phase: None,
+            },
+            &config,
+        )
+        .unwrap();
+
+        let goal_store = GoalRunStore::new(&config.goals_dir).unwrap();
+        let goals = goal_store.list().unwrap();
+        let goal = &goals[0];
+        let goal_id = goal.goal_run_id.to_string();
+
+        std::fs::write(goal.workspace_path.join("file1.txt"), "a-updated\n").unwrap();
+        std::fs::write(goal.workspace_path.join("file2.txt"), "b-updated\n").unwrap();
+
+        build_package(&config, &goal_id, "Test changes", false).unwrap();
+        let packages = load_all_packages(&config).unwrap();
+        let pkg_id = packages[0].package_id.to_string();
+
+        // Use "all" to approve everything.
+        apply_package(
+            &config,
+            &pkg_id,
+            None,
+            false,
+            false,
+            SelectiveReviewPatterns {
+                approve: &["all".to_string()],
+                reject: &[],
+                discuss: &[],
+            },
+        )
+        .unwrap();
+
+        let file1 = std::fs::read_to_string(project.path().join("file1.txt")).unwrap();
+        assert_eq!(file1, "a-updated\n");
+
+        let file2 = std::fs::read_to_string(project.path().join("file2.txt")).unwrap();
+        assert_eq!(file2, "b-updated\n");
+    }
+
+    #[test]
+    fn selective_apply_special_value_rest() {
+        let project = TempDir::new().unwrap();
+        std::fs::write(project.path().join("important.txt"), "keep\n").unwrap();
+        std::fs::write(project.path().join("other.txt"), "skip\n").unwrap();
+
+        let config = GatewayConfig::for_project(project.path());
+
+        super::super::goal::execute(
+            &super::super::goal::GoalCommands::Start {
+                title: "Rest test".to_string(),
+                source: Some(project.path().to_path_buf()),
+                objective: "Test rest".to_string(),
+                agent: "test-agent".to_string(),
+                phase: None,
+            },
+            &config,
+        )
+        .unwrap();
+
+        let goal_store = GoalRunStore::new(&config.goals_dir).unwrap();
+        let goals = goal_store.list().unwrap();
+        let goal = &goals[0];
+        let goal_id = goal.goal_run_id.to_string();
+
+        std::fs::write(goal.workspace_path.join("important.txt"), "keep-updated\n").unwrap();
+        std::fs::write(goal.workspace_path.join("other.txt"), "skip-updated\n").unwrap();
+
+        build_package(&config, &goal_id, "Test changes", false).unwrap();
+        let packages = load_all_packages(&config).unwrap();
+        let pkg_id = packages[0].package_id.to_string();
+
+        // Reject important, approve "rest".
+        apply_package(
+            &config,
+            &pkg_id,
+            None,
+            false,
+            false,
+            SelectiveReviewPatterns {
+                approve: &["rest".to_string()],
+                reject: &["important.txt".to_string()],
+                discuss: &[],
+            },
+        )
+        .unwrap();
+
+        // important should be unchanged (rejected before "rest").
+        let important = std::fs::read_to_string(project.path().join("important.txt")).unwrap();
+        assert_eq!(important, "keep\n");
+
+        // other should be updated (approved by "rest").
+        let other = std::fs::read_to_string(project.path().join("other.txt")).unwrap();
+        assert_eq!(other, "skip-updated\n");
+    }
+
+    #[test]
+    fn selective_apply_dependency_validation_fails() {
+        let project = TempDir::new().unwrap();
+        std::fs::create_dir_all(project.path().join("src")).unwrap();
+        std::fs::write(project.path().join("src/main.rs"), "fn main() {}\n").unwrap();
+        std::fs::write(project.path().join("src/lib.rs"), "pub fn lib() {}\n").unwrap();
+
+        let config = GatewayConfig::for_project(project.path());
+
+        super::super::goal::execute(
+            &super::super::goal::GoalCommands::Start {
+                title: "Dependency test".to_string(),
+                source: Some(project.path().to_path_buf()),
+                objective: "Test dependencies".to_string(),
+                agent: "test-agent".to_string(),
+                phase: None,
+            },
+            &config,
+        )
+        .unwrap();
+
+        let goal_store = GoalRunStore::new(&config.goals_dir).unwrap();
+        let goals = goal_store.list().unwrap();
+        let goal = &goals[0];
+        let goal_id = goal.goal_run_id.to_string();
+
+        std::fs::write(
+            goal.workspace_path.join("src/main.rs"),
+            "fn main() { lib::lib(); }\n",
+        )
+        .unwrap();
+        std::fs::write(
+            goal.workspace_path.join("src/lib.rs"),
+            "pub mod lib { pub fn lib() {} }\n",
+        )
+        .unwrap();
+
+        // Write a change_summary.json declaring the dependency.
+        std::fs::create_dir_all(goal.workspace_path.join(".ta")).unwrap();
+        std::fs::write(
+            goal.workspace_path.join(".ta/change_summary.json"),
+            r#"{
+                "summary": "Updated main and lib",
+                "changes": [
+                    {
+                        "path": "src/main.rs",
+                        "action": "modified",
+                        "why": "Call lib function",
+                        "independent": false,
+                        "depends_on": ["src/lib.rs"],
+                        "depended_by": []
+                    },
+                    {
+                        "path": "src/lib.rs",
+                        "action": "modified",
+                        "why": "Add lib module",
+                        "independent": false,
+                        "depends_on": [],
+                        "depended_by": ["src/main.rs"]
+                    }
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        build_package(&config, &goal_id, "Changes from agent work", false).unwrap();
+        let packages = load_all_packages(&config).unwrap();
+        let pkg_id = packages[0].package_id.to_string();
+
+        // Try to approve main.rs but reject lib.rs — should fail dependency check.
+        let result = apply_package(
+            &config,
+            &pkg_id,
+            None,
+            false,
+            false,
+            SelectiveReviewPatterns {
+                approve: &["src/main.rs".to_string()],
+                reject: &["src/lib.rs".to_string()],
+                discuss: &[],
+            },
+        );
+
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("dependency conflict"));
     }
 }

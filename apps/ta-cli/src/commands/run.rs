@@ -26,6 +26,9 @@ struct AgentLaunchConfig {
     args_template: &'static [&'static str],
     /// Whether this agent reads CLAUDE.md for context injection.
     injects_context_file: bool,
+    /// Optional command to run before the main agent launch (e.g., init).
+    /// (command, args) — runs in the staging directory.
+    pre_launch: Option<(&'static str, &'static [&'static str])>,
 }
 
 /// Look up the built-in launch config for an agent.
@@ -35,11 +38,13 @@ fn agent_launch_config(agent_id: &str) -> AgentLaunchConfig {
             command: "claude".to_string(),
             args_template: &["--dangerously-skip-permissions", "{prompt}"],
             injects_context_file: true,
+            pre_launch: None,
         },
         "codex" => AgentLaunchConfig {
             command: "codex".to_string(),
             args_template: &["--approval-mode", "full-auto", "{prompt}"],
             injects_context_file: false,
+            pre_launch: None,
         },
         "claude-flow" => AgentLaunchConfig {
             command: "npx".to_string(),
@@ -51,11 +56,13 @@ fn agent_launch_config(agent_id: &str) -> AgentLaunchConfig {
                 "--claude",
             ],
             injects_context_file: true,
+            pre_launch: Some(("npx", &["claude-flow@alpha", "hive-mind", "init"])),
         },
         _ => AgentLaunchConfig {
             command: agent_id.to_string(),
             args_template: &[],
             injects_context_file: false,
+            pre_launch: None,
         },
     }
 }
@@ -116,6 +123,9 @@ pub fn execute(
     if no_launch {
         println!("\nWorkspace ready. To use manually:");
         println!("  cd {}", staging_path.display());
+        if let Some((cmd, args)) = agent_config.pre_launch {
+            println!("  {} {}  # required init step", cmd, args.join(" "));
+        }
         println!("  {} {}", agent_config.command, shell_quote(&prompt));
         println!();
         println!("When done, build the PR:");
@@ -124,7 +134,32 @@ pub fn execute(
         return Ok(());
     }
 
-    // 3. Launch the agent in the staging directory.
+    // 3. Run pre-launch command if needed (e.g., hive-mind init).
+    if let Some((cmd, args)) = agent_config.pre_launch {
+        println!("\nRunning pre-launch: {} {}...", cmd, args.join(" "));
+        let pre_status = std::process::Command::new(cmd)
+            .args(args)
+            .current_dir(&staging_path)
+            .status();
+        match pre_status {
+            Ok(exit) if exit.success() => {}
+            Ok(exit) => {
+                return Err(anyhow::anyhow!(
+                    "Pre-launch command exited with status {}",
+                    exit
+                ));
+            }
+            Err(e) => {
+                return Err(anyhow::anyhow!(
+                    "Failed to run pre-launch command '{}': {}",
+                    cmd,
+                    e
+                ));
+            }
+        }
+    }
+
+    // 4. Launch the agent in the staging directory.
     println!(
         "\nLaunching {} in staging workspace...",
         agent_config.command
@@ -166,12 +201,12 @@ pub fn execute(
         }
     }
 
-    // 4. Restore original CLAUDE.md before diffing (removes TA injection).
+    // 5. Restore original CLAUDE.md before diffing (removes TA injection).
     if agent_config.injects_context_file {
         restore_claude_md(&staging_path)?;
     }
 
-    // 5. Build PR package from the diff.
+    // 6. Build PR package from the diff.
     super::pr::execute(
         &super::pr::PrCommands::Build {
             goal_id: goal_id.clone(),
@@ -478,9 +513,14 @@ mod tests {
         assert!(flow.args_template.contains(&"claude-flow@alpha"));
         assert!(flow.args_template.contains(&"hive-mind"));
         assert!(flow.args_template.contains(&"--claude"));
+        let (pre_cmd, pre_args) = flow.pre_launch.expect("claude-flow should have pre_launch");
+        assert_eq!(pre_cmd, "npx");
+        assert!(pre_args.contains(&"hive-mind"));
+        assert!(pre_args.contains(&"init"));
 
         let unknown = agent_launch_config("my-custom-agent");
         assert_eq!(unknown.command, "my-custom-agent");
         assert!(unknown.args_template.is_empty());
+        assert!(unknown.pre_launch.is_none());
     }
 }

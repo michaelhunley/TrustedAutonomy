@@ -519,16 +519,19 @@ ta run "Refactor auth system" --source .
 
 **Approach B: Hive-mind (spawns Claude Code directly)**
 
-Claude-flow's `hive-mind` command spawns a real Claude Code process with the task prompt:
+Claude-flow's `hive-mind` command spawns a real Claude Code process with the task prompt. You must initialize the hive-mind first:
 
 ```bash
 cd .ta/staging/<goal-id>/
+npx claude-flow@alpha hive-mind init       # required — sets up the hive mind
 npx claude-flow@alpha hive-mind spawn "Refactor auth system" --claude
 # Spawns Claude Code with --dangerously-skip-permissions in the staging dir.
 # When done, return to project root and build the PR:
 cd your-project/
 ta pr build <goal-id> --summary "Auth system refactored"
 ```
+
+> **Note:** `ta run "task" --agent claude-flow --source .` handles `hive-mind init` automatically.
 
 **Approach C: Headless swarm (no interactive session)**
 

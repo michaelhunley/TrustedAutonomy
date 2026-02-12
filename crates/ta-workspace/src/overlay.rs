@@ -89,9 +89,12 @@ impl ExcludePatterns {
 
     /// V1 TEMPORARY: Check if a file/directory name should be excluded during copy.
     /// Only checks against the immediate name (single path component).
+    /// Agent infrastructure directories — always excluded (not work product).
+    const INFRA_DIRS: &'static [&'static str] = &[".ta", ".claude-flow", ".hive-mind", ".swarm"];
+
     pub fn should_exclude(&self, name: &str) -> bool {
-        // .ta/ is always excluded (hardcoded, separate from user patterns).
-        if name == ".ta" {
+        // Infrastructure dirs are always excluded (hardcoded, separate from user patterns).
+        if Self::INFRA_DIRS.contains(&name) {
             return true;
         }
         for pattern in &self.patterns {
@@ -404,6 +407,70 @@ impl OverlayWorkspace {
         Ok(applied)
     }
 
+    /// Apply only selected artifacts (by URI) to the target directory.
+    ///
+    /// Used for selective approval where only a subset of changes should be applied.
+    /// URIs should be in the form "fs://workspace/<path>".
+    pub fn apply_selective(
+        &self,
+        target_dir: &Path,
+        approved_uris: &[String],
+    ) -> Result<Vec<(String, &'static str)>, WorkspaceError> {
+        let changes = self.diff_all()?;
+        let mut applied = Vec::new();
+
+        // Convert URIs to relative paths for comparison.
+        let approved_paths: std::collections::HashSet<String> = approved_uris
+            .iter()
+            .filter_map(|uri| uri.strip_prefix("fs://workspace/"))
+            .map(|s| s.to_string())
+            .collect();
+
+        for change in &changes {
+            let path = match change {
+                OverlayChange::Modified { path, .. } => path,
+                OverlayChange::Created { path, .. } => path,
+                OverlayChange::Deleted { path } => path,
+            };
+
+            // Skip if not in approved set.
+            if !approved_paths.contains(path) {
+                continue;
+            }
+
+            match change {
+                OverlayChange::Modified { path, .. } | OverlayChange::Created { path, .. } => {
+                    let src = self.staging_dir.join(path);
+                    let dst = target_dir.join(path);
+                    if let Some(parent) = dst.parent() {
+                        fs::create_dir_all(parent).map_err(|source| WorkspaceError::IoError {
+                            path: parent.to_path_buf(),
+                            source,
+                        })?;
+                    }
+                    fs::copy(&src, &dst)
+                        .map_err(|source| WorkspaceError::IoError { path: dst, source })?;
+                    let kind = if matches!(change, OverlayChange::Modified { .. }) {
+                        "modified"
+                    } else {
+                        "created"
+                    };
+                    applied.push((path.clone(), kind));
+                }
+                OverlayChange::Deleted { path } => {
+                    let dst = target_dir.join(path);
+                    if dst.exists() {
+                        fs::remove_file(&dst)
+                            .map_err(|source| WorkspaceError::IoError { path: dst, source })?;
+                    }
+                    applied.push((path.clone(), "deleted"));
+                }
+            }
+        }
+
+        Ok(applied)
+    }
+
     /// Clean up the staging directory.
     pub fn cleanup(self) -> Result<(), WorkspaceError> {
         if self.staging_dir.exists() {
@@ -497,17 +564,23 @@ fn walk_dir_relative(
 }
 
 /// Check if a path should be skipped when diffing.
-/// We skip .ta/ and .git/ — these are internal state, not agent work product.
+/// We skip infrastructure directories — these are internal state, not agent work product.
 /// V1 TEMPORARY: Also checks exclude patterns for build artifacts that
 /// agents may generate in staging (e.g., `cargo build` creates `target/`).
 fn should_skip_for_diff(path: &str, excludes: &ExcludePatterns) -> bool {
-    path.starts_with(".ta/")
-        || path.starts_with(".ta\\")
-        || path.starts_with(".git/")
-        || path.starts_with(".git\\")
-        || path == ".ta"
-        || path == ".git"
-        || excludes.should_skip_path(path)
+    // Agent infrastructure directories (created at runtime, not work product).
+    const INFRA_DIRS: &[&str] = &[".ta", ".git", ".claude-flow", ".hive-mind", ".swarm"];
+
+    for dir in INFRA_DIRS {
+        if path == *dir
+            || path.starts_with(&format!("{}/", dir))
+            || path.starts_with(&format!("{}\\", dir))
+        {
+            return true;
+        }
+    }
+
+    excludes.should_skip_path(path)
 }
 
 // ── Diff utilities ──────────────────────────────────────────────
@@ -885,6 +958,64 @@ mod tests {
         let changes = overlay.diff_all().unwrap();
 
         // Should see the main.rs change but NOT the target/ files.
+        assert_eq!(changes.len(), 1);
+        match &changes[0] {
+            OverlayChange::Modified { path, .. } => {
+                assert_eq!(path, "src/main.rs");
+            }
+            other => panic!("expected Modified, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn agent_infra_dirs_excluded_from_copy_and_diff() {
+        let source = create_source_project();
+        // Simulate pre-existing claude-flow state in source.
+        fs::create_dir_all(source.path().join(".claude-flow/sessions")).unwrap();
+        fs::write(source.path().join(".claude-flow/agents.json"), "{}").unwrap();
+
+        let staging_root = TempDir::new().unwrap();
+        let overlay = OverlayWorkspace::create(
+            "goal-1",
+            source.path(),
+            staging_root.path(),
+            ExcludePatterns::none(),
+        )
+        .unwrap();
+
+        // .claude-flow/ should NOT be copied (hardcoded exclusion).
+        assert!(!overlay.staging_dir().join(".claude-flow").exists());
+
+        // Simulate agent creating runtime dirs in staging.
+        fs::create_dir_all(overlay.staging_dir().join(".claude-flow/hive-mind")).unwrap();
+        fs::write(
+            overlay
+                .staging_dir()
+                .join(".claude-flow/hive-mind/state.json"),
+            "{}",
+        )
+        .unwrap();
+        fs::create_dir_all(overlay.staging_dir().join(".hive-mind/sessions")).unwrap();
+        fs::write(
+            overlay
+                .staging_dir()
+                .join(".hive-mind/sessions/session.txt"),
+            "data",
+        )
+        .unwrap();
+        fs::create_dir_all(overlay.staging_dir().join(".swarm")).unwrap();
+        fs::write(overlay.staging_dir().join(".swarm/memory.db"), "binary").unwrap();
+
+        // Also make a real change.
+        fs::write(
+            overlay.staging_dir().join("src/main.rs"),
+            "fn main() { println!(\"updated\"); }\n",
+        )
+        .unwrap();
+
+        let changes = overlay.diff_all().unwrap();
+
+        // Should see ONLY the main.rs change — no infrastructure dirs.
         assert_eq!(changes.len(), 1);
         match &changes[0] {
             OverlayChange::Modified { path, .. } => {

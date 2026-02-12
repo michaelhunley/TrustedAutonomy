@@ -58,7 +58,7 @@ Workspace structure with 12 crates under `crates/` and `apps/`. Resource URIs (`
 - [x] `ta pr view` displays per-artifact rationale and dependencies
 
 ## Phase 4c — Selective Review CLI
-<!-- status: pending -->
+<!-- status: done -->
 - `ta pr apply <id> --approve "src/**" --reject "*.test.rs" --discuss "config/*"`
 - Special values: `all` (everything), `rest` (everything not explicitly listed)
 - Selective apply: only copies approved artifacts; tracks partial application state
