@@ -14,6 +14,27 @@ It is a **trust and control plane** that sits underneath *any* agent or multi-ag
 
 ---
 
+## Why Trusted Autonomy
+
+Today's agent tooling forces a bad trade-off: **constant permission prompts** (secure but annoying) or **full auto-approve** (convenient but risky). Users get tired of approving seemingly trivial actions and disable safeguards — often without understanding the security consequences. Experienced users can configure fine-grained tool permissions in frameworks like Claude Code or Claude Flow, but doing this well requires knowing which actions are actually dangerous, how they interact, and what to scope — a level of security reasoning that shouldn't be a prerequisite for safe agent use.
+
+The standard answer is to run agents inside a VM with strict network controls. That works, but it requires infrastructure expertise, adds latency and cost, and produces filesystem diffs that only a sysadmin can review. **VMs answer "what if the agent is malicious?" — but most agent failures aren't escape attempts. They're confident bad decisions.**
+
+TA takes a different approach:
+
+- **Agents work freely** in a staging copy of your project using their native tools. No permission prompts, no special APIs. TA is invisible to the agent.
+- **Nothing reaches the real world** until you review and approve. TA diffs the staging copy against the original and presents changes as a PR-style package — with the agent's rationale for each file.
+- **You review at goal completion**, not per-action. This is the right abstraction: let the agent finish the task, then evaluate the result as a whole.
+- **Selective approval**: accept the code changes, reject the config changes, discuss the rest. Not all-or-nothing.
+- **Any agent, no lock-in**: Claude Code, Codex, Claude Flow, or any future agent works on top without modification.
+- **Layers with VMs and sandboxes** when warranted — TA adds the semantic review layer that containers alone can't provide.
+
+Today TA mediates filesystem changes. The same staging model extends to email drafts, database writes, API calls, and any external action — each becoming a reviewable artifact in the same PR package. See [PLAN.md](PLAN.md) for the roadmap.
+
+> See [docs/WHY-TA-vs-VM.md](docs/WHY-TA-vs-VM.md) for a detailed comparison of TA's approach vs VM sandboxing.
+
+---
+
 ## Core idea
 
 > **Give agents everything they need to do the work — but nothing that can irreversibly affect the world without passing through a single, auditable gateway.**
@@ -766,32 +787,36 @@ cargo fmt --all -- --check
 
 ## Status
 
-Trusted Autonomy is under active development. **157 tests** across 12 crates. See [PLAN.md](PLAN.md) for the full roadmap.
+Trusted Autonomy is under active development. **176 tests** across 12 crates. See [PLAN.md](PLAN.md) for the full roadmap.
 
 ### Implemented
 - **Transparent overlay mediation** — agents work in staging copies using native tools, TA is invisible
+- **Selective approval** — `--approve "src/**" --reject "*.test.rs" --discuss "config/*"` with dependency warnings
+- **Settings injection** — auto-configures agent permissions (replaces `--dangerously-skip-permissions`)
+- **Community forbidden-tools deny list** — `.ta-forbidden-tools` for patterns that should never be allowed
 - Append-only audit log with SHA-256 hash chain
 - Default-deny capability engine with glob pattern matching
 - ChangeSet + PR Package data model (aligned with JSON schema)
 - Per-artifact review model (disposition, dependencies, rationale)
-- URI-aware pattern matching for selective approval (scheme-scoped safety)
-- Staging workspace with snapshot-and-diff
-- Overlay workspace with full-copy and exclude patterns (`.taignore`)
-- Filesystem connector bridging MCP to staging
+- URI-aware pattern matching (scheme-scoped safety — `src/**` can't match `gmail://`)
+- Overlay workspace with exclude patterns (`.taignore`) + agent infra dir filtering
+- Binary file detection in PR view (`--summary`, `--file` flags)
 - GoalRun lifecycle state machine with event dispatch and plan tracking
 - Real MCP server (rmcp 0.14) with 9 tools and policy enforcement
 - CLI: `goal`, `pr`, `run`, `plan`, `audit`, `adapter`, `serve`
-- Agent adapter framework (Claude Code + generic MCP)
+- Agent adapter framework (Claude Code, Claude Flow, Codex, generic MCP)
 - Git integration (`ta pr apply --git-commit`)
 - Plan tracking (`ta plan list/status`, auto-update on `ta pr apply`)
 
 ### Coming next
-- Selective approval CLI (`--approve`, `--reject`, `--discuss` with glob patterns)
+- Agent launch configs as YAML (replace hard-coded agent configs)
+- Event system and orchestration API (`--json` output, webhooks on state transitions)
+- Notification connectors (email/Slack/Discord PR summaries + approve-from-anywhere)
+- Real connectors: Gmail, Drive, databases (same staging model, new resource types)
+- OCI/gVisor sandbox runner (defense-in-depth with TA's semantic review)
+- Virtual office runtime (role-based agent teams, event-driven triggers)
 - V2: Lazy copy-on-write VFS (reflinks/FUSE) — replaces full copy
-- Supervisor agent for PR summary generation
-- OCI/gVisor sandbox runner
 - Web UI for review/approval
-- Real connectors: Gmail, Drive, databases
 
 ---
 

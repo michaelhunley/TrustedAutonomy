@@ -70,6 +70,7 @@ Workspace structure with 12 crates under `crates/` and `apps/`. Resource URIs (`
 **Goal**: Get TA in front of early adopters for feedback. Not production-ready — explicitly disclaimed.
 
 ### Required for v0.1
+- [x] **Version info**: `ta --version` shows `0.1.0-alpha (git-hash date)`, build.rs embeds git metadata
 - **Simple install**: `cargo install ta-cli` or single binary download (cross-compile for macOS/Linux)
 - **Agent launch configs as YAML**: Replace hard-coded `AgentLaunchConfig` match arms with discoverable YAML files (e.g., `agents/claude-code.yaml`, `agents/claude-flow.yaml`). Ship built-in defaults, allow user overrides in `.ta/agents/` or `~/.config/ta/agents/`. Schema: command, args_template (`{prompt}` substitution), injects_context_file, env vars, description.
 - **Agent setup guides**: Step-by-step for Claude Code, Claude Flow (when available), Codex/similar
@@ -98,6 +99,17 @@ Workspace structure with 12 crates under `crates/` and `apps/`. Resource URIs (`
 - "What connectors matter most? (Gmail, Drive, DB, Slack, etc.)"
 - "Would you pay for a hosted version? What would that need to include?"
 
+## Phase v0.1.1 — Release Automation & Binary Distribution
+<!-- status: pending -->
+- **GitHub Actions CI**: lint (clippy + fmt), test, build on push/PR
+- **Cross-compile matrix**: macOS aarch64 + x86_64, Linux aarch64 + x86_64 (musl static)
+- **GitHub Releases**: `gh release create v0.1.0-alpha --generate-notes` with attached binaries
+- **`cargo install ta-cli`**: Ensure crate publishes to crates.io (verify metadata, dependencies)
+- **Install script**: `curl -fsSL https://ta.dev/install.sh | sh` one-liner (download + place in PATH)
+- **Version bumping**: `cargo release` or manual Cargo.toml + git tag workflow
+- **Nix flake output**: `nix run github:trustedautonomy/ta` for Nix users
+- **Homebrew formula**: Future — tap for macOS users (`brew install trustedautonomy/tap/ta`)
+
 ## Phase 4c.1 — Concurrent Session Conflict Detection
 <!-- status: pending -->
 - Detect when source files have changed since staging copy was made (stale overlay)
@@ -106,6 +118,7 @@ Workspace structure with 12 crates under `crates/` and `apps/`. Resource URIs (`
 - **Current limitation**: if you edit source files while a TA session is active, `ta pr apply` will silently overwrite those changes. Git handles this for committed code, but uncommitted edits can be lost.
 - Display warnings at PR review time if source has diverged
 - Future: lock files or advisory locks for active goals
+- **Multi-agent intra-staging conflicts**: When multiple agents work in the same staging workspace (e.g., via Claude Flow swarms), consider integrating [agentic-jujutsu](https://github.com/ruvnet/claude-flow) for lock-free concurrent file operations with auto-merge. This handles agent-to-agent coordination; TA handles agent-to-human review. Different layers, composable.
 
 ## Phase 4c.2 — External Diff Routing
 <!-- status: pending -->
@@ -157,3 +170,32 @@ Options (choose one):
 - Desktop: installer with bundled daemon, git, rg/jq
 - Cloud: OCI image for daemon + connectors, ephemeral workspaces
 - Web UI for review/approval (localhost → LAN → cloud)
+
+## Phase 9 — Event System & Orchestration API
+<!-- status: pending -->
+> See `docs/VISION-virtual-office.md` for full vision.
+- `--json` output flag on all CLI commands for programmatic consumption
+- Event hook execution: call webhooks/scripts on goal + PR state transitions
+- `ta events listen` command — stream JSON events for external consumers
+- Stable event schema matching `docs/plugins-architecture-guidance.md` hooks
+- Non-interactive approval API: token-based approve/reject (for Slack buttons, email replies)
+- Foundation for notification connectors and virtual office runtime
+
+## Phase 10 — Notification Connectors
+<!-- status: pending -->
+- `ta-connector-notify-email`: SMTP PR summaries + reply-to-approve parsing
+- `ta-connector-notify-slack`: Slack app with Block Kit PR cards + button callbacks
+- `ta-connector-notify-discord`: Discord bot with embed summaries + reaction handlers
+- Bidirectional: outbound notifications + inbound approval actions
+- Unified config: `notification_channel` per role/goal
+
+## Phase 11 — Virtual Office Runtime
+<!-- status: pending -->
+> Thin orchestration layer that composes TA, Claude Flow, and notification connectors.
+- Role definition schema (YAML): purpose, triggers, agent, capabilities, notification channel
+- Trigger system: cron scheduler + webhook receiver + TA event listener
+- Office manager daemon: reads role configs, routes triggers, calls `ta run`
+- `ta office start/stop/status` CLI commands
+- Role-scoped TA policies auto-generated from role capability declarations
+- Integration with Claude Flow as the agent coordination backend
+- Does NOT duplicate orchestration — composes existing tools with role/trigger glue

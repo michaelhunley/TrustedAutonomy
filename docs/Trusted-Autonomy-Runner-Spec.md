@@ -16,7 +16,7 @@ The Runner MUST:
 2. Restrict filesystem access to the workspace mount only.
 3. Prevent access to host credentials, secrets, and user home directories.
 4. Control or block outbound network traffic.
-5. Ensure all real-world access occurs via the Trust Autonomy Gateway.
+5. Ensure all real-world access occurs via the Trusted Autonomy Gateway.
 6. Be cross-platform with one-click install semantics.
 7. Be deterministic and auditable.
 

@@ -18,7 +18,12 @@ use ta_mcp_gateway::GatewayConfig;
 
 /// Trusted Autonomy CLI — review and approve agent changes.
 #[derive(Parser)]
-#[command(name = "ta", version, about)]
+#[command(
+    name = "ta",
+    version,
+    long_version = long_version(),
+    about
+)]
 struct Cli {
     /// Project root directory (defaults to current directory).
     #[arg(long, default_value = ".")]
@@ -77,6 +82,18 @@ enum Commands {
     },
     /// Start the MCP server on stdio.
     Serve,
+}
+
+/// Build the long version string: "0.1.0-alpha (abc1234 2026-02-11)"
+const fn long_version() -> &'static str {
+    concat!(
+        env!("CARGO_PKG_VERSION"),
+        " (",
+        env!("TA_GIT_HASH"),
+        " ",
+        env!("TA_BUILD_DATE"),
+        ")"
+    )
 }
 
 fn main() -> anyhow::Result<()> {
