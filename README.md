@@ -282,160 +282,181 @@ These are additive — not architectural rewrites.
 
 ---
 
-## Getting Started
+## Quick Start (5 minutes)
 
-### Prerequisites
-
-**Option A: Using Nix (recommended)**
-
-Nix provides a reproducible dev environment with the exact Rust toolchain, formatter, linter, and test runner — identical on macOS, Linux, and WSL.
-
-1. Install Nix with flakes enabled:
-   ```bash
-   curl --proto '=https' --tlsv1.2 -sSf -L https://install.determinate.systems/nix | sh -s -- install
-   ```
-
-2. (Optional) Install direnv for automatic environment loading:
-   ```bash
-   nix profile install nixpkgs#direnv
-   ```
-   Then add the [direnv hook](https://direnv.net/docs/hook.html) to your shell config (`.bashrc`, `.zshrc`, etc.).
-
-3. Enter the dev environment:
-   ```bash
-   # With direnv (automatic — activates when you cd into the repo):
-   direnv allow
-
-   # Without direnv (manual):
-   nix develop
-   ```
-
-**Option B: Without Nix**
-
-1. Install Rust via [rustup](https://rustup.rs/):
-   ```bash
-   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-   ```
-   The `rust-toolchain.toml` in this repo will automatically select the correct Rust version.
-
-2. Install system dependencies:
-   - **macOS:** `brew install openssl pkg-config`
-   - **Ubuntu/Debian:** `apt install libssl-dev pkg-config`
-   - **Windows:** Use WSL2 with one of the above.
-
-3. Install dev tools (optional but recommended):
-   ```bash
-   cargo install cargo-nextest just
-   ```
-
-### Building
+### 1. Install TA from source
 
 ```bash
-cargo build --workspace
+# Clone the repo
+git clone https://github.com/trustedautonomy/ta.git
+cd ta
+
+# Build (pick one):
+
+# Option A — With Nix (reproducible, recommended for contributors)
+nix develop --command cargo build --release -p ta-cli
+
+# Option B — Without Nix (just needs Rust)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh  # if needed
+cargo build --release -p ta-cli
 ```
 
-### Running Tests
+The binary lands at `target/release/ta-cli`. Add it to your PATH:
 
 ```bash
-# All tests (with cargo-nextest for faster parallel execution)
-cargo nextest run --workspace
+# Add to your shell profile (~/.bashrc, ~/.zshrc, etc.)
+export PATH="$HOME/path-to/ta/target/release:$PATH"
 
-# Or with standard cargo test
-cargo test --workspace
+# Or symlink it
+ln -sf "$(pwd)/target/release/ta-cli" /usr/local/bin/ta
 ```
 
-### Development Commands
+### 2. Install an agent
 
-If you have `just` installed (included in the Nix devShell):
+TA works with any coding agent. Pick one (or more):
+
+**Claude Code** (recommended)
+```bash
+# Native install (preferred)
+curl -fsSL https://claude.ai/install.sh | bash
+
+# Or via npm
+npm install -g @anthropic-ai/claude-code
+```
+Requires an [Anthropic API key](https://console.anthropic.com/) or a Claude Max plan.
+
+**Claude Flow** (multi-agent orchestration on top of Claude Code)
+```bash
+# Requires Node.js 20+ and Claude Code installed first
+npx claude-flow@alpha init --wizard
+
+# Or full install
+curl -fsSL https://cdn.jsdelivr.net/gh/ruvnet/claude-flow@main/scripts/install.sh | bash -s -- --full
+```
+See the [claude-flow repo](https://github.com/ruvnet/claude-flow) for configuration options.
+
+**OpenAI Codex CLI**
+```bash
+npm install -g @openai/codex
+```
+Requires an [OpenAI API key](https://platform.openai.com/api-keys) or ChatGPT Plus/Pro subscription.
+
+### 3. Run your first mediated task
 
 ```bash
-just           # run lint + format check + tests
-just build     # build all crates
-just test      # run all tests
-just check     # format check + clippy lint
-just fmt       # auto-format all code
-just verify    # full pre-commit check (format, lint, build, test)
+cd your-project/
+
+# One command: create staging copy → launch agent → build PR on exit
+ta run claude-code "Fix the auth bug" --source .
+
+# TA copies your project to .ta/staging/, injects context into CLAUDE.md,
+# launches Claude Code in the staging copy. Agent works normally.
+# When Claude exits, TA diffs staging vs source and builds a PR package.
+
+# Review what the agent did
+ta pr list
+ta pr view <package-id>
+
+# Approve and apply changes back to your project
+ta pr approve <package-id>
+ta pr apply <package-id> --git-commit
 ```
 
-### Project Structure
-
-```
-crates/
-  ta-audit/               Append-only event log + SHA-256 hash chain (13 tests)
-  ta-changeset/           ChangeSet + PR Package data model (14 tests)
-  ta-policy/              Capability manifests + default-deny policy engine (16 tests)
-  ta-workspace/           Staging + overlay workspace manager + JSON change store (29 tests)
-  ta-goal/                GoalRun lifecycle state machine + event dispatch (20 tests)
-  ta-mcp-gateway/         MCP server (rmcp) — 9 tools, policy enforcement (15 tests)
-  ta-daemon/              MCP server binary (stdio transport)
-  ta-sandbox/             Allowlisted command execution (stub)
-  ta-connectors/
-    fs/                   Filesystem connector: staging + diffs + apply (11 tests)
-    web/                  Web fetch connector (stub)
-    mock-drive/           Mock Google Drive (stub)
-    mock-gmail/           Mock Gmail (stub)
-apps/
-  ta-cli/                 CLI: goals, PR review/approve/apply, run, audit, adapters (12 tests + 1 integration)
-tests/
-  vertical_slice          End-to-end integration test (1 test)
-schema/
-  pr_package.schema.json  PR package JSON schema
-  capability.schema.json  Capability manifest schema
-  agent_setup.schema.json Agent setup proposal schema
-```
+That's it. The agent never knew it was in a staging workspace.
 
 ---
 
-## Local Build and Dogfood
+## How It Works
 
-### Build
-
-```bash
-# Option A: With Nix (recommended)
-./dev "cargo build --workspace"
-
-# Option B: Without Nix
-cargo build --workspace
+```
+Your Project                     Staging Copy (.ta/staging/)
+     |                                    |
+     |-- ta run "task" --source . ------->|  (full copy, minus build artifacts)
+     |                                    |
+     |                              Agent works here
+     |                              (reads, writes, tests — normal tools)
+     |                                    |
+     |                              ta pr build --latest
+     |                                    |
+     |<--- ta pr apply <id> -------------|  (only approved changes copied back)
+     |
+   Your project updated + optional git commit
 ```
 
-### Dogfood workflow (transparent overlay)
+TA is invisible to the agent. It works by:
+1. Copying your project to a staging directory (with `.taignore` to skip build artifacts)
+2. Letting the agent work normally in the copy using its native tools
+3. Diffing the staging copy against the original to create a PR package
+4. Letting you review, approve, and apply changes back
 
-This is the primary workflow. TA copies your project to a staging directory, the agent works normally in the copy, and TA diffs the result into a PR package for review.
+---
+
+## Step-by-Step Workflow
+
+### Manual workflow (any agent)
 
 ```bash
 # 1. Start a goal — creates a staging copy of your project
-cargo run -p ta-cli -- goal start "Fix the auth bug" --source .
+ta goal start "Fix the auth bug" --source .
 
 # 2. Note the staging path and goal ID from the output, then enter staging
 cd .ta/staging/<goal-id>/
 
-# 3. Launch your agent (Claude Code, or any tool)
-claude
+# 3. Launch your agent (Claude Code, Codex, or any tool)
+claude    # or: codex, or any tool
 
 # 4. Agent works normally — reads, writes, runs tests, etc.
 #    It doesn't know it's in a staging workspace.
 #    When done, exit the agent.
 
 # 5. Build a PR package from the diff
-cargo run -p ta-cli -- pr build <goal-id> --summary "Fixed the auth bug"
+ta pr build <goal-id> --summary "Fixed the auth bug"
 
 # 6. Review the changes
-cargo run -p ta-cli -- pr view <package-id>
+ta pr view <package-id>
 
 # 7. Approve and apply back to your project (with optional git commit)
-cargo run -p ta-cli -- pr approve <package-id>
-cargo run -p ta-cli -- pr apply <package-id> --git-commit
+ta pr approve <package-id>
+ta pr apply <package-id> --git-commit
 ```
 
 ### One-command shortcut
 
-`ta run claude-code` wraps steps 1-5 into a single command:
+`ta run` wraps the manual steps into a single command:
 
 ```bash
-cargo run -p ta-cli -- run claude-code "Fix the auth bug" --source .
-# TA creates the staging workspace, injects context into CLAUDE.md,
-# launches Claude Code, and auto-builds the PR when Claude exits.
+ta run claude-code "Fix the auth bug" --source .
 # Then review + approve + apply as above.
+```
+
+### Using with Claude Flow
+
+Claude Flow orchestrates multiple Claude Code agents. Each agent gets its own TA-mediated workspace:
+
+```bash
+# Start a TA goal for the overall task
+ta goal start "Refactor auth system" --source .
+
+# Launch Claude Flow in the staging directory
+cd .ta/staging/<goal-id>/
+npx claude-flow@alpha
+
+# Claude Flow spawns sub-agents — each works in the same staging copy.
+# When done, build and review the combined PR.
+ta pr build <goal-id> --summary "Auth system refactored by agent swarm"
+ta pr view <package-id>
+ta pr approve <package-id>
+ta pr apply <package-id> --git-commit
+```
+
+### Using with OpenAI Codex
+
+```bash
+# Same workflow — TA doesn't care which agent you use
+ta goal start "Add input validation" --source .
+cd .ta/staging/<goal-id>/
+codex    # Codex works in the staging copy like normal
+# Exit Codex, then build/review/apply as above
 ```
 
 ### Exclude patterns (.taignore)
@@ -456,19 +477,27 @@ large-data/
 
 If no `.taignore` exists, sensible defaults are used. The `.ta/` directory is always excluded.
 
-## Using Trusted Autonomy with Claude Code
+---
 
-### Primary: Transparent overlay (recommended)
+## Review Workflow
 
-See **Local Build and Dogfood** above. The agent works in a normal-looking project directory and never knows TA exists. This works with Claude Code, Codex, or any tool.
+```bash
+ta pr list                            # List pending PRs
+ta pr view <package-id>               # View details + diffs
+ta pr approve <package-id>            # Approve
+ta pr deny <package-id> --reason "x"  # Deny with reason
+ta pr apply <package-id> --git-commit # Apply + commit
+```
 
-### Alternative: MCP-native tools
+---
 
-For agents that support MCP tool integration directly, TA can also expose tools via MCP:
+## Alternative: MCP-Native Tools
+
+For agents that support MCP tool integration directly, TA can also expose tools via MCP instead of the overlay approach:
 
 ```bash
 # Install the Claude Code adapter (generates .mcp.json + .ta/config.toml)
-cargo run -p ta-cli -- adapter install claude-code
+ta adapter install claude-code
 
 # Start Claude Code — TA tools appear alongside built-in tools
 claude
@@ -486,19 +515,12 @@ claude
 | `ta_goal_status` | Check GoalRun state |
 | `ta_goal_list` | List all GoalRuns |
 
-### Review workflow (both modes)
+---
 
-```bash
-cargo run -p ta-cli -- pr list                          # List pending PRs
-cargo run -p ta-cli -- pr view <package-id>             # View details + diffs
-cargo run -p ta-cli -- pr approve <package-id>          # Approve
-cargo run -p ta-cli -- pr apply <package-id> --git-commit  # Apply + commit
-```
-
-### Architecture
+## Architecture
 
 ```
-Transparent overlay mode:
+Transparent overlay mode (recommended):
   Agent works in staging copy (native tools)
     → TA diffs staging vs source
     → PR Package → Human Review → Approve → Apply
@@ -518,39 +540,96 @@ MCP-native mode:
   PR Package → Human Review (CLI) → Approve → Apply
 ```
 
-### Agent teams
-
 Multiple agents can work simultaneously. Each gets an isolated GoalRun with its own staging workspace and capabilities.
+
+---
+
+## Project Structure
+
+```
+crates/
+  ta-audit/               Append-only event log + SHA-256 hash chain
+  ta-changeset/           ChangeSet + PR Package data model + URI pattern matching
+  ta-policy/              Capability manifests + default-deny policy engine
+  ta-workspace/           Staging + overlay workspace manager + JSON change store
+  ta-goal/                GoalRun lifecycle state machine + event dispatch
+  ta-mcp-gateway/         MCP server (rmcp) — 9 tools, policy enforcement
+  ta-daemon/              MCP server binary (stdio transport)
+  ta-sandbox/             Allowlisted command execution (stub)
+  ta-connectors/
+    fs/                   Filesystem connector: staging + diffs + apply
+    web/                  Web fetch connector (stub)
+    mock-drive/           Mock Google Drive (stub)
+    mock-gmail/           Mock Gmail (stub)
+apps/
+  ta-cli/                 CLI: goals, PRs, run, plan, audit, adapters
+schema/
+  pr_package.schema.json  PR package JSON schema
+  capability.schema.json  Capability manifest schema
+  agent_setup.schema.json Agent setup proposal schema
+```
+
+---
+
+## Contributing
+
+### Prerequisites
+
+**Option A: Using Nix (recommended)**
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf -L https://install.determinate.systems/nix | sh -s -- install
+nix develop   # enters dev shell with Rust, just, etc.
+```
+
+**Option B: Without Nix**
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+# macOS: brew install openssl pkg-config
+# Ubuntu: apt install libssl-dev pkg-config
+```
+
+### Build and test
+
+```bash
+cargo build --workspace
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all -- --check
+```
+
+Or with the Nix wrapper: `./dev "cargo test --workspace"`
 
 ---
 
 ## Status
 
-Trusted Autonomy is under active development. **138 tests** across 12 crates.
+Trusted Autonomy is under active development. **157 tests** across 12 crates. See [PLAN.md](PLAN.md) for the full roadmap.
 
 ### Implemented
 - **Transparent overlay mediation** — agents work in staging copies using native tools, TA is invisible
 - Append-only audit log with SHA-256 hash chain
 - Default-deny capability engine with glob pattern matching
 - ChangeSet + PR Package data model (aligned with JSON schema)
+- Per-artifact review model (disposition, dependencies, rationale)
+- URI-aware pattern matching for selective approval (scheme-scoped safety)
 - Staging workspace with snapshot-and-diff
 - Overlay workspace with full-copy and exclude patterns (`.taignore`)
 - Filesystem connector bridging MCP to staging
-- GoalRun lifecycle state machine with event dispatch
+- GoalRun lifecycle state machine with event dispatch and plan tracking
 - Real MCP server (rmcp 0.14) with 9 tools and policy enforcement
-- CLI: `goal start/list/status`, `pr build/list/view/approve/deny/apply`, `run claude-code`, `audit`, `adapter`
+- CLI: `goal`, `pr`, `run`, `plan`, `audit`, `adapter`, `serve`
 - Agent adapter framework (Claude Code + generic MCP)
 - Git integration (`ta pr apply --git-commit`)
-- End-to-end: agent works in staging → TA diffs → PR package → review → approve → apply → git commit
+- Plan tracking (`ta plan list/status`, auto-update on `ta pr apply`)
 
 ### Coming next
+- Selective approval CLI (`--approve`, `--reject`, `--discuss` with glob patterns)
 - V2: Lazy copy-on-write VFS (reflinks/FUSE) — replaces full copy
 - Supervisor agent for PR summary generation
 - OCI/gVisor sandbox runner
-- Plugin trait registry
 - Web UI for review/approval
-- ed25519 capability signing
-- SQLite change store
 - Real connectors: Gmail, Drive, databases
 
 ---

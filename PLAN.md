@@ -50,11 +50,11 @@ Workspace structure with 12 crates under `crates/` and `apps/`. Resource URIs (`
 
 ## Phase 4b — Per-Artifact Review Model
 <!-- status: in_progress -->
-- ArtifactDisposition enum: Pending / Approved / Rejected / Discuss (per artifact, not per package)
-- ChangeDependency struct for agent-reported inter-file dependencies
-- URI-aware pattern matching: scheme-scoped glob (fs:// patterns can't match gmail:// URIs)
-- Bare patterns auto-prefix with `fs://workspace/` for convenience
-- `ta pr build` reads `.ta/change_summary.json` into PRPackage dependency metadata
+- [x] ArtifactDisposition enum: Pending / Approved / Rejected / Discuss (per artifact, not per package)
+- [x] ChangeDependency struct for agent-reported inter-file dependencies
+- [x] URI-aware pattern matching: scheme-scoped glob (fs:// patterns can't match gmail:// URIs)
+- [x] Bare patterns auto-prefix with `fs://workspace/` for convenience; `*` respects `/`, `**` for deep
+- [ ] `ta pr build` reads `.ta/change_summary.json` into PRPackage dependency metadata
 
 ## Phase 4c — Selective Review CLI
 <!-- status: pending -->

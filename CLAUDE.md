@@ -36,7 +36,7 @@ Run these four checks (all must pass):
 
 ## Current State
 
-- **151 tests passing** across 12 crates (run `ta plan list` for full status)
+- **157 tests passing** across 12 crates (run `ta plan list` for full status)
 - See **PLAN.md** for the canonical development roadmap with per-phase status
 - `ta plan list` / `ta plan status` show current progress
 - Goals can link to plan phases: `ta run "title" --source . --phase 4b`
