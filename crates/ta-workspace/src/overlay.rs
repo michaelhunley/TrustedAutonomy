@@ -253,11 +253,31 @@ impl OverlayWorkspace {
                     })?;
 
                 if staging_content != source_content {
-                    let diff = simple_unified_diff(
-                        path,
-                        &String::from_utf8_lossy(&source_content),
-                        &String::from_utf8_lossy(&staging_content),
-                    );
+                    // Detect binary: if either version has null bytes in first 8KB,
+                    // produce a summary instead of a lossy text diff.
+                    let source_binary = source_content
+                        .get(..8192)
+                        .unwrap_or(&source_content)
+                        .contains(&0);
+                    let staging_binary = staging_content
+                        .get(..8192)
+                        .unwrap_or(&staging_content)
+                        .contains(&0);
+                    let diff = if source_binary || staging_binary {
+                        format!(
+                            "--- a/{}\n+++ b/{}\n[binary file changed: {} -> {} bytes]\n",
+                            path,
+                            path,
+                            source_content.len(),
+                            staging_content.len()
+                        )
+                    } else {
+                        simple_unified_diff(
+                            path,
+                            &String::from_utf8_lossy(&source_content),
+                            &String::from_utf8_lossy(&staging_content),
+                        )
+                    };
                     changes.push(OverlayChange::Modified {
                         path: path.clone(),
                         diff,
@@ -265,7 +285,20 @@ impl OverlayWorkspace {
                 }
             } else {
                 // File only in staging — created.
-                let content = fs::read_to_string(&staging_path).unwrap_or_default();
+                // Detect binary files: if the first 8KB contains a null byte,
+                // store a placeholder instead of lossy UTF-8 conversion.
+                let raw = fs::read(&staging_path).map_err(|source| WorkspaceError::IoError {
+                    path: staging_path.clone(),
+                    source,
+                })?;
+                let is_binary = raw.get(..8192).unwrap_or(&raw).contains(&0);
+                let content = if is_binary {
+                    format!("[binary file: {} bytes]", raw.len())
+                } else {
+                    String::from_utf8(raw).unwrap_or_else(|e| {
+                        format!("[binary file: {} bytes]", e.into_bytes().len())
+                    })
+                };
                 changes.push(OverlayChange::Created {
                     path: path.clone(),
                     content,

@@ -130,6 +130,15 @@ pub fn execute(
     };
 
     if no_launch {
+        // Restore injected files — user will run the agent manually,
+        // so injected context stays only if they re-run `ta run`.
+        if agent_config.injects_context_file {
+            restore_claude_md(&staging_path)?;
+        }
+        if agent_config.injects_settings {
+            restore_claude_settings(&staging_path)?;
+        }
+
         println!("\nWorkspace ready. To use manually:");
         println!("  cd {}", staging_path.display());
         if let Some((cmd, args)) = agent_config.pre_launch {
@@ -191,6 +200,14 @@ pub fn execute(
         }
         Err(e) => {
             if e.kind() == std::io::ErrorKind::NotFound {
+                // Restore injected files before returning — agent won't run.
+                if agent_config.injects_context_file {
+                    restore_claude_md(&staging_path)?;
+                }
+                if agent_config.injects_settings {
+                    restore_claude_settings(&staging_path)?;
+                }
+
                 println!(
                     "\n'{}' command not found. To use manually:",
                     agent_config.command
@@ -566,7 +583,7 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn run_creates_goal_and_injects_claude_md() {
+    fn run_creates_goal_and_restores_on_no_launch() {
         let project = TempDir::new().unwrap();
         std::fs::write(project.path().join("README.md"), "# Test\n").unwrap();
         std::fs::write(
@@ -594,20 +611,41 @@ mod tests {
         let goals = goal_store.list().unwrap();
         assert_eq!(goals.len(), 1);
 
-        // Verify CLAUDE.md was injected.
+        // With --no-launch, injected files should be restored so they
+        // don't contaminate a subsequent `ta pr build` diff.
         let claude_md = std::fs::read_to_string(goals[0].workspace_path.join("CLAUDE.md")).unwrap();
+        assert_eq!(claude_md, "# Existing project instructions\n");
+
+        // Settings should also be restored (removed since it didn't exist).
+        assert!(!goals[0].workspace_path.join(SETTINGS_REL_PATH).exists());
+    }
+
+    #[test]
+    fn run_injects_context_for_agent() {
+        // Verify that inject + restore roundtrip works for the agent path.
+        let staging = TempDir::new().unwrap();
+        std::fs::write(
+            staging.path().join("CLAUDE.md"),
+            "# Existing project instructions\n",
+        )
+        .unwrap();
+
+        inject_claude_md(staging.path(), "Test goal", "goal-123", None, None).unwrap();
+
+        // Verify CLAUDE.md was injected.
+        let claude_md = std::fs::read_to_string(staging.path().join("CLAUDE.md")).unwrap();
         assert!(claude_md.contains("Trusted Autonomy"));
         assert!(claude_md.contains("Test goal"));
         assert!(claude_md.contains("Existing project instructions"));
 
         // Verify backup was saved.
-        let backup =
-            std::fs::read_to_string(goals[0].workspace_path.join(CLAUDE_MD_BACKUP)).unwrap();
+        let backup = std::fs::read_to_string(staging.path().join(CLAUDE_MD_BACKUP)).unwrap();
         assert_eq!(backup, "# Existing project instructions\n");
 
+        inject_claude_settings(staging.path(), None).unwrap();
+
         // Verify settings.local.json was injected.
-        let settings =
-            std::fs::read_to_string(goals[0].workspace_path.join(SETTINGS_REL_PATH)).unwrap();
+        let settings = std::fs::read_to_string(staging.path().join(SETTINGS_REL_PATH)).unwrap();
         assert!(settings.contains("Trusted Autonomy"));
         assert!(settings.contains("Bash(*)"));
     }

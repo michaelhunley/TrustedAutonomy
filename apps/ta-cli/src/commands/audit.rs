@@ -36,37 +36,28 @@ pub fn execute(cmd: &AuditCommands, config: &GatewayConfig) -> anyhow::Result<()
                 return Ok(());
             }
 
-            let events = AuditLog::read_all(&path)?;
-            if events.is_empty() {
-                println!("Audit log is empty.");
-                return Ok(());
-            }
-
-            // Verify the hash chain by checking each event links to the previous.
-            let mut valid = true;
-            for (i, event) in events.iter().enumerate().skip(1) {
-                if event.previous_hash.is_none() {
-                    println!("WARNING: Event {} has no previous_hash link", i);
-                    valid = false;
+            // Verify using the real hash-chain verification (recomputes hashes).
+            match AuditLog::verify_chain(&path) {
+                Ok(_) => {
+                    let events = AuditLog::read_all(&path)?;
+                    println!(
+                        "Audit log verified: {} event(s), hash chain intact.",
+                        events.len()
+                    );
                 }
-            }
-
-            // First event should have no previous_hash.
-            if events[0].previous_hash.is_some() {
-                println!("WARNING: First event has unexpected previous_hash");
-                valid = false;
-            }
-
-            if valid {
-                println!(
-                    "Audit log verified: {} event(s), hash chain intact.",
-                    events.len()
-                );
-            } else {
-                println!(
-                    "Audit log has {} event(s) with integrity warnings.",
-                    events.len()
-                );
+                Err(ta_audit::AuditError::IntegrityViolation {
+                    line,
+                    expected,
+                    actual,
+                }) => {
+                    println!("INTEGRITY VIOLATION at line {}:", line);
+                    println!("  Expected previous_hash: {}", expected);
+                    println!("  Actual previous_hash:   {}", actual);
+                    println!();
+                    println!("The audit log may have been tampered with.");
+                    anyhow::bail!("Audit log integrity check failed");
+                }
+                Err(e) => return Err(e.into()),
             }
         }
 
