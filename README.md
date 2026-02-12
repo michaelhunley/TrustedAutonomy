@@ -341,6 +341,31 @@ npm install -g @openai/codex
 ```
 Requires an [OpenAI API key](https://platform.openai.com/api-keys) or ChatGPT Plus/Pro subscription.
 
+### API key configuration
+
+You can set API keys globally or per-project.
+
+**Global** (all projects):
+```bash
+# Add to ~/.bashrc or ~/.zshrc
+export ANTHROPIC_API_KEY="sk-ant-..."
+export OPENAI_API_KEY="sk-..."
+```
+
+**Per-project** (recommended — uses [direnv](https://direnv.net/)):
+```bash
+# Create a .envrc in your project root
+echo 'export ANTHROPIC_API_KEY="sk-ant-..."' >> .envrc
+direnv allow
+```
+
+The key activates when you `cd` into the project and deactivates when you leave. If you're using Nix (Option A above), direnv is already available.
+
+**Important:** Never commit API keys. Add `.envrc` to your `.gitignore`:
+```bash
+echo ".envrc" >> .gitignore
+```
+
 ### 3. Run your first mediated task
 
 ```bash
