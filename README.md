@@ -301,14 +301,11 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh  # if needed
 cargo build --release -p ta-cli
 ```
 
-The binary lands at `target/release/ta-cli`. Add it to your PATH:
+The binary lands at `target/release/ta`. Add it to your PATH:
 
 ```bash
 # Add to your shell profile (~/.bashrc, ~/.zshrc, etc.)
 export PATH="$HOME/path-to/ta/target/release:$PATH"
-
-# Or symlink it
-ln -sf "$(pwd)/target/release/ta-cli" /usr/local/bin/ta
 ```
 
 ### 2. Install an agent
@@ -370,11 +367,14 @@ The key activates when you `cd` into the project and deactivates when you leave.
 cd your-project/
 
 # One command: create staging copy → launch agent → build PR on exit
-ta run claude-code "Fix the auth bug" --source .
+ta run "Fix the auth bug" --source .
+
+# Uses Claude Code by default. For other agents:
+ta run "Fix the auth bug" --agent claude-flow --source .
 
 # TA copies your project to .ta/staging/, injects context into CLAUDE.md,
-# launches Claude Code in the staging copy. Agent works normally.
-# When Claude exits, TA diffs staging vs source and builds a PR package.
+# launches the agent in the staging copy. Agent works normally.
+# When the agent exits, TA diffs staging vs source and builds a PR package.
 
 # Review what the agent did
 ta pr list
@@ -394,7 +394,7 @@ That's it. The agent never knew it was in a staging workspace.
 ```
 Your Project                     Staging Copy (.ta/staging/)
      |                                    |
-     |-- ta run "task" --source . ------->|  (full copy, minus build artifacts)
+     |-- ta run "task" --source . -------->|  (full copy, minus build artifacts)
      |                                    |
      |                              Agent works here
      |                              (reads, writes, tests — normal tools)
@@ -448,7 +448,9 @@ ta pr apply <package-id> --git-commit
 `ta run` wraps the manual steps into a single command:
 
 ```bash
-ta run claude-code "Fix the auth bug" --source .
+ta run "Fix the auth bug" --source .
+# Uses Claude Code by default. For other agents:
+ta run "Fix the auth bug" --agent claude-flow --source .
 # Then review + approve + apply as above.
 ```
 
@@ -507,9 +509,9 @@ ta goal start "Refactor auth system" --source .
 Use `ta run` to launch Claude Code inside the staging workspace. Because claude-flow is registered as an MCP server, Claude Code can call swarm/memory/task tools automatically:
 
 ```bash
-ta run claude-code "Refactor auth system" --source .
+ta run "Refactor auth system" --source .
 
-# Claude Code launches in .ta/staging/<goal-id>/
+# Claude Code (default agent) launches in .ta/staging/<goal-id>/
 # It can use mcp__claude-flow__swarm_init, mcp__claude-flow__task_orchestrate,
 # etc. alongside its normal tools.
 # When Claude exits, TA diffs and builds the PR package.
