@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint-and-test:
+    name: Lint and Test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v27
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+
+      - name: Setup Nix cache
+        uses: cachix/cachix-action@v15
+        with:
+          name: trustedautonomy
+          authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+          skipPush: ${{ github.event_name == 'pull_request' }}
+
+      - name: Build all crates
+        run: nix develop --command bash -c "cargo build --workspace --all-targets"
+
+      - name: Run tests
+        run: nix develop --command bash -c "cargo test --workspace"
+
+      - name: Run clippy
+        run: nix develop --command bash -c "cargo clippy --workspace --all-targets -- -D warnings"
+
+      - name: Check formatting
+        run: nix develop --command bash -c "cargo fmt --all -- --check"
+
+      - name: Build ta-cli binary
+        run: nix develop --command bash -c "cargo build --release -p ta-cli"
+
+      - name: Test ta-cli --version
+        run: nix develop --command bash -c "./target/release/ta --version"

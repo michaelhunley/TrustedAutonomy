@@ -1,0 +1,190 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g., v0.1.0)'
+        required: true
+
+env:
+  CARGO_TERM_COLOR: always
+  BINARY_NAME: ta
+
+jobs:
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+      version: ${{ steps.get_version.outputs.version }}
+    steps:
+      - name: Get version from tag
+        id: get_version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.get_version.outputs.version }}
+          release_name: Release ${{ steps.get_version.outputs.version }}
+          draft: false
+          prerelease: ${{ contains(steps.get_version.outputs.version, 'alpha') || contains(steps.get_version.outputs.version, 'beta') }}
+          body: |
+            ## Release ${{ steps.get_version.outputs.version }}
+
+            ### Installation
+
+            **macOS (Homebrew - coming soon)**
+            ```bash
+            brew install trustedautonomy/tap/ta
+            ```
+
+            **Linux/macOS (install script)**
+            ```bash
+            curl -fsSL https://raw.githubusercontent.com/trustedautonomy/ta/main/install.sh | sh
+            ```
+
+            **Cargo**
+            ```bash
+            cargo install ta-cli
+            ```
+
+            **Nix**
+            ```bash
+            nix run github:trustedautonomy/ta
+            ```
+
+            ### Binaries
+
+            Download the appropriate binary for your platform below.
+
+            ---
+
+            See the [CHANGELOG](https://github.com/trustedautonomy/ta/blob/main/CHANGELOG.md) for detailed changes.
+
+  build-release:
+    name: Build ${{ matrix.target }}
+    needs: create-release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS builds
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            cross: false
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            cross: false
+          # Linux builds (musl for static binaries)
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            cross: true
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            cross: true
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Nix (non-cross builds)
+        if: matrix.cross == false
+        uses: cachix/install-nix-action@v27
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+
+      - name: Setup Nix cache (non-cross builds)
+        if: matrix.cross == false
+        uses: cachix/cachix-action@v15
+        with:
+          name: trustedautonomy
+          authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+          skipPush: false
+
+      - name: Install Rust (cross builds)
+        if: matrix.cross == true
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross (cross builds)
+        if: matrix.cross == true
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build binary (native)
+        if: matrix.cross == false
+        run: |
+          nix develop --command bash -c "rustup target add ${{ matrix.target }} && cargo build --release --target ${{ matrix.target }} -p ta-cli"
+
+      - name: Build binary (cross)
+        if: matrix.cross == true
+        run: |
+          cross build --release --target ${{ matrix.target }} -p ta-cli
+
+      - name: Create artifact directory
+        run: mkdir -p artifacts
+
+      - name: Package binary (Unix)
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf ../../../artifacts/${{ env.BINARY_NAME }}-${{ needs.create-release.outputs.version }}-${{ matrix.target }}.tar.gz ${{ env.BINARY_NAME }}
+          cd -
+
+      - name: Generate SHA256 checksums
+        run: |
+          cd artifacts
+          sha256sum *.tar.gz > SHA256SUMS.txt
+          cd -
+
+      - name: Upload binary artifact
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./artifacts/${{ env.BINARY_NAME }}-${{ needs.create-release.outputs.version }}-${{ matrix.target }}.tar.gz
+          asset_name: ${{ env.BINARY_NAME }}-${{ needs.create-release.outputs.version }}-${{ matrix.target }}.tar.gz
+          asset_content_type: application/gzip
+
+      - name: Upload checksums (first job only)
+        if: matrix.target == 'x86_64-apple-darwin'
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./artifacts/SHA256SUMS.txt
+          asset_name: SHA256SUMS.txt
+          asset_content_type: text/plain
+
+  publish-crate:
+    name: Publish to crates.io
+    needs: build-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v27
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+
+      - name: Publish ta-cli to crates.io
+        run: |
+          nix develop --command bash -c "cargo publish -p ta-cli --token ${{ secrets.CARGO_REGISTRY_TOKEN }}"
+        continue-on-error: true

@@ -34,6 +34,32 @@
         ];
 
       in {
+        # Default package: ta-cli binary
+        packages.default = pkgs.rustPlatform.buildRustPackage {
+          pname = "ta-cli";
+          version = "0.1.0-alpha";
+
+          src = ./.;
+
+          cargoLock = {
+            lockFile = ./Cargo.lock;
+          };
+
+          inherit nativeBuildInputs buildInputs;
+
+          # Build only ta-cli, not all workspace members
+          cargoBuildFlags = [ "-p" "ta-cli" ];
+
+          meta = with pkgs.lib; {
+            description = "Trusted Autonomy — local-first agent substrate";
+            homepage = "https://github.com/trustedautonomy/ta";
+            license = licenses.asl20;
+            maintainers = [ ];
+            mainProgram = "ta";
+          };
+        };
+
+        # Development shell
         devShells.default = pkgs.mkShell {
           inherit nativeBuildInputs buildInputs;
 
