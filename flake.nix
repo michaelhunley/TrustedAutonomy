@@ -33,9 +33,10 @@
           pkgs.libiconv
         ];
 
-      in {
-        # Default package: ta-cli binary
-        packages.default = pkgs.rustPlatform.buildRustPackage {
+      in
+      let
+        # Build the ta-cli package once
+        ta-cli-package = pkgs.rustPlatform.buildRustPackage {
           pname = "ta-cli";
           version = "0.1.0-alpha";
 
@@ -56,6 +57,24 @@
             license = licenses.asl20;
             maintainers = [ ];
             mainProgram = "ta";
+          };
+        };
+      in {
+        # Packages
+        packages = {
+          default = ta-cli-package;
+          ta-cli = ta-cli-package;
+        };
+
+        # Apps for 'nix run github:trustedautonomy/ta'
+        apps = {
+          default = {
+            type = "app";
+            program = "${pkgs.lib.getExe ta-cli-package}";
+          };
+          ta = {
+            type = "app";
+            program = "${pkgs.lib.getExe ta-cli-package}";
           };
         };
 
