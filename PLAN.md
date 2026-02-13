@@ -101,15 +101,113 @@ Workspace structure with 12 crates under `crates/` and `apps/`. Resource URIs (`
 - "Would you pay for a hosted version? What would that need to include?"
 
 ## Phase v0.1.1 — Release Automation & Binary Distribution
-<!-- status: pending -->
-- **GitHub Actions CI**: lint (clippy + fmt), test, build on push/PR
-- **Cross-compile matrix**: macOS aarch64 + x86_64, Linux aarch64 + x86_64 (musl static)
-- **GitHub Releases**: `gh release create v0.1.0-alpha --generate-notes` with attached binaries
-- **`cargo install ta-cli`**: Ensure crate publishes to crates.io (verify metadata, dependencies)
+<!-- status: in_progress -->
+
+### Done
+- [x] **GitHub Actions CI** (`.github/workflows/ci.yml`): lint (clippy + fmt), test, build on push/PR
+  - Ubuntu + macOS matrix, Nix devShell via DeterminateSystems/nix-installer-action
+  - Magic Nix Cache (no auth token needed), step timeouts, graceful degradation
+- [x] **Release workflow** (`.github/workflows/release.yml`): triggered by version tag or manual dispatch
+  - Cross-compile matrix: macOS aarch64 + x86_64 (native), Linux x86_64 + aarch64 (musl via `cross`)
+  - Creates GitHub Release with binary tarballs + SHA256 checksums
+  - Publishes to crates.io (requires `CARGO_REGISTRY_TOKEN` secret)
+
+### Remaining
+- **Validate release end-to-end** (manual — see checklist below)
 - **Install script**: `curl -fsSL https://ta.dev/install.sh | sh` one-liner (download + place in PATH)
 - **Version bumping**: `cargo release` or manual Cargo.toml + git tag workflow
 - **Nix flake output**: `nix run github:trustedautonomy/ta` for Nix users
 - **Homebrew formula**: Future — tap for macOS users (`brew install trustedautonomy/tap/ta`)
+
+### Release Validation Checklist (manual, one-time)
+These steps must be done by the repo owner to validate the release pipeline:
+
+1. **Set GitHub secrets** (Settings → Secrets and variables → Actions):
+   - `CARGO_REGISTRY_TOKEN` — from `cargo login` / crates.io API tokens page
+   - (Optional) `CACHIX_AUTH_TOKEN` — only needed if you want to push Nix cache binaries
+
+2. **Verify CI passes on a PR to main**:
+   ```bash
+   git checkout feature/release-automation
+   gh pr create --base main --title "Release Automation" --body "CI + release workflows"
+   # Wait for CI checks to pass on both Ubuntu and macOS
+   ```
+
+3. **Merge to main** and verify CI runs on the main branch push.
+
+4. **Test release workflow** (dry run via manual dispatch):
+   ```bash
+   # From GitHub Actions tab → Release → Run workflow → enter tag "v0.1.0-alpha"
+   # Or from CLI:
+   gh workflow run release.yml -f tag=v0.1.0-alpha
+   ```
+   - Verify: 4 binary artifacts built (2× macOS, 2× Linux musl)
+   - Verify: GitHub Release page created with binaries + checksums
+   - Verify: crates.io publish attempted (will fail if metadata incomplete — check Cargo.toml)
+
+5. **Test the binaries**:
+   ```bash
+   # Download and verify on macOS:
+   tar xzf ta-v0.1.0-alpha-aarch64-apple-darwin.tar.gz
+   ./ta --version
+   # Should show: ta 0.1.0-alpha (git-hash date)
+   ```
+
+6. **Validate `cargo install`** (after crates.io publish succeeds):
+   ```bash
+   cargo install ta-cli
+   ta --version
+   ```
+
+## Phase v0.1.2 — Follow-Up Goals & Iterative Review
+<!-- status: pending -->
+**Goal**: Enable iterative refinement — fix CI failures, address discuss items, revise rejected changes — without losing context from the original goal.
+
+### Core: `ta goal start "title" --follow-up [id]`
+- `--follow-up` without ID: finds the most recent goal (prefers unapplied, falls back to latest applied)
+- `--follow-up <id-prefix>`: match by first N characters of goal UUID (no full hash needed)
+- `GoalRun` gets `parent_goal_id: Option<Uuid>` linking to the predecessor
+
+### Staging Behavior (depends on parent state)
+
+**Parent NOT yet applied** (PrReady / UnderReview / Approved):
+- Follow-up staging starts from the **parent's staging** (preserves in-flight work)
+- `ta pr build` diffs against the **original source** (same base as parent)
+- The follow-up's PR **supersedes** the parent's PR — single unified diff covering both rounds
+- Parent PR status transitions to `Superseded { superseded_by: Uuid }`
+- Result: one collapsed PR for review, not a chain of incremental PRs
+
+**Parent already applied** (Applied / Completed):
+- Follow-up staging starts from **current source** (which already has applied changes)
+- Creates a new, independent PR for the follow-up changes
+- Parent link preserved for audit trail / context injection only
+
+### Context Injection
+When a follow-up goal starts, `inject_claude_md()` includes parent context:
+- Parent goal title, objective, summary (what was done)
+- Artifact list with dispositions (what was approved/rejected/discussed)
+- Any discuss items with their rationale (from `change_summary.json`)
+- Free-text follow-up context from the objective field
+
+**Specifying detailed context**:
+- Short: `ta run "Fix CI lint failures" --source . --follow-up` (title IS the context)
+- Detailed: `ta run --source . --follow-up --objective "Fix clippy warnings in pr.rs and add missing test for edge case X. Also address the discuss item on config.toml — reviewer wanted env var override support."` (objective field scales to paragraphs)
+- From file: `ta run --source . --follow-up --objective-file review-notes.md` (for structured review notes)
+- **Phase 4d integration**: When discuss items have comment threads (Phase 4d), those comments auto-populate follow-up context — each discussed artifact's thread becomes a structured section in CLAUDE.md injection. The `--follow-up` flag on a goal with discuss items is the resolution path for Phase 4d's discussion workflow.
+
+### CLI Changes
+- `ta goal start` / `ta run`: add `--follow-up [id-prefix]` and `--objective-file <path>` flags
+- `ta goal list`: show parent chain (`goal-abc → goal-def (follow-up)`)
+- `ta pr list`: show superseded PRs with `[superseded]` marker
+- `ta pr build`: when parent PR exists and is unapplied, mark it superseded
+
+### Data Model Changes
+- `GoalRun`: add `parent_goal_id: Option<Uuid>`
+- `PRStatus`: add `Superseded { superseded_by: Uuid }` variant
+- `PRPackage`: no changes (the new PR package is a complete, standalone package)
+
+### Phase 4d Note
+> Follow-up goals are the **resolution mechanism** for Phase 4d discuss items. When 4d adds per-artifact comment threads and persistent review sessions, `--follow-up` on a goal with unresolved discuss items will inject those threads as structured agent instructions. The agent addresses each discussed artifact; the resulting PR supersedes the original. This keeps discuss → revise → re-review as a natural loop without new CLI commands — just `ta run --follow-up`.
 
 ## Phase v0.2 — Git Workflow Automation
 <!-- status: pending -->
@@ -146,9 +244,10 @@ Workspace structure with 12 crates under `crates/` and `apps/`. Resource URIs (`
 ## Phase 4d — Review Sessions
 <!-- status: pending -->
 - ReviewSession persists across CLI invocations (multi-interaction review)
-- Per-artifact comment threads
+- Per-artifact comment threads (stored in PR package or sidecar file)
 - Supervisor agent analyzes dependency graph and warns about coupled rejections
 - Discussion workflow for `?` (discuss) items
+- **Resolution path**: `ta run --follow-up` on a goal with discuss items injects comment threads as structured agent context; the agent addresses each discussed artifact and the resulting PR supersedes the original (see Phase v0.1.2)
 
 ## Phase 4e — Plan Lifecycle Automation
 <!-- status: pending -->
