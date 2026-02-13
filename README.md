@@ -63,6 +63,19 @@ Trusted Autonomy achieves this by:
 
 ---
 
+## Current status: v0.1.0-alpha
+
+This is an early alpha release for feedback. Please note:
+
+- **Not production-ready.** Do not use for critical or irreversible operations.
+- **The security model is not yet audited.** Do not trust it with secrets or sensitive data.
+- **No sandbox isolation yet.** The agent runs with your permissions in a staging copy. Defense-in-depth (OCI/gVisor) is planned for Phase 7.
+- **No conflict detection yet.** Editing source files while a TA session is active may lose uncommitted changes on apply. Git protects committed work.
+
+If any of these are blockers for your use case, watch the repo — each is on the [roadmap](PLAN.md).
+
+---
+
 ## Design principles
 - Normal environment illusion: tools feel like standard filesystem/network access, but all effects are mediated.
 - Default collect (staged-by-default): changes accumulate as pending review artifacts (PR package) rather than applying immediately.

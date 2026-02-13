@@ -80,10 +80,10 @@ Workspace structure with 12 crates under `crates/` and `apps/`. Resource URIs (`
 - **Error messages**: Graceful failures with actionable guidance (not panics or cryptic errors)
 - **.taignore defaults** cover common project types (Rust, Node, Python, Go)
 
-### Disclaimers to include
+### Disclaimers to include (added to README)
 - "Alpha — not production-ready. Do not use for critical/irreversible operations"
 - "The security model is not yet audited. Do not trust it with secrets or sensitive data"
-- "Selective approval (Phase 4b-4c) is not yet implemented — review is all-or-nothing"
+- ~~"Selective approval (Phase 4b-4c) is not yet implemented — review is all-or-nothing"~~ — DONE (Phase 4b-4c complete)
 - "No sandbox isolation yet — agent runs with your permissions in a staging copy"
 - "No conflict detection yet — editing source files while a TA session is active may lose changes on apply (git protects committed work)"
 
