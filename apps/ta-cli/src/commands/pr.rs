@@ -570,24 +570,34 @@ fn view_package(
     });
 
     if let Some(goal) = matching_goal {
-        let staging = StagingWorkspace::new(goal.goal_run_id.to_string(), &config.staging_dir)?;
-        let staged_files = staging.list_files()?;
+        // Use artifact URIs from the package (already filtered by ExcludePatterns)
+        // instead of staging.list_files() which walks ALL files including target/.
+        let artifact_files: Vec<String> = pkg
+            .changes
+            .artifacts
+            .iter()
+            .filter_map(|a| {
+                a.resource_uri
+                    .strip_prefix("fs://workspace/")
+                    .map(String::from)
+            })
+            .collect();
 
         // Filter to a single file if --file was passed.
         let files_to_show: Vec<&String> = if let Some(filter) = file_filter {
-            staged_files
+            artifact_files
                 .iter()
                 .filter(|f| f.as_str() == filter)
                 .collect()
         } else {
-            staged_files.iter().collect()
+            artifact_files.iter().collect()
         };
 
         if let Some(filter) = file_filter {
             if files_to_show.is_empty() {
                 println!("\nFile '{}' not found in staged changes.", filter);
                 println!("Available files:");
-                for f in &staged_files {
+                for f in &artifact_files {
                     println!("  {}", f);
                 }
                 return Ok(());
@@ -595,6 +605,7 @@ fn view_package(
         }
 
         if !files_to_show.is_empty() {
+            let staging = StagingWorkspace::new(goal.goal_run_id.to_string(), &config.staging_dir)?;
             println!("\nDiffs:");
             println!("{}", "=".repeat(60));
             for file in &files_to_show {
@@ -1812,5 +1823,75 @@ mod tests {
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("dependency conflict"));
+    }
+
+    #[test]
+    fn build_pr_excludes_target_dir() {
+        // Set up a source project with a target/ directory (simulates Rust build artifacts).
+        let project = TempDir::new().unwrap();
+        std::fs::write(project.path().join("README.md"), "# Test\n").unwrap();
+        std::fs::create_dir_all(project.path().join("src")).unwrap();
+        std::fs::write(project.path().join("src/main.rs"), "fn main() {}\n").unwrap();
+
+        // Create a target/ directory with build artifacts in source.
+        std::fs::create_dir_all(project.path().join("target/debug/incremental")).unwrap();
+        std::fs::write(
+            project.path().join("target/debug/incremental/artifact.o"),
+            "binary-data",
+        )
+        .unwrap();
+
+        let config = GatewayConfig::for_project(project.path());
+
+        super::super::goal::execute(
+            &super::super::goal::GoalCommands::Start {
+                title: "Exclude test".to_string(),
+                source: Some(project.path().to_path_buf()),
+                objective: "Test exclusion".to_string(),
+                agent: "test-agent".to_string(),
+                phase: None,
+            },
+            &config,
+        )
+        .unwrap();
+
+        let goal_store = GoalRunStore::new(&config.goals_dir).unwrap();
+        let goals = goal_store.list().unwrap();
+        let goal = &goals[0];
+        let goal_id = goal.goal_run_id.to_string();
+
+        // Verify target/ was NOT copied to staging.
+        assert!(!goal.workspace_path.join("target").exists());
+
+        // Modify a real source file.
+        std::fs::write(goal.workspace_path.join("README.md"), "# Updated\n").unwrap();
+
+        // Also create target/ in staging to simulate agent building in staging.
+        std::fs::create_dir_all(goal.workspace_path.join("target/debug/incremental")).unwrap();
+        std::fs::write(
+            goal.workspace_path
+                .join("target/debug/incremental/ta_workspace-123"),
+            "build-artifact",
+        )
+        .unwrap();
+
+        // Build PR — target/ should be excluded from artifacts.
+        build_package(&config, &goal_id, "Test changes", false).unwrap();
+
+        let packages = load_all_packages(&config).unwrap();
+        let pkg = &packages[0];
+
+        // Only the real source change should be in artifacts.
+        assert_eq!(pkg.changes.artifacts.len(), 1);
+        assert!(pkg.changes.artifacts[0].resource_uri.contains("README.md"));
+
+        // No target/ files should appear.
+        for artifact in &pkg.changes.artifacts {
+            assert!(
+                !artifact.resource_uri.contains("target/"),
+                "target/ file should be excluded: {}",
+                artifact.resource_uri
+            );
+        }
     }
 }

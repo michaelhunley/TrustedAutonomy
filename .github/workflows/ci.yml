@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint-and-test:
+    name: Lint and Test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Setup Nix cache
+        uses: DeterminateSystems/magic-nix-cache-action@main
+        continue-on-error: true
+
+      - name: Build all crates
+        run: nix develop --command bash -c "cargo build --workspace --all-targets"
+        timeout-minutes: 30
+
+      - name: Run tests
+        run: nix develop --command bash -c "cargo test --workspace"
+        timeout-minutes: 15
+
+      - name: Run clippy
+        run: nix develop --command bash -c "cargo clippy --workspace --all-targets -- -D warnings"
+        timeout-minutes: 15
+
+      - name: Check formatting
+        run: nix develop --command bash -c "cargo fmt --all -- --check"
+        timeout-minutes: 5
+
+      - name: Build ta-cli binary
+        run: nix develop --command bash -c "cargo build --release -p ta-cli"
+        timeout-minutes: 30
+
+      - name: Test ta-cli --version
+        run: nix develop --command bash -c "./target/release/ta --version"
+        timeout-minutes: 5
