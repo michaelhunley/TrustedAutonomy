@@ -189,15 +189,15 @@ safety per unit of engineering effort than a VM sandbox.
 | Question | VM Answer | TA Answer |
 |---|---|---|
 | Can I see what the agent will do before it happens? | No — inspect after | Yes — review before |
-| Can I approve some changes and reject others? | No — all or nothing | Yes — per-artifact |
-| Can a non-developer review and approve? | Barely | Yes — semantic diffs with rationale |
+| Can I approve some changes and reject others? | Yes - manual intervention | Yes — per-artifact |
+| Can a non-developer review and approve? | Yes with addtional tools and learning | Yes — semantic diffs with rationale |
 | Does it work with email, Slack, APIs, databases? | Poorly — VMs sandbox files + network | Yes — unified staging model for any resource |
-| Can multiple agents collaborate? | Hard — VMs isolate | Easy — shared staging |
+| Can multiple agents collaborate? | Yes — Using a system like Claude Flow or manual setup | Easy — shared staging |
 | What infrastructure do I need? | Hypervisor + images + compute | None — runs on your laptop |
-| Does it protect against a malicious agent? | Yes (strong) | Partially (sandbox layer needed) |
-| Does it protect against a wrong agent? | No (damage already done inside VM) | Yes (nothing happens without approval) |
-| How fast is it? | Seconds to minutes (boot) | Milliseconds (file copy) |
-| What does it cost to run? | $$$ (compute per VM) | Free (file copies) |
+| Does it protect against a malicious agent? | Yes (strong) | Yes, but not hardened or inescapable (sandbox layer needed) |
+| Does it protect against a wrong agent? | Only with human best efforts review (damage already done inside VM) | Yes (nothing happens without approval) |
+| How fast is it? | Seconds (boot) | Milliseconds (file copy) |
+| What does it cost to run? | free if you know what you are doing | Free (file copies) |
 
 ---
 

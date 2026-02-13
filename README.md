@@ -9,16 +9,16 @@ It is a **trust and control plane** that sits underneath *any* agent or multi-ag
 
 - agents can operate autonomously inside a defined charter
 - all real-world effects are staged, reviewable, and auditable
-- humans remain in control at meaningful boundaries (PR-style milestones)
+- humans remain in control at meaningful boundaries (a pull request at each milestones in simple English with detailed diffs for deep inspection)
 - orchestration layers remain swappable and unaware of the substrate
 
 ---
 
 ## Why Trusted Autonomy
 
-Today's agent tooling forces a bad trade-off: **constant permission prompts** (secure but annoying) or **full auto-approve** (convenient but risky). Users get tired of approving seemingly trivial actions and disable safeguards — often without understanding the security consequences. Experienced users can configure fine-grained tool permissions in frameworks like Claude Code or Claude Flow, but doing this well requires knowing which actions are actually dangerous, how they interact, and what to scope — a level of security reasoning that shouldn't be a prerequisite for safe agent use.
+Today's agent tooling forces trade-offs forcing choices between security and convenience; many people opt for convenience. This shouldn't be the choice for tech and non-tech users alike. Default behavior is locked down requiring **constant permission prompts** (secure but annoying) or folder level access that stil requires many approvals with options to "always allow". An all too common alternative, or the result of many "yeah, always allow" choices is **full auto-approve** (convenient but risky). Users get tired of approving seemingly trivial actions, needing to constantly check and babysit their smart agents, and disable safeguards — many users without understanding the security consequences. Experienced users can configure fine-grained tool permissions in frameworks like Claude Code or Claude Flow, but doing this well requires knowing which actions are actually dangerous, how they interact, and what to scope — a level of security reasoning that shouldn't be a prerequisite for safe agent use. M
 
-The standard answer is to run agents inside a VM with strict network controls. That works, but it requires infrastructure expertise, adds latency and cost, and produces filesystem diffs that only a sysadmin can review. **VMs answer "what if the agent is malicious?" — but most agent failures aren't escape attempts. They're confident bad decisions.**
+The standard answer is to run agents inside a VM with strict network controls and file access mappings. That works, but it requires a reasonable amount of technical sophistication to manage correctly, requires some customization per workflow, and requires some knowledge to track and review diffs - all of which is time not focused on the users goal. There are two classes of problem to solve: malicious intent (purposefully built Claude skills to cause harm as witnissed in recent Clawdbot security scans), and well-intentioned AI doing the wrong thing for the "right" reasons. VMs solve the former, humans have to engage to solve the latter. TA helps with both.
 
 TA takes a different approach:
 
@@ -29,7 +29,7 @@ TA takes a different approach:
 - **Any agent, no lock-in**: Claude Code, Codex, Claude Flow, or any future agent works on top without modification.
 - **Layers with VMs and sandboxes** when warranted — TA adds the semantic review layer that containers alone can't provide.
 
-Today TA mediates filesystem changes. The same staging model extends to email drafts, database writes, API calls, and any external action — each becoming a reviewable artifact in the same PR package. See [PLAN.md](PLAN.md) for the roadmap.
+Today TA mediates filesystem changes. The same staging model in future releases extends to any state change actions including email drafts, database writes, API calls, and any external action — each becoming a reviewable artifact in the same PR package. See [PLAN.md](PLAN.md) for the roadmap.
 
 > See [docs/WHY-TA-vs-VM.md](docs/WHY-TA-vs-VM.md) for a detailed comparison of TA's approach vs VM sandboxing.
 
@@ -58,12 +58,12 @@ Trusted Autonomy achieves this by:
 ### This is **not**
 - an “Agent OS VM”
 - a replacement for LangGraph, Claude Flow, CrewAI, etc.
-- a UI-first product
+- a UI-first product (comes later but independently)
 - a monolithic orchestration framework
 
 ---
 
-## Current status: v0.1.0-alpha
+## Current status: v0.1.1-alpha
 
 This is an early alpha release for feedback. Please note:
 
@@ -117,7 +117,7 @@ Agents should be able to **read, write, and modify files normally**, without lea
 
 ### How it works
 - Agents interact with filesystem tools exposed via MCP
-- Those tools operate on a **staging workspace** (isolated directory per goal)
+- Those tools operate on a **staging workspace** (isolated directory per goal today, sparse virtual file system in the future)
 - Reads snapshot the original file; writes create diffs against the snapshot
 - All writes become **ChangeSets with diffs**, bundled into PR packages
 
@@ -266,10 +266,10 @@ Nix improves correctness without becoming a dependency tax.
 ## Compatibility with existing agent systems
 
 Trusted Autonomy is designed so that:
-- Claude Code
+- Claude Code (tested)
 - Codex
 - LangGraph
-- claude-flow
+- claude-flow (tested and my default operating model)
 - Ollama-based agents
 - future orchestration layers
 
@@ -303,7 +303,7 @@ This mirrors how high-trust engineering systems already work.
 
 ---
 
-## Future extensions (by design, not accident)
+## Future extensions (by design)
 
 - continuous security auditor agents
 - automatic least-privilege recommendations
@@ -741,6 +741,7 @@ schema/
 ---
 
 ## Contributing
+See [CONTRIBUTING.md](CONTRIBUTING.md) for latest details
 
 ### Prerequisites
 
