@@ -12,6 +12,8 @@ It is a **trust and control plane** that sits underneath *any* agent or multi-ag
 - humans remain in control at meaningful boundaries (a pull request at each milestones in simple English with detailed diffs for deep inspection)
 - orchestration layers remain swappable and unaware of the substrate
 
+![Agent changes are collected and presented at goal completion for approval](./OperatingModel.png)
+
 ---
 
 ## Why Trusted Autonomy
