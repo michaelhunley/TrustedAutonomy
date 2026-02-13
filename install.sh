@@ -93,6 +93,41 @@ install_binary() {
         exit 1
     fi
 
+    # Download checksum file
+    CHECKSUM_URL="https://github.com/$REPO/releases/download/$VERSION/${BINARY_NAME}-${VERSION}-${TARGET}.tar.gz.sha256"
+    echo -e "${GREEN}Downloading checksum...${NC}"
+    if ! curl -fsSL "$CHECKSUM_URL" -o "$TMP_DIR/${BINARY_NAME}.tar.gz.sha256"; then
+        echo -e "${YELLOW}Warning: Could not download checksum file${NC}"
+        echo -e "${YELLOW}Skipping checksum verification (not recommended)${NC}"
+    else
+        # Verify checksum
+        echo -e "${GREEN}Verifying checksum...${NC}"
+        cd "$TMP_DIR"
+
+        # Different SHA256 command formats for different platforms
+        if command -v sha256sum > /dev/null; then
+            # Linux
+            if ! sha256sum -c "${BINARY_NAME}.tar.gz.sha256" 2>/dev/null; then
+                echo -e "${RED}Error: Checksum verification failed${NC}"
+                echo -e "${RED}The downloaded file may be corrupted or tampered with${NC}"
+                exit 1
+            fi
+        elif command -v shasum > /dev/null; then
+            # macOS
+            if ! shasum -a 256 -c "${BINARY_NAME}.tar.gz.sha256" 2>/dev/null; then
+                echo -e "${RED}Error: Checksum verification failed${NC}"
+                echo -e "${RED}The downloaded file may be corrupted or tampered with${NC}"
+                exit 1
+            fi
+        else
+            echo -e "${YELLOW}Warning: No SHA256 tool found (sha256sum or shasum)${NC}"
+            echo -e "${YELLOW}Skipping checksum verification (not recommended)${NC}"
+        fi
+
+        cd - > /dev/null
+        echo -e "${GREEN}✓ Checksum verified${NC}"
+    fi
+
     # Extract archive
     echo -e "${GREEN}Extracting binary...${NC}"
     tar xzf "$TMP_DIR/${BINARY_NAME}.tar.gz" -C "$TMP_DIR"
