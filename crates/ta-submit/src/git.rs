@@ -67,7 +67,13 @@ impl GitAdapter {
             .title
             .to_lowercase()
             .chars()
-            .map(|c| if c.is_alphanumeric() || c == '-' { c } else { '-' })
+            .map(|c| {
+                if c.is_alphanumeric() || c == '-' {
+                    c
+                } else {
+                    '-'
+                }
+            })
             .collect::<String>();
 
         // Truncate to reasonable length
@@ -131,9 +137,7 @@ impl SubmitAdapter for GitAdapter {
         Ok(CommitResult {
             commit_id: commit_id.clone(),
             message: format!("Committed as {}", &commit_id[..8]),
-            metadata: [("full_hash".to_string(), commit_id)]
-                .into_iter()
-                .collect(),
+            metadata: [("full_hash".to_string(), commit_id)].into_iter().collect(),
         })
     }
 
@@ -176,7 +180,7 @@ impl SubmitAdapter for GitAdapter {
 
         // Create PR using gh CLI
         let output = Command::new("gh")
-            .args(&[
+            .args([
                 "pr",
                 "create",
                 "--base",
@@ -202,7 +206,7 @@ impl SubmitAdapter for GitAdapter {
         // Extract PR number from URL (e.g., https://github.com/owner/repo/pull/123)
         let pr_number = pr_url
             .split('/')
-            .last()
+            .next_back()
             .unwrap_or("unknown")
             .to_string();
 
@@ -210,9 +214,7 @@ impl SubmitAdapter for GitAdapter {
             review_url: pr_url.clone(),
             review_id: pr_number,
             message: format!("Created PR: {}", pr_url),
-            metadata: [("pr_url".to_string(), pr_url)]
-                .into_iter()
-                .collect(),
+            metadata: [("pr_url".to_string(), pr_url)].into_iter().collect(),
         })
     }
 
@@ -223,7 +225,12 @@ impl SubmitAdapter for GitAdapter {
 
 impl GitAdapter {
     /// Build PR body from template or default format
-    fn build_pr_body(&self, goal: &GoalRun, pr: &PRPackage, config: &SubmitConfig) -> Result<String> {
+    fn build_pr_body(
+        &self,
+        goal: &GoalRun,
+        pr: &PRPackage,
+        config: &SubmitConfig,
+    ) -> Result<String> {
         // Try to load template if specified
         if let Some(template_path) = &config.git.pr_template {
             if template_path.exists() {
@@ -253,10 +260,7 @@ impl GitAdapter {
             .replace("{pr_id}", &pr.package_id.to_string())
             .replace("{title}", &goal.title)
             .replace("{objective}", &goal.objective)
-            .replace(
-                "{plan_phase}",
-                goal.plan_phase.as_deref().unwrap_or("N/A"),
-            )
+            .replace("{plan_phase}", goal.plan_phase.as_deref().unwrap_or("N/A"))
             .replace("{artifact_count}", &pr.changes.artifacts.len().to_string())
     }
 }
@@ -269,26 +273,26 @@ mod tests {
 
     fn init_git_repo(dir: &Path) -> Result<()> {
         Command::new("git")
-            .args(&["init"])
+            .args(["init"])
             .current_dir(dir)
             .output()?;
         Command::new("git")
-            .args(&["config", "user.name", "Test User"])
+            .args(["config", "user.name", "Test User"])
             .current_dir(dir)
             .output()?;
         Command::new("git")
-            .args(&["config", "user.email", "test@example.com"])
+            .args(["config", "user.email", "test@example.com"])
             .current_dir(dir)
             .output()?;
 
         // Create initial commit
         std::fs::write(dir.join("README.md"), "# Test\n")?;
         Command::new("git")
-            .args(&["add", "."])
+            .args(["add", "."])
             .current_dir(dir)
             .output()?;
         Command::new("git")
-            .args(&["commit", "-m", "Initial commit"])
+            .args(["commit", "-m", "Initial commit"])
             .current_dir(dir)
             .output()?;
 

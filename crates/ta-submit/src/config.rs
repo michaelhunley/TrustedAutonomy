@@ -4,18 +4,10 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Top-level workflow configuration from .ta/workflow.toml
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct WorkflowConfig {
     /// Submit adapter configuration
     pub submit: SubmitConfig,
-}
-
-impl Default for WorkflowConfig {
-    fn default() -> Self {
-        Self {
-            submit: SubmitConfig::default(),
-        }
-    }
 }
 
 /// Submit adapter configuration
