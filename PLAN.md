@@ -225,30 +225,102 @@ When a follow-up goal starts, `inject_claude_md()` includes parent context:
 
 ---
 
-## v0.2 — Git Workflow & Review Enhancements *(release: tag v0.2.0-alpha)*
+## v0.2 — Submit Adapters & Workflow Automation *(release: tag v0.2.0-alpha)*
 
-### v0.2.0 — Git Workflow Automation
-<!-- status: pending -->
-- **Workflow config** (`.ta/workflow.toml`): user-defined git workflow preferences
+### v0.2.0 — SubmitAdapter Trait & Git Implementation
+<!-- status: done -->
+**Architecture**: The staging→review→apply loop is VCS-agnostic. "Submit" is a pluggable adapter — git is the first implementation, but the trait supports Perforce, SVN, plain file copy, or non-code workflows (art pipelines, document review).
+
+#### SubmitAdapter Trait (`crates/ta-workspace` or new `crates/ta-submit`)
+```rust
+pub trait SubmitAdapter: Send + Sync {
+    /// Create a working branch/changelist/workspace for this goal.
+    fn prepare(&self, goal: &GoalRun, config: &SubmitConfig) -> Result<()>;
+    /// Commit/shelve the approved changes from staging.
+    fn commit(&self, goal: &GoalRun, pr: &PRPackage, message: &str) -> Result<CommitResult>;
+    /// Push/submit the committed changes for review.
+    fn push(&self, goal: &GoalRun) -> Result<PushResult>;
+    /// Open a review request (GitHub PR, Perforce review, email, etc.).
+    fn open_review(&self, goal: &GoalRun, pr: &PRPackage) -> Result<ReviewResult>;
+    /// Adapter display name (for CLI output).
+    fn name(&self) -> &str;
+}
+```
+`CommitResult`, `PushResult`, `ReviewResult` are adapter-neutral structs carrying identifiers (commit hash, changelist number, PR URL, etc.).
+
+#### Built-in Adapters
+- **`git`** (default): Git branching + GitHub/GitLab PR creation
   - `branch_prefix`: naming convention for auto-created branches (e.g., `ta/`, `feature/`)
   - `auto_branch`: create a feature branch automatically on `ta goal start`
-  - `auto_pr`: open a GitHub/GitLab PR automatically after `ta pr apply --git-commit`
+  - `auto_review`: open a GitHub/GitLab PR automatically after commit+push
   - `pr_template`: path to PR body template with `{summary}`, `{artifacts}`, `{plan_phase}` substitution
   - `merge_strategy`: `squash` | `merge` | `rebase` (default: `squash`)
   - `target_branch`: base branch for PRs (default: `main`)
-- **`ta pr apply --git-commit --push`** creates branch + commit + push + PR in one command
-- **Branch lifecycle**: `ta goal start` creates `ta/<goal-id-short>-<slug>`, `ta pr apply` pushes and opens PR
-- **CLAUDE.md injection**: injects branch workflow instructions so agents commit to feature branches, not `main`
-- **Backwards-compatible**: workflow config is optional; without it, current behavior is preserved
+  - `remote`: git remote name (default: `origin`)
+- **`none`** (fallback): Just copy files back to source. No VCS operations. Current behavior when no config exists.
+- **Future adapters** (not in v0.2): `perforce` (changelists + Swarm), `svn`, `art-pipeline` (file copy + notification)
+
+#### Workflow Config (`.ta/workflow.toml`)
+```toml
+[submit]
+adapter = "git"                    # or "none"; future: "perforce", "svn"
+auto_commit = true                 # commit on ta pr apply
+auto_push = true                   # push after commit
+auto_review = true                 # open PR/review after push
+
+[submit.git]                       # adapter-specific settings
+branch_prefix = "ta/"
+target_branch = "main"
+merge_strategy = "squash"
+pr_template = ".ta/pr-template.md"
+```
+
+#### CLI Changes
+- **`ta pr apply <id> --submit`** runs the full adapter pipeline: commit → push → open review
+- **`ta pr apply <id> --git-commit`** remains as shorthand (equivalent to `--submit` with git adapter, no push)
+- **`ta pr apply <id> --git-commit --push`** equivalent to `--submit` with git adapter + push + open review
+- **Branch lifecycle**: `ta goal start` calls `adapter.prepare()` (git: creates branch), `ta pr apply --submit` calls commit → push → open_review
+
+#### Integration Points
+- **CLAUDE.md injection**: injects workflow instructions so agents respect the configured VCS (e.g., commit to feature branches for git, don't touch VCS for `none`)
+- **Backwards-compatible**: without `.ta/workflow.toml`, behavior is identical to today (`none` adapter — just file copy)
+- **Agent launch configs**: YAML agent configs can reference workflow adapter for prompt context
+
+#### Future Extensibility & Design Evolution
+**Vision**: The `SubmitAdapter` pattern is designed to extend beyond VCS to any "submit" workflow where changes need approval before affecting the outside world.
+
+**Potential Non-VCS Adapters** (post-v0.2):
+- **Webhook/API adapter**: POST PRPackage JSON to REST endpoints for external review systems
+- **Email adapter**: Send PR summaries via SMTP with reply-to-approve workflows (integrates with v0.9 notification connectors)
+- **Storage adapter**: Upload artifacts to S3/GCS/Drive with shareable review links
+- **Ticketing adapter**: Create JIRA/Linear/GitHub Issues for review workflows
+- **Slack/Discord adapter**: Post review requests as interactive messages with approval buttons (v0.9 integration)
+
+**Architectural Decision (v0.3+ if needed)**:
+- **Recommendation**: Keep `SubmitAdapter` VCS-focused for clarity. Introduce parallel traits for other domains:
+  - `NotifyAdapter` — for notification/communication workflows (v0.9)
+  - `PublishAdapter` — for API/webhook publishing workflows (v0.4-v0.5 timeframe)
+  - `StorageAdapter` — for artifact upload/sharing workflows (v0.5 timeframe)
+- **Rationale**: Specialized traits provide clearer semantics than forcing all workflows through VCS-oriented method names (prepare/commit/push/open_review). Each domain gets methods that make semantic sense for that domain.
+- **Alternative considered**: Generalize `SubmitAdapter` methods to `prepare/submit/request_review/finalize`. Rejected because VCS workflows are the primary use case and generic names lose clarity.
+
+**Roadmap Integration**:
+- **v0.3-v0.4**: If demand arises, introduce `PublishAdapter` for webhook/API submission workflows
+- **v0.5**: Evaluate `StorageAdapter` for external connector integration (Gmail, Drive per existing plan)
+- **v0.9**: `NotifyAdapter` integrates with notification connectors (email, Slack, Discord)
+- **v1.0**: Virtual office roles can compose multiple adapter types (VCS + notifications + storage) for comprehensive workflows
+
+**Design Principle**: "Submit" isn't just VCS — it's any workflow where changes need approval before affecting external state. The adapter pattern enables pluggable approval workflows across all domains.
 
 ### v0.2.1 — Concurrent Session Conflict Detection
 <!-- status: pending -->
 - Detect when source files have changed since staging copy was made (stale overlay)
 - On `ta pr apply`: compare source file mtime/hash against snapshot taken at `ta goal start`
-- Conflict resolution strategies: abort, merge (delegate to git merge), force-overwrite
+- Conflict resolution strategies: abort, merge (delegate to VCS adapter's merge if available), force-overwrite
 - **Current limitation**: if you edit source files while a TA session is active, `ta pr apply` will silently overwrite those changes. Git handles this for committed code, but uncommitted edits can be lost.
 - Display warnings at PR review time if source has diverged
 - Future: lock files or advisory locks for active goals
+- **Adapter integration**: git adapter can use `git merge`/`git diff` for smarter conflict resolution; `none` adapter falls back to mtime/hash comparison only
 - **Multi-agent intra-staging conflicts**: When multiple agents work in the same staging workspace (e.g., via Claude Flow swarms), consider integrating [agentic-jujutsu](https://github.com/ruvnet/claude-flow) for lock-free concurrent file operations with auto-merge. This handles agent-to-agent coordination; TA handles agent-to-human review. Different layers, composable.
 
 ### v0.2.2 — External Diff Routing

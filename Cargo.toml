@@ -8,6 +8,7 @@ members = [
     "crates/ta-mcp-gateway",
     "crates/ta-policy",
     "crates/ta-sandbox",
+    "crates/ta-submit",
     "crates/ta-workspace",
     "crates/ta-connectors/fs",
     "crates/ta-connectors/web",
