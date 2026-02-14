@@ -436,9 +436,7 @@ fn build_package(
                 // Load parent PR and check if it's unapplied.
                 if let Ok(mut parent_pr) = load_package(config, parent_pr_id) {
                     match parent_pr.status {
-                        PRStatus::Draft
-                        | PRStatus::PendingReview
-                        | PRStatus::Approved { .. } => {
+                        PRStatus::Draft | PRStatus::PendingReview | PRStatus::Approved { .. } => {
                             // Parent PR not yet applied — mark it as superseded.
                             parent_pr.status = PRStatus::Superseded {
                                 superseded_by: package_id,
