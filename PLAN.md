@@ -3,6 +3,17 @@
 > Canonical plan for the project. Machine-parseable: each phase has a `<!-- status: done|in_progress|pending -->` marker.
 > Updated automatically by `ta pr apply` when a goal with `--phase` completes.
 
+## Versioning & Release Policy
+
+- **Version format**: `MAJOR.MINOR.PATCH-alpha` (semver). Current: `v0.1.2-alpha`.
+- **Release tags**: Each `vX.Y.0` phase is a **release point** — cut a git tag and publish binaries.
+- **Patch phases** (`vX.Y.1`, `vX.Y.2`) are incremental work within a release cycle.
+- **When completing a phase**, the implementing agent MUST:
+  1. Update `version` in `apps/ta-cli/Cargo.toml` to the phase's version (e.g., `0.2.0-alpha`)
+  2. Update the "Current State" section in `CLAUDE.md` with the new version and test count
+  3. Mark the phase as `done` in this file
+- **Pre-v0.1 phases** (Phase 0–4c) used internal numbering. All phases from v0.1 onward use version-based naming.
+
 ---
 
 ## Phase 0 — Repo Layout & Core Data Model
@@ -212,7 +223,11 @@ When a follow-up goal starts, `inject_claude_md()` includes parent context:
 ### Phase 4d Note
 > Follow-up goals are the **resolution mechanism** for Phase 4d discuss items. When 4d adds per-artifact comment threads and persistent review sessions, `--follow-up` on a goal with unresolved discuss items will inject those threads as structured agent instructions. The agent addresses each discussed artifact; the resulting PR supersedes the original. This keeps discuss → revise → re-review as a natural loop without new CLI commands — just `ta run --follow-up`.
 
-## Phase v0.2 — Git Workflow Automation
+---
+
+## v0.2 — Git Workflow & Review Enhancements *(release: tag v0.2.0-alpha)*
+
+### v0.2.0 — Git Workflow Automation
 <!-- status: pending -->
 - **Workflow config** (`.ta/workflow.toml`): user-defined git workflow preferences
   - `branch_prefix`: naming convention for auto-created branches (e.g., `ta/`, `feature/`)
@@ -226,7 +241,7 @@ When a follow-up goal starts, `inject_claude_md()` includes parent context:
 - **CLAUDE.md injection**: injects branch workflow instructions so agents commit to feature branches, not `main`
 - **Backwards-compatible**: workflow config is optional; without it, current behavior is preserved
 
-## Phase 4c.1 — Concurrent Session Conflict Detection
+### v0.2.1 — Concurrent Session Conflict Detection
 <!-- status: pending -->
 - Detect when source files have changed since staging copy was made (stale overlay)
 - On `ta pr apply`: compare source file mtime/hash against snapshot taken at `ta goal start`
@@ -236,7 +251,7 @@ When a follow-up goal starts, `inject_claude_md()` includes parent context:
 - Future: lock files or advisory locks for active goals
 - **Multi-agent intra-staging conflicts**: When multiple agents work in the same staging workspace (e.g., via Claude Flow swarms), consider integrating [agentic-jujutsu](https://github.com/ruvnet/claude-flow) for lock-free concurrent file operations with auto-merge. This handles agent-to-agent coordination; TA handles agent-to-human review. Different layers, composable.
 
-## Phase 4c.2 — External Diff Routing
+### v0.2.2 — External Diff Routing
 <!-- status: pending -->
 - Config file (`.ta/diff-handlers.toml` or similar) maps file patterns to external applications
 - Examples: `*.uasset` → Unreal Editor, `*.png` → image diff tool, `*.blend` → Blender
@@ -244,11 +259,11 @@ When a follow-up goal starts, `inject_claude_md()` includes parent context:
 - Default handlers: text → inline diff (current), binary → byte count summary
 - Integration with OS `open` / `xdg-open` as fallback
 
-## Phase 4c.3 — Tiered Diff Explanations & Output Adapters
+### v0.2.3 — Tiered Diff Explanations & Output Adapters
 <!-- status: pending -->
 **Goal**: Rich, layered diff review — top-level summary → medium detail → full diff, with pluggable output formatting.
 
-### Tiered Explanation Model
+#### Tiered Explanation Model
 Each artifact in a PR gets a three-tier explanation:
 1. **Top**: One-line summary (e.g., "Refactored auth middleware to use JWT")
 2. **Medium**: Paragraph explaining what changed and why, dependencies affected
@@ -270,7 +285,7 @@ related_artifacts:
   - tests/auth_test.rs
 ```
 
-### Output Adapters (Plugin System)
+#### Output Adapters (Plugin System)
 Configurable output renderers for `ta pr view`, designed for reuse:
 - **terminal** (default): Colored inline diff with collapsible tiers (summary → expand for detail)
 - **markdown**: Render PR as `.md` file — useful for GitHub PR bodies or documentation
@@ -280,26 +295,30 @@ Configurable output renderers for `ta pr view`, designed for reuse:
 - Plugin interface: adapter receives `PRPackage` + explanation sidecars, returns formatted output
 - Adapters are composable: `ta pr view <id> --format markdown > review.md`
 
-### CLI Changes
+#### CLI Changes
 - `ta pr view <id> --detail top|medium|full` (default: medium — shows summary + explanation, not full diff)
 - `ta pr view <id> --format terminal|markdown|json|html`
 - `ta pr build` ingests `*.diff.explanation.yaml` sidecars into PRPackage (similar to `change_summary.json`)
 - CLAUDE.md injection instructs agents to produce explanation sidecars alongside changes
 
-### Data Model
+#### Data Model
 - `Artifact` gains optional `explanation_tiers: Option<ExplanationTiers>` (summary, explanation, tags)
 - `PRPackage` stores tier data; output adapters read it at render time
 - Explanation sidecars are ingested at `ta pr build` time, not stored permanently in staging
 
-## Phase 4d — Review Sessions
+---
+
+## v0.3 — Review & Plan Automation *(release: tag v0.3.0-alpha)*
+
+### v0.3.0 — Review Sessions
 <!-- status: pending -->
 - ReviewSession persists across CLI invocations (multi-interaction review)
 - Per-artifact comment threads (stored in PR package or sidecar file)
 - Supervisor agent analyzes dependency graph and warns about coupled rejections
 - Discussion workflow for `?` (discuss) items
-- **Resolution path**: `ta run --follow-up` on a goal with discuss items injects comment threads as structured agent context; the agent addresses each discussed artifact and the resulting PR supersedes the original (see Phase v0.1.2)
+- **Resolution path**: `ta run --follow-up` on a goal with discuss items injects comment threads as structured agent context; the agent addresses each discussed artifact and the resulting PR supersedes the original (see v0.1.2)
 
-## Phase 4e — Plan Lifecycle Automation
+### v0.3.1 — Plan Lifecycle Automation
 <!-- status: pending -->
 - Supervisor agent reads change_summary.json, validates completed work against plan
 - Completing one phase auto-suggests/creates goal for next pending phase
@@ -307,35 +326,55 @@ Configurable output renderers for `ta pr view`, designed for reuse:
 - `ta plan next` command to create goal for next pending phase
 - Plan versioning and history
 
-## Phase 5 — Intent-to-Access Planner
+---
+
+## v0.4 — Agent Intelligence *(release: tag v0.4.0-alpha)*
+
+### v0.4.0 — Intent-to-Access Planner
 <!-- status: pending -->
 - LLM "Intent-to-Policy Planner" outputs AgentSetupProposal (JSON)
 - Deterministic Policy Compiler validates proposal (subset of templates, staged semantics, budgets)
 - Agent setup becomes an "Agent PR" requiring approval before activation
 - User goal → proposed agent roster + scoped capabilities + milestone plan
 
-## Phase 6 — First External Connector
+---
+
+## v0.5 — External Connectors *(release: tag v0.5.0-alpha)*
+
+### v0.5.0 — First External Connector
 <!-- status: pending -->
 Options (choose one):
 - **Gmail staging**: read threads, create draft (ChangeSet), send gated by approval
 - **Drive staging**: read doc, write_patch + diff preview, commit gated
 - **DB staging**: write_patch as transaction log + preview, commit gated
 
-## Phase 7 — Sandbox Runner
+---
+
+## v0.6 — Sandbox Isolation *(release: tag v0.6.0-beta)*
+
+### v0.6.0 — Sandbox Runner
 <!-- status: pending -->
 - OCI/gVisor sandbox for agent execution
 - Allowlisted command execution (rg, fmt, test profiles)
 - CWD enforcement — agents can't escape workspace
 - Command transcripts hashed into audit log
 
-## Phase 8 — Distribution & Packaging
+---
+
+## v0.7 — Distribution & Packaging *(release: tag v0.7.0-beta)*
+
+### v0.7.0 — Distribution & Packaging
 <!-- status: pending -->
 - Developer: `cargo run` + local config + Nix
 - Desktop: installer with bundled daemon, git, rg/jq
 - Cloud: OCI image for daemon + connectors, ephemeral workspaces
 - Web UI for review/approval (localhost → LAN → cloud)
 
-## Phase 9 — Event System & Orchestration API
+---
+
+## v0.8 — Events & Orchestration *(release: tag v0.8.0-beta)*
+
+### v0.8.0 — Event System & Orchestration API
 <!-- status: pending -->
 > See `docs/VISION-virtual-office.md` for full vision.
 - `--json` output flag on all CLI commands for programmatic consumption
@@ -345,7 +384,11 @@ Options (choose one):
 - Non-interactive approval API: token-based approve/reject (for Slack buttons, email replies)
 - Foundation for notification connectors and virtual office runtime
 
-## Phase 10 — Notification Connectors
+---
+
+## v0.9 — Notification Connectors *(release: tag v0.9.0-beta)*
+
+### v0.9.0 — Notification Connectors
 <!-- status: pending -->
 - `ta-connector-notify-email`: SMTP PR summaries + reply-to-approve parsing
 - `ta-connector-notify-slack`: Slack app with Block Kit PR cards + button callbacks
@@ -353,7 +396,11 @@ Options (choose one):
 - Bidirectional: outbound notifications + inbound approval actions
 - Unified config: `notification_channel` per role/goal
 
-## Phase 11 — Virtual Office Runtime
+---
+
+## v1.0 — Virtual Office *(release: tag v1.0.0)*
+
+### v1.0.0 — Virtual Office Runtime
 <!-- status: pending -->
 > Thin orchestration layer that composes TA, Claude Flow, and notification connectors.
 - Role definition schema (YAML): purpose, triggers, agent, capabilities, notification channel
