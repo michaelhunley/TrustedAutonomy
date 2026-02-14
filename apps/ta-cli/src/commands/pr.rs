@@ -1074,13 +1074,13 @@ fn apply_package(
 
         let adapter: Box<dyn SubmitAdapter> = match adapter_name {
             "git" => Box::new(GitAdapter::new(&target_dir)),
-            "none" | _ => Box::new(NoneAdapter::new()),
+            _ => Box::new(NoneAdapter::new()),
         };
 
         println!("\nUsing submit adapter: {}", adapter.name());
 
         // Prepare (create branch if needed).
-        if let Err(e) = adapter.prepare(&goal, &workflow_config.submit) {
+        if let Err(e) = adapter.prepare(goal, &workflow_config.submit) {
             eprintln!("Warning: adapter prepare failed: {}", e);
         }
 
@@ -1091,7 +1091,7 @@ fn apply_package(
             pkg.summary.what_changed, package_id
         );
 
-        match adapter.commit(&goal, &pkg, &commit_msg) {
+        match adapter.commit(goal, &pkg, &commit_msg) {
             Ok(result) => {
                 println!("✓ {}", result.message);
             }
@@ -1107,7 +1107,7 @@ fn apply_package(
         // Push to remote if requested.
         if git_push {
             println!("Pushing to remote...");
-            match adapter.push(&goal) {
+            match adapter.push(goal) {
                 Ok(result) => {
                     println!("✓ {}", result.message);
                 }
@@ -1122,7 +1122,7 @@ fn apply_package(
         // Open review (PR) if requested.
         if git_review {
             println!("Creating pull request...");
-            match adapter.open_review(&goal, &pkg) {
+            match adapter.open_review(goal, &pkg) {
                 Ok(result) => {
                     println!("✓ {}", result.message);
                     if !result.review_url.starts_with("none://") {
