@@ -487,6 +487,13 @@ ta pr apply <package-id> --git-commit
 ta run "Fix the auth bug" --source .
 # Uses Claude Code by default. For other agents:
 ta run "Fix the auth bug" --agent claude-flow --source .
+
+# Follow-up on a previous goal to iterate on feedback:
+ta run "Address config validation" --source . --follow-up
+# Automatically links to the most recent goal, includes parent context
+
+# Follow-up with detailed review notes:
+ta run --source . --follow-up --objective-file review-notes.md
 # Then review + approve + apply as above.
 ```
 
@@ -658,6 +665,36 @@ ta pr view <package-id>               # View details + diffs
 ta pr approve <package-id>            # Approve
 ta pr deny <package-id> --reason "x"  # Deny with reason
 ta pr apply <package-id> --git-commit # Apply + commit
+
+# Selective approval (approve some, reject/discuss others)
+ta pr apply <id> --approve "src/**/*.rs" --reject "*.test.rs" --discuss "config/*"
+ta pr apply <id> --approve all        # Approve everything
+ta pr apply <id> --approve rest       # Approve everything not explicitly matched
+```
+
+### Iterative Review with Follow-Up Goals
+
+When you need to iterate on feedback or address discuss items:
+
+```bash
+# Mark items for discussion during initial review
+ta pr apply <id> --approve "src/**" --discuss "config/*"
+
+# Start a follow-up goal to address feedback
+ta run "Fix config validation" --source . --follow-up
+# - Automatically links to most recent goal
+# - Agent receives parent context (what was approved/rejected/discussed)
+# - New PR supersedes parent PR if parent wasn't applied yet
+
+# Follow up on a specific goal (ID prefix matching)
+ta run "Address security feedback" --source . --follow-up abc123
+
+# Provide detailed review notes from a file
+ta run --source . --follow-up --objective-file review-feedback.md
+
+# View goal chain
+ta goal list  # Shows parent relationships: "title (→ parent_id)"
+ta pr list    # Shows superseded PRs: "superseded (abc12345)"
 ```
 
 ---

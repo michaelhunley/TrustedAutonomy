@@ -6,6 +6,7 @@ use clap::Subcommand;
 use ta_goal::{GoalRunState, GoalRunStore};
 use ta_mcp_gateway::GatewayConfig;
 use ta_workspace::{ExcludePatterns, OverlayWorkspace};
+use uuid::Uuid;
 
 #[derive(Subcommand)]
 pub enum GoalCommands {
@@ -25,6 +26,12 @@ pub enum GoalCommands {
         /// Plan phase this goal implements (e.g., "4b").
         #[arg(long)]
         phase: Option<String>,
+        /// Follow up on a previous goal (ID prefix or omit for latest).
+        #[arg(long)]
+        follow_up: Option<Option<String>>,
+        /// Read objective from a file instead of --objective.
+        #[arg(long)]
+        objective_file: Option<PathBuf>,
     },
     /// List all goal runs.
     List {
@@ -44,6 +51,57 @@ pub enum GoalCommands {
     },
 }
 
+/// Find a parent goal by ID prefix, or return the latest goal if no prefix given.
+fn find_parent_goal(store: &GoalRunStore, id_prefix: Option<&str>) -> anyhow::Result<Uuid> {
+    match id_prefix {
+        Some(prefix) => {
+            // Match by ID prefix (first N characters).
+            let all_goals = store.list()?;
+            let matches: Vec<_> = all_goals
+                .iter()
+                .filter(|g| g.goal_run_id.to_string().starts_with(prefix))
+                .collect();
+
+            match matches.len() {
+                0 => anyhow::bail!("No goal found matching prefix '{}'", prefix),
+                1 => Ok(matches[0].goal_run_id),
+                _ => {
+                    anyhow::bail!(
+                        "Ambiguous prefix '{}' matches {} goals. Use a longer prefix.",
+                        prefix,
+                        matches.len()
+                    )
+                }
+            }
+        }
+        None => {
+            // Find the most recent goal (prefer unapplied, fall back to latest applied).
+            let all_goals = store.list()?;
+            if all_goals.is_empty() {
+                anyhow::bail!(
+                    "No previous goals found. Cannot use --follow-up without an existing goal."
+                );
+            }
+
+            // Sort by updated_at descending.
+            let mut sorted = all_goals.clone();
+            sorted.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+
+            // Prefer goals that haven't been applied yet.
+            let unapplied = sorted
+                .iter()
+                .find(|g| !matches!(g.state, GoalRunState::Applied | GoalRunState::Completed));
+
+            if let Some(goal) = unapplied {
+                Ok(goal.goal_run_id)
+            } else {
+                // Fall back to the most recent goal.
+                Ok(sorted[0].goal_run_id)
+            }
+        }
+    }
+}
+
 pub fn execute(cmd: &GoalCommands, config: &GatewayConfig) -> anyhow::Result<()> {
     let store = GoalRunStore::new(&config.goals_dir)?;
 
@@ -54,6 +112,8 @@ pub fn execute(cmd: &GoalCommands, config: &GatewayConfig) -> anyhow::Result<()>
             objective,
             agent,
             phase,
+            follow_up,
+            objective_file,
         } => start_goal(
             config,
             &store,
@@ -62,6 +122,8 @@ pub fn execute(cmd: &GoalCommands, config: &GatewayConfig) -> anyhow::Result<()>
             objective,
             agent,
             phase.as_deref(),
+            follow_up.as_ref(),
+            objective_file.as_deref(),
         ),
         GoalCommands::List { state } => list_goals(&store, state.as_deref()),
         GoalCommands::Status { id } => show_status(&store, id),
@@ -69,6 +131,7 @@ pub fn execute(cmd: &GoalCommands, config: &GatewayConfig) -> anyhow::Result<()>
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn start_goal(
     config: &GatewayConfig,
     store: &GoalRunStore,
@@ -77,7 +140,25 @@ fn start_goal(
     objective: &str,
     agent: &str,
     phase: Option<&str>,
+    follow_up: Option<&Option<String>>,
+    objective_file: Option<&std::path::Path>,
 ) -> anyhow::Result<()> {
+    // Resolve objective from file if specified.
+    let final_objective = if let Some(obj_file) = objective_file {
+        std::fs::read_to_string(obj_file)?
+    } else if objective.is_empty() {
+        title.to_string()
+    } else {
+        objective.to_string()
+    };
+
+    // Find parent goal if --follow-up is specified.
+    let parent_goal_id = if let Some(follow_up_arg) = follow_up {
+        Some(find_parent_goal(store, follow_up_arg.as_deref())?)
+    } else {
+        None
+    };
+
     let source_dir = match source {
         Some(p) => p.canonicalize()?,
         None => config.workspace_root.clone(),
@@ -86,15 +167,14 @@ fn start_goal(
     // Create the GoalRun first to get the ID.
     let mut goal = ta_goal::GoalRun::new(
         title,
-        if objective.is_empty() {
-            title
-        } else {
-            objective
-        },
+        &final_objective,
         agent,
         PathBuf::new(), // placeholder — set after overlay creation
         config.store_dir.join("placeholder"), // placeholder — set after overlay creation
     );
+
+    // Set parent goal ID if this is a follow-up.
+    goal.parent_goal_id = parent_goal_id;
 
     let goal_id = goal.goal_run_id.to_string();
 
@@ -144,10 +224,20 @@ fn list_goals(store: &GoalRunStore, state: Option<&str>) -> anyhow::Result<()> {
     println!("{}", "-".repeat(94));
 
     for g in &goals {
+        let title_with_chain = if let Some(parent_id) = g.parent_goal_id {
+            format!(
+                "{} (→ {})",
+                truncate(&g.title, 20),
+                &parent_id.to_string()[..8]
+            )
+        } else {
+            truncate(&g.title, 28)
+        };
+
         println!(
             "{:<38} {:<30} {:<14} {:<12}",
             g.goal_run_id,
-            truncate(&g.title, 28),
+            title_with_chain,
             g.state.to_string(),
             g.agent_id,
         );
@@ -158,7 +248,7 @@ fn list_goals(store: &GoalRunStore, state: Option<&str>) -> anyhow::Result<()> {
 }
 
 fn show_status(store: &GoalRunStore, id: &str) -> anyhow::Result<()> {
-    let goal_run_id = uuid::Uuid::parse_str(id)?;
+    let goal_run_id = Uuid::parse_str(id)?;
     match store.get(goal_run_id)? {
         Some(g) => {
             println!("Goal Run: {}", g.goal_run_id);
@@ -173,6 +263,9 @@ fn show_status(store: &GoalRunStore, id: &str) -> anyhow::Result<()> {
             }
             if let Some(ref phase) = g.plan_phase {
                 println!("Phase:    {}", phase);
+            }
+            if let Some(parent_id) = g.parent_goal_id {
+                println!("Parent:   {} (follow-up)", parent_id);
             }
             println!("Staging:  {}", g.workspace_path.display());
             if let Some(pr_id) = g.pr_package_id {
@@ -245,6 +338,8 @@ mod tests {
             "Test objective",
             "test-agent",
             None,
+            None,
+            None,
         )
         .unwrap();
 
@@ -277,6 +372,8 @@ mod tests {
             Some(project.path()),
             "Will be deleted",
             "test-agent",
+            None,
+            None,
             None,
         )
         .unwrap();

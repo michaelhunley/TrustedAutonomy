@@ -66,6 +66,12 @@ enum Commands {
         /// Plan phase this goal implements (e.g., "4b").
         #[arg(long)]
         phase: Option<String>,
+        /// Follow up on a previous goal (ID prefix or omit for latest).
+        #[arg(long)]
+        follow_up: Option<Option<String>>,
+        /// Read objective from a file instead of --objective.
+        #[arg(long)]
+        objective_file: Option<PathBuf>,
         /// Don't launch the agent — just set up the workspace.
         #[arg(long)]
         no_launch: bool,
@@ -111,6 +117,8 @@ fn main() -> anyhow::Result<()> {
             source,
             objective,
             phase,
+            follow_up,
+            objective_file,
             no_launch,
         } => commands::run::execute(
             &config,
@@ -119,6 +127,8 @@ fn main() -> anyhow::Result<()> {
             source.as_deref(),
             objective,
             phase.as_deref(),
+            follow_up.as_ref(),
+            objective_file.as_deref(),
             *no_launch,
         ),
         Commands::Plan { command } => commands::plan::execute(command, &config),

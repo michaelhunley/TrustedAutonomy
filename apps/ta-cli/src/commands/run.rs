@@ -75,6 +75,7 @@ fn agent_launch_config(agent_id: &str) -> AgentLaunchConfig {
 
 // ── Public API ──────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 pub fn execute(
     config: &GatewayConfig,
     title: &str,
@@ -82,6 +83,8 @@ pub fn execute(
     source: Option<&Path>,
     objective: &str,
     phase: Option<&str>,
+    follow_up: Option<&Option<String>>,
+    objective_file: Option<&Path>,
     no_launch: bool,
 ) -> anyhow::Result<()> {
     let agent_config = agent_launch_config(agent);
@@ -96,6 +99,8 @@ pub fn execute(
             objective: objective.to_string(),
             agent: agent.to_string(),
             phase: phase.map(|p| p.to_string()),
+            follow_up: follow_up.cloned(),
+            objective_file: objective_file.map(|p| p.to_path_buf()),
         },
         config,
     )?;
@@ -116,6 +121,9 @@ pub fn execute(
             &goal_id,
             goal.plan_phase.as_deref(),
             goal.source_dir.as_deref(),
+            goal.parent_goal_id,
+            &goal_store,
+            config,
         )?;
     }
     if agent_config.injects_settings {
@@ -462,14 +470,114 @@ fn build_plan_section(plan_phase: Option<&str>, source_dir: Option<&Path>) -> St
     )
 }
 
+/// Build a parent goal context section for CLAUDE.md injection.
+/// Returns empty string if no parent goal or if parent's PR is not available.
+fn build_parent_context_section(
+    parent_goal_id: Option<uuid::Uuid>,
+    goal_store: &ta_goal::GoalRunStore,
+    config: &GatewayConfig,
+) -> String {
+    let parent_id = match parent_goal_id {
+        Some(id) => id,
+        None => return String::new(),
+    };
+
+    let parent_goal = match goal_store.get(parent_id) {
+        Ok(Some(g)) => g,
+        _ => return String::new(),
+    };
+
+    let mut context = format!(
+        "\n## Follow-Up Context\n\nThis is a follow-up goal building on:\n\
+         **Parent Goal:** {} ({})\n\
+         **Parent Objective:** {}\n",
+        parent_goal.title, parent_id, parent_goal.objective
+    );
+
+    // If parent has a PR, include artifact dispositions and discuss items.
+    if let Some(pr_id) = parent_goal.pr_package_id {
+        use crate::commands::pr::load_package;
+        if let Ok(parent_pr) = load_package(config, pr_id) {
+            let approved = parent_pr
+                .changes
+                .artifacts
+                .iter()
+                .filter(|a| {
+                    matches!(
+                        a.disposition,
+                        ta_changeset::pr_package::ArtifactDisposition::Approved
+                    )
+                })
+                .count();
+            let rejected = parent_pr
+                .changes
+                .artifacts
+                .iter()
+                .filter(|a| {
+                    matches!(
+                        a.disposition,
+                        ta_changeset::pr_package::ArtifactDisposition::Rejected
+                    )
+                })
+                .count();
+            let discuss = parent_pr
+                .changes
+                .artifacts
+                .iter()
+                .filter(|a| {
+                    matches!(
+                        a.disposition,
+                        ta_changeset::pr_package::ArtifactDisposition::Discuss
+                    )
+                })
+                .count();
+
+            context.push_str(&format!(
+                "\n**Parent PR Status:** {} ({} approved, {} rejected, {} discuss)\n",
+                parent_pr.status, approved, rejected, discuss
+            ));
+
+            // List discuss items with their rationale.
+            let discuss_items: Vec<_> = parent_pr
+                .changes
+                .artifacts
+                .iter()
+                .filter(|a| {
+                    matches!(
+                        a.disposition,
+                        ta_changeset::pr_package::ArtifactDisposition::Discuss
+                    )
+                })
+                .collect();
+
+            if !discuss_items.is_empty() {
+                context.push_str("\n### Items for Discussion:\n");
+                for artifact in discuss_items {
+                    context.push_str(&format!("- {}", artifact.resource_uri));
+                    if let Some(ref why) = artifact.rationale {
+                        context.push_str(&format!(" — {}", why));
+                    }
+                    context.push('\n');
+                }
+            }
+        }
+    }
+
+    context
+}
+
 /// Inject a CLAUDE.md file into the staging workspace to orient the agent.
 /// Saves the original content to `.ta/claude_md_original` for later restoration.
+#[allow(clippy::too_many_arguments)]
 fn inject_claude_md(
     staging_path: &Path,
     title: &str,
     goal_id: &str,
     plan_phase: Option<&str>,
     source_dir: Option<&Path>,
+    parent_goal_id: Option<uuid::Uuid>,
+    goal_store: &ta_goal::GoalRunStore,
+    config: &GatewayConfig,
 ) -> anyhow::Result<()> {
     let claude_md_path = staging_path.join("CLAUDE.md");
 
@@ -495,6 +603,9 @@ fn inject_claude_md(
     // Build plan context section if PLAN.md exists in source.
     let plan_section = build_plan_section(plan_phase, source_dir);
 
+    // Build parent context section if this is a follow-up goal.
+    let parent_section = build_parent_context_section(parent_goal_id, goal_store, config);
+
     let injected = format!(
         r#"# Trusted Autonomy — Mediated Goal
 
@@ -502,7 +613,7 @@ You are working on a TA-mediated goal in a staging workspace.
 
 **Goal:** {}
 **Goal ID:** {}
-{}
+{}{}
 ## How this works
 
 - This directory is a copy of the original project
@@ -545,7 +656,7 @@ Rules for the summary:
 
 {}
 "#,
-        title, goal_id, plan_section, existing_section
+        title, goal_id, plan_section, parent_section, existing_section
     );
 
     std::fs::write(&claude_md_path, injected)?;
@@ -602,6 +713,8 @@ mod tests {
             Some(project.path()),
             "Test objective",
             None,
+            None,
+            None,
             true,
         )
         .unwrap();
@@ -624,13 +737,26 @@ mod tests {
     fn run_injects_context_for_agent() {
         // Verify that inject + restore roundtrip works for the agent path.
         let staging = TempDir::new().unwrap();
+        let config = GatewayConfig::for_project(staging.path());
+        let goal_store = GoalRunStore::new(&config.goals_dir).unwrap();
+
         std::fs::write(
             staging.path().join("CLAUDE.md"),
             "# Existing project instructions\n",
         )
         .unwrap();
 
-        inject_claude_md(staging.path(), "Test goal", "goal-123", None, None).unwrap();
+        inject_claude_md(
+            staging.path(),
+            "Test goal",
+            "goal-123",
+            None,
+            None,
+            None,
+            &goal_store,
+            &config,
+        )
+        .unwrap();
 
         // Verify CLAUDE.md was injected.
         let claude_md = std::fs::read_to_string(staging.path().join("CLAUDE.md")).unwrap();
@@ -653,10 +779,22 @@ mod tests {
     #[test]
     fn inject_and_restore_claude_md_roundtrip() {
         let staging = TempDir::new().unwrap();
+        let config = GatewayConfig::for_project(staging.path());
+        let goal_store = GoalRunStore::new(&config.goals_dir).unwrap();
         let original = "# My Project\nExisting instructions.\n";
         std::fs::write(staging.path().join("CLAUDE.md"), original).unwrap();
 
-        inject_claude_md(staging.path(), "Fix bug", "goal-123", None, None).unwrap();
+        inject_claude_md(
+            staging.path(),
+            "Fix bug",
+            "goal-123",
+            None,
+            None,
+            None,
+            &goal_store,
+            &config,
+        )
+        .unwrap();
 
         // Verify injection happened.
         let injected = std::fs::read_to_string(staging.path().join("CLAUDE.md")).unwrap();
@@ -675,9 +813,21 @@ mod tests {
     #[test]
     fn restore_removes_claude_md_if_not_originally_present() {
         let staging = TempDir::new().unwrap();
+        let config = GatewayConfig::for_project(staging.path());
+        let goal_store = GoalRunStore::new(&config.goals_dir).unwrap();
         // No CLAUDE.md exists initially.
 
-        inject_claude_md(staging.path(), "New goal", "goal-456", None, None).unwrap();
+        inject_claude_md(
+            staging.path(),
+            "New goal",
+            "goal-456",
+            None,
+            None,
+            None,
+            &goal_store,
+            &config,
+        )
+        .unwrap();
 
         // CLAUDE.md was created by injection.
         assert!(staging.path().join("CLAUDE.md").exists());
