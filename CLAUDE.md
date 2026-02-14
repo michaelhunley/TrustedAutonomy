@@ -59,11 +59,22 @@ This applies to both manual work and TA-mediated goals. When `ta pr apply --git-
 
 ## Current State
 
+- **Current version**: `0.1.2-alpha`
 - **161 tests passing** across 12 crates (run `ta plan list` for full status)
 - See **PLAN.md** for the canonical development roadmap with per-phase status
 - `ta plan list` / `ta plan status` show current progress
 - Goals can link to plan phases: `ta run "title" --source . --phase 4b`
 - `ta pr apply` auto-updates PLAN.md when a phase completes
+
+## Version Management
+
+When completing a phase, you MUST update versions as part of the work:
+
+1. **`apps/ta-cli/Cargo.toml`**: Update `version` to the phase's target version (e.g., `"0.2.0-alpha"`)
+2. **This file (`CLAUDE.md`)**: Update "Current version" above to match
+3. **`PLAN.md`**: Mark the phase `<!-- status: done -->` (done automatically by `ta pr apply --phase`)
+
+Version format: `MAJOR.MINOR.PATCH-alpha` (semver). See `PLAN.md` "Versioning & Release Policy" for the full mapping of phases to versions.
 
 ### How It Works (Phase 3 Overlay Flow)
 1. `ta goal start "title" --source . --phase 4b` → copies project to `.ta/staging/`
