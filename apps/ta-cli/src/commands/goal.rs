@@ -78,7 +78,9 @@ fn find_parent_goal(store: &GoalRunStore, id_prefix: Option<&str>) -> anyhow::Re
             // Find the most recent goal (prefer unapplied, fall back to latest applied).
             let all_goals = store.list()?;
             if all_goals.is_empty() {
-                anyhow::bail!("No previous goals found. Cannot use --follow-up without an existing goal.");
+                anyhow::bail!(
+                    "No previous goals found. Cannot use --follow-up without an existing goal."
+                );
             }
 
             // Sort by updated_at descending.
@@ -129,6 +131,7 @@ pub fn execute(cmd: &GoalCommands, config: &GatewayConfig) -> anyhow::Result<()>
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn start_goal(
     config: &GatewayConfig,
     store: &GoalRunStore,
@@ -222,7 +225,11 @@ fn list_goals(store: &GoalRunStore, state: Option<&str>) -> anyhow::Result<()> {
 
     for g in &goals {
         let title_with_chain = if let Some(parent_id) = g.parent_goal_id {
-            format!("{} (→ {})", truncate(&g.title, 20), &parent_id.to_string()[..8])
+            format!(
+                "{} (→ {})",
+                truncate(&g.title, 20),
+                &parent_id.to_string()[..8]
+            )
         } else {
             truncate(&g.title, 28)
         };

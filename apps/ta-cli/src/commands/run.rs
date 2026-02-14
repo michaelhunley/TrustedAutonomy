@@ -75,6 +75,7 @@ fn agent_launch_config(agent_id: &str) -> AgentLaunchConfig {
 
 // ── Public API ──────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 pub fn execute(
     config: &GatewayConfig,
     title: &str,
@@ -501,19 +502,34 @@ fn build_parent_context_section(
                 .changes
                 .artifacts
                 .iter()
-                .filter(|a| matches!(a.disposition, ta_changeset::pr_package::ArtifactDisposition::Approved))
+                .filter(|a| {
+                    matches!(
+                        a.disposition,
+                        ta_changeset::pr_package::ArtifactDisposition::Approved
+                    )
+                })
                 .count();
             let rejected = parent_pr
                 .changes
                 .artifacts
                 .iter()
-                .filter(|a| matches!(a.disposition, ta_changeset::pr_package::ArtifactDisposition::Rejected))
+                .filter(|a| {
+                    matches!(
+                        a.disposition,
+                        ta_changeset::pr_package::ArtifactDisposition::Rejected
+                    )
+                })
                 .count();
             let discuss = parent_pr
                 .changes
                 .artifacts
                 .iter()
-                .filter(|a| matches!(a.disposition, ta_changeset::pr_package::ArtifactDisposition::Discuss))
+                .filter(|a| {
+                    matches!(
+                        a.disposition,
+                        ta_changeset::pr_package::ArtifactDisposition::Discuss
+                    )
+                })
                 .count();
 
             context.push_str(&format!(
@@ -526,7 +542,12 @@ fn build_parent_context_section(
                 .changes
                 .artifacts
                 .iter()
-                .filter(|a| matches!(a.disposition, ta_changeset::pr_package::ArtifactDisposition::Discuss))
+                .filter(|a| {
+                    matches!(
+                        a.disposition,
+                        ta_changeset::pr_package::ArtifactDisposition::Discuss
+                    )
+                })
                 .collect();
 
             if !discuss_items.is_empty() {
@@ -547,6 +568,7 @@ fn build_parent_context_section(
 
 /// Inject a CLAUDE.md file into the staging workspace to orient the agent.
 /// Saves the original content to `.ta/claude_md_original` for later restoration.
+#[allow(clippy::too_many_arguments)]
 fn inject_claude_md(
     staging_path: &Path,
     title: &str,
@@ -724,7 +746,17 @@ mod tests {
         )
         .unwrap();
 
-        inject_claude_md(staging.path(), "Test goal", "goal-123", None, None, None, &goal_store, &config).unwrap();
+        inject_claude_md(
+            staging.path(),
+            "Test goal",
+            "goal-123",
+            None,
+            None,
+            None,
+            &goal_store,
+            &config,
+        )
+        .unwrap();
 
         // Verify CLAUDE.md was injected.
         let claude_md = std::fs::read_to_string(staging.path().join("CLAUDE.md")).unwrap();
@@ -752,7 +784,17 @@ mod tests {
         let original = "# My Project\nExisting instructions.\n";
         std::fs::write(staging.path().join("CLAUDE.md"), original).unwrap();
 
-        inject_claude_md(staging.path(), "Fix bug", "goal-123", None, None, None, &goal_store, &config).unwrap();
+        inject_claude_md(
+            staging.path(),
+            "Fix bug",
+            "goal-123",
+            None,
+            None,
+            None,
+            &goal_store,
+            &config,
+        )
+        .unwrap();
 
         // Verify injection happened.
         let injected = std::fs::read_to_string(staging.path().join("CLAUDE.md")).unwrap();
@@ -775,7 +817,17 @@ mod tests {
         let goal_store = GoalRunStore::new(&config.goals_dir).unwrap();
         // No CLAUDE.md exists initially.
 
-        inject_claude_md(staging.path(), "New goal", "goal-456", None, None, None, &goal_store, &config).unwrap();
+        inject_claude_md(
+            staging.path(),
+            "New goal",
+            "goal-456",
+            None,
+            None,
+            None,
+            &goal_store,
+            &config,
+        )
+        .unwrap();
 
         // CLAUDE.md was created by injection.
         assert!(staging.path().join("CLAUDE.md").exists());
