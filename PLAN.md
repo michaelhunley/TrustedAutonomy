@@ -88,6 +88,7 @@ Workspace structure with 12 crates under `crates/` and `apps/`. Resource URIs (`
 - "No conflict detection yet — editing source files while a TA session is active may lose changes on apply (git protects committed work)"
 
 ### Nice-to-have for v0.1
+- `ta pr view --file` accepts **comma-separated list** to review select files (e.g., `--file src/main.rs,src/lib.rs`)
 - `ta pr view` shows colored diffs in terminal
 - Basic telemetry opt-in (anonymous usage stats for prioritization)
 - GitHub repo with issues template for feedback
@@ -242,6 +243,53 @@ When a follow-up goal starts, `inject_claude_md()` includes parent context:
 - `ta pr view <id> --file model.uasset` opens the file in the configured handler
 - Default handlers: text → inline diff (current), binary → byte count summary
 - Integration with OS `open` / `xdg-open` as fallback
+
+## Phase 4c.3 — Tiered Diff Explanations & Output Adapters
+<!-- status: pending -->
+**Goal**: Rich, layered diff review — top-level summary → medium detail → full diff, with pluggable output formatting.
+
+### Tiered Explanation Model
+Each artifact in a PR gets a three-tier explanation:
+1. **Top**: One-line summary (e.g., "Refactored auth middleware to use JWT")
+2. **Medium**: Paragraph explaining what changed and why, dependencies affected
+3. **Detail**: Full unified diff with inline annotations
+
+Agents populate tiers via sidecar files: `<filename>.diff.explanation.yaml` (or JSON) written alongside changes. Schema:
+```yaml
+file: src/auth/middleware.rs
+summary: "Refactored auth middleware to use JWT instead of session tokens"
+explanation: |
+  Replaced session-based auth with JWT validation. The middleware now
+  checks the Authorization header for a Bearer token, validates it
+  against the JWKS endpoint, and extracts claims into the request context.
+  This change touches 3 files: middleware.rs (core logic), config.rs
+  (JWT settings), and tests/auth_test.rs (updated test fixtures).
+tags: [security, breaking-change]
+related_artifacts:
+  - src/auth/config.rs
+  - tests/auth_test.rs
+```
+
+### Output Adapters (Plugin System)
+Configurable output renderers for `ta pr view`, designed for reuse:
+- **terminal** (default): Colored inline diff with collapsible tiers (summary → expand for detail)
+- **markdown**: Render PR as `.md` file — useful for GitHub PR bodies or documentation
+- **json**: Machine-readable structured output for CI/CD integration
+- **html**: Standalone review page with expandable sections (JavaScript-free progressive disclosure)
+- Config: `.ta/output.toml` or `--format <adapter>` flag on `ta pr view`
+- Plugin interface: adapter receives `PRPackage` + explanation sidecars, returns formatted output
+- Adapters are composable: `ta pr view <id> --format markdown > review.md`
+
+### CLI Changes
+- `ta pr view <id> --detail top|medium|full` (default: medium — shows summary + explanation, not full diff)
+- `ta pr view <id> --format terminal|markdown|json|html`
+- `ta pr build` ingests `*.diff.explanation.yaml` sidecars into PRPackage (similar to `change_summary.json`)
+- CLAUDE.md injection instructs agents to produce explanation sidecars alongside changes
+
+### Data Model
+- `Artifact` gains optional `explanation_tiers: Option<ExplanationTiers>` (summary, explanation, tags)
+- `PRPackage` stores tier data; output adapters read it at render time
+- Explanation sidecars are ingested at `ta pr build` time, not stored permanently in staging
 
 ## Phase 4d — Review Sessions
 <!-- status: pending -->
