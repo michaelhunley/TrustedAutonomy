@@ -427,6 +427,40 @@ fn build_package(
         status: PRStatus::PendingReview,
     };
 
+    // Handle PR supersession for follow-up goals.
+    // If this goal has a parent and the parent's PR is not yet applied,
+    // mark the parent PR as superseded by this new PR.
+    if let Some(parent_goal_id) = goal.parent_goal_id {
+        if let Some(parent_goal) = goal_store.get(parent_goal_id)? {
+            if let Some(parent_pr_id) = parent_goal.pr_package_id {
+                // Load parent PR and check if it's unapplied.
+                if let Ok(mut parent_pr) = load_package(config, parent_pr_id) {
+                    match parent_pr.status {
+                        PRStatus::Draft
+                        | PRStatus::PendingReview
+                        | PRStatus::Approved { .. } => {
+                            // Parent PR not yet applied — mark it as superseded.
+                            parent_pr.status = PRStatus::Superseded {
+                                superseded_by: package_id,
+                            };
+                            save_package(config, &parent_pr)?;
+                            println!(
+                                "Parent PR {} superseded by this follow-up PR.",
+                                parent_pr_id
+                            );
+                        }
+                        PRStatus::Applied { .. } | PRStatus::Denied { .. } => {
+                            // Parent already applied or denied — no supersession needed.
+                        }
+                        PRStatus::Superseded { .. } => {
+                            // Parent already superseded — nothing to do.
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Save the PR package.
     save_package(config, &pkg)?;
 
@@ -473,11 +507,18 @@ fn list_packages(config: &GatewayConfig, goal_filter: Option<&str>) -> anyhow::R
     println!("{}", "-".repeat(92));
 
     for pkg in &filtered {
+        let status_display = match &pkg.status {
+            PRStatus::Superseded { superseded_by } => {
+                format!("superseded ({})", &superseded_by.to_string()[..8])
+            }
+            _ => format!("{:?}", pkg.status),
+        };
+
         println!(
             "{:<38} {:<30} {:<16} {:<8}",
             pkg.package_id,
             truncate(&pkg.goal.title, 28),
-            format!("{:?}", pkg.status),
+            status_display,
             pkg.changes.artifacts.len(),
         );
     }
@@ -1106,7 +1147,7 @@ fn load_all_packages(config: &GatewayConfig) -> anyhow::Result<Vec<PRPackage>> {
     Ok(packages)
 }
 
-fn load_package(config: &GatewayConfig, package_id: Uuid) -> anyhow::Result<PRPackage> {
+pub fn load_package(config: &GatewayConfig, package_id: Uuid) -> anyhow::Result<PRPackage> {
     let path = config.pr_packages_dir.join(format!("{}.json", package_id));
     if !path.exists() {
         anyhow::bail!("PR package not found: {}", package_id);
@@ -1158,6 +1199,8 @@ mod tests {
                 objective: "Test PR building from overlay".to_string(),
                 agent: "test-agent".to_string(),
                 phase: None,
+                follow_up: None,
+                objective_file: None,
             },
             &config,
         )
@@ -1226,6 +1269,8 @@ mod tests {
                 objective: "Test apply".to_string(),
                 agent: "test-agent".to_string(),
                 phase: None,
+                follow_up: None,
+                objective_file: None,
             },
             &config,
         )
@@ -1315,6 +1360,8 @@ mod tests {
                 objective: "Test git commit".to_string(),
                 agent: "test-agent".to_string(),
                 phase: None,
+                follow_up: None,
+                objective_file: None,
             },
             &config,
         )
@@ -1370,6 +1417,8 @@ mod tests {
                 objective: "Test change_summary ingestion".to_string(),
                 agent: "test-agent".to_string(),
                 phase: None,
+                follow_up: None,
+                objective_file: None,
             },
             &config,
         )
@@ -1483,6 +1532,8 @@ mod tests {
                 objective: "Nothing".to_string(),
                 agent: "test-agent".to_string(),
                 phase: None,
+                follow_up: None,
+                objective_file: None,
             },
             &config,
         )
@@ -1518,6 +1569,8 @@ mod tests {
                 objective: "Test selective approval".to_string(),
                 agent: "test-agent".to_string(),
                 phase: None,
+                follow_up: None,
+                objective_file: None,
             },
             &config,
         )
@@ -1587,6 +1640,8 @@ mod tests {
                 objective: "Test rejection".to_string(),
                 agent: "test-agent".to_string(),
                 phase: None,
+                follow_up: None,
+                objective_file: None,
             },
             &config,
         )
@@ -1642,6 +1697,8 @@ mod tests {
                 objective: "Test all".to_string(),
                 agent: "test-agent".to_string(),
                 phase: None,
+                follow_up: None,
+                objective_file: None,
             },
             &config,
         )
@@ -1696,6 +1753,8 @@ mod tests {
                 objective: "Test rest".to_string(),
                 agent: "test-agent".to_string(),
                 phase: None,
+                follow_up: None,
+                objective_file: None,
             },
             &config,
         )
@@ -1753,6 +1812,8 @@ mod tests {
                 objective: "Test dependencies".to_string(),
                 agent: "test-agent".to_string(),
                 phase: None,
+                follow_up: None,
+                objective_file: None,
             },
             &config,
         )
@@ -1850,6 +1911,8 @@ mod tests {
                 objective: "Test exclusion".to_string(),
                 agent: "test-agent".to_string(),
                 phase: None,
+                follow_up: None,
+                objective_file: None,
             },
             &config,
         )

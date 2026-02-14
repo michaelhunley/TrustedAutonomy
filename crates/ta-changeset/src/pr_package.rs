@@ -363,6 +363,10 @@ pub enum PRStatus {
     Applied {
         applied_at: DateTime<Utc>,
     },
+    /// This PR has been superseded by a follow-up goal's PR.
+    Superseded {
+        superseded_by: Uuid,
+    },
 }
 
 impl std::fmt::Display for PRStatus {
@@ -373,6 +377,7 @@ impl std::fmt::Display for PRStatus {
             PRStatus::Approved { .. } => write!(f, "approved"),
             PRStatus::Denied { .. } => write!(f, "denied"),
             PRStatus::Applied { .. } => write!(f, "applied"),
+            PRStatus::Superseded { .. } => write!(f, "superseded"),
         }
     }
 }
@@ -622,5 +627,19 @@ mod tests {
             serde_json::to_string(&DependencyKind::DependedBy).unwrap(),
             "\"depended_by\""
         );
+    }
+
+    #[test]
+    fn pr_status_superseded_serialization() {
+        let superseding_id = Uuid::new_v4();
+        let status = PRStatus::Superseded {
+            superseded_by: superseding_id,
+        };
+        assert_eq!(status.to_string(), "superseded");
+        let json = serde_json::to_string(&status).unwrap();
+        assert!(json.contains("\"superseded\""));
+        assert!(json.contains(&superseding_id.to_string()));
+        let restored: PRStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, status);
     }
 }

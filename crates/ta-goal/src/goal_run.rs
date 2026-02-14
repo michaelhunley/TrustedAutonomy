@@ -138,6 +138,10 @@ pub struct GoalRun {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_phase: Option<String>,
 
+    /// Parent goal ID for follow-up goals (enables iterative refinement).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_goal_id: Option<Uuid>,
+
     /// The PR package ID, if one has been built.
     pub pr_package_id: Option<Uuid>,
 
@@ -169,6 +173,7 @@ impl GoalRun {
             store_path,
             source_dir: None,
             plan_phase: None,
+            parent_goal_id: None,
             pr_package_id: None,
             created_at: now,
             updated_at: now,
@@ -302,5 +307,27 @@ mod tests {
             .to_string(),
             "approved"
         );
+    }
+
+    #[test]
+    fn parent_goal_id_serialization_round_trip() {
+        let mut gr = test_goal_run();
+        let parent_id = Uuid::new_v4();
+        gr.parent_goal_id = Some(parent_id);
+        let json = serde_json::to_string_pretty(&gr).unwrap();
+        assert!(json.contains("\"parent_goal_id\""));
+        let restored: GoalRun = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.parent_goal_id, Some(parent_id));
+    }
+
+    #[test]
+    fn parent_goal_id_none_omitted_from_json() {
+        let gr = test_goal_run();
+        assert!(gr.parent_goal_id.is_none());
+        let json = serde_json::to_string_pretty(&gr).unwrap();
+        assert!(!json.contains("parent_goal_id"));
+        // Deserializing JSON without parent_goal_id should produce None (backward compat).
+        let restored: GoalRun = serde_json::from_str(&json).unwrap();
+        assert!(restored.parent_goal_id.is_none());
     }
 }

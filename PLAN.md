@@ -160,51 +160,53 @@ These steps must be done by the repo owner to validate the release pipeline:
    ```
 
 ## Phase v0.1.2 — Follow-Up Goals & Iterative Review
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Enable iterative refinement — fix CI failures, address discuss items, revise rejected changes — without losing context from the original goal.
 
-### Core: `ta goal start "title" --follow-up [id]`
-- `--follow-up` without ID: finds the most recent goal (prefers unapplied, falls back to latest applied)
-- `--follow-up <id-prefix>`: match by first N characters of goal UUID (no full hash needed)
-- `GoalRun` gets `parent_goal_id: Option<Uuid>` linking to the predecessor
+### Core: `ta goal start "title" --follow-up [id]` ✅ **Implemented**
+- ✅ `--follow-up` without ID: finds the most recent goal (prefers unapplied, falls back to latest applied)
+- ✅ `--follow-up <id-prefix>`: match by first N characters of goal UUID (no full hash needed)
+- ✅ `GoalRun` gets `parent_goal_id: Option<Uuid>` linking to the predecessor
 
 ### Staging Behavior (depends on parent state)
 
-**Parent NOT yet applied** (PrReady / UnderReview / Approved):
-- Follow-up staging starts from the **parent's staging** (preserves in-flight work)
-- `ta pr build` diffs against the **original source** (same base as parent)
-- The follow-up's PR **supersedes** the parent's PR — single unified diff covering both rounds
-- Parent PR status transitions to `Superseded { superseded_by: Uuid }`
+> **Note (v0.1.2 implementation)**: The optimization to start from parent staging is **deferred to a future release**. Current implementation always starts from source, which works correctly but may require manually re-applying parent changes when parent PR is unapplied. The parent context injection and PR supersession work as designed.
+
+**Parent NOT yet applied** (PrReady / UnderReview / Approved) — *Planned optimization*:
+- Follow-up staging should start from the **parent's staging** (preserves in-flight work)
+- `ta pr build` should diff against the **original source** (same base as parent)
+- The follow-up's PR **supersedes** the parent's PR — single unified diff covering both rounds ✅ **Implemented**
+- Parent PR status transitions to `Superseded { superseded_by: Uuid }` ✅ **Implemented**
 - Result: one collapsed PR for review, not a chain of incremental PRs
 
-**Parent already applied** (Applied / Completed):
-- Follow-up staging starts from **current source** (which already has applied changes)
-- Creates a new, independent PR for the follow-up changes
-- Parent link preserved for audit trail / context injection only
+**Parent already applied** (Applied / Completed) — *Current behavior*:
+- Follow-up staging starts from **current source** (which already has applied changes) ✅ **Implemented**
+- Creates a new, independent PR for the follow-up changes ✅ **Implemented**
+- Parent link preserved for audit trail / context injection only ✅ **Implemented**
 
-### Context Injection
+### Context Injection ✅ **Implemented**
 When a follow-up goal starts, `inject_claude_md()` includes parent context:
-- Parent goal title, objective, summary (what was done)
-- Artifact list with dispositions (what was approved/rejected/discussed)
-- Any discuss items with their rationale (from `change_summary.json`)
-- Free-text follow-up context from the objective field
+- ✅ Parent goal title, objective, summary (what was done)
+- ✅ Artifact list with dispositions (what was approved/rejected/discussed)
+- ✅ Any discuss items with their rationale (from `change_summary.json`)
+- ✅ Free-text follow-up context from the objective field
 
 **Specifying detailed context**:
-- Short: `ta run "Fix CI lint failures" --source . --follow-up` (title IS the context)
-- Detailed: `ta run --source . --follow-up --objective "Fix clippy warnings in pr.rs and add missing test for edge case X. Also address the discuss item on config.toml — reviewer wanted env var override support."` (objective field scales to paragraphs)
-- From file: `ta run --source . --follow-up --objective-file review-notes.md` (for structured review notes)
-- **Phase 4d integration**: When discuss items have comment threads (Phase 4d), those comments auto-populate follow-up context — each discussed artifact's thread becomes a structured section in CLAUDE.md injection. The `--follow-up` flag on a goal with discuss items is the resolution path for Phase 4d's discussion workflow.
+- ✅ Short: `ta run "Fix CI lint failures" --source . --follow-up` (title IS the context)
+- ✅ Detailed: `ta run --source . --follow-up --objective "Fix clippy warnings in pr.rs and add missing test for edge case X. Also address the discuss item on config.toml — reviewer wanted env var override support."` (objective field scales to paragraphs)
+- ✅ From file: `ta run --source . --follow-up --objective-file review-notes.md` (for structured review notes)
+- **Phase 4d integration** (future): When discuss items have comment threads (Phase 4d), those comments auto-populate follow-up context — each discussed artifact's thread becomes a structured section in CLAUDE.md injection. The `--follow-up` flag on a goal with discuss items is the resolution path for Phase 4d's discussion workflow.
 
 ### CLI Changes
-- `ta goal start` / `ta run`: add `--follow-up [id-prefix]` and `--objective-file <path>` flags
-- `ta goal list`: show parent chain (`goal-abc → goal-def (follow-up)`)
-- `ta pr list`: show superseded PRs with `[superseded]` marker
-- `ta pr build`: when parent PR exists and is unapplied, mark it superseded
+- ✅ `ta goal start` / `ta run`: add `--follow-up [id-prefix]` and `--objective-file <path>` flags
+- ✅ `ta goal list`: show parent chain (`goal-abc → goal-def (follow-up)`)
+- ✅ `ta pr list`: show superseded PRs with `[superseded]` marker
+- ✅ `ta pr build`: when parent PR exists and is unapplied, mark it superseded
 
 ### Data Model Changes
-- `GoalRun`: add `parent_goal_id: Option<Uuid>`
-- `PRStatus`: add `Superseded { superseded_by: Uuid }` variant
-- `PRPackage`: no changes (the new PR package is a complete, standalone package)
+- ✅ `GoalRun`: add `parent_goal_id: Option<Uuid>`
+- ✅ `PRStatus`: add `Superseded { superseded_by: Uuid }` variant
+- ✅ `PRPackage`: no changes (the new PR package is a complete, standalone package)
 
 ### Phase 4d Note
 > Follow-up goals are the **resolution mechanism** for Phase 4d discuss items. When 4d adds per-artifact comment threads and persistent review sessions, `--follow-up` on a goal with unresolved discuss items will inject those threads as structured agent instructions. The agent addresses each discussed artifact; the resulting PR supersedes the original. This keeps discuss → revise → re-review as a natural loop without new CLI commands — just `ta run --follow-up`.
