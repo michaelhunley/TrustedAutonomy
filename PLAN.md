@@ -128,6 +128,7 @@ Workspace structure with 12 crates under `crates/` and `apps/`. Resource URIs (`
 - **Validate release end-to-end** (manual — see checklist below)
 - **Install script**: `curl -fsSL https://ta.dev/install.sh | sh` one-liner (download + place in PATH)
 - **Version bumping**: `cargo release` or manual Cargo.toml + git tag workflow
+- **Auto-generated release notes**: Collect PR titles merged since last tag and format into GitHub Release body. Use `gh api repos/{owner}/{repo}/releases/generate-notes` or `git log --merges --oneline <prev-tag>..HEAD`. Optionally configurable via `.ta/release.toml` (include/exclude labels, group by category).
 - **Nix flake output**: `nix run github:trustedautonomy/ta` for Nix users
 - **Homebrew formula**: Future — tap for macOS users (`brew install trustedautonomy/tap/ta`)
 
