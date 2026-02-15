@@ -28,4 +28,8 @@ pub enum WorkspaceError {
     /// The change store operation failed.
     #[error("change store error: {0}")]
     StoreError(String),
+
+    /// Conflict detected between source and staging (v0.2.1).
+    #[error("Concurrent session conflict detected:\n{}", .conflicts.join("\n"))]
+    ConflictDetected { conflicts: Vec<String> },
 }
