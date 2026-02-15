@@ -327,12 +327,15 @@ pr_template = ".ta/pr-template.md"
 - **Multi-agent intra-staging conflicts**: When multiple agents work in the same staging workspace (e.g., via Claude Flow swarms), consider integrating [agentic-jujutsu](https://github.com/ruvnet/claude-flow) for lock-free concurrent file operations with auto-merge. This handles agent-to-agent coordination; TA handles agent-to-human review. Different layers, composable.
 
 ### v0.2.2 — External Diff Routing
-<!-- status: pending -->
-- Config file (`.ta/diff-handlers.toml` or similar) maps file patterns to external applications
-- Examples: `*.uasset` → Unreal Editor, `*.png` → image diff tool, `*.blend` → Blender
-- `ta pr view <id> --file model.uasset` opens the file in the configured handler
-- Default handlers: text → inline diff (current), binary → byte count summary
-- Integration with OS `open` / `xdg-open` as fallback
+<!-- status: done -->
+- ✅ Config file (`.ta/diff-handlers.toml`) maps file patterns to external applications
+- ✅ Examples: `*.uasset` → Unreal Editor, `*.png` → image diff tool, `*.blend` → Blender
+- ✅ `ta pr view <id> --file model.uasset` opens the file in the configured handler
+- ✅ Default handlers: text → inline diff (current), binary → byte count summary
+- ✅ Integration with OS `open` / `xdg-open` as fallback
+- ✅ New module: `ta-changeset::diff_handlers` with TOML parsing and pattern matching
+- ✅ CLI flags: `--open-external` (default) / `--no-open-external` to control behavior
+- ✅ Documentation and example config at `.ta/diff-handlers.example.toml`
 
 ### v0.2.3 — Tiered Diff Explanations & Output Adapters
 <!-- status: pending -->

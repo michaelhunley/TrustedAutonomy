@@ -18,3 +18,16 @@ target_branch = "main"             # PR target branch
 merge_strategy = "squash"          # squash, merge, or rebase
 remote = "origin"                  # Git remote name
 pr_template = ".ta/pr-template.md" # PR body template (see examples/pr-template.md)
+
+# ────────────────────────────────────────────────────────────────────
+# Diff Viewing Configuration (v0.2.2)
+# ────────────────────────────────────────────────────────────────────
+
+[diff]
+# Open files in external handlers by default when using `ta pr view --file`
+# If false, always show inline diffs (or [binary: size] for binaries)
+# CLI flag --open-external / --no-open-external overrides this setting
+open_external = true
+
+# Optional: Override default path to diff-handlers.toml
+# handlers_file = ".ta/diff-handlers.toml"

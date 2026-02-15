@@ -8,6 +8,10 @@ use std::path::PathBuf;
 pub struct WorkflowConfig {
     /// Submit adapter configuration
     pub submit: SubmitConfig,
+
+    /// Diff viewing configuration
+    #[serde(default)]
+    pub diff: DiffConfig,
 }
 
 /// Submit adapter configuration
@@ -100,6 +104,30 @@ fn default_merge_strategy() -> String {
 
 fn default_remote() -> String {
     "origin".to_string()
+}
+
+/// Diff viewing configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiffConfig {
+    /// Open files in external handlers by default when using `ta pr view --file`
+    #[serde(default = "default_open_external")]
+    pub open_external: bool,
+
+    /// Optional path override for diff-handlers.toml (defaults to .ta/diff-handlers.toml)
+    pub handlers_file: Option<PathBuf>,
+}
+
+impl Default for DiffConfig {
+    fn default() -> Self {
+        Self {
+            open_external: default_open_external(),
+            handlers_file: None,
+        }
+    }
+}
+
+fn default_open_external() -> bool {
+    true
 }
 
 impl WorkflowConfig {
