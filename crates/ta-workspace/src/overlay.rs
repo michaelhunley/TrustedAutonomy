@@ -418,9 +418,15 @@ impl OverlayWorkspace {
 
     /// Detect conflicts between the current source state and the snapshot.
     /// Returns None if no snapshot was captured (conflict detection disabled).
+    /// Uses the overlay's ExcludePatterns to filter build artifacts (target/, node_modules/, etc.)
+    /// from the "new file" scan, preventing false conflicts from cargo build output.
     pub fn detect_conflicts(&self) -> Result<Option<Vec<Conflict>>, WorkspaceError> {
         match &self.source_snapshot {
-            Some(snapshot) => Ok(Some(snapshot.detect_conflicts(&self.source_dir)?)),
+            Some(snapshot) => Ok(Some(
+                snapshot.detect_conflicts(&self.source_dir, |path| {
+                    self.excludes.should_skip_path(path)
+                })?,
+            )),
             None => Ok(None),
         }
     }

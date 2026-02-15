@@ -314,13 +314,15 @@ pr_template = ".ta/pr-template.md"
 **Design Principle**: "Submit" isn't just VCS — it's any workflow where changes need approval before affecting external state. The adapter pattern enables pluggable approval workflows across all domains.
 
 ### v0.2.1 — Concurrent Session Conflict Detection
-<!-- status: pending -->
+<!-- status: done -->
 - Detect when source files have changed since staging copy was made (stale overlay)
 - On `ta pr apply`: compare source file mtime/hash against snapshot taken at `ta goal start`
 - Conflict resolution strategies: abort, merge (delegate to VCS adapter's merge if available), force-overwrite
-- **Current limitation**: if you edit source files while a TA session is active, `ta pr apply` will silently overwrite those changes. Git handles this for committed code, but uncommitted edits can be lost.
-- Display warnings at PR review time if source has diverged
-- Future: lock files or advisory locks for active goals
+- `SourceSnapshot` captured automatically at overlay creation (mtime + SHA-256)
+- `--conflict-resolution abort|force-overwrite|merge` CLI flag on `ta pr apply`
+- `apply_with_conflict_check()` aborts on conflict by default, warns and proceeds on force-overwrite
+- 8 unit tests + integration tests
+- **Remaining**: lock files or advisory locks for active goals (deferred to future)
 - **Adapter integration**: git adapter can use `git merge`/`git diff` for smarter conflict resolution; `none` adapter falls back to mtime/hash comparison only
 - **Multi-agent intra-staging conflicts**: When multiple agents work in the same staging workspace (e.g., via Claude Flow swarms), consider integrating [agentic-jujutsu](https://github.com/ruvnet/claude-flow) for lock-free concurrent file operations with auto-merge. This handles agent-to-agent coordination; TA handles agent-to-human review. Different layers, composable.
 

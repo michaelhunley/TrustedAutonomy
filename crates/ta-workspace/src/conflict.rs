@@ -202,7 +202,16 @@ impl SourceSnapshot {
 
     /// Detect conflicts between this snapshot and the current source state.
     /// Returns a list of files that have changed since the snapshot.
-    pub fn detect_conflicts(&self, source_root: &Path) -> Result<Vec<Conflict>, WorkspaceError> {
+    /// The `should_skip` predicate filters paths from the "new file" scan,
+    /// matching the same patterns used during snapshot capture (e.g., target/, node_modules/).
+    pub fn detect_conflicts<F>(
+        &self,
+        source_root: &Path,
+        should_skip: F,
+    ) -> Result<Vec<Conflict>, WorkspaceError>
+    where
+        F: Fn(&str) -> bool,
+    {
         let mut conflicts = Vec::new();
 
         for (path, snapshot) in &self.files {
@@ -254,8 +263,8 @@ impl SourceSnapshot {
                 };
                 let rel_path_str = rel_path.to_string_lossy().to_string();
 
-                // Skip infra dirs (same as OverlayWorkspace logic).
-                if is_infra_path(&rel_path_str) {
+                // Skip infra dirs and user-excluded paths (target/, node_modules/, etc.).
+                if is_infra_path(&rel_path_str) || should_skip(&rel_path_str) {
                     continue;
                 }
 
@@ -407,7 +416,7 @@ mod tests {
         thread::sleep(Duration::from_secs(2));
         create_test_file(dir.path(), "a.txt", "modified A");
 
-        let conflicts = snapshot.detect_conflicts(dir.path()).unwrap();
+        let conflicts = snapshot.detect_conflicts(dir.path(), |_| false).unwrap();
         assert_eq!(conflicts.len(), 1);
         assert_eq!(conflicts[0].path, "a.txt");
         assert!(conflicts[0].description.contains("modified"));
@@ -421,7 +430,7 @@ mod tests {
         let snapshot = SourceSnapshot::capture(dir.path(), |_| false).unwrap();
         fs::remove_file(dir.path().join("file.txt")).unwrap();
 
-        let conflicts = snapshot.detect_conflicts(dir.path()).unwrap();
+        let conflicts = snapshot.detect_conflicts(dir.path(), |_| false).unwrap();
         assert_eq!(conflicts.len(), 1);
         assert_eq!(conflicts[0].path, "file.txt");
         assert!(conflicts[0].description.contains("deleted"));
@@ -437,7 +446,7 @@ mod tests {
         // Create a new file in source.
         create_test_file(dir.path(), "new.txt", "new content");
 
-        let conflicts = snapshot.detect_conflicts(dir.path()).unwrap();
+        let conflicts = snapshot.detect_conflicts(dir.path(), |_| false).unwrap();
         // Should find the new file as a divergence (not a strict conflict, but noteworthy).
         let new_file_conflict = conflicts.iter().find(|c| c.path == "new.txt");
         assert!(new_file_conflict.is_some());
@@ -450,7 +459,7 @@ mod tests {
         create_test_file(dir.path(), "file.txt", "content");
 
         let snapshot = SourceSnapshot::capture(dir.path(), |_| false).unwrap();
-        let conflicts = snapshot.detect_conflicts(dir.path()).unwrap();
+        let conflicts = snapshot.detect_conflicts(dir.path(), |_| false).unwrap();
 
         assert!(conflicts.is_empty());
     }
@@ -478,5 +487,37 @@ mod tests {
         assert!(!snapshot.files.contains_key(".ta/state.json"));
         assert!(!snapshot.files.contains_key(".git/config"));
         assert!(!snapshot.files.contains_key(".hive-mind/session.json"));
+    }
+
+    #[test]
+    fn detect_conflicts_skips_excluded_paths() {
+        let dir = TempDir::new().unwrap();
+        create_test_file(dir.path(), "src/main.rs", "fn main() {}");
+
+        // Snapshot with no target/ directory.
+        let snapshot = SourceSnapshot::capture(dir.path(), |_| false).unwrap();
+        assert_eq!(snapshot.file_count(), 1);
+
+        // Simulate `cargo build` creating target/ after snapshot.
+        create_test_file(dir.path(), "target/debug/binary", "fake binary");
+        create_test_file(dir.path(), "target/release/deps/foo.d", "dep file");
+
+        // Without skip predicate: target/ files appear as "new" conflicts.
+        let conflicts = snapshot.detect_conflicts(dir.path(), |_| false).unwrap();
+        assert!(
+            conflicts.len() >= 2,
+            "Expected target/ files as conflicts, got {}",
+            conflicts.len()
+        );
+
+        // With skip predicate filtering target/: no false conflicts.
+        let conflicts = snapshot
+            .detect_conflicts(dir.path(), |path| path.starts_with("target"))
+            .unwrap();
+        assert!(
+            conflicts.is_empty(),
+            "Expected no conflicts but got: {:?}",
+            conflicts.iter().map(|c| &c.path).collect::<Vec<_>>()
+        );
     }
 }
