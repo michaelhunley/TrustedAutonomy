@@ -127,10 +127,16 @@ pub fn execute(cmd: &PrCommands, config: &GatewayConfig) -> anyhow::Result<()> {
             reject_patterns,
             discuss_patterns,
         } => {
-            // --submit implies full workflow (commit + push + review)
-            let do_commit = *git_commit || *git_push || *submit;
-            let do_push = *git_push || *submit;
-            let do_review = *submit;
+            // Load workflow config to merge auto_* settings with CLI flags.
+            let workflow_config = ta_submit::WorkflowConfig::load_or_default(
+                &config.workspace_root.join(".ta/workflow.toml"),
+            );
+
+            // CLI flags override config. --submit implies full workflow.
+            let do_commit =
+                *git_commit || *git_push || *submit || workflow_config.submit.auto_commit;
+            let do_push = *git_push || *submit || workflow_config.submit.auto_push;
+            let do_review = *submit || workflow_config.submit.auto_review;
 
             apply_package(
                 config,
