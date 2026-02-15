@@ -548,44 +548,72 @@ impl OverlayWorkspace {
 
     /// Apply changes with conflict detection and resolution strategy.
     /// v0.2.1: Safe apply that checks for concurrent modifications.
+    ///
+    /// Only flags conflicts for files that overlap with the changeset being applied.
+    /// Files that changed in source but aren't in the changeset are safe — the apply
+    /// won't touch them, so there's no risk of data loss.
     pub fn apply_with_conflict_check(
         &self,
         target_dir: &Path,
         resolution: ConflictResolution,
     ) -> Result<Vec<(String, &'static str)>, WorkspaceError> {
         // Check for conflicts if snapshot exists.
-        if let Some(conflicts) = self.detect_conflicts()? {
-            if !conflicts.is_empty() {
-                match resolution {
-                    ConflictResolution::Abort => {
-                        return Err(WorkspaceError::ConflictDetected {
-                            conflicts: conflicts.iter().map(|c| c.description.clone()).collect(),
-                        });
-                    }
-                    ConflictResolution::ForceOverwrite => {
-                        // Proceed with apply despite conflicts.
-                        eprintln!(
-                            "⚠️  Warning: {} conflict(s) detected, but proceeding with force-overwrite",
-                            conflicts.len()
-                        );
-                    }
-                    ConflictResolution::Merge => {
-                        // v0.2.1: Merge strategy requires VCS adapter integration.
-                        // For now, we abort and suggest using the git adapter.
-                        return Err(WorkspaceError::ConflictDetected {
-                            conflicts: vec![
-                                format!(
+        if let Some(all_conflicts) = self.detect_conflicts()? {
+            if !all_conflicts.is_empty() {
+                // Only flag conflicts that overlap with files we're about to apply.
+                let changeset_paths: std::collections::HashSet<String> = self
+                    .diff_all()?
+                    .iter()
+                    .map(|c| match c {
+                        OverlayChange::Modified { path, .. }
+                        | OverlayChange::Created { path, .. }
+                        | OverlayChange::Deleted { path } => path.clone(),
+                    })
+                    .collect();
+
+                let overlapping: Vec<_> = all_conflicts
+                    .iter()
+                    .filter(|c| changeset_paths.contains(&c.path))
+                    .collect();
+
+                let non_overlapping = all_conflicts.len() - overlapping.len();
+                if non_overlapping > 0 {
+                    eprintln!(
+                        "ℹ️  {} file(s) changed in source but not in changeset (safe, skipping)",
+                        non_overlapping
+                    );
+                }
+
+                if !overlapping.is_empty() {
+                    match resolution {
+                        ConflictResolution::Abort => {
+                            return Err(WorkspaceError::ConflictDetected {
+                                conflicts: overlapping
+                                    .iter()
+                                    .map(|c| c.description.clone())
+                                    .collect(),
+                            });
+                        }
+                        ConflictResolution::ForceOverwrite => {
+                            eprintln!(
+                                "⚠️  Warning: {} overlapping conflict(s) detected, but proceeding with force-overwrite",
+                                overlapping.len()
+                            );
+                        }
+                        ConflictResolution::Merge => {
+                            return Err(WorkspaceError::ConflictDetected {
+                                conflicts: vec![format!(
                                     "{} conflict(s) detected. Merge resolution requires VCS adapter (use `ta pr apply --submit` with git).",
-                                    conflicts.len()
-                                )
-                            ],
-                        });
+                                    overlapping.len()
+                                )],
+                            });
+                        }
                     }
                 }
             }
         }
 
-        // No conflicts or resolution strategy allows — proceed with apply.
+        // No overlapping conflicts or resolution strategy allows — proceed with apply.
         self.apply_to(target_dir)
     }
 

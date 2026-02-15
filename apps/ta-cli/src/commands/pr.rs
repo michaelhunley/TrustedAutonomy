@@ -1042,18 +1042,17 @@ fn apply_package(
             {
                 overlay.set_snapshot(snapshot);
 
-                // Check for conflicts and display warnings if any exist.
+                // Preview conflicts (informational — apply_with_conflict_check handles abort/force).
                 if let Ok(Some(conflicts)) = overlay.detect_conflicts() {
                     if !conflicts.is_empty() {
-                        println!("\n⚠️  WARNING: Source files have changed since goal start!");
-                        println!("   {} conflict(s) detected:", conflicts.len());
-                        for conflict in conflicts.iter().take(5) {
-                            println!("   - {}", conflict.description);
-                        }
-                        if conflicts.len() > 5 {
-                            println!("   ... and {} more", conflicts.len() - 5);
-                        }
-                        println!("   Resolution strategy: {:?}\n", conflict_resolution);
+                        println!(
+                            "\nℹ️  {} source file(s) changed since goal start.",
+                            conflicts.len()
+                        );
+                        println!(
+                            "   (Only overlapping changes block apply. Resolution: {:?})\n",
+                            conflict_resolution
+                        );
                     }
                 }
             }
