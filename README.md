@@ -712,6 +712,17 @@ With this config, `ta pr apply <id>` automatically creates a feature branch, com
 - The git adapter auto-detects git repos. If `adapter = "none"` but you're in a git repo and pass `--git-commit`, it uses git automatically.
 - **PR creation requires the [GitHub CLI](https://cli.github.com/)** (`gh`). Install it and run `gh auth login` once.
 
+**Quick setup from examples:**
+
+```bash
+mkdir -p .ta
+cp examples/workflow.toml .ta/workflow.toml
+cp examples/pr-template.md .ta/pr-template.md
+# Edit .ta/workflow.toml to match your project (branch prefix, target branch, etc.)
+```
+
+The `examples/` directory ships with commented reference configs. The `.ta/` directory is gitignored — your config stays local.
+
 ### Iterative Review with Follow-Up Goals
 
 When you need to iterate on feedback or address discuss items:
