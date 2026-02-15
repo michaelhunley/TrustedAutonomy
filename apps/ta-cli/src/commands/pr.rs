@@ -1090,11 +1090,24 @@ fn apply_package(
             eprintln!("Warning: adapter prepare failed: {}", e);
         }
 
-        // Commit changes.
+        // Commit changes — goal title as subject, summary as body.
         println!("Committing changes...");
+        let artifact_lines: String = pkg
+            .changes
+            .artifacts
+            .iter()
+            .map(|a| format!("  {:?}  {}", a.change_type, a.resource_uri))
+            .collect::<Vec<_>>()
+            .join("\n");
+
         let commit_msg = format!(
-            "{}\n\nApplied via Trusted Autonomy PR package {}",
-            pkg.summary.what_changed, package_id
+            "{title}\n\nWhat: {what}\nWhy:  {why}\nImpact: {impact}\n\nChanges ({count} file(s)):\n{artifacts}",
+            title = goal.title,
+            what = pkg.summary.what_changed,
+            why = pkg.summary.why,
+            impact = pkg.summary.impact,
+            count = pkg.changes.artifacts.len(),
+            artifacts = artifact_lines,
         );
 
         match adapter.commit(goal, &pkg, &commit_msg) {
@@ -1441,7 +1454,8 @@ mod tests {
             .output()
             .unwrap();
         let log_output = String::from_utf8_lossy(&log.stdout);
-        assert!(log_output.contains("Modified README"));
+        // Subject line is the goal title; summary is in the commit body.
+        assert!(log_output.contains("Git test"));
     }
 
     #[test]
