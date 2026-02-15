@@ -1003,13 +1003,14 @@ dependencies = [
  "sha2",
  "tempfile",
  "thiserror",
+ "toml",
  "tracing",
  "uuid",
 ]
 
 [[package]]
 name = "ta-cli"
-version = "0.2.0-alpha"
+version = "0.2.2-alpha"
 dependencies = [
  "anyhow",
  "chrono",

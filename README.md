@@ -78,6 +78,36 @@ If any of these are blockers for your use case, watch the repo — each is on th
 
 ---
 
+## Quick Start
+
+### Install
+
+```bash
+# From source (current alpha)
+git clone https://github.com/trustedautonomy/ta
+cd ta
+cargo build --release
+export PATH="$PWD/target/release:$PATH"
+```
+
+### Run Your First Goal
+
+```bash
+# Start an agent-mediated goal
+ta run "Add README badge for build status" --source .
+
+# Review the changes
+ta pr view <pr-id>
+
+# Approve and apply
+ta pr approve <pr-id>
+ta pr apply <pr-id>
+```
+
+**📖 For detailed usage, configuration, and workflows, see [docs/USAGE.md](docs/USAGE.md)**
+
+---
+
 ## Design principles
 - Normal environment illusion: tools feel like standard filesystem/network access, but all effects are mediated.
 - Default collect (staged-by-default): changes accumulate as pending review artifacts (PR package) rather than applying immediately.

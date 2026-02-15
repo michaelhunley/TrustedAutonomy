@@ -6,6 +6,7 @@ use chrono::Utc;
 use clap::Subcommand;
 use ta_changeset::changeset::{ChangeKind, ChangeSet, CommitIntent};
 use ta_changeset::diff::DiffContent;
+use ta_changeset::diff_handlers::DiffHandlersConfig;
 use ta_changeset::pr_package::{
     AgentIdentity, Artifact, ArtifactDisposition, ChangeDependency, ChangeType, Changes,
     DependencyKind, Goal, Iteration, PRPackage, PRStatus, Plan, Provenance, RequestedAction,
@@ -48,8 +49,15 @@ pub enum PrCommands {
         #[arg(long)]
         summary: bool,
         /// Show diff for a single file only (path relative to workspace root).
+        /// If a diff handler is configured for this file type, it will be opened
+        /// in the external application instead of showing the diff inline.
         #[arg(long)]
         file: Option<String>,
+        /// Open file in external handler.
+        /// If not specified, uses workflow.toml [diff] open_external setting (default: true).
+        /// Use --no-open-external to force inline diff display even if handler exists.
+        #[arg(long)]
+        open_external: Option<bool>,
     },
     /// Approve a PR package for application.
     Approve {
@@ -112,9 +120,12 @@ pub fn execute(cmd: &PrCommands, config: &GatewayConfig) -> anyhow::Result<()> {
             latest,
         } => build_package(config, goal_id, summary, *latest),
         PrCommands::List { goal } => list_packages(config, goal.as_deref()),
-        PrCommands::View { id, summary, file } => {
-            view_package(config, id, *summary, file.as_deref())
-        }
+        PrCommands::View {
+            id,
+            summary,
+            file,
+            open_external,
+        } => view_package(config, id, *summary, file.as_deref(), open_external),
         PrCommands::Approve { id, reviewer } => approve_package(config, id, reviewer),
         PrCommands::Deny {
             id,
@@ -594,6 +605,7 @@ fn view_package(
     id: &str,
     summary_only: bool,
     file_filter: Option<&str>,
+    open_external: &Option<bool>,
 ) -> anyhow::Result<()> {
     let package_id = Uuid::parse_str(id)?;
     let pkg = load_package(config, package_id)?;
@@ -682,6 +694,51 @@ fn view_package(
 
         if !files_to_show.is_empty() {
             let staging = StagingWorkspace::new(goal.goal_run_id.to_string(), &config.staging_dir)?;
+
+            // Determine if external handlers should be used.
+            // Priority: CLI flag > workflow.toml [diff] open_external > default (true)
+            let use_external_handlers = match open_external {
+                Some(value) => *value,
+                None => {
+                    // Load workflow config to check [diff] section
+                    let workflow_config = ta_submit::WorkflowConfig::load_or_default(
+                        &config.workspace_root.join(".ta/workflow.toml"),
+                    );
+                    workflow_config.diff.open_external
+                }
+            };
+
+            // Load diff-handlers config if external viewing is enabled.
+            let diff_handlers = if use_external_handlers {
+                DiffHandlersConfig::load_from_project(&config.workspace_root).ok()
+            } else {
+                None
+            };
+
+            // If --file is specified with a single file and external handlers are enabled,
+            // try to open in external handler.
+            if let Some(_filter) = file_filter {
+                if use_external_handlers && files_to_show.len() == 1 {
+                    let file = files_to_show[0];
+                    let staged_path = goal.workspace_path.join(file);
+
+                    // Check if there's a configured handler or use OS default.
+                    if let Some(ref handlers) = diff_handlers {
+                        match handlers.open_file(&staged_path, true) {
+                            Ok(()) => {
+                                println!("Opened {} in external application", file);
+                                return Ok(());
+                            }
+                            Err(e) => {
+                                eprintln!("Warning: failed to open in external handler: {}", e);
+                                eprintln!("Falling back to inline diff view...\n");
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Fallback: show inline diffs.
             println!("\nDiffs:");
             println!("{}", "=".repeat(60));
             for file in &files_to_show {
