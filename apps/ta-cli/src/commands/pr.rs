@@ -1058,26 +1058,27 @@ fn apply_package(
             }
         }
 
-        let applied = if selective_review {
-            // Selective mode: only apply approved artifacts.
-            // Note: apply_selective doesn't support conflict checking yet (v0.2.1 limitation).
-            // We'll check conflicts above and warn, but apply proceeds normally.
-            let approved_uris: Vec<String> = pkg
-                .changes
+        // Collect artifact URIs from the PR package — the authoritative list of intended changes.
+        let artifact_uris: Vec<String> = if selective_review {
+            // Selective mode: only approved artifacts.
+            pkg.changes
                 .artifacts
                 .iter()
                 .filter(|a| a.disposition == ArtifactDisposition::Approved)
                 .map(|a| a.resource_uri.clone())
-                .collect();
-            overlay
-                .apply_selective(&target_dir, &approved_uris)
-                .map_err(|e| anyhow::anyhow!("{}", e))?
+                .collect()
         } else {
-            // Standard mode: apply all changes with conflict detection.
-            overlay
-                .apply_with_conflict_check(&target_dir, conflict_resolution)
-                .map_err(|e| anyhow::anyhow!("{}", e))?
+            // Standard mode: all artifacts.
+            pkg.changes
+                .artifacts
+                .iter()
+                .map(|a| a.resource_uri.clone())
+                .collect()
         };
+
+        let applied = overlay
+            .apply_with_conflict_check(&target_dir, conflict_resolution, &artifact_uris)
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
 
         applied
             .into_iter()

@@ -546,34 +546,32 @@ impl OverlayWorkspace {
         Ok(applied)
     }
 
-    /// Apply changes with conflict detection and resolution strategy.
-    /// v0.2.1: Safe apply that checks for concurrent modifications.
+    /// Apply specific artifacts with conflict detection and resolution strategy.
     ///
-    /// Only flags conflicts for files that overlap with the changeset being applied.
-    /// Files that changed in source but aren't in the changeset are safe — the apply
-    /// won't touch them, so there's no risk of data loss.
+    /// `artifact_uris` is the authoritative list of files the PR package intends to change
+    /// (from the PR package's artifact list). Only these files are applied and only conflicts
+    /// overlapping with these files trigger abort/force. This prevents stale staging copies
+    /// of unrelated files from overwriting newer source changes.
     pub fn apply_with_conflict_check(
         &self,
         target_dir: &Path,
         resolution: ConflictResolution,
+        artifact_uris: &[String],
     ) -> Result<Vec<(String, &'static str)>, WorkspaceError> {
+        // Convert URIs to relative paths for comparison.
+        let artifact_paths: std::collections::HashSet<String> = artifact_uris
+            .iter()
+            .filter_map(|uri| uri.strip_prefix("fs://workspace/"))
+            .map(|s| s.to_string())
+            .collect();
+
         // Check for conflicts if snapshot exists.
         if let Some(all_conflicts) = self.detect_conflicts()? {
             if !all_conflicts.is_empty() {
-                // Only flag conflicts that overlap with files we're about to apply.
-                let changeset_paths: std::collections::HashSet<String> = self
-                    .diff_all()?
-                    .iter()
-                    .map(|c| match c {
-                        OverlayChange::Modified { path, .. }
-                        | OverlayChange::Created { path, .. }
-                        | OverlayChange::Deleted { path } => path.clone(),
-                    })
-                    .collect();
-
+                // Only flag conflicts that overlap with the artifact list.
                 let overlapping: Vec<_> = all_conflicts
                     .iter()
-                    .filter(|c| changeset_paths.contains(&c.path))
+                    .filter(|c| artifact_paths.contains(&c.path))
                     .collect();
 
                 let non_overlapping = all_conflicts.len() - overlapping.len();
@@ -613,8 +611,8 @@ impl OverlayWorkspace {
             }
         }
 
-        // No overlapping conflicts or resolution strategy allows — proceed with apply.
-        self.apply_to(target_dir)
+        // Apply only the files from the artifact list (not all diffs).
+        self.apply_selective(target_dir, artifact_uris)
     }
 
     /// Clean up the staging directory.
