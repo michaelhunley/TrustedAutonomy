@@ -1168,6 +1168,7 @@ dependencies = [
  "chrono",
  "serde",
  "serde_json",
+ "sha2",
  "ta-changeset",
  "tempfile",
  "thiserror",

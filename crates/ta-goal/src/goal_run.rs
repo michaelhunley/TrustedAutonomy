@@ -142,6 +142,11 @@ pub struct GoalRun {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_goal_id: Option<Uuid>,
 
+    /// Source file snapshot taken at goal start (for conflict detection).
+    /// Serialized as embedded JSON — allows concurrent session conflict detection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_snapshot: Option<serde_json::Value>,
+
     /// The PR package ID, if one has been built.
     pub pr_package_id: Option<Uuid>,
 
@@ -174,6 +179,7 @@ impl GoalRun {
             source_dir: None,
             plan_phase: None,
             parent_goal_id: None,
+            source_snapshot: None,
             pr_package_id: None,
             created_at: now,
             updated_at: now,
