@@ -87,6 +87,10 @@ pub enum PrCommands {
         /// Equivalent to --git-commit --git-push with auto PR creation.
         #[arg(long)]
         submit: bool,
+        /// Conflict resolution strategy: abort (default), force-overwrite, merge.
+        /// v0.2.1: Determines what happens if source files have changed since goal start.
+        #[arg(long, default_value = "abort")]
+        conflict_resolution: String,
         /// Approve artifacts matching these patterns (repeatable).
         /// Special values: "all" (everything), "rest" (everything not explicitly matched).
         #[arg(long = "approve")]
@@ -123,6 +127,7 @@ pub fn execute(cmd: &PrCommands, config: &GatewayConfig) -> anyhow::Result<()> {
             git_commit,
             git_push,
             submit,
+            conflict_resolution,
             approve_patterns,
             reject_patterns,
             discuss_patterns,
@@ -132,6 +137,18 @@ pub fn execute(cmd: &PrCommands, config: &GatewayConfig) -> anyhow::Result<()> {
             let do_push = *git_push || *submit;
             let do_review = *submit;
 
+            // Parse conflict resolution strategy.
+            use ta_workspace::ConflictResolution;
+            let resolution = match conflict_resolution.as_str() {
+                "abort" => ConflictResolution::Abort,
+                "force-overwrite" | "force" => ConflictResolution::ForceOverwrite,
+                "merge" => ConflictResolution::Merge,
+                _ => anyhow::bail!(
+                    "Invalid conflict resolution strategy: '{}' (must be: abort, force-overwrite, merge)",
+                    conflict_resolution
+                ),
+            };
+
             apply_package(
                 config,
                 id,
@@ -139,6 +156,7 @@ pub fn execute(cmd: &PrCommands, config: &GatewayConfig) -> anyhow::Result<()> {
                 do_commit,
                 do_push,
                 do_review,
+                resolution,
                 SelectiveReviewPatterns {
                     approve: approve_patterns,
                     reject: reject_patterns,
@@ -895,6 +913,7 @@ fn assign_dispositions(
     (approved, rejected, discussed)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_package(
     config: &GatewayConfig,
     id: &str,
@@ -902,6 +921,7 @@ fn apply_package(
     git_commit: bool,
     git_push: bool,
     git_review: bool,
+    conflict_resolution: ta_workspace::ConflictResolution,
     patterns: SelectiveReviewPatterns,
 ) -> anyhow::Result<()> {
     let package_id = Uuid::parse_str(id)?;
@@ -1002,15 +1022,41 @@ fn apply_package(
         // Overlay-based goal: diff staging vs source, copy changed files.
         // V1 TEMPORARY: Load exclude patterns for diff filtering.
         let excludes = ExcludePatterns::load(source_dir);
-        let overlay = OverlayWorkspace::open(
+        let mut overlay = OverlayWorkspace::open(
             goal.goal_run_id.to_string(),
             source_dir,
             &goal.workspace_path,
             excludes,
         );
 
+        // v0.2.1: Restore source snapshot from goal for conflict detection.
+        if let Some(snapshot_json) = &goal.source_snapshot {
+            if let Ok(snapshot) =
+                serde_json::from_value::<ta_workspace::SourceSnapshot>(snapshot_json.clone())
+            {
+                overlay.set_snapshot(snapshot);
+
+                // Check for conflicts and display warnings if any exist.
+                if let Ok(Some(conflicts)) = overlay.detect_conflicts() {
+                    if !conflicts.is_empty() {
+                        println!("\n⚠️  WARNING: Source files have changed since goal start!");
+                        println!("   {} conflict(s) detected:", conflicts.len());
+                        for conflict in conflicts.iter().take(5) {
+                            println!("   - {}", conflict.description);
+                        }
+                        if conflicts.len() > 5 {
+                            println!("   ... and {} more", conflicts.len() - 5);
+                        }
+                        println!("   Resolution strategy: {:?}\n", conflict_resolution);
+                    }
+                }
+            }
+        }
+
         let applied = if selective_review {
             // Selective mode: only apply approved artifacts.
+            // Note: apply_selective doesn't support conflict checking yet (v0.2.1 limitation).
+            // We'll check conflicts above and warn, but apply proceeds normally.
             let approved_uris: Vec<String> = pkg
                 .changes
                 .artifacts
@@ -1022,9 +1068,9 @@ fn apply_package(
                 .apply_selective(&target_dir, &approved_uris)
                 .map_err(|e| anyhow::anyhow!("{}", e))?
         } else {
-            // Legacy mode: apply all changes.
+            // Standard mode: apply all changes with conflict detection.
             overlay
-                .apply_to(&target_dir)
+                .apply_with_conflict_check(&target_dir, conflict_resolution)
                 .map_err(|e| anyhow::anyhow!("{}", e))?
         };
 
@@ -1337,6 +1383,7 @@ mod tests {
             false,
             false,
             false,
+            ta_workspace::ConflictResolution::Abort,
             SelectiveReviewPatterns::default(),
         )
         .unwrap();
@@ -1424,6 +1471,7 @@ mod tests {
             true,
             false,
             false,
+            ta_workspace::ConflictResolution::Abort,
             SelectiveReviewPatterns::default(),
         )
         .unwrap();
@@ -1645,6 +1693,7 @@ mod tests {
             false,
             false,
             false,
+            ta_workspace::ConflictResolution::Abort,
             SelectiveReviewPatterns {
                 approve: &["src/**".to_string()],
                 reject: &[],
@@ -1706,6 +1755,7 @@ mod tests {
             false,
             false,
             false,
+            ta_workspace::ConflictResolution::Abort,
             SelectiveReviewPatterns {
                 approve: &["all".to_string()],
                 reject: &["config.toml".to_string()],
@@ -1764,6 +1814,7 @@ mod tests {
             false,
             false,
             false,
+            ta_workspace::ConflictResolution::Abort,
             SelectiveReviewPatterns {
                 approve: &["all".to_string()],
                 reject: &[],
@@ -1821,6 +1872,7 @@ mod tests {
             false,
             false,
             false,
+            ta_workspace::ConflictResolution::Abort,
             SelectiveReviewPatterns {
                 approve: &["rest".to_string()],
                 reject: &["important.txt".to_string()],
@@ -1917,6 +1969,7 @@ mod tests {
             false,
             false,
             false,
+            ta_workspace::ConflictResolution::Abort,
             SelectiveReviewPatterns {
                 approve: &["src/main.rs".to_string()],
                 reject: &["src/lib.rs".to_string()],

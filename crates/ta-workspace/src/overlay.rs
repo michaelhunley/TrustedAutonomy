@@ -11,6 +11,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::conflict::{Conflict, ConflictResolution, SourceSnapshot};
 use crate::error::WorkspaceError;
 
 // ── V1 copy-optimization excludes (remove when V2 VFS lands) ──────
@@ -155,7 +156,8 @@ pub struct OverlayWorkspace {
     goal_id: String,
     source_dir: PathBuf,
     staging_dir: PathBuf,
-    excludes: ExcludePatterns, // V1 TEMPORARY
+    excludes: ExcludePatterns,               // V1 TEMPORARY
+    source_snapshot: Option<SourceSnapshot>, // v0.2.1: Conflict detection
 }
 
 impl OverlayWorkspace {
@@ -180,11 +182,16 @@ impl OverlayWorkspace {
 
         copy_dir_recursive(&source_dir, &staging_dir, &excludes)?;
 
+        // v0.2.1: Capture source snapshot for conflict detection.
+        let snapshot =
+            SourceSnapshot::capture(&source_dir, |path| excludes.should_skip_path(path)).ok(); // Tolerate snapshot failure — conflict detection is optional.
+
         Ok(Self {
             goal_id,
             source_dir,
             staging_dir,
             excludes,
+            source_snapshot: snapshot,
         })
     }
 
@@ -200,7 +207,18 @@ impl OverlayWorkspace {
             source_dir: source_dir.as_ref().to_path_buf(),
             staging_dir: staging_dir.as_ref().to_path_buf(),
             excludes,
+            source_snapshot: None, // Snapshot must be loaded separately if needed.
         }
+    }
+
+    /// Set the source snapshot (for conflict detection after restore from disk).
+    pub fn set_snapshot(&mut self, snapshot: SourceSnapshot) {
+        self.source_snapshot = Some(snapshot);
+    }
+
+    /// Get the source snapshot, if available.
+    pub fn snapshot(&self) -> Option<&SourceSnapshot> {
+        self.source_snapshot.as_ref()
     }
 
     pub fn goal_id(&self) -> &str {
@@ -398,7 +416,25 @@ impl OverlayWorkspace {
             .collect())
     }
 
+    /// Detect conflicts between the current source state and the snapshot.
+    /// Returns None if no snapshot was captured (conflict detection disabled).
+    pub fn detect_conflicts(&self) -> Result<Option<Vec<Conflict>>, WorkspaceError> {
+        match &self.source_snapshot {
+            Some(snapshot) => Ok(Some(snapshot.detect_conflicts(&self.source_dir)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Check if conflicts exist (returns true if any conflicts are detected).
+    pub fn has_conflicts(&self) -> Result<bool, WorkspaceError> {
+        match self.detect_conflicts()? {
+            Some(conflicts) => Ok(!conflicts.is_empty()),
+            None => Ok(false), // No snapshot — assume no conflicts.
+        }
+    }
+
     /// Apply only the changed files from staging back to a target directory.
+    /// Does NOT check for conflicts — use apply_with_conflict_check for safety.
     pub fn apply_to(
         &self,
         target_dir: &Path,
@@ -502,6 +538,49 @@ impl OverlayWorkspace {
         }
 
         Ok(applied)
+    }
+
+    /// Apply changes with conflict detection and resolution strategy.
+    /// v0.2.1: Safe apply that checks for concurrent modifications.
+    pub fn apply_with_conflict_check(
+        &self,
+        target_dir: &Path,
+        resolution: ConflictResolution,
+    ) -> Result<Vec<(String, &'static str)>, WorkspaceError> {
+        // Check for conflicts if snapshot exists.
+        if let Some(conflicts) = self.detect_conflicts()? {
+            if !conflicts.is_empty() {
+                match resolution {
+                    ConflictResolution::Abort => {
+                        return Err(WorkspaceError::ConflictDetected {
+                            conflicts: conflicts.iter().map(|c| c.description.clone()).collect(),
+                        });
+                    }
+                    ConflictResolution::ForceOverwrite => {
+                        // Proceed with apply despite conflicts.
+                        eprintln!(
+                            "⚠️  Warning: {} conflict(s) detected, but proceeding with force-overwrite",
+                            conflicts.len()
+                        );
+                    }
+                    ConflictResolution::Merge => {
+                        // v0.2.1: Merge strategy requires VCS adapter integration.
+                        // For now, we abort and suggest using the git adapter.
+                        return Err(WorkspaceError::ConflictDetected {
+                            conflicts: vec![
+                                format!(
+                                    "{} conflict(s) detected. Merge resolution requires VCS adapter (use `ta pr apply --submit` with git).",
+                                    conflicts.len()
+                                )
+                            ],
+                        });
+                    }
+                }
+            }
+        }
+
+        // No conflicts or resolution strategy allows — proceed with apply.
+        self.apply_to(target_dir)
     }
 
     /// Clean up the staging directory.

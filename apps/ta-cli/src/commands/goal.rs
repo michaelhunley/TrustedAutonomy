@@ -183,11 +183,17 @@ fn start_goal(
     let excludes = ExcludePatterns::load(&source_dir);
     let overlay = OverlayWorkspace::create(&goal_id, &source_dir, &config.staging_dir, excludes)?;
 
+    // v0.2.1: Capture source snapshot for conflict detection.
+    let snapshot_json = overlay
+        .snapshot()
+        .and_then(|snap| serde_json::to_value(snap).ok());
+
     // Update goal with actual paths.
     goal.workspace_path = overlay.staging_dir().to_path_buf();
     goal.store_path = config.store_dir.join(&goal_id);
     goal.source_dir = Some(source_dir);
     goal.plan_phase = phase.map(|p| p.to_string());
+    goal.source_snapshot = snapshot_json;
 
     // Transition: Created → Configured → Running.
     goal.transition(GoalRunState::Configured)?;

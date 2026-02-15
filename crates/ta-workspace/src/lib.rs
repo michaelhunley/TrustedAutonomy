@@ -16,11 +16,13 @@
 //! - [`JsonFileStore`] — MVP implementation: one JSONL file per goal,
 //!   append-optimized, survives process restarts.
 
+pub mod conflict;
 pub mod error;
 pub mod overlay;
 pub mod staging;
 pub mod store;
 
+pub use conflict::{Conflict, ConflictResolution, FileSnapshot, SourceSnapshot};
 pub use error::WorkspaceError;
 pub use overlay::{ExcludePatterns, OverlayWorkspace};
 pub use staging::StagingWorkspace;
