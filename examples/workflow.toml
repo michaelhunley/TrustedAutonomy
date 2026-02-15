@@ -1,0 +1,20 @@
+# .ta/workflow.toml — Submit adapter configuration for Trusted Autonomy.
+#
+# Copy this file to your project's .ta/ directory:
+#   mkdir -p .ta && cp examples/workflow.toml .ta/workflow.toml
+#
+# Without this file, `ta pr apply` only copies files back to your project.
+# With it, apply can automatically commit, push, and open a PR.
+
+[submit]
+adapter = "git"          # "git" or "none" (default: "none")
+auto_commit = true       # Commit on every `ta pr apply`
+auto_push = true         # Push to remote after commit
+auto_review = true       # Open a PR/review after push (requires `gh` CLI)
+
+[submit.git]
+branch_prefix = "ta/"              # Branch naming: ta/<goal-slug>
+target_branch = "main"             # PR target branch
+merge_strategy = "squash"          # squash, merge, or rebase
+remote = "origin"                  # Git remote name
+pr_template = ".ta/pr-template.md" # PR body template (see examples/pr-template.md)

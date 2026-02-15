@@ -665,12 +665,63 @@ ta pr view <package-id>               # View details + diffs
 ta pr approve <package-id>            # Approve
 ta pr deny <package-id> --reason "x"  # Deny with reason
 ta pr apply <package-id> --git-commit # Apply + commit
+ta pr apply <package-id> --submit     # Apply + commit + push + open PR
 
 # Selective approval (approve some, reject/discuss others)
 ta pr apply <id> --approve "src/**/*.rs" --reject "*.test.rs" --discuss "config/*"
 ta pr apply <id> --approve all        # Approve everything
 ta pr apply <id> --approve rest       # Approve everything not explicitly matched
 ```
+
+### Workflow Automation (`.ta/workflow.toml`)
+
+By default, `ta pr apply` only copies files back to your project. To automatically commit, push, and open a pull request, you can either pass CLI flags each time or create a `.ta/workflow.toml` config file to set your preferences once.
+
+**Option A: CLI flags (no config needed)**
+
+```bash
+ta pr apply <id> --git-commit         # Commit only
+ta pr apply <id> --git-push           # Commit + push (implies --git-commit)
+ta pr apply <id> --submit             # Commit + push + open PR
+```
+
+**Option B: Config file (set once, always active)**
+
+Create `.ta/workflow.toml` in your project root:
+
+```toml
+[submit]
+adapter = "git"          # "git" or "none" (default: "none")
+auto_commit = true       # Commit on every ta pr apply
+auto_push = true         # Push after commit
+auto_review = true       # Open a PR after push
+
+[submit.git]
+branch_prefix = "ta/"    # Branch naming: ta/<goal-slug>
+target_branch = "main"   # PR target branch
+merge_strategy = "squash" # squash, merge, or rebase
+remote = "origin"        # Git remote name
+# pr_template = ".ta/pr-template.md"  # Optional PR body template
+```
+
+With this config, `ta pr apply <id>` automatically creates a feature branch, commits, pushes, and opens a GitHub PR — no flags needed.
+
+**How it works:**
+- Without `.ta/workflow.toml`: all `auto_*` settings default to `false`. You must use `--git-commit`, `--git-push`, or `--submit` explicitly.
+- With `.ta/workflow.toml`: the `auto_*` settings activate on every `ta pr apply`. CLI flags always work as overrides on top.
+- The git adapter auto-detects git repos. If `adapter = "none"` but you're in a git repo and pass `--git-commit`, it uses git automatically.
+- **PR creation requires the [GitHub CLI](https://cli.github.com/)** (`gh`). Install it and run `gh auth login` once.
+
+**Quick setup from examples:**
+
+```bash
+mkdir -p .ta
+cp examples/workflow.toml .ta/workflow.toml
+cp examples/pr-template.md .ta/pr-template.md
+# Edit .ta/workflow.toml to match your project (branch prefix, target branch, etc.)
+```
+
+The `examples/` directory ships with commented reference configs. The `.ta/` directory is gitignored — your config stays local.
 
 ### Iterative Review with Follow-Up Goals
 

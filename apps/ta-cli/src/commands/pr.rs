@@ -132,10 +132,16 @@ pub fn execute(cmd: &PrCommands, config: &GatewayConfig) -> anyhow::Result<()> {
             reject_patterns,
             discuss_patterns,
         } => {
-            // --submit implies full workflow (commit + push + review)
-            let do_commit = *git_commit || *git_push || *submit;
-            let do_push = *git_push || *submit;
-            let do_review = *submit;
+            // Load workflow config to merge auto_* settings with CLI flags.
+            let workflow_config = ta_submit::WorkflowConfig::load_or_default(
+                &config.workspace_root.join(".ta/workflow.toml"),
+            );
+
+            // CLI flags override config. --submit implies full workflow.
+            let do_commit =
+                *git_commit || *git_push || *submit || workflow_config.submit.auto_commit;
+            let do_push = *git_push || *submit || workflow_config.submit.auto_push;
+            let do_review = *submit || workflow_config.submit.auto_review;
 
             // Parse conflict resolution strategy.
             use ta_workspace::ConflictResolution;
@@ -1130,11 +1136,24 @@ fn apply_package(
             eprintln!("Warning: adapter prepare failed: {}", e);
         }
 
-        // Commit changes.
+        // Commit changes — goal title as subject, summary as body.
         println!("Committing changes...");
+        let artifact_lines: String = pkg
+            .changes
+            .artifacts
+            .iter()
+            .map(|a| format!("  {:?}  {}", a.change_type, a.resource_uri))
+            .collect::<Vec<_>>()
+            .join("\n");
+
         let commit_msg = format!(
-            "{}\n\nApplied via Trusted Autonomy PR package {}",
-            pkg.summary.what_changed, package_id
+            "{title}\n\nWhat: {what}\nWhy:  {why}\nImpact: {impact}\n\nChanges ({count} file(s)):\n{artifacts}",
+            title = goal.title,
+            what = pkg.summary.what_changed,
+            why = pkg.summary.why,
+            impact = pkg.summary.impact,
+            count = pkg.changes.artifacts.len(),
+            artifacts = artifact_lines,
         );
 
         match adapter.commit(goal, &pkg, &commit_msg) {
@@ -1483,7 +1502,8 @@ mod tests {
             .output()
             .unwrap();
         let log_output = String::from_utf8_lossy(&log.stdout);
-        assert!(log_output.contains("Modified README"));
+        // Subject line is the goal title; summary is in the commit body.
+        assert!(log_output.contains("Git test"));
     }
 
     #[test]

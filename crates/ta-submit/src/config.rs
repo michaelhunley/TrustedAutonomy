@@ -17,8 +17,8 @@ pub struct SubmitConfig {
     #[serde(default = "default_adapter")]
     pub adapter: String,
 
-    /// Auto-commit on `ta pr apply`
-    #[serde(default = "default_true")]
+    /// Auto-commit on `ta pr apply` (only active when .ta/workflow.toml exists)
+    #[serde(default)]
     pub auto_commit: bool,
 
     /// Auto-push after commit
@@ -38,7 +38,7 @@ impl Default for SubmitConfig {
     fn default() -> Self {
         Self {
             adapter: default_adapter(),
-            auto_commit: true,
+            auto_commit: false,
             auto_push: false,
             auto_review: false,
             git: GitConfig::default(),
@@ -84,10 +84,6 @@ impl Default for GitConfig {
 // Serde default functions
 fn default_adapter() -> String {
     "none".to_string()
-}
-
-fn default_true() -> bool {
-    true
 }
 
 fn default_branch_prefix() -> String {

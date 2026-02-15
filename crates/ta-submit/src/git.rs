@@ -120,12 +120,15 @@ impl SubmitAdapter for GitAdapter {
             ));
         }
 
-        // Format commit message with metadata
+        // Append metadata trailers to the caller-provided message.
+        let phase_line = goal
+            .plan_phase
+            .as_ref()
+            .map(|p| format!("\nPhase: {}", p))
+            .unwrap_or_default();
         let commit_msg = format!(
-            "{}\n\nGoal-ID: {}\nPR-ID: {}\n\nCo-Authored-By: Trusted Autonomy <ta@trustedautonomy.dev>",
-            message,
-            goal.goal_run_id,
-            pr.package_id
+            "{}\n\nGoal-ID: {}\nPR-ID: {}{}\n\nCo-Authored-By: Trusted Autonomy <ta@trustedautonomy.dev>",
+            message, goal.goal_run_id, pr.package_id, phase_line
         );
 
         // Commit
@@ -251,17 +254,39 @@ impl GitAdapter {
         ))
     }
 
-    /// Substitute template variables
+    /// Substitute template variables.
+    ///
+    /// Available variables:
+    ///   {title}          — goal title
+    ///   {summary}        — what changed (from change_summary.json)
+    ///   {why}            — why it changed
+    ///   {impact}         — impact assessment
+    ///   {objective}      — full goal objective text
+    ///   {artifact_count} — number of files changed
+    ///   {artifacts}      — one line per artifact: "ChangeType  uri"
+    ///   {goal_id}        — goal UUID
+    ///   {pr_id}          — PR package UUID
+    ///   {plan_phase}     — plan phase (or "N/A")
     fn substitute_template(&self, template: &str, goal: &GoalRun, pr: &PRPackage) -> String {
+        let artifact_lines: String = pr
+            .changes
+            .artifacts
+            .iter()
+            .map(|a| format!("- `{:?}` {}", a.change_type, a.resource_uri))
+            .collect::<Vec<_>>()
+            .join("\n");
+
         template
             .replace("{summary}", &pr.summary.what_changed)
             .replace("{why}", &pr.summary.why)
+            .replace("{impact}", &pr.summary.impact)
             .replace("{goal_id}", &goal.goal_run_id.to_string())
             .replace("{pr_id}", &pr.package_id.to_string())
             .replace("{title}", &goal.title)
             .replace("{objective}", &goal.objective)
             .replace("{plan_phase}", goal.plan_phase.as_deref().unwrap_or("N/A"))
             .replace("{artifact_count}", &pr.changes.artifacts.len().to_string())
+            .replace("{artifacts}", &artifact_lines)
     }
 }
 
