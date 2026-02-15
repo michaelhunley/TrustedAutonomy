@@ -83,6 +83,10 @@ pub enum PrCommands {
         /// Push to remote after committing (implies --git-commit).
         #[arg(long)]
         git_push: bool,
+        /// Run full submit workflow (commit + push + open review).
+        /// Equivalent to --git-commit --git-push with auto PR creation.
+        #[arg(long)]
+        submit: bool,
         /// Approve artifacts matching these patterns (repeatable).
         /// Special values: "all" (everything), "rest" (everything not explicitly matched).
         #[arg(long = "approve")]
@@ -118,21 +122,30 @@ pub fn execute(cmd: &PrCommands, config: &GatewayConfig) -> anyhow::Result<()> {
             target,
             git_commit,
             git_push,
+            submit,
             approve_patterns,
             reject_patterns,
             discuss_patterns,
-        } => apply_package(
-            config,
-            id,
-            target.as_deref(),
-            *git_commit || *git_push,
-            *git_push,
-            SelectiveReviewPatterns {
-                approve: approve_patterns,
-                reject: reject_patterns,
-                discuss: discuss_patterns,
-            },
-        ),
+        } => {
+            // --submit implies full workflow (commit + push + review)
+            let do_commit = *git_commit || *git_push || *submit;
+            let do_push = *git_push || *submit;
+            let do_review = *submit;
+
+            apply_package(
+                config,
+                id,
+                target.as_deref(),
+                do_commit,
+                do_push,
+                do_review,
+                SelectiveReviewPatterns {
+                    approve: approve_patterns,
+                    reject: reject_patterns,
+                    discuss: discuss_patterns,
+                },
+            )
+        }
     }
 }
 
@@ -888,6 +901,7 @@ fn apply_package(
     target: Option<&str>,
     git_commit: bool,
     git_push: bool,
+    git_review: bool,
     patterns: SelectiveReviewPatterns,
 ) -> anyhow::Result<()> {
     let package_id = Uuid::parse_str(id)?;
@@ -1041,61 +1055,85 @@ fn apply_package(
         println!("  {}", file);
     }
 
-    // Git integration.
+    // Submit workflow integration (git or other adapters).
     if git_commit {
-        println!("\nCreating git commit...");
+        use ta_submit::{GitAdapter, NoneAdapter, SubmitAdapter, WorkflowConfig};
+
+        // Load workflow config if it exists.
+        let workflow_config_path = target_dir.join(".ta/workflow.toml");
+        let workflow_config = WorkflowConfig::load_or_default(&workflow_config_path);
+
+        // Select adapter based on config.
+        // Default to "git" if in a git repo and no config exists (backwards compatibility).
+        let is_git_repo = target_dir.join(".git").exists();
+        let adapter_name = if workflow_config.submit.adapter == "none" && is_git_repo {
+            "git"
+        } else {
+            &workflow_config.submit.adapter
+        };
+
+        let adapter: Box<dyn SubmitAdapter> = match adapter_name {
+            "git" => Box::new(GitAdapter::new(&target_dir)),
+            _ => Box::new(NoneAdapter::new()),
+        };
+
+        println!("\nUsing submit adapter: {}", adapter.name());
+
+        // Prepare (create branch if needed).
+        if let Err(e) = adapter.prepare(goal, &workflow_config.submit) {
+            eprintln!("Warning: adapter prepare failed: {}", e);
+        }
+
+        // Commit changes.
+        println!("Committing changes...");
         let commit_msg = format!(
             "{}\n\nApplied via Trusted Autonomy PR package {}",
             pkg.summary.what_changed, package_id
         );
 
-        // git add all changed files.
-        let add_result = std::process::Command::new("git")
-            .args(["add", "-A"])
-            .current_dir(&target_dir)
-            .output()?;
-
-        if !add_result.status.success() {
-            anyhow::bail!(
-                "git add failed: {}",
-                String::from_utf8_lossy(&add_result.stderr)
-            );
-        }
-
-        // git commit.
-        let commit_result = std::process::Command::new("git")
-            .args(["commit", "-m", &commit_msg])
-            .current_dir(&target_dir)
-            .output()?;
-
-        if !commit_result.status.success() {
-            let stderr = String::from_utf8_lossy(&commit_result.stderr);
-            if stderr.contains("nothing to commit") {
-                println!("No changes to commit (already up to date).");
-            } else {
-                anyhow::bail!("git commit failed: {}", stderr);
+        match adapter.commit(goal, &pkg, &commit_msg) {
+            Ok(result) => {
+                println!("✓ {}", result.message);
             }
-        } else {
-            println!(
-                "Committed: {}",
-                String::from_utf8_lossy(&commit_result.stdout).trim()
-            );
+            Err(e) => {
+                eprintln!("Commit failed: {}", e);
+                // Continue anyway if this is a "none" adapter
+                if adapter.name() != "none" {
+                    anyhow::bail!("Failed to commit changes: {}", e);
+                }
+            }
         }
 
+        // Push to remote if requested.
         if git_push {
             println!("Pushing to remote...");
-            let push_result = std::process::Command::new("git")
-                .args(["push"])
-                .current_dir(&target_dir)
-                .output()?;
-
-            if !push_result.status.success() {
-                anyhow::bail!(
-                    "git push failed: {}",
-                    String::from_utf8_lossy(&push_result.stderr)
-                );
+            match adapter.push(goal) {
+                Ok(result) => {
+                    println!("✓ {}", result.message);
+                }
+                Err(e) => {
+                    if adapter.name() != "none" {
+                        anyhow::bail!("Failed to push: {}", e);
+                    }
+                }
             }
-            println!("Pushed successfully.");
+        }
+
+        // Open review (PR) if requested.
+        if git_review {
+            println!("Creating pull request...");
+            match adapter.open_review(goal, &pkg) {
+                Ok(result) => {
+                    println!("✓ {}", result.message);
+                    if !result.review_url.starts_with("none://") {
+                        println!("  PR URL: {}", result.review_url);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Warning: PR creation failed: {}", e);
+                    eprintln!("  You can manually create a PR from the pushed branch.");
+                }
+            }
         }
     }
 
@@ -1298,6 +1336,7 @@ mod tests {
             None,
             false,
             false,
+            false,
             SelectiveReviewPatterns::default(),
         )
         .unwrap();
@@ -1383,6 +1422,7 @@ mod tests {
             &pkg_id,
             None,
             true,
+            false,
             false,
             SelectiveReviewPatterns::default(),
         )
@@ -1604,6 +1644,7 @@ mod tests {
             None,
             false,
             false,
+            false,
             SelectiveReviewPatterns {
                 approve: &["src/**".to_string()],
                 reject: &[],
@@ -1664,6 +1705,7 @@ mod tests {
             None,
             false,
             false,
+            false,
             SelectiveReviewPatterns {
                 approve: &["all".to_string()],
                 reject: &["config.toml".to_string()],
@@ -1721,6 +1763,7 @@ mod tests {
             None,
             false,
             false,
+            false,
             SelectiveReviewPatterns {
                 approve: &["all".to_string()],
                 reject: &[],
@@ -1775,6 +1818,7 @@ mod tests {
             &config,
             &pkg_id,
             None,
+            false,
             false,
             false,
             SelectiveReviewPatterns {
@@ -1870,6 +1914,7 @@ mod tests {
             &config,
             &pkg_id,
             None,
+            false,
             false,
             false,
             SelectiveReviewPatterns {

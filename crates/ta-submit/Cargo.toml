@@ -1,0 +1,22 @@
+[package]
+name = "ta-submit"
+version = "0.1.0"
+edition = "2021"
+description = "Submit adapters for VCS integration in Trusted Autonomy"
+license = "Apache-2.0"
+repository = "https://github.com/trustedautonomy/ta"
+homepage = "https://github.com/trustedautonomy/ta"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+ta-changeset = { path = "../ta-changeset" }
+ta-goal = { path = "../ta-goal" }
+toml = "0.8"
+
+[dev-dependencies]
+tempfile = { workspace = true }
