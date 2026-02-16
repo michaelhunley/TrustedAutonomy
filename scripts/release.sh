@@ -5,18 +5,19 @@
 #   ./scripts/release.sh <version>
 #
 # Examples:
-#   ./scripts/release.sh 0.3.0-alpha    # Pre-release (alpha/beta → GitHub marks as prerelease)
-#   ./scripts/release.sh 1.0.0          # Stable release
+#   ./scripts/release.sh 0.3.0-alpha
+#   ./scripts/release.sh 1.0.0
 #
 # What this script does:
 #   1. Validates the version format
 #   2. Collects commits since last tag
-#   3. Generates release notes (via TA agent if available, else from commit log)
-#   4. Updates version in all Cargo.toml files + DISCLAIMER.md
+#   3. Generates user-facing release notes (agent in background or template)
+#   4. Bumps version in all Cargo.toml files + DISCLAIMER.md
 #   5. Runs the full verification suite (build, test, clippy, fmt)
-#   6. Commits the version bump + release notes
-#   7. Creates a git tag with release notes
-#   8. Pushes the tag (which triggers the GitHub Actions release workflow)
+#   6. Waits for release notes (if agent is still running)
+#   7. Commits the version bump + release notes
+#   8. Creates a git tag with release notes
+#   9. Pushes the tag (triggers GitHub Actions release workflow)
 #
 # Prerequisites:
 #   - Clean working tree (no uncommitted changes)
@@ -86,10 +87,10 @@ fi
 LAST_TAG="$(git describe --tags --abbrev=0 2>/dev/null || echo "")"
 if [ -n "$LAST_TAG" ]; then
     info "Collecting commits since ${LAST_TAG}..."
-    COMMIT_LOG="$(git log "${LAST_TAG}..HEAD" --pretty=format:"- %s (%h)" --no-merges)"
+    COMMIT_LOG="$(git log "${LAST_TAG}..HEAD" --pretty=format:"%s" --no-merges)"
 else
     info "No previous tag found. Collecting all commits..."
-    COMMIT_LOG="$(git log --pretty=format:"- %s (%h)" --no-merges)"
+    COMMIT_LOG="$(git log --pretty=format:"%s" --no-merges)"
 fi
 
 COMMIT_COUNT="$(echo "$COMMIT_LOG" | wc -l | tr -d ' ')"
@@ -98,65 +99,73 @@ info "Found ${COMMIT_COUNT} commits to include."
 # ── Generate release notes ───────────────────────────────────
 
 RELEASE_NOTES_FILE="${REPO_ROOT}/RELEASE_NOTES.md"
+AGENT_PID=""
 
-generate_notes_from_commits() {
-    cat > "$RELEASE_NOTES_FILE" <<NOTES_EOF
-# Release ${TAG}
+# Categorize commits into user-facing groups
+categorize_commits() {
+    local features="" fixes="" improvements="" docs="" other=""
 
-## Changes since ${LAST_TAG:-"initial release"}
+    while IFS= read -r line; do
+        # Skip empty lines
+        [ -z "$line" ] && continue
+        # Strip common prefixes and clean up
+        local clean
+        clean="$(echo "$line" | sed 's/^[a-z]*: //; s/^[A-Z][a-z]*: //')"
 
-${COMMIT_LOG}
+        case "$line" in
+            *[Ff]ix*|*[Bb]ug*|*[Pp]atch*|*[Rr]esolve*)
+                fixes="${fixes}- ${clean}\n" ;;
+            *[Aa]dd*|*[Nn]ew*|*[Ff]eat*|*[Ii]mplement*|*[Cc]reate*)
+                features="${features}- ${clean}\n" ;;
+            *[Dd]oc*|*README*|*USAGE*|*RELEASING*|*PLAN*)
+                docs="${docs}- ${clean}\n" ;;
+            *[Rr]efactor*|*[Uu]pdate*|*[Ii]mprove*|*[Oo]ptimize*|*[Cc]lean*|*[Cc]onsolidate*)
+                improvements="${improvements}- ${clean}\n" ;;
+            *)
+                other="${other}- ${clean}\n" ;;
+        esac
+    done <<< "$COMMIT_LOG"
 
----
+    cat > "$RELEASE_NOTES_FILE" <<EOF
+# Trusted Autonomy ${TAG}
 
-Full changelog: https://github.com/trustedautonomy/ta/compare/${LAST_TAG:-"main"}...${TAG}
-NOTES_EOF
+EOF
+
+    [ -n "$features" ] && printf "## New Features\n\n${features}\n" >> "$RELEASE_NOTES_FILE"
+    [ -n "$improvements" ] && printf "## Improvements\n\n${improvements}\n" >> "$RELEASE_NOTES_FILE"
+    [ -n "$fixes" ] && printf "## Bug Fixes\n\n${fixes}\n" >> "$RELEASE_NOTES_FILE"
+    [ -n "$docs" ] && printf "## Documentation\n\n${docs}\n" >> "$RELEASE_NOTES_FILE"
+    [ -n "$other" ] && printf "## Other Changes\n\n${other}\n" >> "$RELEASE_NOTES_FILE"
+
+    printf -- "---\n\nFull changelog: https://github.com/trustedautonomy/ta/compare/${LAST_TAG:-"main"}...${TAG}\n" >> "$RELEASE_NOTES_FILE"
 }
 
-# Try agent-generated release notes via TA, fall back to commit log
+# Try agent-generated release notes in background, proceed with verification
 if command -v ta >/dev/null 2>&1; then
-    info "Generating release notes via TA agent framework..."
+    info "Starting release notes agent in background..."
 
-    OBJECTIVE="Synthesize user-facing release notes for version ${TAG} of Trusted Autonomy.
+    AGENT_NOTES="${REPO_ROOT}/.ta-release-notes-${VERSION}.md"
 
-Here are the commits since the last release (${LAST_TAG:-"initial"}):
-
-${COMMIT_LOG}
-
-Write concise, user-facing release notes in Markdown. Group changes into
-sections like \"New Features\", \"Improvements\", \"Bug Fixes\" as appropriate.
-Do NOT include commit hashes or internal details. Focus on what matters
-to users. Keep it brief — a few bullet points per section.
-
-Write the release notes to: ${RELEASE_NOTES_FILE}"
-
-    # Launch a TA goal for the agent to write release notes
     ta run "Release notes for ${TAG}" \
         --agent claude-code \
         --source "$REPO_ROOT" \
-        --objective "$OBJECTIVE" 2>/dev/null || true
+        --objective "Write user-facing release notes for Trusted Autonomy ${TAG}. Commits since ${LAST_TAG:-initial}:
 
-    # If the agent didn't produce notes, fall back
-    if [ ! -f "$RELEASE_NOTES_FILE" ]; then
-        info "Agent did not produce notes — falling back to commit log."
-        generate_notes_from_commits
-    fi
-else
-    info "ta not found — generating release notes from commit log."
-    generate_notes_from_commits
+${COMMIT_LOG}
+
+Rules:
+- Write for END USERS, not developers. Focus on what they can now do.
+- Group into: New Features, Improvements, Bug Fixes (skip empty sections)
+- No commit hashes, no file paths, no internal implementation details
+- Each bullet should describe a user-visible capability or behavior change
+- Keep it brief — 1-2 sentences per bullet, few bullets per section
+- Write to: ${AGENT_NOTES}" &
+    AGENT_PID=$!
+    info "Agent running in background (PID ${AGENT_PID}). Continuing with build..."
 fi
 
-info "Release notes written to ${RELEASE_NOTES_FILE}"
-echo ""
-echo -e "${BOLD}── Release Notes ──${NC}"
-cat "$RELEASE_NOTES_FILE"
-echo ""
-
-echo -n "Edit release notes before continuing? [y/N] "
-read -r answer
-if [ "$answer" = "y" ] || [ "$answer" = "Y" ]; then
-    "${EDITOR:-vi}" "$RELEASE_NOTES_FILE"
-fi
+# Always generate template notes immediately (used as fallback)
+categorize_commits
 
 # ── Version bump ─────────────────────────────────────────────
 
@@ -200,6 +209,37 @@ info "  Format check..."
 
 info "${GREEN}All checks passed.${NC}"
 
+# ── Wait for agent notes (if running) ────────────────────────
+
+if [ -n "$AGENT_PID" ]; then
+    if kill -0 "$AGENT_PID" 2>/dev/null; then
+        info "Waiting for release notes agent to finish..."
+        wait "$AGENT_PID" 2>/dev/null || true
+    fi
+
+    AGENT_NOTES="${REPO_ROOT}/.ta-release-notes-${VERSION}.md"
+    if [ -f "$AGENT_NOTES" ]; then
+        info "Agent-generated notes available. Using agent notes."
+        cp "$AGENT_NOTES" "$RELEASE_NOTES_FILE"
+        rm -f "$AGENT_NOTES"
+    else
+        info "Agent did not produce notes. Using categorized commit notes."
+    fi
+fi
+
+# ── Review release notes ─────────────────────────────────────
+
+echo ""
+echo -e "${BOLD}── Release Notes ──${NC}"
+cat "$RELEASE_NOTES_FILE"
+echo ""
+
+echo -n "Edit release notes before continuing? [y/N] "
+read -r answer
+if [ "$answer" = "y" ] || [ "$answer" = "Y" ]; then
+    "${EDITOR:-vi}" "$RELEASE_NOTES_FILE"
+fi
+
 # ── Commit and tag ───────────────────────────────────────────
 
 RELEASE_NOTES_BODY="$(cat "$RELEASE_NOTES_FILE")"
@@ -217,8 +257,9 @@ git tag -a "$TAG" -m "Release ${TAG}
 
 ${RELEASE_NOTES_BODY}"
 
-# Clean up temp file
+# Clean up temp files
 rm -f "$RELEASE_NOTES_FILE"
+rm -f "${REPO_ROOT}/.ta-release-notes-${VERSION}.md"
 
 # ── Push ─────────────────────────────────────────────────────
 
