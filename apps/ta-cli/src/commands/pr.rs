@@ -138,7 +138,15 @@ pub fn execute(cmd: &PrCommands, config: &GatewayConfig) -> anyhow::Result<()> {
             open_external,
             detail,
             format,
-        } => view_package(config, id, *summary, file.as_deref(), open_external, detail, format),
+        } => view_package(
+            config,
+            id,
+            *summary,
+            file.as_deref(),
+            open_external,
+            detail,
+            format,
+        ),
         PrCommands::Approve { id, reviewer } => approve_package(config, id, reviewer),
         PrCommands::Deny {
             id,
@@ -612,6 +620,7 @@ fn list_packages(config: &GatewayConfig, goal_filter: Option<&str>) -> anyhow::R
 }
 
 /// Check if a file appears to be binary by looking for null bytes in the first 8KB.
+#[allow(dead_code)]
 fn is_binary_file(path: &std::path::Path) -> bool {
     use std::io::Read;
     let Ok(mut file) = std::fs::File::open(path) else {
@@ -625,6 +634,7 @@ fn is_binary_file(path: &std::path::Path) -> bool {
 }
 
 /// Human-readable file size display.
+#[allow(dead_code)]
 fn file_size_display(path: &std::path::Path) -> String {
     let Ok(meta) = std::fs::metadata(path) else {
         return "unknown size".to_string();
@@ -640,6 +650,7 @@ fn file_size_display(path: &std::path::Path) -> String {
 }
 
 /// DiffProvider implementation using StagingWorkspace.
+#[allow(dead_code)]
 struct StagingDiffProvider {
     staging: StagingWorkspace,
 }
@@ -667,8 +678,12 @@ fn view_package(
     let pkg = load_package(config, package_id)?;
 
     // Parse detail level and format.
-    let detail_level = detail_str.parse::<DetailLevel>().map_err(|e| anyhow::anyhow!(e))?;
-    let output_format = format_str.parse::<OutputFormat>().map_err(|e| anyhow::anyhow!(e))?;
+    let detail_level = detail_str
+        .parse::<DetailLevel>()
+        .map_err(|e| anyhow::anyhow!(e))?;
+    let output_format = format_str
+        .parse::<OutputFormat>()
+        .map_err(|e| anyhow::anyhow!(e))?;
 
     // v0.2.3: Use output adapters for rendering.
     // Exception: If --file with --open-external, try external handler first.

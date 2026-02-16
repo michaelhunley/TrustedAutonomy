@@ -4,6 +4,7 @@ use crate::error::ChangeSetError;
 use crate::output_adapters::{DetailLevel, OutputAdapter, RenderContext};
 use crate::pr_package::{Artifact, ChangeType};
 
+#[derive(Default)]
 pub struct HtmlAdapter {}
 
 impl HtmlAdapter {
@@ -61,37 +62,67 @@ impl OutputAdapter for HtmlAdapter {
 
         // Header
         html.push_str("<div class=\"header\">\n");
-        html.push_str(&format!("<h1>PR Package</h1>\n"));
+        html.push_str("<h1>PR Package</h1>\n");
         html.push_str(&format!("<p><strong>ID:</strong> {}</p>\n", pkg.package_id));
-        html.push_str(&format!("<p><strong>Status:</strong> <span class=\"status {}\">{}</span></p>\n", pkg.status.to_string(), pkg.status));
-        html.push_str(&format!("<p><strong>Goal:</strong> {}</p>\n", pkg.goal.title));
-        html.push_str(&format!("<p><strong>Created:</strong> {}</p>\n", pkg.created_at.format("%Y-%m-%d %H:%M:%S")));
+        html.push_str(&format!(
+            "<p><strong>Status:</strong> <span class=\"status {}\">{}</span></p>\n",
+            pkg.status, pkg.status
+        ));
+        html.push_str(&format!(
+            "<p><strong>Goal:</strong> {}</p>\n",
+            pkg.goal.title
+        ));
+        html.push_str(&format!(
+            "<p><strong>Created:</strong> {}</p>\n",
+            pkg.created_at.format("%Y-%m-%d %H:%M:%S")
+        ));
         html.push_str("</div>\n");
 
         // Summary
         html.push_str("<div class=\"summary\">\n<h2>Summary</h2>\n");
-        html.push_str(&format!("<p><strong>What changed:</strong> {}</p>\n", pkg.summary.what_changed));
-        html.push_str(&format!("<p><strong>Why:</strong> {}</p>\n", pkg.summary.why));
-        html.push_str(&format!("<p><strong>Impact:</strong> {}</p>\n", pkg.summary.impact));
+        html.push_str(&format!(
+            "<p><strong>What changed:</strong> {}</p>\n",
+            pkg.summary.what_changed
+        ));
+        html.push_str(&format!(
+            "<p><strong>Why:</strong> {}</p>\n",
+            pkg.summary.why
+        ));
+        html.push_str(&format!(
+            "<p><strong>Impact:</strong> {}</p>\n",
+            pkg.summary.impact
+        ));
         html.push_str("</div>\n");
 
         // Artifacts
-        html.push_str(&format!("<h2>Changes ({} artifacts)</h2>\n", pkg.changes.artifacts.len()));
+        html.push_str(&format!(
+            "<h2>Changes ({} artifacts)</h2>\n",
+            pkg.changes.artifacts.len()
+        ));
 
         let artifacts: Vec<&Artifact> = if let Some(filter) = &ctx.file_filter {
-            pkg.changes.artifacts.iter().filter(|a| a.resource_uri.contains(filter)).collect()
+            pkg.changes
+                .artifacts
+                .iter()
+                .filter(|a| a.resource_uri.contains(filter))
+                .collect()
         } else {
             pkg.changes.artifacts.iter().collect()
         };
 
         for artifact in artifacts {
             html.push_str("<div class=\"artifact\">\n");
-            html.push_str(&format!("{} <strong>{}</strong>\n", self.change_badge(&artifact.change_type), artifact.resource_uri));
+            html.push_str(&format!(
+                "{} <strong>{}</strong>\n",
+                self.change_badge(&artifact.change_type),
+                artifact.resource_uri
+            ));
 
             if let Some(tiers) = &artifact.explanation_tiers {
                 html.push_str(&format!("<p><em>{}</em></p>\n", tiers.summary));
 
-                if ctx.detail_level == DetailLevel::Medium || ctx.detail_level == DetailLevel::Full {
+                if ctx.detail_level == DetailLevel::Medium || ctx.detail_level == DetailLevel::Full
+                {
                     html.push_str(&format!("<p>{}</p>\n", tiers.explanation));
 
                     if !tiers.tags.is_empty() {
@@ -112,9 +143,15 @@ impl OutputAdapter for HtmlAdapter {
                         html.push_str("<details>\n<summary>View diff</summary>\n<pre><code>");
                         for line in diff.lines() {
                             if line.starts_with('+') && !line.starts_with("+++") {
-                                html.push_str(&format!("<span class=\"diff-add\">{}</span>\n", line));
+                                html.push_str(&format!(
+                                    "<span class=\"diff-add\">{}</span>\n",
+                                    line
+                                ));
                             } else if line.starts_with('-') && !line.starts_with("---") {
-                                html.push_str(&format!("<span class=\"diff-del\">{}</span>\n", line));
+                                html.push_str(&format!(
+                                    "<span class=\"diff-del\">{}</span>\n",
+                                    line
+                                ));
                             } else {
                                 html.push_str(&format!("{}\n", line));
                             }
@@ -127,7 +164,10 @@ impl OutputAdapter for HtmlAdapter {
             html.push_str("</div>\n");
         }
 
-        html.push_str(&format!("<div class=\"meta\">Generated by Trusted Autonomy v{}</div>\n", pkg.package_version));
+        html.push_str(&format!(
+            "<div class=\"meta\">Generated by Trusted Autonomy v{}</div>\n",
+            pkg.package_version
+        ));
         html.push_str("</body>\n</html>");
 
         Ok(html)

@@ -1,8 +1,9 @@
 //! json.rs — JSON output adapter for machine-readable output.
 
 use crate::error::ChangeSetError;
-use crate::output_adapters::{DetailLevel, OutputAdapter, RenderContext};
+use crate::output_adapters::{OutputAdapter, RenderContext};
 
+#[derive(Default)]
 pub struct JsonAdapter {}
 
 impl JsonAdapter {
@@ -16,8 +17,9 @@ impl OutputAdapter for JsonAdapter {
         // For JSON output, we serialize the entire PRPackage
         // The detail_level and file_filter are ignored — the consumer can filter client-side
 
-        let json = serde_json::to_string_pretty(ctx.package)
-            .map_err(|e| ChangeSetError::InvalidData(format!("JSON serialization failed: {}", e)))?;
+        let json = serde_json::to_string_pretty(ctx.package).map_err(|e| {
+            ChangeSetError::InvalidData(format!("JSON serialization failed: {}", e))
+        })?;
 
         Ok(json)
     }
@@ -30,6 +32,7 @@ impl OutputAdapter for JsonAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::output_adapters::DetailLevel;
     use crate::pr_package::*;
     use chrono::Utc;
     use uuid::Uuid;

@@ -4,6 +4,7 @@ use crate::error::ChangeSetError;
 use crate::output_adapters::{DetailLevel, OutputAdapter, RenderContext};
 use crate::pr_package::{Artifact, ChangeType};
 
+#[derive(Default)]
 pub struct TerminalAdapter {}
 
 impl TerminalAdapter {
@@ -50,7 +51,7 @@ impl TerminalAdapter {
 
     fn render_artifact_top(&self, artifact: &Artifact) -> String {
         let change_icon = match artifact.change_type {
-            ChangeType::Add => "\x1b[32m+\x1b[0m", // Green +
+            ChangeType::Add => "\x1b[32m+\x1b[0m",    // Green +
             ChangeType::Modify => "\x1b[33m~\x1b[0m", // Yellow ~
             ChangeType::Delete => "\x1b[31m-\x1b[0m", // Red -
             ChangeType::Rename => "\x1b[36m>\x1b[0m", // Cyan >
@@ -81,7 +82,10 @@ impl TerminalAdapter {
         output.push('\n');
 
         if let Some(tiers) = &artifact.explanation_tiers {
-            output.push_str(&format!("    \x1b[2mExplanation:\x1b[0m {}\n", tiers.explanation));
+            output.push_str(&format!(
+                "    \x1b[2mExplanation:\x1b[0m {}\n",
+                tiers.explanation
+            ));
 
             if !tiers.tags.is_empty() {
                 output.push_str(&format!(
@@ -163,10 +167,10 @@ impl OutputAdapter for TerminalAdapter {
             artifacts.iter().collect()
         };
 
-        if filtered_artifacts.is_empty() && ctx.file_filter.is_some() {
+        if let (true, Some(filter)) = (filtered_artifacts.is_empty(), &ctx.file_filter) {
             return Err(ChangeSetError::InvalidData(format!(
                 "No artifacts match filter: {}",
-                ctx.file_filter.as_ref().unwrap()
+                filter
             )));
         }
 
