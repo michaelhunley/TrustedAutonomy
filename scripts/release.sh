@@ -14,10 +14,11 @@
 #   3. Generates user-facing release notes (categorized by type)
 #   4. Bumps version in all Cargo.toml files + DISCLAIMER.md
 #   5. Runs the full verification suite (build, test, clippy, fmt)
-#   6. Shows release notes and offers $EDITOR review
-#   7. Commits the version bump + release notes
-#   8. Creates a git tag with release notes
-#   9. Pushes the tag (triggers GitHub Actions release workflow)
+#   6. Shows release notes draft and offers $EDITOR review
+#   7. Prepends release notes to RELEASE_NOTES.md (cumulative history)
+#   8. Commits the version bump + release notes
+#   9. Creates a git tag with release notes
+#  10. Pushes the tag (triggers GitHub Actions release workflow)
 #
 # Prerequisites:
 #   - Clean working tree (no uncommitted changes)
@@ -98,8 +99,9 @@ info "Found ${COMMIT_COUNT} commits to include."
 # ── Generate release notes ───────────────────────────────────
 
 RELEASE_NOTES_FILE="${REPO_ROOT}/RELEASE_NOTES.md"
+DRAFT_FILE="${REPO_ROOT}/.release-draft-${VERSION}.md"
 
-# Categorize commits into user-facing groups
+# Categorize commits into user-facing groups and write to DRAFT_FILE
 categorize_commits() {
     local features="" fixes="" improvements="" docs="" other=""
 
@@ -124,18 +126,15 @@ categorize_commits() {
         esac
     done <<< "$COMMIT_LOG"
 
-    cat > "$RELEASE_NOTES_FILE" <<EOF
-# Trusted Autonomy ${TAG}
+    printf "## ${TAG}\n\n" > "$DRAFT_FILE"
 
-EOF
+    [ -n "$features" ] && printf "### New Features\n\n${features}\n" >> "$DRAFT_FILE"
+    [ -n "$improvements" ] && printf "### Improvements\n\n${improvements}\n" >> "$DRAFT_FILE"
+    [ -n "$fixes" ] && printf "### Bug Fixes\n\n${fixes}\n" >> "$DRAFT_FILE"
+    [ -n "$docs" ] && printf "### Documentation\n\n${docs}\n" >> "$DRAFT_FILE"
+    [ -n "$other" ] && printf "### Other Changes\n\n${other}\n" >> "$DRAFT_FILE"
 
-    [ -n "$features" ] && printf "## New Features\n\n${features}\n" >> "$RELEASE_NOTES_FILE"
-    [ -n "$improvements" ] && printf "## Improvements\n\n${improvements}\n" >> "$RELEASE_NOTES_FILE"
-    [ -n "$fixes" ] && printf "## Bug Fixes\n\n${fixes}\n" >> "$RELEASE_NOTES_FILE"
-    [ -n "$docs" ] && printf "## Documentation\n\n${docs}\n" >> "$RELEASE_NOTES_FILE"
-    [ -n "$other" ] && printf "## Other Changes\n\n${other}\n" >> "$RELEASE_NOTES_FILE"
-
-    printf -- "---\n\nFull changelog: https://github.com/trustedautonomy/ta/compare/${LAST_TAG:-"main"}...${TAG}\n" >> "$RELEASE_NOTES_FILE"
+    printf -- "---\n\nFull changelog: https://github.com/trustedautonomy/ta/compare/${LAST_TAG:-"main"}...${TAG}\n" >> "$DRAFT_FILE"
 }
 
 # Generate categorized release notes from commits
@@ -187,19 +186,38 @@ info "${GREEN}All checks passed.${NC}"
 # ── Review release notes ─────────────────────────────────────
 
 echo ""
-echo -e "${BOLD}── Release Notes ──${NC}"
-cat "$RELEASE_NOTES_FILE"
+echo -e "${BOLD}── Release Notes for ${TAG} ──${NC}"
+cat "$DRAFT_FILE"
 echo ""
 
 echo -n "Edit release notes before continuing? [y/N] "
 read -r answer
 if [ "$answer" = "y" ] || [ "$answer" = "Y" ]; then
-    "${EDITOR:-vi}" "$RELEASE_NOTES_FILE"
+    "${EDITOR:-vi}" "$DRAFT_FILE"
 fi
 
-# ── Commit and tag ───────────────────────────────────────────
+# ── Prepend to RELEASE_NOTES.md ──────────────────────────────
 
-RELEASE_NOTES_BODY="$(cat "$RELEASE_NOTES_FILE")"
+RELEASE_NOTES_BODY="$(cat "$DRAFT_FILE")"
+
+if [ -f "$RELEASE_NOTES_FILE" ]; then
+    # Prepend new entry after the "# Release Notes" header
+    EXISTING="$(tail -n +2 "$RELEASE_NOTES_FILE")"
+    cat > "$RELEASE_NOTES_FILE" <<PREPEND_EOF
+# Release Notes
+
+${RELEASE_NOTES_BODY}
+${EXISTING}
+PREPEND_EOF
+else
+    cat > "$RELEASE_NOTES_FILE" <<NEW_EOF
+# Release Notes
+
+${RELEASE_NOTES_BODY}
+NEW_EOF
+fi
+
+rm -f "$DRAFT_FILE"
 
 info "Committing version bump..."
 git add -A
@@ -214,8 +232,6 @@ git tag -a "$TAG" -m "Release ${TAG}
 
 ${RELEASE_NOTES_BODY}"
 
-# Clean up temp files
-rm -f "$RELEASE_NOTES_FILE"
 
 # ── Push ─────────────────────────────────────────────────────
 

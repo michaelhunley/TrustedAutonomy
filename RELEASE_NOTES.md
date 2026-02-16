@@ -1,43 +1,31 @@
-# Release Notes: Trusted Autonomy v0.2.2-alpha
+# Release Notes
 
-## New Features
+## v0.2.2-alpha
 
-**External Diff Routing**
-Apply changes to resources outside the staging workspace. TA can now route diffs to external files using URI patterns, enabling goals that modify configuration files, documentation, or other resources beyond the project directory.
+### New Features
 
-**Workflow Configuration**
-Customize goal and PR behavior with `workflow.toml` configuration files. Control automatic commit creation, PR opening, and approval workflows per project or per goal.
+- External diff routing — agent changes can be diffed and routed through configurable pipelines
+- Concurrent session conflict detection — multiple agents working on the same source are detected and warned
+- Selective approval with URI-aware pattern matching — approve, reject, or discuss specific files using glob patterns (`ta pr approve --approve "src/**" --reject "tests/**"`)
+- Change summary ingestion — agents can produce `change_summary.json` for richer PR descriptions
+- YAML agent launch configs — add new agent frameworks without code changes
+- Terms acceptance gate — first-run disclaimer review before using TA
+- Plan tracking — `ta plan list` and `ta plan status` show PLAN.md progress; `ta pr apply` auto-updates phases
 
-**Follow-Up Goals**
-Create iterative refinement workflows by launching new goals based on previous work. Enables multi-step development where each goal builds on the last, with full review at each stage.
+### Improvements
 
-**Concurrent Session Conflict Detection**
-TA now detects when multiple goals would modify the same files and prevents overlapping changes. Only actual conflicts trigger warnings—normal source changes during a goal's lifetime no longer cause false positives.
+- Simplified disclaimer to MIT-style "AS IS" + "NO LIABILITY" clauses
+- Enriched git commit messages and PR bodies with full goal context
+- Workflow configuration via `workflow.toml` with auto-approve/auto-commit settings
+- Release automation with `scripts/release.sh` for one-command releases
+- Cross-platform CI builds (macOS ARM + Intel, Linux x86_64 + ARM)
 
-**PR Template Configuration**
-Customize pull request descriptions with `pr-template.md` files. Control how TA formats PR bodies when automatically creating pull requests from approved goals.
+### Bug Fixes
 
-## Improvements
-
-**Smarter Conflict Detection**
-Build artifacts and temporary files no longer trigger false conflict warnings. TA uses the PR package's artifact list to check only relevant changes.
-
-**Richer Commit Messages and PR Bodies**
-Automatically includes full goal context (title, description, plan phase) in commit messages and pull request descriptions. Makes it easier to understand why changes were made when reviewing git history.
-
-**Enhanced Documentation**
-Consolidated release guides, clearer setup instructions, and improved README with architecture diagrams and usage examples.
-
-**Simplified License Terms**
-Updated disclaimer to MIT-style clauses for clarity.
-
-## Bug Fixes
-
-- Fixed macOS compatibility in release builds (removed Nix dependency, fixed BSD sed issues)
-- Fixed PR view filtering to properly exclude build artifacts from diffs
-- Resolved CI/CD pipeline issues with action permissions and deprecated dependencies
-- Fixed various clippy lints for cleaner codebase
+- Fixed false conflicts from build artifacts in staging detection
+- Fixed PR view filtering of `target/` directory artifacts
+- Resolved macOS BSD sed compatibility in release tooling
 
 ---
 
-*Note: v0.2.2-alpha is an early preview release. Expect rough edges and breaking changes as we iterate toward v0.3 and beyond. See DISCLAIMER.md for full terms.*
+Full changelog: https://github.com/michaelhunley/TrustedAutonomy/commits/v0.2.2-alpha
