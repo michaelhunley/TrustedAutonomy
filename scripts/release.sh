@@ -10,17 +10,18 @@
 #
 # What this script does:
 #   1. Validates the version format
-#   2. Updates version in all Cargo.toml files
-#   3. Runs the full verification suite (build, test, clippy, fmt)
-#   4. Updates Cargo.lock
-#   5. Commits the version bump
-#   6. Creates a git tag
-#   7. Pushes the tag (which triggers the GitHub Actions release workflow)
+#   2. Collects commits since last tag
+#   3. Generates release notes (via TA agent if available, else from commit log)
+#   4. Updates version in all Cargo.toml files + DISCLAIMER.md
+#   5. Runs the full verification suite (build, test, clippy, fmt)
+#   6. Commits the version bump + release notes
+#   7. Creates a git tag with release notes
+#   8. Pushes the tag (which triggers the GitHub Actions release workflow)
 #
 # Prerequisites:
 #   - Clean working tree (no uncommitted changes)
 #   - Nix devShell available (./dev script)
-#   - gh CLI installed (for optional PR creation)
+#   - ta binary available for agent-generated release notes (optional)
 
 set -euo pipefail
 
@@ -80,22 +81,102 @@ if git rev-parse "$TAG" >/dev/null 2>&1; then
     error "Tag '$TAG' already exists."
 fi
 
+# ── Collect commits since last release ───────────────────────
+
+LAST_TAG="$(git describe --tags --abbrev=0 2>/dev/null || echo "")"
+if [ -n "$LAST_TAG" ]; then
+    info "Collecting commits since ${LAST_TAG}..."
+    COMMIT_LOG="$(git log "${LAST_TAG}..HEAD" --pretty=format:"- %s (%h)" --no-merges)"
+else
+    info "No previous tag found. Collecting all commits..."
+    COMMIT_LOG="$(git log --pretty=format:"- %s (%h)" --no-merges)"
+fi
+
+COMMIT_COUNT="$(echo "$COMMIT_LOG" | wc -l | tr -d ' ')"
+info "Found ${COMMIT_COUNT} commits to include."
+
+# ── Generate release notes ───────────────────────────────────
+
+RELEASE_NOTES_FILE="${REPO_ROOT}/RELEASE_NOTES.md"
+
+generate_notes_from_commits() {
+    cat > "$RELEASE_NOTES_FILE" <<NOTES_EOF
+# Release ${TAG}
+
+## Changes since ${LAST_TAG:-"initial release"}
+
+${COMMIT_LOG}
+
+---
+
+Full changelog: https://github.com/trustedautonomy/ta/compare/${LAST_TAG:-"main"}...${TAG}
+NOTES_EOF
+}
+
+# Try agent-generated release notes via TA, fall back to commit log
+if command -v ta >/dev/null 2>&1; then
+    info "Generating release notes via TA agent framework..."
+
+    OBJECTIVE="Synthesize user-facing release notes for version ${TAG} of Trusted Autonomy.
+
+Here are the commits since the last release (${LAST_TAG:-"initial"}):
+
+${COMMIT_LOG}
+
+Write concise, user-facing release notes in Markdown. Group changes into
+sections like \"New Features\", \"Improvements\", \"Bug Fixes\" as appropriate.
+Do NOT include commit hashes or internal details. Focus on what matters
+to users. Keep it brief — a few bullet points per section.
+
+Write the release notes to: ${RELEASE_NOTES_FILE}"
+
+    # Launch a TA goal for the agent to write release notes
+    ta run "Release notes for ${TAG}" \
+        --agent claude-code \
+        --source "$REPO_ROOT" \
+        --objective "$OBJECTIVE" 2>/dev/null || true
+
+    # If the agent didn't produce notes, fall back
+    if [ ! -f "$RELEASE_NOTES_FILE" ]; then
+        info "Agent did not produce notes — falling back to commit log."
+        generate_notes_from_commits
+    fi
+else
+    info "ta not found — generating release notes from commit log."
+    generate_notes_from_commits
+fi
+
+info "Release notes written to ${RELEASE_NOTES_FILE}"
+echo ""
+echo -e "${BOLD}── Release Notes ──${NC}"
+cat "$RELEASE_NOTES_FILE"
+echo ""
+
+echo -n "Edit release notes before continuing? [y/N] "
+read -r answer
+if [ "$answer" = "y" ] || [ "$answer" = "Y" ]; then
+    "${EDITOR:-vi}" "$RELEASE_NOTES_FILE"
+fi
+
 # ── Version bump ─────────────────────────────────────────────
 
-info "Bumping version to ${VERSION} in all Cargo.toml files..."
+info "Bumping version to ${VERSION}..."
 
-# Workspace root Cargo.toml — update the workspace.package.version
+# Workspace root Cargo.toml
 sed -i.bak "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml
 rm -f Cargo.toml.bak
 
 # All member crate Cargo.toml files
 for cargo_toml in crates/*/Cargo.toml apps/*/Cargo.toml; do
     if [ -f "$cargo_toml" ]; then
-        # Only update the [package] version, not dependency versions
         sed -i.bak "/^\[package\]/,/^\[/{s/^version = \".*\"/version = \"${VERSION}\"/}" "$cargo_toml"
         rm -f "${cargo_toml}.bak"
     fi
 done
+
+# Update DISCLAIMER.md version
+sed -i.bak "s/^\*\*Version\*\*: .*/\*\*Version\*\*: ${VERSION}/" DISCLAIMER.md
+rm -f DISCLAIMER.md.bak
 
 # Update Cargo.lock
 info "Updating Cargo.lock..."
@@ -121,6 +202,8 @@ info "${GREEN}All checks passed.${NC}"
 
 # ── Commit and tag ───────────────────────────────────────────
 
+RELEASE_NOTES_BODY="$(cat "$RELEASE_NOTES_FILE")"
+
 info "Committing version bump..."
 git add -A
 git commit -m "Release ${TAG}
@@ -129,8 +212,13 @@ Bump all crate versions to ${VERSION}.
 
 Co-Authored-By: claude-flow <ruv@ruv.net>"
 
-info "Creating tag ${TAG}..."
-git tag -a "$TAG" -m "Release ${TAG}"
+info "Creating tag ${TAG} with release notes..."
+git tag -a "$TAG" -m "Release ${TAG}
+
+${RELEASE_NOTES_BODY}"
+
+# Clean up temp file
+rm -f "$RELEASE_NOTES_FILE"
 
 # ── Push ─────────────────────────────────────────────────────
 
