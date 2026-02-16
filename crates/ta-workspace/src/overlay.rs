@@ -11,7 +11,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::conflict::{Conflict, ConflictResolution, SourceSnapshot};
+use crate::conflict::{Conflict, ConflictResolution, FileSnapshot, SourceSnapshot};
 use crate::error::WorkspaceError;
 
 // ── V1 copy-optimization excludes (remove when V2 VFS lands) ──────
@@ -565,6 +565,8 @@ impl OverlayWorkspace {
             .map(|s| s.to_string())
             .collect();
 
+        let mut filtered_uris = artifact_uris.to_vec();
+
         // Check for conflicts if snapshot exists.
         if let Some(all_conflicts) = self.detect_conflicts()? {
             if !all_conflicts.is_empty() {
@@ -583,36 +585,98 @@ impl OverlayWorkspace {
                 }
 
                 if !overlapping.is_empty() {
-                    match resolution {
-                        ConflictResolution::Abort => {
-                            return Err(WorkspaceError::ConflictDetected {
-                                conflicts: overlapping
-                                    .iter()
-                                    .map(|c| c.description.clone())
-                                    .collect(),
-                            });
+                    // Smart auto-resolve: compare staging hash to snapshot hash.
+                    // If they match, the agent never touched the file — it's a phantom
+                    // artifact from source drift, not a real conflict.
+                    let (true_conflicts, auto_resolved) =
+                        self.classify_overlapping_conflicts(&overlapping);
+
+                    if !auto_resolved.is_empty() {
+                        eprintln!(
+                            "ℹ️  {} file(s) auto-resolved (source changed, agent did not modify)",
+                            auto_resolved.len()
+                        );
+                        for path in &auto_resolved {
+                            eprintln!("   skipping: {}", path);
                         }
-                        ConflictResolution::ForceOverwrite => {
-                            eprintln!(
-                                "⚠️  Warning: {} overlapping conflict(s) detected, but proceeding with force-overwrite",
-                                overlapping.len()
-                            );
-                        }
-                        ConflictResolution::Merge => {
-                            return Err(WorkspaceError::ConflictDetected {
-                                conflicts: vec![format!(
-                                    "{} conflict(s) detected. Merge resolution requires VCS adapter (use `ta pr apply --submit` with git).",
-                                    overlapping.len()
-                                )],
-                            });
+
+                        // Remove phantom artifacts from the apply list.
+                        let resolved_set: std::collections::HashSet<&str> =
+                            auto_resolved.iter().map(|s| s.as_str()).collect();
+                        filtered_uris.retain(|uri| {
+                            uri.strip_prefix("fs://workspace/")
+                                .is_none_or(|p| !resolved_set.contains(p))
+                        });
+                    }
+
+                    if !true_conflicts.is_empty() {
+                        match resolution {
+                            ConflictResolution::Abort => {
+                                return Err(WorkspaceError::ConflictDetected {
+                                    conflicts: true_conflicts,
+                                });
+                            }
+                            ConflictResolution::ForceOverwrite => {
+                                eprintln!(
+                                    "⚠️  Warning: {} true conflict(s) detected, proceeding with force-overwrite",
+                                    true_conflicts.len()
+                                );
+                            }
+                            ConflictResolution::Merge => {
+                                return Err(WorkspaceError::ConflictDetected {
+                                    conflicts: vec![format!(
+                                        "{} conflict(s) detected. Merge resolution requires VCS adapter (use `ta pr apply --submit` with git).",
+                                        true_conflicts.len()
+                                    )],
+                                });
+                            }
                         }
                     }
                 }
             }
         }
 
-        // Apply only the files from the artifact list (not all diffs).
-        self.apply_selective(target_dir, artifact_uris)
+        // Apply only the files from the (possibly filtered) artifact list.
+        self.apply_selective(target_dir, &filtered_uris)
+    }
+
+    /// Classify overlapping conflicts into true conflicts (agent changed the file)
+    /// vs phantom artifacts (agent didn't touch it, only source diverged).
+    ///
+    /// Compares the staging file hash to the snapshot hash. If they match,
+    /// the agent never modified the file — it's safe to auto-resolve.
+    fn classify_overlapping_conflicts(
+        &self,
+        overlapping: &[&Conflict],
+    ) -> (Vec<String>, Vec<String>) {
+        let mut true_conflicts = Vec::new();
+        let mut auto_resolved = Vec::new();
+
+        for conflict in overlapping {
+            let staging_path = self.staging_dir.join(&conflict.path);
+            let agent_changed = if staging_path.exists() {
+                // Compare staging file hash to snapshot hash at goal start.
+                match FileSnapshot::capture(&self.staging_dir, &conflict.path) {
+                    Ok(staging_snap) => staging_snap.content_hash != conflict.snapshot.content_hash,
+                    Err(_) => true, // Can't read staging file — assume agent changed it (safe)
+                }
+            } else if conflict.snapshot.content_hash.is_empty() {
+                // File didn't exist at snapshot time and doesn't exist in staging.
+                // This is a new-in-source file the agent never saw. Auto-resolve.
+                false
+            } else {
+                // File existed at snapshot time but agent deleted it. Real change.
+                true
+            };
+
+            if agent_changed {
+                true_conflicts.push(conflict.description.clone());
+            } else {
+                auto_resolved.push(conflict.path.clone());
+            }
+        }
+
+        (true_conflicts, auto_resolved)
     }
 
     /// Clean up the staging directory.
@@ -1109,6 +1173,125 @@ mod tests {
             }
             other => panic!("expected Modified, got {:?}", other),
         }
+    }
+
+    // ── Smart conflict auto-resolve tests ──────────────────────────
+
+    #[test]
+    fn phantom_artifacts_auto_resolved_on_abort() {
+        // Setup: source has files A and B.
+        let source = TempDir::new().unwrap();
+        fs::write(source.path().join("a.txt"), "original A").unwrap();
+        fs::write(source.path().join("b.txt"), "original B").unwrap();
+
+        let staging_root = TempDir::new().unwrap();
+        let overlay = OverlayWorkspace::create(
+            "goal-phantom",
+            source.path(),
+            staging_root.path(),
+            ExcludePatterns::none(),
+        )
+        .unwrap();
+
+        // Agent modifies A in staging (real work).
+        fs::write(overlay.staging_dir().join("a.txt"), "agent changed A").unwrap();
+        // Agent does NOT touch B in staging — B stays identical to snapshot.
+
+        // Simulate source divergence: modify BOTH A and B in source.
+        // Need mtime to differ for conflict detection.
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        fs::write(source.path().join("a.txt"), "source changed A").unwrap();
+        fs::write(source.path().join("b.txt"), "source changed B").unwrap();
+
+        // Both A and B are in the artifact manifest (dirty working tree scenario).
+        let artifact_uris = vec![
+            "fs://workspace/a.txt".to_string(),
+            "fs://workspace/b.txt".to_string(),
+        ];
+
+        // With Abort: should auto-resolve B (phantom) and error on A (true conflict).
+        let result = overlay.apply_with_conflict_check(
+            source.path(),
+            ConflictResolution::Abort,
+            &artifact_uris,
+        );
+
+        assert!(
+            result.is_err(),
+            "expected error from true conflict on a.txt"
+        );
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(
+            err_msg.contains("a.txt"),
+            "error should mention a.txt: {}",
+            err_msg
+        );
+        // B should NOT appear in the error — it was auto-resolved.
+        assert!(
+            !err_msg.contains("b.txt"),
+            "error should not mention b.txt (phantom): {}",
+            err_msg
+        );
+    }
+
+    #[test]
+    fn phantom_artifacts_excluded_from_apply() {
+        // Setup: source has files A and B.
+        let source = TempDir::new().unwrap();
+        fs::write(source.path().join("a.txt"), "original A").unwrap();
+        fs::write(source.path().join("b.txt"), "original B").unwrap();
+
+        let staging_root = TempDir::new().unwrap();
+        let overlay = OverlayWorkspace::create(
+            "goal-phantom2",
+            source.path(),
+            staging_root.path(),
+            ExcludePatterns::none(),
+        )
+        .unwrap();
+
+        // Agent modifies A (real work), does NOT touch B.
+        fs::write(overlay.staging_dir().join("a.txt"), "agent changed A").unwrap();
+
+        // Simulate source divergence on B only.
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        fs::write(source.path().join("b.txt"), "source changed B").unwrap();
+
+        // Both A and B in artifact manifest.
+        let artifact_uris = vec![
+            "fs://workspace/a.txt".to_string(),
+            "fs://workspace/b.txt".to_string(),
+        ];
+
+        // Apply to a fresh target pre-populated with current source.
+        let target = TempDir::new().unwrap();
+        fs::write(target.path().join("a.txt"), "source changed A too").unwrap();
+        fs::write(target.path().join("b.txt"), "source changed B").unwrap();
+
+        // No true conflicts (only B diverged, and B is phantom).
+        // ForceOverwrite so A goes through regardless.
+        let result = overlay.apply_with_conflict_check(
+            source.path(),
+            ConflictResolution::ForceOverwrite,
+            &artifact_uris,
+        );
+
+        assert!(result.is_ok(), "apply should succeed: {:?}", result.err());
+        let applied = result.unwrap();
+
+        // A should be applied (agent changed it).
+        let applied_paths: Vec<&str> = applied.iter().map(|(p, _)| p.as_str()).collect();
+        assert!(
+            applied_paths.contains(&"a.txt"),
+            "a.txt should be applied: {:?}",
+            applied_paths
+        );
+        // B should NOT be applied (phantom, filtered out).
+        assert!(
+            !applied_paths.contains(&"b.txt"),
+            "b.txt should NOT be applied (phantom): {:?}",
+            applied_paths
+        );
     }
 
     #[test]
