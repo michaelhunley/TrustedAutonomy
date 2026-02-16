@@ -1,5 +1,34 @@
 # Release Notes
 
+## v0.2.4-alpha
+
+### New Features
+
+- Add per-target "what I did" summaries
+
+### Improvements
+
+- updated terminology for better user clarity and proper product framing
+
+### Bug Fixes
+
+- Fix draft view display bugs + revise roadmap for MCP interception architecture
+- resolved terminology update status
+- Fix cargo fmt formatting in explanation.rs and output_adapters/mod.rs
+- Smart conflict auto-resolve: detect phantom artifacts from dirty working tree
+- Fix clippy errors in v0.2.3 output adapters
+- Remove interactive ta-run from release script, fix crates.io publish
+
+### Other Changes
+
+- v0.2.4 — Terminology & Positioning Pass
+- v0.2.3 — Tiered Diff Explanations & Output Adapters
+- Make RELEASE_NOTES.md persistent with prepend-on-release
+- Added detailed plan for MCP integration in place of connectors for tasks like email so we don't reinvent the wheel, and plan for strong network abstraction to catch unexpected state change network requests in v0.7
+---
+
+Full changelog: https://github.com/trustedautonomy/ta/compare/v0.2.2-alpha...v0.2.4-alpha
+
 ## v0.2.2-alpha
 
 ### New Features
