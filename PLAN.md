@@ -385,7 +385,7 @@ Configurable output renderers for `ta pr view`, designed for reuse:
 - Explanation sidecars are ingested at `ta pr build` time, not stored permanently in staging
 
 ### v0.2.4 — Terminology & Positioning Pass
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Rename user-facing concepts for clarity. TA is an **agentic governance wrapper** — it wraps agent execution transparently, holds proposed changes at a human review checkpoint, and applies approved changes to the user's world. Terminology should work for developers and non-developers alike, and avoid VCS jargon since TA targets Perforce, SVN, document platforms, email, social media, and more.
 
 #### Core Terminology Changes

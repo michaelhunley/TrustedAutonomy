@@ -1,0 +1,262 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.org/schemas/agent-pr-package.schema.json",
+  "title": "Agent PR Package",
+  "type": "object",
+  "required": [
+    "package_version",
+    "package_id",
+    "created_at",
+    "goal",
+    "iteration",
+    "agent_identity",
+    "summary",
+    "plan",
+    "changes",
+    "risk",
+    "provenance",
+    "review_requests",
+    "signatures"
+  ],
+  "properties": {
+    "package_version": { "type": "string", "pattern": "^1\\.[0-9]+\\.[0-9]+$" },
+    "package_id": { "type": "string", "description": "Globally unique identifier (UUID recommended)." },
+    "created_at": { "type": "string", "format": "date-time" },
+
+    "goal": {
+      "type": "object",
+      "required": ["goal_id", "title", "objective", "success_criteria"],
+      "properties": {
+        "goal_id": { "type": "string" },
+        "title": { "type": "string" },
+        "objective": { "type": "string" },
+        "success_criteria": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1
+        },
+        "constraints": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+
+    "iteration": {
+      "type": "object",
+      "required": ["iteration_id", "sequence", "workspace_ref"],
+      "properties": {
+        "iteration_id": { "type": "string" },
+        "sequence": { "type": "integer", "minimum": 1 },
+        "workspace_ref": {
+          "type": "object",
+          "required": ["type", "ref"],
+          "properties": {
+            "type": { "type": "string", "enum": ["git_worktree", "jj_workspace"] },
+            "ref": { "type": "string", "description": "Branch/worktree name or identifier." },
+            "base_ref": { "type": "string", "description": "Base branch/ref for diff comparison." }
+          }
+        }
+      }
+    },
+
+    "agent_identity": {
+      "type": "object",
+      "required": ["agent_id", "agent_type", "constitution_id", "capability_manifest_hash"],
+      "properties": {
+        "agent_id": { "type": "string" },
+        "agent_type": { "type": "string" },
+        "constitution_id": { "type": "string" },
+        "capability_manifest_hash": { "type": "string", "description": "Hash of signed capabilities granted for this iteration." },
+        "orchestrator_run_id": { "type": "string" }
+      }
+    },
+
+    "summary": {
+      "type": "object",
+      "required": ["what_changed", "why", "impact", "rollback_plan"],
+      "properties": {
+        "what_changed": { "type": "string" },
+        "why": { "type": "string" },
+        "impact": { "type": "string" },
+        "rollback_plan": { "type": "string" },
+        "open_questions": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+
+    "plan": {
+      "type": "object",
+      "required": ["completed_steps", "next_steps"],
+      "properties": {
+        "completed_steps": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1
+        },
+        "next_steps": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "decision_log": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["decision", "rationale"],
+            "properties": {
+              "decision": { "type": "string" },
+              "rationale": { "type": "string" },
+              "alternatives": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        }
+      }
+    },
+
+    "changes": {
+      "type": "object",
+      "required": ["artifacts", "patch_sets"],
+      "properties": {
+        "artifacts": {
+          "type": "array",
+          "description": "Local workspace changes (files).",
+          "items": {
+            "type": "object",
+            "required": ["resource_uri", "change_type", "diff_ref"],
+            "properties": {
+              "resource_uri": { "type": "string", "pattern": "^fs://.*" },
+              "change_type": { "type": "string", "enum": ["add", "modify", "delete", "rename"] },
+              "diff_ref": { "type": "string", "description": "Pointer to diff artifact (stored by substrate)." },
+              "tests_run": {
+                "type": "array",
+                "items": { "type": "string" }
+              }
+            }
+          }
+        },
+
+        "patch_sets": {
+          "type": "array",
+          "description": "Staged changes to external resources (Drive/Gmail/Social/DB).",
+          "items": {
+            "type": "object",
+            "required": ["patch_set_id", "target_uri", "action", "preview_ref"],
+            "properties": {
+              "patch_set_id": { "type": "string" },
+              "target_uri": { "type": "string" },
+              "action": {
+                "type": "string",
+                "enum": [
+                  "write_patch",
+                  "create_draft",
+                  "label_change",
+                  "permission_change",
+                  "db_patch",
+                  "schedule_post"
+                ]
+              },
+              "preview_ref": { "type": "string", "description": "Pointer to rendered preview/diff." },
+              "commit_intent": {
+                "type": "string",
+                "enum": ["none", "request_commit", "request_send", "request_post"]
+              }
+            }
+          }
+        }
+      }
+    },
+
+    "risk": {
+      "type": "object",
+      "required": ["risk_score", "findings", "policy_decisions"],
+      "properties": {
+        "risk_score": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["category", "severity", "description"],
+            "properties": {
+              "category": {
+                "type": "string",
+                "enum": ["pii", "secrets", "exfiltration", "external_comm", "prompt_injection", "policy_violation", "unknown"]
+              },
+              "severity": { "type": "string", "enum": ["low", "medium", "high", "critical"] },
+              "description": { "type": "string" },
+              "evidence_refs": { "type": "array", "items": { "type": "string" } },
+              "mitigation": { "type": "string" }
+            }
+          }
+        },
+        "policy_decisions": {
+          "type": "array",
+          "description": "Summarized decisions from policy engine relevant to this PR.",
+          "items": {
+            "type": "object",
+            "required": ["rule_id", "effect"],
+            "properties": {
+              "rule_id": { "type": "string" },
+              "effect": { "type": "string", "enum": ["allow", "deny", "require_approval", "transform"] },
+              "notes": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+
+    "provenance": {
+      "type": "object",
+      "required": ["inputs", "tool_trace_hash"],
+      "properties": {
+        "inputs": {
+          "type": "array",
+          "description": "Citations and references to key sources used.",
+          "items": {
+            "type": "object",
+            "required": ["source_type", "ref", "trust_level"],
+            "properties": {
+              "source_type": { "type": "string", "enum": ["web", "email", "drive", "fs", "db", "user"] },
+              "ref": { "type": "string", "description": "URI or internal artifact pointer." },
+              "trust_level": { "type": "string", "enum": ["trusted", "untrusted", "quarantined"] },
+              "notes": { "type": "string" }
+            }
+          }
+        },
+        "tool_trace_hash": { "type": "string", "description": "Hash of the full tool-call trace for replay." }
+      }
+    },
+
+    "review_requests": {
+      "type": "object",
+      "required": ["requested_actions", "reviewers"],
+      "properties": {
+        "requested_actions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["action", "targets"],
+            "properties": {
+              "action": { "type": "string", "enum": ["merge", "commit_patches", "send_emails", "post_social", "approve_next_iteration"] },
+              "targets": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        },
+        "reviewers": { "type": "array", "items": { "type": "string" } },
+        "required_approvals": { "type": "integer", "minimum": 1, "default": 1 },
+        "notes_to_reviewer": { "type": "string" }
+      }
+    },
+
+    "signatures": {
+      "type": "object",
+      "required": ["package_hash", "agent_signature"],
+      "properties": {
+        "package_hash": { "type": "string" },
+        "agent_signature": { "type": "string", "description": "Signature over package_hash with agent identity key." },
+        "gateway_attestation": { "type": "string", "description": "Optional signature from MCP gateway attesting policy/trace linkage." }
+      }
+    }
+  }
+}

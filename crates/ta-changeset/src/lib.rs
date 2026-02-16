@@ -4,13 +4,14 @@
 //!
 //! A [`ChangeSet`] represents any pending change — a file patch, email draft,
 //! DB mutation, or social media post. All changes are collected (staged) by
-//! default and bundled into a [`PRPackage`] for human review.
+//! default and bundled into a [`DraftPackage`] for human review.
 //!
-//! The data model aligns with `schema/pr_package.schema.json`.
+//! The data model aligns with `schema/draft_package.schema.json`.
 
 pub mod changeset;
 pub mod diff;
 pub mod diff_handlers;
+pub mod draft_package;
 pub mod error;
 pub mod explanation;
 pub mod output_adapters;
@@ -20,8 +21,12 @@ pub mod uri_pattern;
 pub use changeset::{ChangeKind, ChangeSet, CommitIntent};
 pub use diff::DiffContent;
 pub use diff_handlers::{DiffHandlerError, DiffHandlersConfig, HandlerRule};
+pub use draft_package::{DraftPackage, DraftStatus, ExplanationTiers};
 pub use error::ChangeSetError;
 pub use explanation::ExplanationSidecar;
 pub use output_adapters::{DetailLevel, OutputAdapter, OutputFormat, RenderContext};
-pub use pr_package::{ExplanationTiers, PRPackage, PRStatus};
 pub use uri_pattern::{filter_uris, matches_uri};
+
+// Backwards compatibility: export old names as aliases
+pub use draft_package::DraftPackage as PRPackage;
+pub use draft_package::DraftStatus as PRStatus;

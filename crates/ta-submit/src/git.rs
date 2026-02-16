@@ -1,7 +1,7 @@
 //! Git adapter for branch-based workflows with GitHub/GitLab PR creation
 
 use std::process::Command;
-use ta_changeset::PRPackage;
+use ta_changeset::DraftPackage;
 use ta_goal::GoalRun;
 
 use crate::adapter::{CommitResult, PushResult, Result, ReviewResult, SubmitAdapter, SubmitError};
@@ -106,7 +106,7 @@ impl SubmitAdapter for GitAdapter {
         Ok(())
     }
 
-    fn commit(&self, goal: &GoalRun, pr: &PRPackage, message: &str) -> Result<CommitResult> {
+    fn commit(&self, goal: &GoalRun, pr: &DraftPackage, message: &str) -> Result<CommitResult> {
         tracing::info!("GitAdapter: committing changes");
 
         // Add all changes (staging workspace is already filtered by .taignore)
@@ -166,7 +166,7 @@ impl SubmitAdapter for GitAdapter {
         })
     }
 
-    fn open_review(&self, goal: &GoalRun, pr: &PRPackage) -> Result<ReviewResult> {
+    fn open_review(&self, goal: &GoalRun, pr: &DraftPackage) -> Result<ReviewResult> {
         if !self.has_gh_cli() {
             return Err(SubmitError::ReviewError(
                 "gh CLI not found - install GitHub CLI to create PRs".to_string(),
@@ -231,7 +231,7 @@ impl GitAdapter {
     fn build_pr_body(
         &self,
         goal: &GoalRun,
-        pr: &PRPackage,
+        pr: &DraftPackage,
         config: &SubmitConfig,
     ) -> Result<String> {
         // Try to load template if specified
@@ -267,7 +267,7 @@ impl GitAdapter {
     ///   {goal_id}        — goal UUID
     ///   {pr_id}          — PR package UUID
     ///   {plan_phase}     — plan phase (or "N/A")
-    fn substitute_template(&self, template: &str, goal: &GoalRun, pr: &PRPackage) -> String {
+    fn substitute_template(&self, template: &str, goal: &GoalRun, pr: &DraftPackage) -> String {
         let artifact_lines: String = pr
             .changes
             .artifacts

@@ -4,7 +4,7 @@
 //!
 //! Provides human review and approval workflow for agent-staged changes:
 //! - `ta goal list/status` — inspect active goal runs
-//! - `ta pr list/view/approve/deny/apply` — review and manage PR packages
+//! - `ta draft list/view/approve/deny/apply` — review and manage draft packages
 //! - `ta audit verify/tail` — inspect the tamper-evident audit trail
 //! - `ta adapter list/install` — manage agent adapter integrations
 //! - `ta serve` — start MCP server on stdio
@@ -44,7 +44,13 @@ enum Commands {
         #[command(subcommand)]
         command: commands::goal::GoalCommands,
     },
-    /// Review and manage PR packages.
+    /// Review and manage draft packages.
+    Draft {
+        #[command(subcommand)]
+        command: commands::draft::DraftCommands,
+    },
+    /// Review and manage PR packages (deprecated: use 'draft').
+    #[command(hide = true)]
     Pr {
         #[command(subcommand)]
         command: commands::pr::PrCommands,
@@ -148,6 +154,7 @@ fn main() -> anyhow::Result<()> {
 
     match &cli.command {
         Commands::Goal { command } => commands::goal::execute(command, &config),
+        Commands::Draft { command } => commands::draft::execute(command, &config),
         Commands::Pr { command } => commands::pr::execute(command, &config),
         Commands::Audit { command } => commands::audit::execute(command, &config),
         Commands::Run {
