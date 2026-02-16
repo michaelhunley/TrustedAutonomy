@@ -10,94 +10,27 @@ on:
         description: 'Tag to release (e.g., v0.1.0)'
         required: true
 
+permissions:
+  contents: write
+
 env:
   CARGO_TERM_COLOR: always
   BINARY_NAME: ta
 
 jobs:
-  create-release:
-    name: Create Release
-    runs-on: ubuntu-latest
-    outputs:
-      upload_url: ${{ steps.create_release.outputs.upload_url }}
-      version: ${{ steps.get_version.outputs.version }}
-    steps:
-      - name: Get version from tag
-        id: get_version
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "version=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
-          else
-            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ steps.get_version.outputs.version }}
-          release_name: Release ${{ steps.get_version.outputs.version }}
-          draft: false
-          prerelease: ${{ contains(steps.get_version.outputs.version, 'alpha') || contains(steps.get_version.outputs.version, 'beta') }}
-          body: |
-            ## Release ${{ steps.get_version.outputs.version }}
-
-            ### Installation
-
-            **macOS (Homebrew - coming soon)**
-            ```bash
-            brew install trustedautonomy/tap/ta
-            ```
-
-            **Linux/macOS (install script)**
-            ```bash
-            curl -fsSL https://raw.githubusercontent.com/trustedautonomy/ta/main/install.sh | sh
-            ```
-
-            **Cargo**
-            ```bash
-            cargo install ta-cli
-            ```
-
-            **Nix**
-            ```bash
-            nix run github:trustedautonomy/ta
-            ```
-
-            ### Documentation
-
-            - [USAGE.md](https://github.com/trustedautonomy/ta/blob/main/docs/USAGE.md) — Complete usage guide (also included in binary downloads)
-            - [DISCLAIMER.md](https://github.com/trustedautonomy/ta/blob/main/DISCLAIMER.md) — Terms of use
-            - HTML versions of both documents are available as release assets below
-
-            ### Binaries
-
-            Download the appropriate binary for your platform below. Each archive includes the `ta` binary, `USAGE.md`, `DISCLAIMER.md`, and `LICENSE`.
-
-            **Note:** On first run, `ta` will prompt you to review and accept the terms of use.
-
-            ---
-
-            See the [CHANGELOG](https://github.com/trustedautonomy/ta/blob/main/CHANGELOG.md) for detailed changes.
-
   build-release:
     name: Build ${{ matrix.target }}
-    needs: create-release
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          # macOS builds
           - target: x86_64-apple-darwin
             os: macos-latest
             cross: false
           - target: aarch64-apple-darwin
             os: macos-latest
             cross: false
-          # Linux builds (musl for static binaries)
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             cross: true
@@ -108,6 +41,15 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Get version
+        id: get_version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
 
       - name: Install Nix (non-cross builds)
         if: matrix.cross == false
@@ -138,94 +80,106 @@ jobs:
         run: |
           cross build --release --target ${{ matrix.target }} -p ta-cli
 
-      - name: Create artifact directory
-        run: mkdir -p artifacts
-
-      - name: Package binary with docs (Unix)
+      - name: Package binary with docs
         run: |
           mkdir -p staging
           cp target/${{ matrix.target }}/release/${{ env.BINARY_NAME }} staging/
           cp docs/USAGE.md staging/ 2>/dev/null || true
           cp DISCLAIMER.md staging/ 2>/dev/null || true
           cp LICENSE staging/ 2>/dev/null || true
+          mkdir -p artifacts
           cd staging
-          tar czf ../artifacts/${{ env.BINARY_NAME }}-${{ needs.create-release.outputs.version }}-${{ matrix.target }}.tar.gz *
-          cd -
+          tar czf ../artifacts/${{ env.BINARY_NAME }}-${{ steps.get_version.outputs.version }}-${{ matrix.target }}.tar.gz *
 
       - name: Generate SHA256 checksums
         run: |
           cd artifacts
-          sha256sum *.tar.gz > SHA256SUMS.txt
-          cd -
+          sha256sum *.tar.gz > SHA256SUMS-${{ matrix.target }}.txt
 
-      - name: Upload binary artifact
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./artifacts/${{ env.BINARY_NAME }}-${{ needs.create-release.outputs.version }}-${{ matrix.target }}.tar.gz
-          asset_name: ${{ env.BINARY_NAME }}-${{ needs.create-release.outputs.version }}-${{ matrix.target }}.tar.gz
-          asset_content_type: application/gzip
-
-      - name: Upload checksums and docs (first job only)
-        if: matrix.target == 'x86_64-apple-darwin'
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./artifacts/SHA256SUMS.txt
-          asset_name: SHA256SUMS.txt
-          asset_content_type: text/plain
-
-      - name: Upload USAGE.md (first job only)
-        if: matrix.target == 'x86_64-apple-darwin'
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./docs/USAGE.md
-          asset_name: USAGE.md
-          asset_content_type: text/markdown
-
-      - name: Generate HTML docs (first job only)
+      - name: Generate HTML docs (macOS x86_64 only)
         if: matrix.target == 'x86_64-apple-darwin'
         run: |
           brew install pandoc
           pandoc docs/USAGE.md -s --metadata title="Trusted Autonomy Usage Guide" \
             -c https://cdn.simplecss.org/simple.min.css \
-            -o docs/USAGE.html
+            -o artifacts/USAGE.html
           pandoc DISCLAIMER.md -s --metadata title="Trusted Autonomy Terms of Use" \
             -c https://cdn.simplecss.org/simple.min.css \
-            -o docs/DISCLAIMER.html
+            -o artifacts/DISCLAIMER.html
+          cp docs/USAGE.md artifacts/USAGE.md
 
-      - name: Upload USAGE.html (first job only)
-        if: matrix.target == 'x86_64-apple-darwin'
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
         with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./docs/USAGE.html
-          asset_name: USAGE.html
-          asset_content_type: text/html
+          name: release-${{ matrix.target }}
+          path: artifacts/
 
-      - name: Upload DISCLAIMER.html (first job only)
-        if: matrix.target == 'x86_64-apple-darwin'
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  publish-release:
+    name: Publish Release
+    needs: build-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Get version
+        id: get_version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
         with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./docs/DISCLAIMER.html
-          asset_name: DISCLAIMER.html
-          asset_content_type: text/html
+          path: artifacts
+          merge-multiple: true
+
+      - name: Merge checksums
+        run: |
+          cd artifacts
+          cat SHA256SUMS-*.txt > SHA256SUMS.txt
+          rm -f SHA256SUMS-*.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.get_version.outputs.version }}
+          name: Release ${{ steps.get_version.outputs.version }}
+          draft: false
+          prerelease: ${{ contains(steps.get_version.outputs.version, 'alpha') || contains(steps.get_version.outputs.version, 'beta') }}
+          files: artifacts/*
+          body: |
+            ## Release ${{ steps.get_version.outputs.version }}
+
+            ### Installation
+
+            **Cargo**
+            ```bash
+            cargo install ta-cli
+            ```
+
+            **Nix**
+            ```bash
+            nix run github:trustedautonomy/ta
+            ```
+
+            **Binary download**
+
+            Download the appropriate archive for your platform below. Each includes the `ta` binary, `USAGE.md`, `DISCLAIMER.md`, and `LICENSE`.
+
+            On first run, `ta` will prompt you to review and accept the terms of use.
+
+            ### Documentation
+
+            - [USAGE.md](https://github.com/trustedautonomy/ta/blob/main/docs/USAGE.md) — Complete usage guide
+            - [DISCLAIMER.md](https://github.com/trustedautonomy/ta/blob/main/DISCLAIMER.md) — Terms of use
 
   publish-crate:
     name: Publish to crates.io
-    needs: build-release
+    needs: publish-release
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
