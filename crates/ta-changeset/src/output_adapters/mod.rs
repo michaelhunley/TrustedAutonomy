@@ -1,13 +1,13 @@
-//! output_adapters — Pluggable output renderers for PR review (v0.2.3).
+//! output_adapters — Pluggable output renderers for draft review (v0.2.3).
 //!
-//! Output adapters transform PRPackage data into different formats for review:
+//! Output adapters transform DraftPackage data into different formats for review:
 //! - **Terminal**: Colored inline diff with tiered display (default)
 //! - **Markdown**: GitHub-ready markdown with collapsible sections
 //! - **JSON**: Machine-readable structured output for CI/CD
 //! - **HTML**: Standalone review page with progressive disclosure
 
+use crate::draft_package::DraftPackage;
 use crate::error::ChangeSetError;
-use crate::pr_package::PRPackage;
 
 pub mod html;
 pub mod json;
@@ -90,7 +90,7 @@ impl std::fmt::Display for DetailLevel {
 
 /// Context for rendering a PR package.
 pub struct RenderContext<'a> {
-    pub package: &'a PRPackage,
+    pub package: &'a DraftPackage,
     pub detail_level: DetailLevel,
     /// Optional: Filter to a specific file (show only one artifact).
     pub file_filter: Option<String>,

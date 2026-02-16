@@ -1,6 +1,6 @@
 //! "None" adapter - backwards-compatible fallback with no VCS operations
 
-use ta_changeset::PRPackage;
+use ta_changeset::DraftPackage;
 use ta_goal::GoalRun;
 
 use crate::adapter::{CommitResult, PushResult, Result, ReviewResult, SubmitAdapter};
@@ -32,7 +32,7 @@ impl SubmitAdapter for NoneAdapter {
         Ok(())
     }
 
-    fn commit(&self, goal: &GoalRun, _pr: &PRPackage, message: &str) -> Result<CommitResult> {
+    fn commit(&self, goal: &GoalRun, _pr: &DraftPackage, message: &str) -> Result<CommitResult> {
         // No-op: no commit operation
         tracing::debug!("NoneAdapter: commit() - no-op");
         Ok(CommitResult {
@@ -52,7 +52,7 @@ impl SubmitAdapter for NoneAdapter {
         })
     }
 
-    fn open_review(&self, goal: &GoalRun, _pr: &PRPackage) -> Result<ReviewResult> {
+    fn open_review(&self, goal: &GoalRun, _pr: &DraftPackage) -> Result<ReviewResult> {
         // No-op: no review creation
         tracing::debug!("NoneAdapter: open_review() - no-op");
         Ok(ReviewResult {

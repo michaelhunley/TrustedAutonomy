@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use ta_changeset::PRPackage;
+use ta_changeset::DraftPackage;
 use ta_goal::GoalRun;
 use thiserror::Error;
 
@@ -94,7 +94,7 @@ pub trait SubmitAdapter: Send + Sync {
     /// For Git: `git add` + `git commit`
     /// For Perforce: shelve files
     /// For "none": no-op
-    fn commit(&self, goal: &GoalRun, pr: &PRPackage, message: &str) -> Result<CommitResult>;
+    fn commit(&self, goal: &GoalRun, pr: &DraftPackage, message: &str) -> Result<CommitResult>;
 
     /// Push the committed changes
     ///
@@ -108,7 +108,7 @@ pub trait SubmitAdapter: Send + Sync {
     /// For Git: create GitHub/GitLab PR via API or `gh pr create`
     /// For Perforce: create Swarm review
     /// For "none": no-op
-    fn open_review(&self, goal: &GoalRun, pr: &PRPackage) -> Result<ReviewResult>;
+    fn open_review(&self, goal: &GoalRun, pr: &DraftPackage) -> Result<ReviewResult>;
 
     /// Adapter display name (for CLI output)
     fn name(&self) -> &str;
