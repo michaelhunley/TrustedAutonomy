@@ -25,12 +25,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # macOS Intel — macos-13 runners are x86_64
           - target: x86_64-apple-darwin
-            os: macos-latest
+            os: macos-13
             cross: false
+          # macOS Apple Silicon — macos-latest (14+) runners are aarch64
           - target: aarch64-apple-darwin
             os: macos-latest
             cross: false
+          # Linux builds (musl for static binaries)
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             cross: true
@@ -51,34 +54,22 @@ jobs:
             echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
           fi
 
-      - name: Install Nix (non-cross builds)
-        if: matrix.cross == false
-        uses: DeterminateSystems/nix-installer-action@main
-
-      - name: Setup Nix cache (non-cross builds)
-        if: matrix.cross == false
-        uses: DeterminateSystems/magic-nix-cache-action@main
-        continue-on-error: true
-
-      - name: Install Rust (cross builds)
-        if: matrix.cross == true
+      - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install cross (cross builds)
+      - name: Install cross (Linux cross-compilation)
         if: matrix.cross == true
         run: cargo install cross --git https://github.com/cross-rs/cross
 
       - name: Build binary (native)
         if: matrix.cross == false
-        run: |
-          nix develop --command bash -c "rustup target add ${{ matrix.target }} && cargo build --release --target ${{ matrix.target }} -p ta-cli"
+        run: cargo build --release --target ${{ matrix.target }} -p ta-cli
 
       - name: Build binary (cross)
         if: matrix.cross == true
-        run: |
-          cross build --release --target ${{ matrix.target }} -p ta-cli
+        run: cross build --release --target ${{ matrix.target }} -p ta-cli
 
       - name: Package binary with docs
         run: |
@@ -96,7 +87,7 @@ jobs:
           cd artifacts
           sha256sum *.tar.gz > SHA256SUMS-${{ matrix.target }}.txt
 
-      - name: Generate HTML docs (macOS x86_64 only)
+      - name: Generate HTML docs (macOS Intel only)
         if: matrix.target == 'x86_64-apple-darwin'
         run: |
           brew install pandoc
@@ -185,10 +176,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Nix
-        uses: DeterminateSystems/nix-installer-action@main
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Publish ta-cli to crates.io
-        run: |
-          nix develop --command bash -c "cargo publish -p ta-cli --token ${{ secrets.CARGO_REGISTRY_TOKEN }}"
+        run: cargo publish -p ta-cli --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
         continue-on-error: true
