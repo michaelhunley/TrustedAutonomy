@@ -169,7 +169,7 @@ rm -f Cargo.toml.bak
 # All member crate Cargo.toml files
 for cargo_toml in crates/*/Cargo.toml apps/*/Cargo.toml; do
     if [ -f "$cargo_toml" ]; then
-        sed -i.bak "/^\[package\]/,/^\[/{s/^version = \".*\"/version = \"${VERSION}\"/}" "$cargo_toml"
+        sed -i.bak '/^\[package\]/,/^\[/s/^version = ".*"/version = "'"${VERSION}"'"/' "$cargo_toml"
         rm -f "${cargo_toml}.bak"
     fi
 done
