@@ -226,6 +226,7 @@ impl<S: ChangeStore> FsConnector<S> {
                     rationale: None,
                     dependencies: vec![],
                     explanation_tiers: None,
+                    comments: None,
                 }
             })
             .collect();

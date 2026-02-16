@@ -1,8 +1,10 @@
 # Trusted Autonomy — Usage Guide
 
-**Version**: v0.2.2-alpha
+**Version**: v0.3.0-alpha (In Progress)
 
 Complete guide to using Trusted Autonomy for safe, reviewable AI agent workflows.
+
+> **Note**: v0.3.0 Review Sessions infrastructure is implemented but CLI commands are coming soon.
 
 ---
 
@@ -14,11 +16,12 @@ Complete guide to using Trusted Autonomy for safe, reviewable AI agent workflows
 4. [Configuration](#configuration)
 5. [Agent Configuration](#agent-configuration)
 6. [PR Review & Approval](#pr-review--approval)
-7. [External Diff Handlers](#external-diff-handlers)
-8. [Git Integration](#git-integration)
-9. [Advanced Workflows](#advanced-workflows)
-10. [Claude Flow Optimization](#claude-flow-optimization)
-11. [Troubleshooting](#troubleshooting)
+7. **[Review Sessions](#review-sessions)** ⭐ NEW in v0.3.0
+8. [External Diff Handlers](#external-diff-handlers)
+9. [Git Integration](#git-integration)
+10. [Advanced Workflows](#advanced-workflows)
+11. [Claude Flow Optimization](#claude-flow-optimization)
+12. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -250,6 +253,94 @@ ta run --follow-up --objective-file review-notes.md --source .
 
 # The follow-up PR supersedes the parent (single unified diff)
 ```
+
+---
+
+## Review Sessions
+
+**⭐ NEW in v0.3.0**: Multi-interaction review workflows with persistent sessions and per-artifact comments.
+
+### Overview
+
+Review Sessions enable you to:
+- **Review draft packages across multiple CLI invocations** — pause and resume at any time
+- **Add comments to specific artifacts** — provide structured feedback with markdown support
+- **Track your progress** — automatically remember which artifacts you've reviewed
+- **Collaborate** — comment threads support multiple reviewers and agents
+
+### Data Model
+
+Review sessions persist in `~/.ta/review_sessions/<session-id>.json` and track:
+- **Session metadata**: ID, reviewer identity, created/updated timestamps, state (Active/Paused/Completed)
+- **Per-artifact reviews**: Comments, dispositions (Approved/Rejected/Discuss/Pending), review timestamps
+- **Current focus**: Which artifact you're examining (for "next" navigation)
+- **Session notes**: General observations not tied to specific artifacts
+
+### Comment Threads
+
+Each artifact can have a comment thread with multiple comments from:
+- **Human reviewers** — your feedback during review
+- **Agents** — responses in follow-up workflows
+- **Other team members** — collaborative review
+
+Comments support markdown formatting for rich feedback.
+
+### CLI Commands (Coming Soon)
+
+The CLI commands for review sessions are planned but not yet implemented. Planned interface:
+
+```bash
+# Start a new review session for a draft package
+ta draft review start <draft-id> [--reviewer <name>]
+
+# Add a comment to a specific artifact
+ta draft review comment <artifact-uri> "Your feedback here"
+
+# Move to the next artifact that hasn't been reviewed
+ta draft review next
+
+# Set disposition for current artifact
+ta draft review approve <artifact-uri>
+ta draft review reject <artifact-uri> --reason "Needs refactoring"
+ta draft review discuss <artifact-uri> --comment "Questions about approach"
+
+# Add session-level notes (not tied to specific artifacts)
+ta draft review note "Overall: well-structured changes"
+
+# List all review sessions
+ta draft review list [--status active|paused|completed]
+
+# Resume a paused session
+ta draft review resume <session-id>
+
+# Finish review and apply approved changes
+ta draft review finish --approve "src/**" --reject "config.toml"
+```
+
+### Architecture
+
+**Modules**:
+- `crates/ta-changeset/src/review_session.rs` — Core data model (ReviewSession, CommentThread, etc.)
+- `crates/ta-changeset/src/review_session_store.rs` — Persistent JSON storage
+- `crates/ta-changeset/src/draft_package.rs` — Artifact.comments field integration
+
+**Tests**: 50 unit tests covering session lifecycle, comment threads, disposition tracking, and persistence.
+
+### Workflow Integration
+
+Review Sessions integrate with existing workflows:
+
+1. **Draft Build**: `ta draft build` creates a draft package as usual
+2. **Start Review**: `ta draft review start <draft-id>` creates a persistent session
+3. **Iterative Review**: Add comments, set dispositions, pause/resume across multiple CLI invocations
+4. **Finish**: `ta draft review finish` applies approved changes (uses existing selective review logic)
+
+### Follow-Up Goals (v0.1.2 Integration)
+
+When artifacts have `Discuss` disposition:
+- `ta run --follow-up <goal-id>` injects comment threads as structured context
+- Agent addresses each discussed artifact with explanations
+- New PR supersedes the original (see v0.1.2 Follow-Up Goals)
 
 ---
 

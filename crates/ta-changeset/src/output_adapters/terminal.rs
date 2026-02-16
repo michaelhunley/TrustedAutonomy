@@ -271,6 +271,7 @@ mod tests {
                         tags: vec!["security".to_string()],
                         related_artifacts: vec![],
                     }),
+                    comments: None,
                 }],
                 patch_sets: vec![],
             },

@@ -356,6 +356,7 @@ fn build_package(
                     rationale: None,
                     dependencies: vec![],
                     explanation_tiers: None,
+                    comments: None,
                 });
                 changesets.push(
                     ChangeSet::new(
@@ -378,6 +379,7 @@ fn build_package(
                     rationale: None,
                     dependencies: vec![],
                     explanation_tiers: None,
+                    comments: None,
                 });
                 changesets.push(
                     ChangeSet::new(
@@ -400,6 +402,7 @@ fn build_package(
                     rationale: None,
                     dependencies: vec![],
                     explanation_tiers: None,
+                    comments: None,
                 });
                 changesets.push(
                     ChangeSet::new(

@@ -123,6 +123,10 @@ pub struct Artifact {
     /// Three-tier explanation (summary, explanation, tags) from sidecar YAML (v0.2.3).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub explanation_tiers: Option<ExplanationTiers>,
+    /// Comment thread for this artifact (v0.3.0 — Review Sessions).
+    /// Comments from ReviewSession are merged here during draft finalization.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comments: Option<crate::review_session::CommentThread>,
 }
 
 /// Per-artifact review disposition.
@@ -458,6 +462,7 @@ mod tests {
                     rationale: None,
                     dependencies: vec![],
                     explanation_tiers: None,
+                    comments: None,
                 }],
                 patch_sets: vec![],
             },
@@ -617,6 +622,7 @@ mod tests {
                 kind: DependencyKind::DependsOn,
             }],
             explanation_tiers: None,
+            comments: None,
         };
         let json = serde_json::to_string(&artifact).unwrap();
         let restored: Artifact = serde_json::from_str(&json).unwrap();
@@ -704,6 +710,7 @@ mod tests {
                 tags: vec!["security".to_string()],
                 related_artifacts: vec![],
             }),
+            comments: None,
         };
         let json = serde_json::to_string(&artifact).unwrap();
         let restored: Artifact = serde_json::from_str(&json).unwrap();
