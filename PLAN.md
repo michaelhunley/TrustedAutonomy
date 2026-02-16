@@ -476,6 +476,7 @@ A `ta release` command driven by a YAML task script (`.ta/release.yaml`). Each s
 - Deterministic Policy Compiler validates proposal (subset of templates, staged semantics, budgets)
 - Agent setup becomes an "Agent PR" requiring approval before activation
 - User goal → proposed agent roster + scoped capabilities + milestone plan
+- agent setup evaluates how to run the agents efficiently at lowest cost (model selection, prompt caching, etc) and advises tradeoffs with human opt in where appropriate
 
 ---
 
