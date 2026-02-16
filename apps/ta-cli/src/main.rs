@@ -29,6 +29,10 @@ struct Cli {
     #[arg(long, default_value = ".")]
     project_root: PathBuf,
 
+    /// Accept terms of use non-interactively (for CI/scripted usage).
+    #[arg(long, global = true)]
+    accept_terms: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -88,6 +92,12 @@ enum Commands {
     },
     /// Start the MCP server on stdio.
     Serve,
+    /// Review and accept the terms of use.
+    AcceptTerms,
+    /// View the current terms of use.
+    ViewTerms,
+    /// Show terms acceptance status.
+    TermsStatus,
 }
 
 /// Build the long version string: "0.1.0-alpha (abc1234 2026-02-11)"
@@ -104,6 +114,35 @@ const fn long_version() -> &'static str {
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+
+    // Handle --accept-terms flag (non-interactive acceptance).
+    if cli.accept_terms {
+        commands::terms::accept_non_interactive()?;
+    }
+
+    // Terms-related commands don't require prior acceptance.
+    match &cli.command {
+        Commands::AcceptTerms => return commands::terms::prompt_and_accept(),
+        Commands::ViewTerms => {
+            commands::terms::view_terms();
+            return Ok(());
+        }
+        Commands::TermsStatus => return commands::terms::show_status(),
+        _ => {}
+    }
+
+    // All other commands require terms acceptance.
+    if let Err(e) = commands::terms::check_accepted() {
+        eprintln!("Error: {}", e);
+        eprintln!();
+        eprintln!("To accept terms interactively:");
+        eprintln!("  ta accept-terms");
+        eprintln!();
+        eprintln!("To accept non-interactively (CI/scripts):");
+        eprintln!("  ta --accept-terms <command>");
+        return Err(e);
+    }
+
     let project_root = cli.project_root.canonicalize().unwrap_or(cli.project_root);
     let config = GatewayConfig::for_project(&project_root);
 
@@ -134,5 +173,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Plan { command } => commands::plan::execute(command, &config),
         Commands::Adapter { command } => commands::adapter::execute(command, &project_root),
         Commands::Serve => commands::serve::execute(&project_root),
+        // Already handled above.
+        Commands::AcceptTerms | Commands::ViewTerms | Commands::TermsStatus => unreachable!(),
     }
 }

@@ -83,7 +83,7 @@ Workspace structure with 12 crates under `crates/` and `apps/`. Resource URIs (`
 ### Required for v0.1
 - [x] **Version info**: `ta --version` shows `0.1.0-alpha (git-hash date)`, build.rs embeds git metadata
 - **Simple install**: `cargo install ta-cli` or single binary download (cross-compile for macOS/Linux)
-- **Agent launch configs as YAML**: Replace hard-coded `AgentLaunchConfig` match arms with discoverable YAML files (e.g., `agents/claude-code.yaml`, `agents/claude-flow.yaml`). Ship built-in defaults, allow user overrides in `.ta/agents/` or `~/.config/ta/agents/`. Schema: command, args_template (`{prompt}` substitution), injects_context_file, env vars, description.
+- [x] **Agent launch configs as YAML**: YAML files in `agents/` (claude-code.yaml, codex.yaml, claude-flow.yaml, generic.yaml). Config search: `.ta/agents/` (project) → `~/.config/ta/agents/` (user) → shipped defaults → hard-coded fallback. Schema: command, args_template (`{prompt}`), injects_context_file, injects_settings, pre_launch, env. Added `serde_yaml` dep, 2 tests.
 - **Agent setup guides**: Step-by-step for Claude Code, Claude Flow (when available), Codex/similar
 - **README rewrite**: Quick-start in <5 minutes, architecture overview, what works / what doesn't
 - **`ta adapter install claude-code`** works end-to-end (already partially implemented)

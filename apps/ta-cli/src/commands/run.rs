@@ -17,58 +17,168 @@ use super::plan;
 
 // ── Per-agent launch configuration ──────────────────────────────
 
-/// Built-in agent launch descriptor.
-/// Describes how to invoke an agent and pass the goal prompt.
+/// Agent launch descriptor.
+/// Loaded from YAML config files (with hard-coded fallbacks for built-in agents).
+///
+/// Config search order:
+///   1. `.ta/agents/<agent-id>.yaml`       (project override)
+///   2. `~/.config/ta/agents/<agent-id>.yaml`  (user override)
+///   3. `<binary-dir>/agents/<agent-id>.yaml`  (shipped defaults)
+///   4. Hard-coded fallback
+#[derive(serde::Deserialize, Clone, Debug)]
 struct AgentLaunchConfig {
     /// The command to execute (e.g., "claude", "codex").
     command: String,
     /// Arguments to pass. `{prompt}` is replaced with the goal text.
-    args_template: &'static [&'static str],
+    args_template: Vec<String>,
     /// Whether this agent reads CLAUDE.md for context injection.
+    #[serde(default)]
     injects_context_file: bool,
     /// Whether to inject .claude/settings.local.json with TA permissions.
+    #[serde(default)]
     injects_settings: bool,
     /// Optional command to run before the main agent launch (e.g., init).
-    /// (command, args) — runs in the staging directory.
-    pre_launch: Option<(&'static str, &'static [&'static str])>,
+    #[serde(default)]
+    pre_launch: Option<PreLaunchConfig>,
+    /// Environment variables to set for the agent process.
+    #[serde(default)]
+    env: std::collections::HashMap<String, String>,
+    /// Human-readable name (informational only, used by `ta agent list` in future).
+    #[serde(default)]
+    #[allow(dead_code)]
+    name: Option<String>,
+    /// Description of the agent (informational only, used by `ta agent list` in future).
+    #[serde(default)]
+    #[allow(dead_code)]
+    description: Option<String>,
 }
 
-/// Look up the built-in launch config for an agent.
-fn agent_launch_config(agent_id: &str) -> AgentLaunchConfig {
+/// Pre-launch command configuration (deserialized from YAML).
+#[derive(serde::Deserialize, Clone, Debug)]
+struct PreLaunchConfig {
+    command: String,
+    args: Vec<String>,
+}
+
+/// Try to load agent config from YAML files, falling back to hard-coded defaults.
+fn agent_launch_config(agent_id: &str, source_dir: Option<&Path>) -> AgentLaunchConfig {
+    // Try YAML configs in priority order.
+    if let Some(config) = load_agent_yaml(agent_id, source_dir) {
+        return config;
+    }
+    // Fall back to built-in defaults.
+    builtin_agent_config(agent_id)
+}
+
+/// Search for an agent YAML config in standard locations.
+fn load_agent_yaml(agent_id: &str, source_dir: Option<&Path>) -> Option<AgentLaunchConfig> {
+    let filename = format!("{}.yaml", agent_id);
+
+    // 1. Project override: .ta/agents/<agent-id>.yaml
+    if let Some(source) = source_dir {
+        let project_path = source.join(".ta").join("agents").join(&filename);
+        if let Some(config) = try_load_yaml(&project_path) {
+            return Some(config);
+        }
+    }
+
+    // 2. User override: ~/.config/ta/agents/<agent-id>.yaml
+    if let Some(home) = dirs_path() {
+        let user_path = home
+            .join(".config")
+            .join("ta")
+            .join("agents")
+            .join(&filename);
+        if let Some(config) = try_load_yaml(&user_path) {
+            return Some(config);
+        }
+    }
+
+    // 3. Shipped defaults: <binary-dir>/agents/<agent-id>.yaml
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(bin_dir) = exe.parent() {
+            let shipped_path = bin_dir.join("agents").join(&filename);
+            if let Some(config) = try_load_yaml(&shipped_path) {
+                return Some(config);
+            }
+        }
+    }
+
+    None
+}
+
+/// Attempt to read and parse a single YAML config file.
+fn try_load_yaml(path: &Path) -> Option<AgentLaunchConfig> {
+    let content = std::fs::read_to_string(path).ok()?;
+    serde_yaml::from_str(&content).ok()
+}
+
+/// Get home directory (cross-platform).
+fn dirs_path() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from)
+}
+
+/// Hard-coded built-in agent configs (fallback when no YAML file is found).
+fn builtin_agent_config(agent_id: &str) -> AgentLaunchConfig {
     match agent_id {
         "claude-code" => AgentLaunchConfig {
             command: "claude".to_string(),
-            args_template: &["{prompt}"],
+            args_template: vec!["{prompt}".to_string()],
             injects_context_file: true,
             injects_settings: true,
             pre_launch: None,
+            env: Default::default(),
+            name: Some("claude-code".to_string()),
+            description: Some("Anthropic's Claude Code CLI".to_string()),
         },
         "codex" => AgentLaunchConfig {
             command: "codex".to_string(),
-            args_template: &["--approval-mode", "full-auto", "{prompt}"],
+            args_template: vec![
+                "--approval-mode".to_string(),
+                "full-auto".to_string(),
+                "{prompt}".to_string(),
+            ],
             injects_context_file: false,
             injects_settings: false,
             pre_launch: None,
+            env: Default::default(),
+            name: Some("codex".to_string()),
+            description: Some("OpenAI's Codex CLI".to_string()),
         },
         "claude-flow" => AgentLaunchConfig {
             command: "npx".to_string(),
-            args_template: &[
-                "claude-flow@alpha",
-                "hive-mind",
-                "spawn",
-                "{prompt}",
-                "--claude",
+            args_template: vec![
+                "claude-flow@alpha".to_string(),
+                "hive-mind".to_string(),
+                "spawn".to_string(),
+                "{prompt}".to_string(),
+                "--claude".to_string(),
             ],
             injects_context_file: true,
             injects_settings: true,
-            pre_launch: Some(("npx", &["claude-flow@alpha", "hive-mind", "init"])),
+            pre_launch: Some(PreLaunchConfig {
+                command: "npx".to_string(),
+                args: vec![
+                    "claude-flow@alpha".to_string(),
+                    "hive-mind".to_string(),
+                    "init".to_string(),
+                ],
+            }),
+            env: Default::default(),
+            name: Some("claude-flow".to_string()),
+            description: Some("Claude Flow multi-agent orchestration".to_string()),
         },
         _ => AgentLaunchConfig {
             command: agent_id.to_string(),
-            args_template: &[],
+            args_template: vec![],
             injects_context_file: false,
             injects_settings: false,
             pre_launch: None,
+            env: Default::default(),
+            name: None,
+            description: None,
         },
     }
 }
@@ -87,7 +197,7 @@ pub fn execute(
     objective_file: Option<&Path>,
     no_launch: bool,
 ) -> anyhow::Result<()> {
-    let agent_config = agent_launch_config(agent);
+    let agent_config = agent_launch_config(agent, source);
 
     // 1. Start the goal (creates overlay workspace).
     let goal_store = GoalRunStore::new(&config.goals_dir)?;
@@ -149,8 +259,12 @@ pub fn execute(
 
         println!("\nWorkspace ready. To use manually:");
         println!("  cd {}", staging_path.display());
-        if let Some((cmd, args)) = agent_config.pre_launch {
-            println!("  {} {}  # required init step", cmd, args.join(" "));
+        if let Some(ref pre) = agent_config.pre_launch {
+            println!(
+                "  {} {}  # required init step",
+                pre.command,
+                pre.args.join(" ")
+            );
         }
         println!("  {} {}", agent_config.command, shell_quote(&prompt));
         println!();
@@ -161,10 +275,14 @@ pub fn execute(
     }
 
     // 3. Run pre-launch command if needed (e.g., hive-mind init).
-    if let Some((cmd, args)) = agent_config.pre_launch {
-        println!("\nRunning pre-launch: {} {}...", cmd, args.join(" "));
-        let pre_status = std::process::Command::new(cmd)
-            .args(args)
+    if let Some(ref pre) = agent_config.pre_launch {
+        println!(
+            "\nRunning pre-launch: {} {}...",
+            pre.command,
+            pre.args.join(" ")
+        );
+        let pre_status = std::process::Command::new(&pre.command)
+            .args(&pre.args)
             .current_dir(&staging_path)
             .status();
         match pre_status {
@@ -178,7 +296,7 @@ pub fn execute(
             Err(e) => {
                 return Err(anyhow::anyhow!(
                     "Failed to run pre-launch command '{}': {}",
-                    cmd,
+                    pre.command,
                     e
                 ));
             }
@@ -273,9 +391,14 @@ fn launch_agent(
     let mut cmd = std::process::Command::new(&config.command);
     cmd.current_dir(staging_path);
 
-    for arg_template in config.args_template {
+    for arg_template in &config.args_template {
         let arg = arg_template.replace("{prompt}", prompt);
         cmd.arg(arg);
+    }
+
+    // Set agent-specific environment variables from config.
+    for (key, value) in &config.env {
+        cmd.env(key, value);
     }
 
     cmd.status()
@@ -652,6 +775,14 @@ Rules for the summary:
 - `depended_by`: list of other file paths that would break if this change is reverted
 - Be honest about dependencies — the reviewer uses this to decide which changes to accept individually
 
+## Documentation Updates
+
+If your changes affect user-facing behavior (new commands, changed flags, new config options, workflow changes):
+- Update `docs/USAGE.md` with the new/changed functionality
+- Keep the tone consumer-friendly (no internal implementation details)
+- Update version references if they exist in the docs
+- Update the `CLAUDE.md` "Current State" section if the test count changes
+
 ---
 
 {}
@@ -839,37 +970,91 @@ mod tests {
 
     #[test]
     fn agent_config_returns_correct_launch_config() {
-        let claude = agent_launch_config("claude-code");
+        // Pass None for source_dir — tests use built-in fallbacks (no YAML files).
+        let claude = agent_launch_config("claude-code", None);
         assert_eq!(claude.command, "claude");
         assert!(claude.injects_context_file);
         assert!(claude.injects_settings);
-        // No --dangerously-skip-permissions — TA injects settings instead.
         assert!(!claude
             .args_template
-            .contains(&"--dangerously-skip-permissions"));
+            .contains(&"--dangerously-skip-permissions".to_string()));
 
-        let codex = agent_launch_config("codex");
+        let codex = agent_launch_config("codex", None);
         assert_eq!(codex.command, "codex");
         assert!(!codex.injects_context_file);
         assert!(!codex.injects_settings);
 
-        let flow = agent_launch_config("claude-flow");
+        let flow = agent_launch_config("claude-flow", None);
         assert_eq!(flow.command, "npx");
         assert!(flow.injects_context_file);
         assert!(flow.injects_settings);
-        assert!(flow.args_template.contains(&"claude-flow@alpha"));
-        assert!(flow.args_template.contains(&"hive-mind"));
-        assert!(flow.args_template.contains(&"--claude"));
-        let (pre_cmd, pre_args) = flow.pre_launch.expect("claude-flow should have pre_launch");
-        assert_eq!(pre_cmd, "npx");
-        assert!(pre_args.contains(&"hive-mind"));
-        assert!(pre_args.contains(&"init"));
+        assert!(flow
+            .args_template
+            .contains(&"claude-flow@alpha".to_string()));
+        assert!(flow.args_template.contains(&"hive-mind".to_string()));
+        assert!(flow.args_template.contains(&"--claude".to_string()));
+        let pre = flow.pre_launch.expect("claude-flow should have pre_launch");
+        assert_eq!(pre.command, "npx");
+        assert!(pre.args.contains(&"hive-mind".to_string()));
+        assert!(pre.args.contains(&"init".to_string()));
 
-        let unknown = agent_launch_config("my-custom-agent");
+        let unknown = agent_launch_config("my-custom-agent", None);
         assert_eq!(unknown.command, "my-custom-agent");
         assert!(unknown.args_template.is_empty());
         assert!(unknown.pre_launch.is_none());
         assert!(!unknown.injects_settings);
+    }
+
+    #[test]
+    fn agent_config_loads_from_yaml() {
+        let project = TempDir::new().unwrap();
+        let agents_dir = project.path().join(".ta").join("agents");
+        std::fs::create_dir_all(&agents_dir).unwrap();
+
+        let yaml = r#"
+name: test-agent
+description: "A test agent"
+command: my-test-cmd
+args_template:
+  - "--flag"
+  - "{prompt}"
+injects_context_file: true
+injects_settings: false
+env:
+  MY_VAR: "hello"
+"#;
+        std::fs::write(agents_dir.join("test-agent.yaml"), yaml).unwrap();
+
+        let config = agent_launch_config("test-agent", Some(project.path()));
+        assert_eq!(config.command, "my-test-cmd");
+        assert_eq!(config.args_template, vec!["--flag", "{prompt}"]);
+        assert!(config.injects_context_file);
+        assert!(!config.injects_settings);
+        assert!(config.pre_launch.is_none());
+        assert_eq!(config.env.get("MY_VAR").unwrap(), "hello");
+    }
+
+    #[test]
+    fn agent_config_yaml_with_pre_launch() {
+        let project = TempDir::new().unwrap();
+        let agents_dir = project.path().join(".ta").join("agents");
+        std::fs::create_dir_all(&agents_dir).unwrap();
+
+        let yaml = r#"
+name: flow-test
+command: npx
+args_template: ["{prompt}"]
+pre_launch:
+  command: npx
+  args: ["flow", "init"]
+"#;
+        std::fs::write(agents_dir.join("flow-test.yaml"), yaml).unwrap();
+
+        let config = agent_launch_config("flow-test", Some(project.path()));
+        assert_eq!(config.command, "npx");
+        let pre = config.pre_launch.expect("should have pre_launch");
+        assert_eq!(pre.command, "npx");
+        assert_eq!(pre.args, vec!["flow", "init"]);
     }
 
     #[test]

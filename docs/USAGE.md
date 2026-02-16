@@ -1,6 +1,6 @@
 # Trusted Autonomy — Usage Guide
 
-**Version**: v0.2.0-alpha
+**Version**: v0.2.2-alpha
 
 Complete guide to using Trusted Autonomy for safe, reviewable AI agent workflows.
 
@@ -8,39 +8,70 @@ Complete guide to using Trusted Autonomy for safe, reviewable AI agent workflows
 
 ## Table of Contents
 
-1. [Quick Start](#quick-start)
-2. [Core Workflow](#core-workflow)
-3. [Configuration](#configuration)
-4. [PR Review & Approval](#pr-review--approval)
-5. [External Diff Handlers](#external-diff-handlers)
-6. [Git Integration](#git-integration)
-7. [Advanced Workflows](#advanced-workflows)
-8. [Troubleshooting](#troubleshooting)
+1. [Installation](#installation)
+2. [Quick Start](#quick-start)
+3. [Core Workflow](#core-workflow)
+4. [Configuration](#configuration)
+5. [Agent Configuration](#agent-configuration)
+6. [PR Review & Approval](#pr-review--approval)
+7. [External Diff Handlers](#external-diff-handlers)
+8. [Git Integration](#git-integration)
+9. [Advanced Workflows](#advanced-workflows)
+10. [Claude Flow Optimization](#claude-flow-optimization)
+11. [Troubleshooting](#troubleshooting)
+
+---
+
+## Installation
+
+### Binary download (macOS / Linux)
+
+Download the latest release from the [Releases page](https://github.com/trustedautonomy/ta/releases):
+
+```bash
+# macOS (Apple Silicon)
+curl -LO https://github.com/trustedautonomy/ta/releases/latest/download/ta-aarch64-apple-darwin.tar.gz
+tar xzf ta-aarch64-apple-darwin.tar.gz
+sudo mv ta /usr/local/bin/
+
+# macOS (Intel)
+curl -LO https://github.com/trustedautonomy/ta/releases/latest/download/ta-x86_64-apple-darwin.tar.gz
+tar xzf ta-x86_64-apple-darwin.tar.gz
+sudo mv ta /usr/local/bin/
+
+# Linux (x86_64)
+curl -LO https://github.com/trustedautonomy/ta/releases/latest/download/ta-x86_64-unknown-linux-musl.tar.gz
+tar xzf ta-x86_64-unknown-linux-musl.tar.gz
+sudo mv ta /usr/local/bin/
+```
+
+### From crates.io
+
+```bash
+cargo install ta-cli
+```
+
+### From source
+
+```bash
+git clone https://github.com/trustedautonomy/ta
+cd ta
+cargo build --release -p ta-cli
+# Binary at target/release/ta
+```
+
+### Verify installation
+
+```bash
+ta --version
+# ta 0.2.2-alpha (commit-hash date)
+```
 
 ---
 
 ## Quick Start
 
-### 1. Install Trusted Autonomy
-
-```bash
-# From crates.io (recommended)
-cargo install ta-cli
-
-# Or build from source
-git clone https://github.com/trustedautonomy/ta
-cd ta
-cargo build --release
-```
-
-### 2. Verify Installation
-
-```bash
-ta --version
-# ta 0.2.0-alpha (commit-hash date)
-```
-
-### 3. Run Your First Goal
+### Run Your First Goal
 
 ```bash
 # Start an agent-mediated goal
@@ -345,6 +376,63 @@ Closes #
 
 ---
 
+## Agent Configuration
+
+TA uses YAML config files to define how each agent is launched. This makes it easy to add new agent frameworks without code changes.
+
+### Built-in agents
+
+TA ships with configs for:
+- **claude-code** — Anthropic's Claude Code CLI (default)
+- **codex** — OpenAI's Codex CLI
+- **claude-flow** — Multi-agent orchestration via Claude Flow
+
+### Custom agents
+
+Create a YAML config for any agent framework:
+
+```yaml
+# .ta/agents/my-agent.yaml
+name: my-agent
+description: "My custom coding agent"
+command: my-agent-cli
+args_template:
+  - "--mode"
+  - "autonomous"
+  - "{prompt}"
+injects_context_file: false
+injects_settings: false
+env:
+  MY_AGENT_LOG_LEVEL: "info"
+```
+
+Then use it:
+
+```bash
+ta run "Fix the bug" --agent my-agent --source .
+```
+
+### Config search order
+
+TA searches for agent configs in priority order:
+1. `.ta/agents/<agent>.yaml` — project-specific override
+2. `~/.config/ta/agents/<agent>.yaml` — user-wide override
+3. Built-in defaults (shipped with TA binary)
+4. Hard-coded fallback (runs command with no special args)
+
+### Config fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `command` | string | Command to execute (must be on PATH) |
+| `args_template` | string[] | Arguments; `{prompt}` is replaced with the goal text |
+| `injects_context_file` | bool | Inject goal context into CLAUDE.md before launch |
+| `injects_settings` | bool | Inject `.claude/settings.local.json` with permissions |
+| `pre_launch` | object | Optional command to run before agent launch |
+| `env` | map | Environment variables for the agent process |
+
+---
+
 ## Advanced Workflows
 
 ### Plan-Linked Goals
@@ -397,6 +485,76 @@ ta audit list
 
 # Export for compliance
 ta audit export audit.jsonl
+```
+
+---
+
+## Claude Flow Optimization
+
+When using Claude Flow as your agent framework, these optimizations are available:
+
+### Prompt caching
+
+Claude's API automatically caches system prompts and tool definitions. This is handled transparently by Claude Code and Claude Flow — no configuration needed. Cached prompts reduce latency and cost for repeated operations (like multi-agent swarm tasks that share the same tool definitions).
+
+### Smart model selection
+
+Configure model routing in `.claude/settings.json`:
+
+```json
+{
+  "claudeFlow": {
+    "modelPreferences": {
+      "default": "claude-opus-4-6",
+      "routing": "claude-haiku-4-5-20251001"
+    }
+  }
+}
+```
+
+- **default** (Opus): Used for actual code generation and complex reasoning
+- **routing** (Haiku): Used for task routing and agent coordination — fast and cheap
+
+This gives you the best quality for real work while keeping orchestration overhead low.
+
+### Swarm configuration
+
+```json
+{
+  "claudeFlow": {
+    "swarm": {
+      "topology": "hierarchical-mesh",
+      "maxAgents": 15
+    }
+  }
+}
+```
+
+- **hierarchical-mesh**: Combines hierarchical coordination (queen → workers) with mesh peer-to-peer communication for resilience
+- **maxAgents**: Controls maximum concurrent agents; adjust based on your API rate limits
+
+### Memory backend
+
+```json
+{
+  "claudeFlow": {
+    "memory": {
+      "backend": "hybrid",
+      "enableHNSW": true
+    }
+  }
+}
+```
+
+- **hybrid**: Combines fast in-memory cache with persistent storage
+- **HNSW**: Hierarchical Navigable Small World index for fast semantic search (150x-12,500x faster than keyword search)
+
+### Default configuration for new users
+
+See `examples/claude-settings.json` for an optimized starting configuration that includes all the above settings. Copy it to your project:
+
+```bash
+cp examples/claude-settings.json .claude/settings.json
 ```
 
 ---

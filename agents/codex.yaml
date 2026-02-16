@@ -1,0 +1,17 @@
+# Agent launch configuration for OpenAI Codex CLI.
+# Docs: https://github.com/openai/codex
+#
+# Override per-project: .ta/agents/codex.yaml
+# Override per-user:    ~/.config/ta/agents/codex.yaml
+
+name: codex
+description: "OpenAI's Codex CLI agent with full-auto approval"
+command: codex
+args_template:
+  - "--approval-mode"
+  - "full-auto"
+  - "{prompt}"
+injects_context_file: false
+injects_settings: false
+pre_launch: null
+env: {}

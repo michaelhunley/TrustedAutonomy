@@ -65,14 +65,15 @@ Trusted Autonomy achieves this by:
 
 ---
 
-## Current status: v0.1.1-alpha
+## Current status: v0.2.2-alpha
+
+**208 tests** across 12 crates. Under active development. See [PLAN.md](PLAN.md) for the full roadmap.
 
 This is an early alpha release for feedback. Please note:
 
 - **Not production-ready.** Do not use for critical or irreversible operations.
 - **The security model is not yet audited.** Do not trust it with secrets or sensitive data.
 - **No sandbox isolation yet.** The agent runs with your permissions in a staging copy. Defense-in-depth (OCI/gVisor) is planned for Phase 7.
-- **No conflict detection yet.** Editing source files while a TA session is active may lose uncommitted changes on apply. Git protects committed work.
 
 If any of these are blockers for your use case, watch the repo — each is on the [roadmap](PLAN.md).
 
@@ -80,31 +81,7 @@ If any of these are blockers for your use case, watch the repo — each is on th
 
 ## Quick Start
 
-### Install
-
-```bash
-# From source (current alpha)
-git clone https://github.com/trustedautonomy/ta
-cd ta
-cargo build --release
-export PATH="$PWD/target/release:$PATH"
-```
-
-### Run Your First Goal
-
-```bash
-# Start an agent-mediated goal
-ta run "Add README badge for build status" --source .
-
-# Review the changes
-ta pr view <pr-id>
-
-# Approve and apply
-ta pr approve <pr-id>
-ta pr apply <pr-id>
-```
-
-**📖 For detailed usage, configuration, and workflows, see [docs/USAGE.md](docs/USAGE.md)**
+See the [detailed Quick Start](#quick-start-5-minutes) below for full install + agent setup instructions, or jump to [docs/USAGE.md](docs/USAGE.md) for comprehensive usage guidance. Run `ta --help` for CLI reference.
 
 ---
 
@@ -115,13 +92,6 @@ ta pr apply <pr-id>
 - Single chokepoint: all reads/writes and external effects flow through an MCP Gateway with policy enforcement and audit.
 - PR-per-milestone workflow: complex goals are decomposed into major steps, each producing a PR package for approval.
 - Replaceable orchestration: the substrate is the trust layer; planners/swarms are pluggable.
-
-## “default deny” vs “default collect”
-Trusted Autonomy uses two distinct defaults:
-1. Capability default (security boundary): default deny. If an agent lacks an explicit capability, the gateway rejects it.
-2.  Mutation default (operational workflow): default collect. If the agent is allowed to write, the gateway routes writes into staging (patches/drafts) and queues them for review. Commit/send/post are gated.
-
-Result: within the agent’s charter, work “just happens” and produces a PR package. Human review occurs at major milestones.
 
 ## Why MCP is the abstraction boundary
 
@@ -452,6 +422,8 @@ ta pr apply <package-id> --git-commit
 ```
 
 That's it. The agent never knew it was in a staging workspace.
+
+> **For detailed usage, configuration options, and troubleshooting, see [docs/USAGE.md](docs/USAGE.md)** or run `ta --help`.
 
 ---
 
@@ -919,38 +891,23 @@ cargo fmt --all -- --check
 
 ---
 
-## Status
+## What's Implemented
 
-Trusted Autonomy is under active development. **176 tests** across 12 crates. See [PLAN.md](PLAN.md) for the full roadmap.
-
-### Implemented
 - **Transparent overlay mediation** — agents work in staging copies using native tools, TA is invisible
 - **Selective approval** — `--approve "src/**" --reject "*.test.rs" --discuss "config/*"` with dependency warnings
+- **Concurrent session conflict detection** — detects source changes during active goals, prevents stale overwrites
+- **External diff routing** — route binary/media files to external tools (`*.uasset` to Unreal, `*.png` to image diff, etc.)
+- **YAML agent configs** — discoverable config files for any agent framework (`.ta/agents/`, `~/.config/ta/agents/`)
 - **Settings injection** — auto-configures agent permissions (replaces `--dangerously-skip-permissions`)
-- **Community forbidden-tools deny list** — `.ta-forbidden-tools` for patterns that should never be allowed
+- **Follow-up goals** — `--follow-up` to iterate on review feedback with full parent context injection
+- **Submit adapters** — pluggable VCS integration (git commit/push/PR, or no-VCS file copy)
 - Append-only audit log with SHA-256 hash chain
 - Default-deny capability engine with glob pattern matching
-- ChangeSet + PR Package data model (aligned with JSON schema)
 - Per-artifact review model (disposition, dependencies, rationale)
 - URI-aware pattern matching (scheme-scoped safety — `src/**` can't match `gmail://`)
-- Overlay workspace with exclude patterns (`.taignore`) + agent infra dir filtering
-- Binary file detection in PR view (`--summary`, `--file` flags)
-- GoalRun lifecycle state machine with event dispatch and plan tracking
 - Real MCP server (rmcp 0.14) with 9 tools and policy enforcement
 - CLI: `goal`, `pr`, `run`, `plan`, `audit`, `adapter`, `serve`
-- Agent adapter framework (Claude Code, Claude Flow, Codex, generic MCP)
-- Git integration (`ta pr apply --git-commit`)
 - Plan tracking (`ta plan list/status`, auto-update on `ta pr apply`)
-
-### Coming next
-- Agent launch configs as YAML (replace hard-coded agent configs)
-- Event system and orchestration API (`--json` output, webhooks on state transitions)
-- Notification connectors (email/Slack/Discord PR summaries + approve-from-anywhere)
-- Real connectors: Gmail, Drive, databases (same staging model, new resource types)
-- OCI/gVisor sandbox runner (defense-in-depth with TA's semantic review)
-- Virtual office runtime (role-based agent teams, event-driven triggers)
-- V2: Lazy copy-on-write VFS (reflinks/FUSE) — replaces full copy
-- Web UI for review/approval
 
 ---
 
