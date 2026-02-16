@@ -12,4 +12,8 @@ pub enum ChangeSetError {
     /// Serialization or deserialization failure.
     #[error("serialization error: {0}")]
     SerializationError(#[from] serde_json::Error),
+
+    /// Invalid or malformed data.
+    #[error("invalid data: {0}")]
+    InvalidData(String),
 }

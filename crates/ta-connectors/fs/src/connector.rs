@@ -225,6 +225,7 @@ impl<S: ChangeStore> FsConnector<S> {
                     disposition: Default::default(),
                     rationale: None,
                     dependencies: vec![],
+                    explanation_tiers: None,
                 }
             })
             .collect();

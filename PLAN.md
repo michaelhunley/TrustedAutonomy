@@ -338,7 +338,7 @@ pr_template = ".ta/pr-template.md"
 - ✅ Documentation and example config at `.ta/diff-handlers.example.toml`
 
 ### v0.2.3 — Tiered Diff Explanations & Output Adapters
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Rich, layered diff review — top-level summary → medium detail → full diff, with pluggable output formatting.
 
 #### Tiered Explanation Model

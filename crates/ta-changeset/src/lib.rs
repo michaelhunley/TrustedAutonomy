@@ -12,6 +12,8 @@ pub mod changeset;
 pub mod diff;
 pub mod diff_handlers;
 pub mod error;
+pub mod explanation;
+pub mod output_adapters;
 pub mod pr_package;
 pub mod uri_pattern;
 
@@ -19,5 +21,7 @@ pub use changeset::{ChangeKind, ChangeSet, CommitIntent};
 pub use diff::DiffContent;
 pub use diff_handlers::{DiffHandlerError, DiffHandlersConfig, HandlerRule};
 pub use error::ChangeSetError;
-pub use pr_package::{PRPackage, PRStatus};
+pub use explanation::ExplanationSidecar;
+pub use output_adapters::{DetailLevel, OutputAdapter, OutputFormat, RenderContext};
+pub use pr_package::{ExplanationTiers, PRPackage, PRStatus};
 pub use uri_pattern::{filter_uris, matches_uri};
