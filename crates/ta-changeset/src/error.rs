@@ -16,4 +16,8 @@ pub enum ChangeSetError {
     /// Invalid or malformed data.
     #[error("invalid data: {0}")]
     InvalidData(String),
+
+    /// I/O operation failed.
+    #[error("I/O error: {0}")]
+    IoError(#[from] std::io::Error),
 }

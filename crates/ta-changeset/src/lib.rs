@@ -16,6 +16,8 @@ pub mod error;
 pub mod explanation;
 pub mod output_adapters;
 pub mod pr_package;
+pub mod review_session;
+pub mod review_session_store;
 pub mod uri_pattern;
 
 pub use changeset::{ChangeKind, ChangeSet, CommitIntent};
@@ -25,6 +27,11 @@ pub use draft_package::{DraftPackage, DraftStatus, ExplanationTiers};
 pub use error::ChangeSetError;
 pub use explanation::ExplanationSidecar;
 pub use output_adapters::{DetailLevel, OutputAdapter, OutputFormat, RenderContext};
+pub use review_session::{
+    ArtifactReview, Comment, CommentThread, DispositionCounts, ReviewSession, ReviewState,
+    SessionNote,
+};
+pub use review_session_store::ReviewSessionStore;
 pub use uri_pattern::{filter_uris, matches_uri};
 
 // Backwards compatibility: export old names as aliases
