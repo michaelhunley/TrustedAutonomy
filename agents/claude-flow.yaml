@@ -1,0 +1,24 @@
+# Agent launch configuration for Claude Flow (multi-agent orchestration).
+# Docs: https://github.com/ruvnet/claude-flow
+#
+# Override per-project: .ta/agents/claude-flow.yaml
+# Override per-user:    ~/.config/ta/agents/claude-flow.yaml
+
+name: claude-flow
+description: "Claude Flow — multi-agent orchestration via hive-mind"
+command: npx
+args_template:
+  - "claude-flow@alpha"
+  - "hive-mind"
+  - "spawn"
+  - "{prompt}"
+  - "--claude"
+injects_context_file: true
+injects_settings: true
+pre_launch:
+  command: npx
+  args:
+    - "claude-flow@alpha"
+    - "hive-mind"
+    - "init"
+env: {}

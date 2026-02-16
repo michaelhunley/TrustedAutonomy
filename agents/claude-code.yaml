@@ -1,0 +1,15 @@
+# Agent launch configuration for Claude Code (Anthropic).
+# Docs: https://docs.anthropic.com/en/docs/claude-code
+#
+# Override per-project: .ta/agents/claude-code.yaml
+# Override per-user:    ~/.config/ta/agents/claude-code.yaml
+
+name: claude-code
+description: "Anthropic's Claude Code CLI — interactive coding agent"
+command: claude
+args_template:
+  - "{prompt}"
+injects_context_file: true
+injects_settings: true
+pre_launch: null
+env: {}

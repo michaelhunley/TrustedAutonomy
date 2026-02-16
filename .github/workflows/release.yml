@@ -66,9 +66,17 @@ jobs:
             nix run github:trustedautonomy/ta
             ```
 
+            ### Documentation
+
+            - [USAGE.md](https://github.com/trustedautonomy/ta/blob/main/docs/USAGE.md) — Complete usage guide (also included in binary downloads)
+            - [DISCLAIMER.md](https://github.com/trustedautonomy/ta/blob/main/DISCLAIMER.md) — Terms of use
+            - HTML versions of both documents are available as release assets below
+
             ### Binaries
 
-            Download the appropriate binary for your platform below.
+            Download the appropriate binary for your platform below. Each archive includes the `ta` binary, `USAGE.md`, `DISCLAIMER.md`, and `LICENSE`.
+
+            **Note:** On first run, `ta` will prompt you to review and accept the terms of use.
 
             ---
 
@@ -133,10 +141,15 @@ jobs:
       - name: Create artifact directory
         run: mkdir -p artifacts
 
-      - name: Package binary (Unix)
+      - name: Package binary with docs (Unix)
         run: |
-          cd target/${{ matrix.target }}/release
-          tar czf ../../../artifacts/${{ env.BINARY_NAME }}-${{ needs.create-release.outputs.version }}-${{ matrix.target }}.tar.gz ${{ env.BINARY_NAME }}
+          mkdir -p staging
+          cp target/${{ matrix.target }}/release/${{ env.BINARY_NAME }} staging/
+          cp docs/USAGE.md staging/ 2>/dev/null || true
+          cp DISCLAIMER.md staging/ 2>/dev/null || true
+          cp LICENSE staging/ 2>/dev/null || true
+          cd staging
+          tar czf ../artifacts/${{ env.BINARY_NAME }}-${{ needs.create-release.outputs.version }}-${{ matrix.target }}.tar.gz *
           cd -
 
       - name: Generate SHA256 checksums
@@ -155,7 +168,7 @@ jobs:
           asset_name: ${{ env.BINARY_NAME }}-${{ needs.create-release.outputs.version }}-${{ matrix.target }}.tar.gz
           asset_content_type: application/gzip
 
-      - name: Upload checksums (first job only)
+      - name: Upload checksums and docs (first job only)
         if: matrix.target == 'x86_64-apple-darwin'
         uses: actions/upload-release-asset@v1
         env:
@@ -165,6 +178,50 @@ jobs:
           asset_path: ./artifacts/SHA256SUMS.txt
           asset_name: SHA256SUMS.txt
           asset_content_type: text/plain
+
+      - name: Upload USAGE.md (first job only)
+        if: matrix.target == 'x86_64-apple-darwin'
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./docs/USAGE.md
+          asset_name: USAGE.md
+          asset_content_type: text/markdown
+
+      - name: Generate HTML docs (first job only)
+        if: matrix.target == 'x86_64-apple-darwin'
+        run: |
+          brew install pandoc
+          pandoc docs/USAGE.md -s --metadata title="Trusted Autonomy Usage Guide" \
+            -c https://cdn.simplecss.org/simple.min.css \
+            -o docs/USAGE.html
+          pandoc DISCLAIMER.md -s --metadata title="Trusted Autonomy Terms of Use" \
+            -c https://cdn.simplecss.org/simple.min.css \
+            -o docs/DISCLAIMER.html
+
+      - name: Upload USAGE.html (first job only)
+        if: matrix.target == 'x86_64-apple-darwin'
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./docs/USAGE.html
+          asset_name: USAGE.html
+          asset_content_type: text/html
+
+      - name: Upload DISCLAIMER.html (first job only)
+        if: matrix.target == 'x86_64-apple-darwin'
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ./docs/DISCLAIMER.html
+          asset_name: DISCLAIMER.html
+          asset_content_type: text/html
 
   publish-crate:
     name: Publish to crates.io

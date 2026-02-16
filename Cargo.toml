@@ -58,5 +58,8 @@ rmcp = { version = "0.14", features = ["server", "transport-io"] }
 # JSON Schema generation — used by rmcp for MCP tool parameter schemas.
 schemars = "1"
 
+# YAML configuration parsing — used for agent launch configs.
+serde_yaml = "0.9"
+
 # Testing utilities
 tempfile = "3"

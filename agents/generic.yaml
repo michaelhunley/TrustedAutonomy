@@ -1,0 +1,47 @@
+# Template for adding a custom agent to Trusted Autonomy.
+#
+# Copy this file to one of:
+#   .ta/agents/<agent-name>.yaml      (project-specific override)
+#   ~/.config/ta/agents/<agent-name>.yaml  (user-wide override)
+#
+# Then use: ta run "task" --agent <agent-name> --source .
+#
+# TA searches for agent configs in this order:
+#   1. .ta/agents/<agent-name>.yaml       (project override)
+#   2. ~/.config/ta/agents/<agent-name>.yaml  (user override)
+#   3. <ta-install>/agents/<agent-name>.yaml  (built-in defaults)
+#   4. Hard-coded fallback (launches command with no args)
+
+name: my-agent
+description: "Description of what this agent does"
+
+# The command to execute (must be on PATH or absolute path).
+command: my-agent-cli
+
+# Arguments passed to the command. Use {prompt} as a placeholder —
+# TA replaces it with the goal title + objective text.
+args_template:
+  - "{prompt}"
+
+# If true, TA injects goal context into CLAUDE.md before launch.
+# Enable for agents that read CLAUDE.md for instructions.
+injects_context_file: false
+
+# If true, TA injects .claude/settings.local.json with permissions.
+# Enable for Claude Code-compatible agents.
+injects_settings: false
+
+# Optional command to run before the main agent launch.
+# Set to null if no pre-launch step is needed.
+pre_launch: null
+# Example:
+# pre_launch:
+#   command: my-agent-cli
+#   args: ["init", "--workspace"]
+
+# Environment variables to set for the agent process.
+env: {}
+# Example:
+# env:
+#   MY_AGENT_MODE: "autonomous"
+#   MY_AGENT_LOG_LEVEL: "info"
