@@ -168,10 +168,7 @@ explanation: "This is a test file for validation."
         let tiers = sidecar.into_tiers();
         assert_eq!(tiers.related_artifacts.len(), 2);
         assert_eq!(tiers.related_artifacts[0], "fs://workspace/src/lib.rs");
-        assert_eq!(
-            tiers.related_artifacts[1],
-            "fs://workspace/tests/test.rs"
-        );
+        assert_eq!(tiers.related_artifacts[1], "fs://workspace/tests/test.rs");
     }
 
     #[test]

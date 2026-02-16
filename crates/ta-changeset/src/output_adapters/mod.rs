@@ -142,10 +142,7 @@ mod tests {
             "md".parse::<OutputFormat>().unwrap(),
             OutputFormat::Markdown
         );
-        assert_eq!(
-            "json".parse::<OutputFormat>().unwrap(),
-            OutputFormat::Json
-        );
+        assert_eq!("json".parse::<OutputFormat>().unwrap(), OutputFormat::Json);
         assert_eq!("html".parse::<OutputFormat>().unwrap(), OutputFormat::Html);
         assert!("invalid".parse::<OutputFormat>().is_err());
     }
