@@ -749,17 +749,19 @@ You are working on a TA-mediated goal in a staging workspace.
 - Do NOT modify files outside this directory
 - All your changes will be captured as a PR for review
 
-## Before You Exit — Change Summary
+## Before You Exit — Change Summary (REQUIRED)
 
-Before exiting, create a file `.ta/change_summary.json` with this structure:
+You MUST create `.ta/change_summary.json` before exiting. The human reviewer relies on this to understand your work. Every changed file needs a clear "what I did" and "why" — reviewers who don't understand a change will reject it.
+
 ```json
 {{
-  "summary": "Brief description of all changes",
+  "summary": "Brief description of all changes made in this session",
   "changes": [
     {{
       "path": "relative/path/to/file",
       "action": "modified|created|deleted",
-      "why": "Why this change was needed",
+      "what": "Specific description of what was changed in this target",
+      "why": "Why this change was needed (motivation, not just restating what)",
       "independent": true,
       "depends_on": [],
       "depended_by": []
@@ -769,7 +771,10 @@ Before exiting, create a file `.ta/change_summary.json` with this structure:
 }}
 ```
 
-Rules for the summary:
+Rules for per-target descriptions:
+- **`what`** (REQUIRED): Describe specifically what you changed. NOT "updated file" — instead "Added JWT validation middleware with RS256 signature verification" or "Removed deprecated session-cookie auth fallback". The reviewer sees this as the primary description for each changed file.
+- **`why`**: The motivation, not a restatement of what. "Security audit flagged session cookies as vulnerable" not "To add JWT validation".
+- For lockfiles, config files, and generated files: still provide `what` (e.g., "Added jsonwebtoken v9.3 dependency") — don't leave them blank.
 - `independent`: true if this change can be applied or reverted without affecting other changes
 - `depends_on`: list of other file paths this change requires (e.g., if you add a function call, it depends on the file where the function is defined)
 - `depended_by`: list of other file paths that would break if this change is reverted

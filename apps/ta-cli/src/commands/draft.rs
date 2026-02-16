@@ -9,8 +9,8 @@ use ta_changeset::diff::DiffContent;
 use ta_changeset::diff_handlers::DiffHandlersConfig;
 use ta_changeset::draft_package::{
     AgentIdentity, Artifact, ArtifactDisposition, ChangeDependency, ChangeType, Changes,
-    DependencyKind, DraftPackage, DraftStatus, Goal, Iteration, Plan, Provenance, RequestedAction,
-    ReviewRequests, Risk, Signatures, Summary, WorkspaceRef,
+    DependencyKind, DraftPackage, DraftStatus, ExplanationTiers, Goal, Iteration, Plan, Provenance,
+    RequestedAction, ReviewRequests, Risk, Signatures, Summary, WorkspaceRef,
 };
 use ta_changeset::explanation::ExplanationSidecar;
 use ta_changeset::output_adapters::{
@@ -222,6 +222,9 @@ struct ChangeSummaryEntry {
     path: String,
     #[allow(dead_code)]
     action: Option<String>,
+    /// What was changed in this target (the primary per-target description).
+    what: Option<String>,
+    /// Why the change was needed (motivation).
     why: Option<String>,
     #[allow(dead_code)]
     #[serde(default)]
@@ -254,7 +257,27 @@ fn enrich_artifact(artifact: &mut Artifact, summary: &ChangeSummary) {
         .unwrap_or(&artifact.resource_uri);
 
     if let Some(entry) = summary.changes.iter().find(|c| c.path == rel_path) {
-        artifact.rationale = entry.why.clone();
+        // `what` populates explanation_tiers.summary (the primary per-target description).
+        // `why` populates rationale (the motivation).
+        if let Some(what) = &entry.what {
+            let tiers = artifact
+                .explanation_tiers
+                .get_or_insert_with(|| ExplanationTiers {
+                    summary: String::new(),
+                    explanation: String::new(),
+                    tags: vec![],
+                    related_artifacts: vec![],
+                });
+            tiers.summary = what.clone();
+            // If we also have a `why`, put it in the explanation field.
+            if let Some(why) = &entry.why {
+                tiers.explanation = why.clone();
+            }
+        }
+        // `why` alone (no `what`) goes into rationale for backward compatibility.
+        if entry.what.is_none() {
+            artifact.rationale = entry.why.clone();
+        }
 
         for dep_path in &entry.depends_on {
             artifact.dependencies.push(ChangeDependency {
@@ -1590,7 +1613,8 @@ mod tests {
                     {
                         "path": "README.md",
                         "action": "modified",
-                        "why": "Updated project description",
+                        "what": "Rewrote project description with new tagline",
+                        "why": "Old description was outdated after v2 rewrite",
                         "independent": true,
                         "depends_on": [],
                         "depended_by": []
@@ -1627,19 +1651,27 @@ mod tests {
             .open_questions
             .contains(&"main.rs change is referenced in README".to_string()));
 
-        // Artifacts should have rationale populated.
+        // Artifacts should have descriptions populated.
         let readme_artifact = pkg
             .changes
             .artifacts
             .iter()
             .find(|a| a.resource_uri.contains("README.md"))
             .unwrap();
+        // README has both `what` and `why` — `what` goes to explanation_tiers.summary,
+        // `why` goes to explanation_tiers.explanation.
+        let readme_tiers = readme_artifact.explanation_tiers.as_ref().unwrap();
         assert_eq!(
-            readme_artifact.rationale.as_deref(),
-            Some("Updated project description")
+            readme_tiers.summary,
+            "Rewrote project description with new tagline"
+        );
+        assert_eq!(
+            readme_tiers.explanation,
+            "Old description was outdated after v2 rewrite"
         );
         assert!(readme_artifact.dependencies.is_empty());
 
+        // main.rs has only `why` (no `what`) — backward compat: goes to rationale.
         let main_artifact = pkg
             .changes
             .artifacts

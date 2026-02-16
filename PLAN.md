@@ -51,6 +51,7 @@ Workspace structure with 12 crates under `crates/` and `apps/`. Resource URIs (`
 - CLAUDE.md injection includes instructions for `.ta/change_summary.json`
 - Agent writes per-file rationale + dependency info (depends_on, depended_by, independent)
 - Foundation for selective approval (Phase 4c)
+- **v0.2.4 update**: Added `what` field (per-target "what I did" description) alongside existing `why` (motivation). `what` populates `explanation_tiers.summary`; `why` populates `explanation_tiers.explanation`. Backward compatible — old summaries with only `why` still work via `rationale` field.
 
 ## Phase 4a.1 — Plan Tracking & Lifecycle
 <!-- status: done -->
@@ -442,6 +443,8 @@ Agent works in Virtual Workspace
 - Supervisor agent analyzes dependency graph and warns about coupled rejections
 - Discussion workflow for `?` (discuss) items
 - **Resolution path**: `ta run --follow-up` on a goal with discuss items injects comment threads as structured agent context; the agent addresses each discussed artifact and the resulting PR supersedes the original (see v0.1.2)
+- **Per-target summary enforcement**: At `ta draft build` time, warn (or error) when artifacts lack a `what` description. Agents should always explain what they did to each target. Lockfiles and generated files get auto-summaries from `default_summary()`, but source files should have agent-provided descriptions.
+- **Color coding in HTML/web output**: Add syntax-highlighted diffs in the HTML adapter, color-coded disposition badges, and visual grouping by approval status. Extend to markdown adapter where GitHub renders HTML.
 
 ### v0.3.1 — Plan Lifecycle Automation
 <!-- status: pending -->
@@ -517,18 +520,6 @@ pub struct PendingAction {
 - No Gmail API client. No Slack bot. No Twitter SDK. The MCP servers handle all service-specific logic.
 - TA only adds: interception, capture, display, approval, replay. The governance wrapper.
 
-### v0.5.1 — Community Memory
-<!-- status: pending -->
-**Goal**: Shared knowledge base where users and agents contribute solutions to unknowns. When someone solves a problem (integration quirk, error resolution, workflow pattern), that solution becomes available to the community.
-
-- **Memory schema**: Problem → context → solution → confidence score → contributor
-- **Local-first**: Each TA instance maintains its own memory store (existing `ta-audit` append-only log pattern)
-- **Opt-in sharing**: Users can publish solved unknowns to a community registry (anonymized by default)
-- **Agent-accessible**: MCP tool `ta_memory_search` lets agents query community solutions during goal execution
-- **Feedback loop**: Solutions that work get upvoted (automatically, via "did applying this fix the issue?"); stale/wrong solutions decay
-- **Integration with goal context**: CLAUDE.md injection can include relevant community solutions for the current task
-- **Not a chatbot knowledge base** — focused on actionable problem→solution pairs with provenance
-
 ---
 
 ## v0.6 — Sandbox Isolation *(release: tag v0.6.0-beta)*
@@ -602,6 +593,21 @@ pub struct PendingAction {
 
 Criteria: community interest, standalone utility, maintenance burden. If (b) or (c), define the protocol spec and publish separately.
 
+### v0.7.4 — Community Memory
+<!-- status: pending -->
+**Goal**: Shared knowledge base where users and agents contribute solutions to unknowns. When someone solves a problem (integration quirk, error resolution, workflow pattern), that solution becomes available to the community.
+
+**Why after v0.7.2**: Community memory is most valuable when it includes network/traffic pattern intelligence — "Gmail OAuth flow looks like X", "this API returns 429 after Y requests". Without the network intelligence layer, community memory would be limited to code-level patterns. After v0.7.2, community contributions can include traffic signatures, protocol quirks, and security patterns that make the shared knowledge base substantially richer.
+
+- **Memory schema**: Problem → context → solution → confidence score → contributor
+- **Local-first**: Each TA instance maintains its own memory store (existing `ta-audit` append-only log pattern)
+- **Opt-in sharing**: Users can publish solved unknowns to a community registry (anonymized by default)
+- **Agent-accessible**: MCP tool `ta_memory_search` lets agents query community solutions during goal execution
+- **Feedback loop**: Solutions that work get upvoted (automatically, via "did applying this fix the issue?"); stale/wrong solutions decay
+- **Integration with goal context**: CLAUDE.md injection can include relevant community solutions for the current task
+- **Community traffic patterns**: Anonymized traffic signatures from v0.7.2 — "Gmail send via OAuth", "Stripe API charge" — so new users get expert-level classification immediately
+- **Not a chatbot knowledge base** — focused on actionable problem→solution pairs with provenance
+
 ---
 
 ## v0.8 — Events & Orchestration *(release: tag v0.8.0-beta)*
@@ -654,5 +660,5 @@ Criteria: community interest, standalone utility, maintenance burden. If (b) or 
 - Role-scoped TA policies auto-generated from role capability declarations
 - Integration with Claude Flow as the agent coordination backend
 - Network governance (v0.7) active by default for all agent roles
-- Community memory (v0.5.1) shared across office roles — one role's solutions available to all
+- Community memory (v0.7.4) shared across office roles — one role's solutions available to all
 - Does NOT duplicate orchestration — composes existing tools with role/trigger glue

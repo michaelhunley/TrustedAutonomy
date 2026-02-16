@@ -13,8 +13,8 @@ use ta_changeset::output_adapters::{
 };
 use ta_changeset::pr_package::{
     AgentIdentity, Artifact, ArtifactDisposition, ChangeDependency, ChangeType, Changes,
-    DependencyKind, Goal, Iteration, PRPackage, PRStatus, Plan, Provenance, RequestedAction,
-    ReviewRequests, Risk, Signatures, Summary, WorkspaceRef,
+    DependencyKind, ExplanationTiers, Goal, Iteration, PRPackage, PRStatus, Plan, Provenance,
+    RequestedAction, ReviewRequests, Risk, Signatures, Summary, WorkspaceRef,
 };
 use ta_changeset::uri_pattern;
 use ta_connector_fs::FsConnector;
@@ -222,6 +222,9 @@ struct ChangeSummaryEntry {
     path: String,
     #[allow(dead_code)]
     action: Option<String>,
+    /// What was changed in this target (the primary per-target description).
+    what: Option<String>,
+    /// Why the change was needed (motivation).
     why: Option<String>,
     #[allow(dead_code)]
     #[serde(default)]
@@ -254,7 +257,25 @@ fn enrich_artifact(artifact: &mut Artifact, summary: &ChangeSummary) {
         .unwrap_or(&artifact.resource_uri);
 
     if let Some(entry) = summary.changes.iter().find(|c| c.path == rel_path) {
-        artifact.rationale = entry.why.clone();
+        // `what` populates explanation_tiers.summary (the primary per-target description).
+        // `why` populates rationale (the motivation).
+        if let Some(what) = &entry.what {
+            let tiers = artifact
+                .explanation_tiers
+                .get_or_insert_with(|| ExplanationTiers {
+                    summary: String::new(),
+                    explanation: String::new(),
+                    tags: vec![],
+                    related_artifacts: vec![],
+                });
+            tiers.summary = what.clone();
+            if let Some(why) = &entry.why {
+                tiers.explanation = why.clone();
+            }
+        }
+        if entry.what.is_none() {
+            artifact.rationale = entry.why.clone();
+        }
 
         for dep_path in &entry.depends_on {
             artifact.dependencies.push(ChangeDependency {
