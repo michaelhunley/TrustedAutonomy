@@ -85,6 +85,24 @@ pub struct Changes {
     pub patch_sets: Vec<PatchSet>,
 }
 
+/// Three-tier explanation for an artifact (v0.2.3).
+///
+/// Agents populate this via `.diff.explanation.yaml` sidecar files.
+/// Enables tiered review: top (one-line) → medium (paragraph) → full (with diff).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExplanationTiers {
+    /// One-line summary (e.g., "Refactored auth middleware to use JWT").
+    pub summary: String,
+    /// Paragraph explaining what changed and why, dependencies affected.
+    pub explanation: String,
+    /// Optional tags for categorization (e.g., "security", "breaking-change").
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    /// Related artifacts (URIs) that are connected to this change.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub related_artifacts: Vec<String>,
+}
+
 /// A local filesystem change artifact.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Artifact {
@@ -102,6 +120,9 @@ pub struct Artifact {
     /// Dependencies: other artifacts this one requires or is required by.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dependencies: Vec<ChangeDependency>,
+    /// Three-tier explanation (summary, explanation, tags) from sidecar YAML (v0.2.3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub explanation_tiers: Option<ExplanationTiers>,
 }
 
 /// Per-artifact review disposition.
@@ -436,6 +457,7 @@ mod tests {
                     disposition: Default::default(),
                     rationale: None,
                     dependencies: vec![],
+                    explanation_tiers: None,
                 }],
                 patch_sets: vec![],
             },
@@ -594,6 +616,7 @@ mod tests {
                 target_uri: "fs://workspace/src/lib.rs".to_string(),
                 kind: DependencyKind::DependsOn,
             }],
+            explanation_tiers: None,
         };
         let json = serde_json::to_string(&artifact).unwrap();
         let restored: Artifact = serde_json::from_str(&json).unwrap();
@@ -641,5 +664,65 @@ mod tests {
         assert!(json.contains(&superseding_id.to_string()));
         let restored: PRStatus = serde_json::from_str(&json).unwrap();
         assert_eq!(restored, status);
+    }
+
+    #[test]
+    fn explanation_tiers_serialization() {
+        let tiers = ExplanationTiers {
+            summary: "Refactored auth middleware to use JWT".to_string(),
+            explanation: "Replaced session-based auth with JWT validation.".to_string(),
+            tags: vec!["security".to_string(), "breaking-change".to_string()],
+            related_artifacts: vec![
+                "fs://workspace/src/auth/config.rs".to_string(),
+                "fs://workspace/tests/auth_test.rs".to_string(),
+            ],
+        };
+        let json = serde_json::to_string(&tiers).unwrap();
+        assert!(json.contains("\"summary\""));
+        assert!(json.contains("\"explanation\""));
+        assert!(json.contains("\"tags\""));
+        assert!(json.contains("\"security\""));
+        let restored: ExplanationTiers = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.summary, tiers.summary);
+        assert_eq!(restored.tags.len(), 2);
+        assert_eq!(restored.related_artifacts.len(), 2);
+    }
+
+    #[test]
+    fn artifact_with_explanation_tiers_round_trip() {
+        let artifact = Artifact {
+            resource_uri: "fs://workspace/src/auth/middleware.rs".to_string(),
+            change_type: ChangeType::Modify,
+            diff_ref: "changeset:1".to_string(),
+            tests_run: vec![],
+            disposition: ArtifactDisposition::Pending,
+            rationale: Some("Modernize auth".to_string()),
+            dependencies: vec![],
+            explanation_tiers: Some(ExplanationTiers {
+                summary: "Refactored auth to JWT".to_string(),
+                explanation: "Full JWT integration with validation.".to_string(),
+                tags: vec!["security".to_string()],
+                related_artifacts: vec![],
+            }),
+        };
+        let json = serde_json::to_string(&artifact).unwrap();
+        let restored: Artifact = serde_json::from_str(&json).unwrap();
+        assert!(restored.explanation_tiers.is_some());
+        assert_eq!(
+            restored.explanation_tiers.as_ref().unwrap().summary,
+            "Refactored auth to JWT"
+        );
+    }
+
+    #[test]
+    fn artifact_without_explanation_tiers_deserializes_correctly() {
+        // Backward compatibility: old JSON without explanation_tiers.
+        let json = r#"{
+            "resource_uri": "fs://workspace/test.txt",
+            "change_type": "add",
+            "diff_ref": "changeset:0"
+        }"#;
+        let artifact: Artifact = serde_json::from_str(json).unwrap();
+        assert!(artifact.explanation_tiers.is_none());
     }
 }
