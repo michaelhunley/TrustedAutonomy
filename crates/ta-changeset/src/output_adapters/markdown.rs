@@ -1,7 +1,7 @@
 //! markdown.rs — Markdown output adapter for GitHub PR bodies.
 
 use crate::error::ChangeSetError;
-use crate::output_adapters::{DetailLevel, OutputAdapter, RenderContext};
+use crate::output_adapters::{default_summary, DetailLevel, OutputAdapter, RenderContext};
 use crate::pr_package::{Artifact, ChangeType};
 
 #[derive(Default)]
@@ -28,7 +28,7 @@ impl OutputAdapter for MarkdownAdapter {
         let mut output = String::new();
 
         // Header
-        output.push_str(&format!("# PR Package: {}\n\n", pkg.package_id));
+        output.push_str(&format!("# Draft: {}\n\n", pkg.package_id));
         output.push_str(&format!("**Status**: {}\n\n", pkg.status));
         output.push_str(&format!("**Goal**: {}\n\n", pkg.goal.title));
         output.push_str(&format!(
@@ -71,7 +71,9 @@ impl OutputAdapter for MarkdownAdapter {
                         .as_ref()
                         .map(|t| t.summary.as_str())
                         .or(artifact.rationale.as_deref())
-                        .unwrap_or("(no explanation)");
+                        .unwrap_or_else(|| {
+                            default_summary(&artifact.resource_uri, &artifact.change_type)
+                        });
                     output.push_str(&format!(
                         "- {} **{}** — {}\n",
                         icon, artifact.resource_uri, summary

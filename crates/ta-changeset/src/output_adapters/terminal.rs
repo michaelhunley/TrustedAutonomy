@@ -1,7 +1,7 @@
 //! terminal.rs — Terminal output adapter with colored, tiered display.
 
 use crate::error::ChangeSetError;
-use crate::output_adapters::{DetailLevel, OutputAdapter, RenderContext};
+use crate::output_adapters::{default_summary, DetailLevel, OutputAdapter, RenderContext};
 use crate::pr_package::{Artifact, ChangeType};
 
 #[derive(Default)]
@@ -26,7 +26,7 @@ impl TerminalAdapter {
         let bold = "\x1b[1m";
 
         format!(
-            "{bold}PR Package: {}{reset}\n\
+            "{bold}Draft: {}{reset}\n\
             Status: {}{}{reset}\n\
             Goal: {}\n\
             Created: {}\n\n\
@@ -58,10 +58,10 @@ impl TerminalAdapter {
         };
 
         let disposition_badge = match artifact.disposition {
-            crate::pr_package::ArtifactDisposition::Pending => "\x1b[90m[pending]\x1b[0m",
-            crate::pr_package::ArtifactDisposition::Approved => "\x1b[32m[approved]\x1b[0m",
-            crate::pr_package::ArtifactDisposition::Rejected => "\x1b[31m[rejected]\x1b[0m",
-            crate::pr_package::ArtifactDisposition::Discuss => "\x1b[33m[discuss]\x1b[0m",
+            crate::pr_package::ArtifactDisposition::Pending => "[pending]",
+            crate::pr_package::ArtifactDisposition::Approved => "[approved]",
+            crate::pr_package::ArtifactDisposition::Rejected => "[rejected]",
+            crate::pr_package::ArtifactDisposition::Discuss => "[discuss]",
         };
 
         let summary = artifact
@@ -69,7 +69,7 @@ impl TerminalAdapter {
             .as_ref()
             .map(|t| t.summary.as_str())
             .or(artifact.rationale.as_deref())
-            .unwrap_or("(no explanation)");
+            .unwrap_or_else(|| default_summary(&artifact.resource_uri, &artifact.change_type));
 
         format!(
             "  {} {} {} - {}",
@@ -310,7 +310,7 @@ mod tests {
         };
 
         let output = adapter.render(&ctx).unwrap();
-        assert!(output.contains("PR Package"));
+        assert!(output.contains("Draft"));
         assert!(output.contains("pending_review"));
         assert!(output.contains("src/auth.rs"));
         assert!(output.contains("Migrated to JWT auth"));

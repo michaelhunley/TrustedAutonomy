@@ -105,13 +105,53 @@ pub trait DiffProvider {
     fn get_diff(&self, diff_ref: &str) -> Result<String, ChangeSetError>;
 }
 
-/// Output adapter trait — renders PR packages in different formats.
+/// Output adapter trait — renders draft packages in different formats.
 pub trait OutputAdapter {
-    /// Render the PR package to a string.
+    /// Render the draft package to a string.
     fn render(&self, ctx: &RenderContext) -> Result<String, ChangeSetError>;
 
     /// Adapter name (for logging/debugging).
     fn name(&self) -> &str;
+}
+
+/// Generate a sensible default summary when no explanation or rationale is provided.
+pub fn default_summary<'a>(uri: &str, change_type: &crate::pr_package::ChangeType) -> &'a str {
+    let path = uri.strip_prefix("fs://workspace/").unwrap_or(uri);
+
+    // Lockfiles
+    if path.ends_with("Cargo.lock")
+        || path.ends_with("package-lock.json")
+        || path.ends_with("yarn.lock")
+        || path.ends_with("pnpm-lock.yaml")
+        || path.ends_with("Gemfile.lock")
+        || path.ends_with("poetry.lock")
+    {
+        return "lockfile updated (dependency changes)";
+    }
+
+    // Config / manifest files
+    if path.ends_with("Cargo.toml")
+        || path.ends_with("package.json")
+        || path.ends_with("pyproject.toml")
+    {
+        return "project configuration updated";
+    }
+
+    // Plan / docs
+    if path.ends_with("PLAN.md") || path.ends_with("CHANGELOG.md") {
+        return "project documentation updated";
+    }
+    if path.ends_with("README.md") {
+        return "readme updated";
+    }
+
+    // By change type
+    match change_type {
+        crate::pr_package::ChangeType::Add => "new file",
+        crate::pr_package::ChangeType::Delete => "file removed",
+        crate::pr_package::ChangeType::Rename => "file renamed",
+        crate::pr_package::ChangeType::Modify => "modified",
+    }
 }
 
 /// Get an adapter instance for the given format.

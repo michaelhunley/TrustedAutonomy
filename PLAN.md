@@ -476,14 +476,58 @@ A `ta release` command driven by a YAML task script (`.ta/release.yaml`). Each s
 
 ---
 
-## v0.5 — External Connectors *(release: tag v0.5.0-alpha)*
+## v0.5 — MCP Interception & External Actions *(release: tag v0.5.0-alpha)*
 
-### v0.5.0 — First External Connector
+> **Architecture shift**: Instead of building custom connectors per service (Gmail, Drive, etc.),
+> TA intercepts MCP tool calls that represent state-changing actions. MCP servers handle the
+> integration. TA handles the governance. Same pattern as filesystem: hold changes at a
+> checkpoint, replay on apply.
+
+### v0.5.0 — MCP Tool Call Interception
 <!-- status: pending -->
-Options (choose one):
-- **Gmail staging**: read threads, create draft (ChangeSet), send gated by approval
-- **Drive staging**: read doc, write_patch + diff preview, commit gated
-- **DB staging**: write_patch as transaction log + preview, commit gated
+**Core**: Intercept outbound MCP tool calls that change external state. Hold them in the draft as pending actions. Replay on apply.
+
+- **MCP action capture**: When an agent calls an MCP tool (e.g., `gmail_send`, `slack_post`, `tweet_create`), TA intercepts the call, records the tool name + arguments + timestamp in the draft as a `PendingAction`
+- **Action classification**: Read-only calls (search, list, get) pass through immediately. State-changing calls (send, post, create, update, delete) are captured and held
+- **Draft action display**: `ta draft view` shows pending actions alongside file artifacts — "Gmail: send to alice@example.com, subject: Q3 Report" with full payload available at `--detail full`
+- **Selective approval**: Same `--approve`/`--reject` pattern works for actions. URI scheme distinguishes them: `mcp://gmail/send`, `mcp://slack/post_message`, etc.
+- **Apply = replay**: `ta draft apply` replays approved MCP calls against the live MCP server. Failed replays are reported with retry option.
+- **Data model**: `DraftPackage.changes` gains `pending_actions: Vec<PendingAction>` alongside existing `artifacts` and `patch_sets`
+
+```rust
+pub struct PendingAction {
+    pub action_uri: String,           // mcp://server/tool_name
+    pub tool_name: String,            // Original MCP tool name
+    pub arguments: serde_json::Value, // Captured arguments
+    pub captured_at: DateTime<Utc>,
+    pub disposition: ArtifactDisposition, // Same approval model as file artifacts
+    pub summary: String,              // Human-readable description (LLM-generated)
+    pub reversible: bool,             // Can this action be undone? (send email = no, create draft = yes)
+}
+```
+
+#### First integration targets (via existing MCP servers)
+- **Gmail**: Send email, create draft, reply — using Google MCP server
+- **Slack/Discord**: Post message, react — using respective MCP servers
+- **Social media**: Post, schedule — using platform MCP servers
+- **Google Drive/Docs**: Create, update, share — using Google MCP server
+- **Database**: INSERT/UPDATE/DELETE — using DB MCP servers
+
+#### What TA does NOT build
+- No Gmail API client. No Slack bot. No Twitter SDK. The MCP servers handle all service-specific logic.
+- TA only adds: interception, capture, display, approval, replay. The governance wrapper.
+
+### v0.5.1 — Community Memory
+<!-- status: pending -->
+**Goal**: Shared knowledge base where users and agents contribute solutions to unknowns. When someone solves a problem (integration quirk, error resolution, workflow pattern), that solution becomes available to the community.
+
+- **Memory schema**: Problem → context → solution → confidence score → contributor
+- **Local-first**: Each TA instance maintains its own memory store (existing `ta-audit` append-only log pattern)
+- **Opt-in sharing**: Users can publish solved unknowns to a community registry (anonymized by default)
+- **Agent-accessible**: MCP tool `ta_memory_search` lets agents query community solutions during goal execution
+- **Feedback loop**: Solutions that work get upvoted (automatically, via "did applying this fix the issue?"); stale/wrong solutions decay
+- **Integration with goal context**: CLAUDE.md injection can include relevant community solutions for the current task
+- **Not a chatbot knowledge base** — focused on actionable problem→solution pairs with provenance
 
 ---
 
@@ -493,19 +537,70 @@ Options (choose one):
 <!-- status: pending -->
 - OCI/gVisor sandbox for agent execution
 - Allowlisted command execution (rg, fmt, test profiles)
-- CWD enforcement — agents can't escape workspace
+- CWD enforcement — agents can't escape virtual workspace
 - Command transcripts hashed into audit log
+- Network access policy: allow/deny per-domain (foundation for v0.7 network layer)
 
 ---
 
-## v0.7 — Distribution & Packaging *(release: tag v0.7.0-beta)*
+## v0.7 — Network Abstraction Layer *(release: tag v0.7.0-beta)*
 
-### v0.7.0 — Distribution & Packaging
+> **Separate agent protocol layer**: The network intercept capability may be packaged as a
+> standalone protocol that TA uses but others can adopt independently. Think modern Wireshark
+> with LLM interpretation — understands what traffic means, not just what bytes flow.
+
+### v0.7.0 — Research: Existing Network Intercept Projects
 <!-- status: pending -->
-- Developer: `cargo run` + local config + Nix
-- Desktop: installer with bundled daemon, git, rg/jq
-- Cloud: OCI image for daemon + connectors, ephemeral workspaces
-- Web UI for review/approval (localhost → LAN → cloud)
+**Goal**: Survey existing tools before building. Identify what to adopt vs. build.
+
+- **Survey targets**:
+  - mitmproxy / mitmproxy-rs — transparent HTTPS interception with Python/Rust API
+  - Wireshark/tshark dissectors — protocol parsing at scale
+  - Envoy/Istio sidecar proxy — service mesh traffic interception patterns
+  - eBPF-based tools (bpftrace, Cilium) — kernel-level packet observation without proxy
+  - Burp Suite / ZAP — security-focused HTTP intercept with plugin systems
+  - OpenTelemetry — distributed tracing as a traffic observation model
+  - pcap/npcap libraries — raw packet capture
+- **Evaluation criteria**:
+  - Can it run as a transparent proxy for a sandboxed process? (v0.6 integration)
+  - Does it handle TLS interception with a local CA?
+  - Can we get structured data (method, URL, headers, body) not just raw bytes?
+  - Rust/C FFI available? Or do we shell out?
+  - License compatibility (Apache-2.0 / MIT preferred)
+- **Output**: Decision document — what to adopt, what to wrap, what to build
+
+### v0.7.1 — Network Traffic Capture & Governance
+<!-- status: pending -->
+**Core**: Transparent proxy that captures network traffic from agent processes, classifies it, and holds state-changing requests at a checkpoint.
+
+- **Capture layer**: Transparent proxy (likely mitmproxy-based or custom Rust proxy) that agent traffic routes through
+- **Traffic classification**: LLM-assisted categorization of requests:
+  - Read-only (GET, search queries) → pass through, log for audit
+  - State-changing (POST, PUT, DELETE, form submissions) → capture and hold in draft
+  - Sensitive (auth tokens, PII, credentials) → flag for review, never auto-approve
+- **AI summary**: Each captured request gets an LLM-generated plain-English description: "Sending email to 3 recipients with Q3 financial report attached" instead of raw HTTP POST body
+- **Draft integration**: Captured network actions appear in `ta draft view` alongside MCP actions and file changes. URI scheme: `net://api.gmail.com/POST/send`
+- **Replay on apply**: Approved network requests are replayed. Handles auth token refresh, idempotency keys, retry logic.
+- **Fallback for non-MCP agents**: Any agent that makes direct HTTP calls (no MCP) still gets governance via network capture. MCP interception (v0.5) is preferred; network capture is the safety net.
+
+### v0.7.2 — LLM Traffic Intelligence
+<!-- status: pending -->
+**Goal**: The network layer becomes an expert on traffic patterns — learns from public data and community contributions.
+
+- **Protocol understanding**: Train/fine-tune models on common API patterns (REST, GraphQL, gRPC) so summaries are accurate and actionable
+- **Security intelligence**: Integrate public vulnerability databases (CVE, NVD), known-bad endpoints, credential leak patterns
+- **Anomaly detection**: Flag unusual traffic — agent calling an API it's never called before, unexpected data exfiltration patterns, credential stuffing
+- **Community traffic patterns**: Opt-in sharing of anonymized traffic signatures (not payloads) — "Gmail send via OAuth looks like X" — so new users get expert-level classification immediately
+- **Training pipeline**: Each approved/rejected traffic decision feeds back into the classifier. Over time, TA learns what each user considers safe vs. risky.
+
+### v0.7.3 — Standalone Agent Protocol Layer (packaging decision)
+<!-- status: pending -->
+**Decision point**: Package the network intercept + LLM intelligence as:
+- (a) A built-in TA module (current path)
+- (b) A standalone protocol/library that TA depends on but others can use independently
+- (c) Both — library with TA integration as the reference implementation
+
+Criteria: community interest, standalone utility, maintenance burden. If (b) or (c), define the protocol spec and publish separately.
 
 ---
 
@@ -515,7 +610,7 @@ Options (choose one):
 <!-- status: pending -->
 > See `docs/VISION-virtual-office.md` for full vision.
 - `--json` output flag on all CLI commands for programmatic consumption
-- Event hook execution: call webhooks/scripts on goal + PR state transitions
+- Event hook execution: call webhooks/scripts on goal + draft state transitions
 - `ta events listen` command — stream JSON events for external consumers
 - Stable event schema matching `docs/plugins-architecture-guidance.md` hooks
 - Non-interactive approval API: token-based approve/reject (for Slack buttons, email replies)
@@ -523,15 +618,27 @@ Options (choose one):
 
 ---
 
-## v0.9 — Notification Connectors *(release: tag v0.9.0-beta)*
+## v0.9 — Distribution & Packaging *(release: tag v0.9.0-beta)*
 
-### v0.9.0 — Notification Connectors
+### v0.9.0 — Distribution & Packaging
 <!-- status: pending -->
-- `ta-connector-notify-email`: SMTP PR summaries + reply-to-approve parsing
-- `ta-connector-notify-slack`: Slack app with Block Kit PR cards + button callbacks
-- `ta-connector-notify-discord`: Discord bot with embed summaries + reaction handlers
+- Developer: `cargo run` + local config + Nix
+- Desktop: installer with bundled daemon, git, rg/jq
+- Cloud: OCI image for daemon + MCP servers, ephemeral virtual workspaces
+- Web UI for review/approval (localhost → LAN → cloud)
+
+---
+
+## v0.10 — Notification Channels *(release: tag v0.10.0-beta)*
+
+### v0.10.0 — Notification Channels
+<!-- status: pending -->
+> Leverages MCP interception (v0.5) — TA doesn't build Slack/email clients.
+> Instead, MCP servers handle delivery. TA adds bidirectional approval flows.
+- Outbound: Draft review summaries sent via MCP to email/Slack/Discord
+- Inbound: Approval actions received via MCP (reply-to-approve email, Slack button callback)
+- Unified config: `notification_channel` per role/goal in `.ta/workflow.toml`
 - Bidirectional: outbound notifications + inbound approval actions
-- Unified config: `notification_channel` per role/goal
 
 ---
 
@@ -539,11 +646,13 @@ Options (choose one):
 
 ### v1.0.0 — Virtual Office Runtime
 <!-- status: pending -->
-> Thin orchestration layer that composes TA, Claude Flow, and notification connectors.
+> Thin orchestration layer that composes TA, Claude Flow, and MCP servers.
 - Role definition schema (YAML): purpose, triggers, agent, capabilities, notification channel
 - Trigger system: cron scheduler + webhook receiver + TA event listener
 - Office manager daemon: reads role configs, routes triggers, calls `ta run`
 - `ta office start/stop/status` CLI commands
 - Role-scoped TA policies auto-generated from role capability declarations
 - Integration with Claude Flow as the agent coordination backend
+- Network governance (v0.7) active by default for all agent roles
+- Community memory (v0.5.1) shared across office roles — one role's solutions available to all
 - Does NOT duplicate orchestration — composes existing tools with role/trigger glue

@@ -56,13 +56,13 @@ impl OutputAdapter for HtmlAdapter {
     fn render(&self, ctx: &RenderContext) -> Result<String, ChangeSetError> {
         let pkg = ctx.package;
         let mut html = String::from("<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"UTF-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n");
-        html.push_str(&format!("<title>PR Package: {}</title>\n", pkg.package_id));
+        html.push_str(&format!("<title>Draft: {}</title>\n", pkg.package_id));
         html.push_str(self.css());
         html.push_str("</head>\n<body>\n");
 
         // Header
         html.push_str("<div class=\"header\">\n");
-        html.push_str("<h1>PR Package</h1>\n");
+        html.push_str("<h1>Draft</h1>\n");
         html.push_str(&format!("<p><strong>ID:</strong> {}</p>\n", pkg.package_id));
         html.push_str(&format!(
             "<p><strong>Status:</strong> <span class=\"status {}\">{}</span></p>\n",
