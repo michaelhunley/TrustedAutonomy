@@ -8,8 +8,7 @@ Go to **Settings > Secrets and variables > Actions** in your GitHub repo and add
 
 | Secret | Required | Purpose |
 |---|---|---|
-| `CARGO_REGISTRY_TOKEN` | Yes | Publish to crates.io. Get from [crates.io/settings/tokens](https://crates.io/settings/tokens) (scope: `publish-update`) |
-| `CACHIX_AUTH_TOKEN` | No | Cache Nix builds in CI (only if using Cachix) |
+| `CARGO_REGISTRY_TOKEN` | No | Publish to crates.io. Get from [crates.io/settings/tokens](https://crates.io/settings/tokens) (scope: `publish-update`). If not set, the crates.io publish step is skipped. |
 
 ### 2. Verify CI Passes
 

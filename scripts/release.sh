@@ -11,10 +11,10 @@
 # What this script does:
 #   1. Validates the version format
 #   2. Collects commits since last tag
-#   3. Generates user-facing release notes (agent in background or template)
+#   3. Generates user-facing release notes (categorized by type)
 #   4. Bumps version in all Cargo.toml files + DISCLAIMER.md
 #   5. Runs the full verification suite (build, test, clippy, fmt)
-#   6. Waits for release notes (if agent is still running)
+#   6. Shows release notes and offers $EDITOR review
 #   7. Commits the version bump + release notes
 #   8. Creates a git tag with release notes
 #   9. Pushes the tag (triggers GitHub Actions release workflow)
@@ -22,7 +22,6 @@
 # Prerequisites:
 #   - Clean working tree (no uncommitted changes)
 #   - Nix devShell available (./dev script)
-#   - ta binary available for agent-generated release notes (optional)
 
 set -euo pipefail
 
@@ -99,7 +98,6 @@ info "Found ${COMMIT_COUNT} commits to include."
 # ── Generate release notes ───────────────────────────────────
 
 RELEASE_NOTES_FILE="${REPO_ROOT}/RELEASE_NOTES.md"
-AGENT_PID=""
 
 # Categorize commits into user-facing groups
 categorize_commits() {
@@ -140,31 +138,8 @@ EOF
     printf -- "---\n\nFull changelog: https://github.com/trustedautonomy/ta/compare/${LAST_TAG:-"main"}...${TAG}\n" >> "$RELEASE_NOTES_FILE"
 }
 
-# Try agent-generated release notes in background, proceed with verification
-if command -v ta >/dev/null 2>&1; then
-    info "Starting release notes agent in background..."
-
-    AGENT_NOTES="${REPO_ROOT}/.ta-release-notes-${VERSION}.md"
-
-    ta run "Release notes for ${TAG}" \
-        --agent claude-code \
-        --source "$REPO_ROOT" \
-        --objective "Write user-facing release notes for Trusted Autonomy ${TAG}. Commits since ${LAST_TAG:-initial}:
-
-${COMMIT_LOG}
-
-Rules:
-- Write for END USERS, not developers. Focus on what they can now do.
-- Group into: New Features, Improvements, Bug Fixes (skip empty sections)
-- No commit hashes, no file paths, no internal implementation details
-- Each bullet should describe a user-visible capability or behavior change
-- Keep it brief — 1-2 sentences per bullet, few bullets per section
-- Write to: ${AGENT_NOTES}" &
-    AGENT_PID=$!
-    info "Agent running in background (PID ${AGENT_PID}). Continuing with build..."
-fi
-
-# Always generate template notes immediately (used as fallback)
+# Generate categorized release notes from commits
+# (Agent-synthesized notes planned for `ta release` in v0.3.2)
 categorize_commits
 
 # ── Version bump ─────────────────────────────────────────────
@@ -209,24 +184,6 @@ info "  Format check..."
 
 info "${GREEN}All checks passed.${NC}"
 
-# ── Wait for agent notes (if running) ────────────────────────
-
-if [ -n "$AGENT_PID" ]; then
-    if kill -0 "$AGENT_PID" 2>/dev/null; then
-        info "Waiting for release notes agent to finish..."
-        wait "$AGENT_PID" 2>/dev/null || true
-    fi
-
-    AGENT_NOTES="${REPO_ROOT}/.ta-release-notes-${VERSION}.md"
-    if [ -f "$AGENT_NOTES" ]; then
-        info "Agent-generated notes available. Using agent notes."
-        cp "$AGENT_NOTES" "$RELEASE_NOTES_FILE"
-        rm -f "$AGENT_NOTES"
-    else
-        info "Agent did not produce notes. Using categorized commit notes."
-    fi
-fi
-
 # ── Review release notes ─────────────────────────────────────
 
 echo ""
@@ -259,7 +216,6 @@ ${RELEASE_NOTES_BODY}"
 
 # Clean up temp files
 rm -f "$RELEASE_NOTES_FILE"
-rm -f "${REPO_ROOT}/.ta-release-notes-${VERSION}.md"
 
 # ── Push ─────────────────────────────────────────────────────
 
