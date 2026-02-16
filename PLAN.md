@@ -384,6 +384,53 @@ Configurable output renderers for `ta pr view`, designed for reuse:
 - `PRPackage` stores tier data; output adapters read it at render time
 - Explanation sidecars are ingested at `ta pr build` time, not stored permanently in staging
 
+### v0.2.4 — Terminology & Positioning Pass
+<!-- status: pending -->
+**Goal**: Rename user-facing concepts for clarity. TA is an **agentic governance wrapper** — it wraps agent execution transparently, holds proposed changes at a human review checkpoint, and applies approved changes to the user's world. Terminology should work for developers and non-developers alike, and avoid VCS jargon since TA targets Perforce, SVN, document platforms, email, social media, and more.
+
+#### Core Terminology Changes
+
+| Old term | New term | Rationale |
+|---|---|---|
+| **PRPackage** | **Draft** | A draft is the package of agent work products awaiting review. Implies "complete enough to review, not final until approved." No git connotation. |
+| **PRStatus** | **DraftStatus** | Follows from Draft rename. |
+| **`ta pr build/view/approve/deny/apply`** | **`ta draft build/view/approve/deny/apply`** | CLI surface rename. Keep `apply` — it's VCS-neutral and universally understood. |
+| **PendingReview (status)** | **Checkpoint** | The human-in-the-loop review gate where a Draft is examined for approval. |
+| **staging dir / overlay** | **Virtual Workspace** | Where the agent works. Invisible to the agent. Will become lightweight/virtual (V2: reflinks/FUSE). "Staging" is git jargon; "virtual workspace" is self-explanatory. |
+| **"substrate" / "layer"** | **Wrapper** | TA wraps agent execution. "Substrate" sounds like marketing; "layer" is vague; "wrapper" is literal and clear. |
+| **PR (in docs/README)** | **Draft** | Everywhere user-facing text says "PR" in the TA-specific sense (not git PRs). |
+
+#### Flow in New Terminology
+```
+Agent works in Virtual Workspace
+  -> produces a Draft
+    -> human reviews at Checkpoint
+      -> Approves / Rejects each change
+        -> Approved changes are Applied
+```
+
+#### Scope of Changes
+- **Code**: Rename `PRPackage` -> `DraftPackage`, `PRStatus` -> `DraftStatus`, `pr_package.rs` -> `draft_package.rs` (or keep file name, alias types)
+- **CLI**: `ta draft` subcommand replaces `ta pr`. Keep `ta pr` as hidden alias for backwards compatibility during transition.
+- **Docs**: README, USAGE.md, CLAUDE.md, PLAN.md — replace TA-specific "PR" with "Draft", "staging" with "virtual workspace" in user-facing text
+- **Schema**: `schema/pr_package.schema.json` -> `schema/draft_package.schema.json` (or alias)
+- **Internal code comments**: Update incrementally, not a big-bang rename. Internal variable names can migrate over time.
+
+#### What Stays the Same
+- `apply` — VCS-neutral, universally understood
+- `artifact` — standard term for individual changed items within a Draft
+- `goal` — clear, no issues
+- `checkpoint` — only replaces `PendingReview` status; the concept name for the review gate
+- All internal architecture (overlay, snapshot, conflict detection) — implementation names are fine; only user-facing surface changes
+
+#### Positioning Statement (draft)
+> **Trusted Autonomy** is an agentic governance wrapper. It lets AI agents work freely using their native tools in a virtual workspace, then holds their proposed changes — code commits, document edits, emails, posts — at a checkpoint for human review before anything takes effect. The human sees what the agent wants to do, approves or rejects each action, and maintains an audit trail of every decision.
+
+#### Open Questions
+- Should `DraftPackage` just be `Draft`? Shorter, but `Draft` alone is generic. `DraftPackage` parallels the current data model. Decide during implementation.
+- `Checkpoint` as a status vs. a concept: currently the status enum has `PendingReview`. Rename to `AtCheckpoint`? Or keep `PendingReview` internally and use "checkpoint" only in user-facing text?
+- `ta draft` vs `ta review` as the subcommand? `draft` emphasizes the agent's output; `review` emphasizes the human's action. Both valid. `draft` chosen because the subcommand operates on the draft object (`build`, `view`, `apply`).
+
 ---
 
 ## v0.3 — Review & Plan Automation *(release: tag v0.3.0-alpha)*
