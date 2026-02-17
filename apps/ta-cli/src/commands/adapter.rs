@@ -83,9 +83,9 @@ fn install_claude_code(project_root: &Path) -> anyhow::Result<()> {
     println!("  2. Start Claude Code in this directory");
     println!("  3. TA tools will appear alongside built-in tools");
     println!("  4. Agent stages changes through ta_fs_write");
-    println!("  5. Review with: ta pr list / ta pr view <id>");
-    println!("  6. Approve:    ta pr approve <id>");
-    println!("  7. Apply:      ta pr apply <id>");
+    println!("  5. Review with: ta draft list / ta draft view <id>");
+    println!("  6. Approve:    ta draft approve <id>");
+    println!("  7. Apply:      ta draft apply <id>");
 
     Ok(())
 }
