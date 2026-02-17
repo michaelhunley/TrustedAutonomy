@@ -69,6 +69,9 @@ pub enum PrCommands {
         /// Output format: terminal (default), markdown, json, html.
         #[arg(long, default_value = "terminal")]
         format: String,
+        /// Enable ANSI color output (terminal format only). Default: off.
+        #[arg(long)]
+        color: bool,
     },
     /// Approve a PR package for application.
     Approve {
@@ -138,6 +141,7 @@ pub fn execute(cmd: &PrCommands, config: &GatewayConfig) -> anyhow::Result<()> {
             open_external,
             detail,
             format,
+            color,
         } => view_package(
             config,
             id,
@@ -146,6 +150,7 @@ pub fn execute(cmd: &PrCommands, config: &GatewayConfig) -> anyhow::Result<()> {
             open_external,
             detail,
             format,
+            *color,
         ),
         PrCommands::Approve { id, reviewer } => approve_package(config, id, reviewer),
         PrCommands::Deny {
@@ -689,6 +694,7 @@ impl DiffProvider for StagingDiffProvider {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn view_package(
     config: &GatewayConfig,
     id: &str,
@@ -697,6 +703,7 @@ fn view_package(
     open_external: &Option<bool>,
     detail_str: &str,
     format_str: &str,
+    color: bool,
 ) -> anyhow::Result<()> {
     let package_id = Uuid::parse_str(id)?;
     let pkg = load_package(config, package_id)?;
@@ -759,8 +766,18 @@ fn view_package(
         diff_provider: None, // TODO: Wire up StagingWorkspace diff provider in follow-up
     };
 
+    // Resolve color: CLI --color overrides config default.
+    let effective_color = if color {
+        true
+    } else {
+        let workflow_config = ta_submit::WorkflowConfig::load_or_default(
+            &config.workspace_root.join(".ta/workflow.toml"),
+        );
+        workflow_config.display.color
+    };
+
     // Get the adapter and render.
-    let adapter = get_adapter(output_format);
+    let adapter = get_adapter(output_format, effective_color);
     let output = adapter.render(&ctx).map_err(|e| anyhow::anyhow!("{}", e))?;
 
     println!("{}", output);

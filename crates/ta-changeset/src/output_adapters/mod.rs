@@ -155,9 +155,12 @@ pub fn default_summary<'a>(uri: &str, change_type: &crate::pr_package::ChangeTyp
 }
 
 /// Get an adapter instance for the given format.
-pub fn get_adapter(format: OutputFormat) -> Box<dyn OutputAdapter> {
+///
+/// The `color` parameter controls ANSI color output for the terminal adapter.
+/// It is ignored for other formats.
+pub fn get_adapter(format: OutputFormat, color: bool) -> Box<dyn OutputAdapter> {
     match format {
-        OutputFormat::Terminal => Box::new(terminal::TerminalAdapter::new()),
+        OutputFormat::Terminal => Box::new(terminal::TerminalAdapter::with_color(color)),
         OutputFormat::Markdown => Box::new(markdown::MarkdownAdapter::new()),
         OutputFormat::Json => Box::new(json::JsonAdapter::new()),
         OutputFormat::Html => Box::new(html::HtmlAdapter::new()),

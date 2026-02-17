@@ -12,6 +12,10 @@ pub struct WorkflowConfig {
     /// Diff viewing configuration
     #[serde(default)]
     pub diff: DiffConfig,
+
+    /// Display / output configuration
+    #[serde(default)]
+    pub display: DisplayConfig,
 }
 
 /// Submit adapter configuration
@@ -128,6 +132,15 @@ impl Default for DiffConfig {
 
 fn default_open_external() -> bool {
     true
+}
+
+/// Display / output configuration
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DisplayConfig {
+    /// Enable ANSI color output in terminal adapter. Default: false.
+    /// Override per-command with `--color`.
+    #[serde(default)]
+    pub color: bool,
 }
 
 impl WorkflowConfig {

@@ -1,29 +1,75 @@
-//! terminal.rs — Terminal output adapter with colored, tiered display.
+//! terminal.rs — Terminal output adapter with configurable color support.
+//!
+//! Color is off by default. Enable with `TerminalAdapter::with_color()` or `--color` CLI flag.
 
 use crate::error::ChangeSetError;
 use crate::output_adapters::{default_summary, DetailLevel, OutputAdapter, RenderContext};
 use crate::pr_package::{Artifact, ChangeType};
 
 #[derive(Default)]
-pub struct TerminalAdapter {}
+pub struct TerminalAdapter {
+    color: bool,
+}
 
 impl TerminalAdapter {
     pub fn new() -> Self {
-        Self {}
+        Self::default()
+    }
+
+    pub fn with_color(color: bool) -> Self {
+        Self { color }
+    }
+
+    // -- ANSI helpers (return empty strings when color is off) --
+
+    fn bold(&self) -> &str {
+        if self.color {
+            "\x1b[1m"
+        } else {
+            ""
+        }
+    }
+
+    fn dim(&self) -> &str {
+        if self.color {
+            "\x1b[2m"
+        } else {
+            ""
+        }
+    }
+
+    fn reset(&self) -> &str {
+        if self.color {
+            "\x1b[0m"
+        } else {
+            ""
+        }
+    }
+
+    fn color_code<'a>(&self, code: &'a str) -> &'a str {
+        if self.color {
+            code
+        } else {
+            ""
+        }
     }
 
     fn render_header(&self, ctx: &RenderContext) -> String {
         let pkg = ctx.package;
-        let status_color = match pkg.status {
-            crate::pr_package::PRStatus::Draft => "\x1b[33m", // Yellow
-            crate::pr_package::PRStatus::PendingReview => "\x1b[36m", // Cyan
-            crate::pr_package::PRStatus::Approved { .. } => "\x1b[32m", // Green
-            crate::pr_package::PRStatus::Denied { .. } => "\x1b[31m", // Red
-            crate::pr_package::PRStatus::Applied { .. } => "\x1b[32m", // Green
-            crate::pr_package::PRStatus::Superseded { .. } => "\x1b[90m", // Gray
+        let status_color = if self.color {
+            match pkg.status {
+                crate::pr_package::PRStatus::Draft => "\x1b[33m",
+                crate::pr_package::PRStatus::PendingReview => "\x1b[36m",
+                crate::pr_package::PRStatus::Approved { .. } => "\x1b[32m",
+                crate::pr_package::PRStatus::Denied { .. } => "\x1b[31m",
+                crate::pr_package::PRStatus::Applied { .. } => "\x1b[32m",
+                crate::pr_package::PRStatus::Superseded { .. } => "\x1b[90m",
+            }
+        } else {
+            ""
         };
-        let reset = "\x1b[0m";
-        let bold = "\x1b[1m";
+        let bold = self.bold();
+        let reset = self.reset();
 
         format!(
             "{bold}Draft: {}{reset}\n\
@@ -49,13 +95,26 @@ impl TerminalAdapter {
         )
     }
 
+    fn change_icon(&self, change_type: &ChangeType) -> String {
+        if self.color {
+            match change_type {
+                ChangeType::Add => "\x1b[32m+\x1b[0m".to_string(),
+                ChangeType::Modify => "\x1b[33m~\x1b[0m".to_string(),
+                ChangeType::Delete => "\x1b[31m-\x1b[0m".to_string(),
+                ChangeType::Rename => "\x1b[36m>\x1b[0m".to_string(),
+            }
+        } else {
+            match change_type {
+                ChangeType::Add => "+".to_string(),
+                ChangeType::Modify => "~".to_string(),
+                ChangeType::Delete => "-".to_string(),
+                ChangeType::Rename => ">".to_string(),
+            }
+        }
+    }
+
     fn render_artifact_top(&self, artifact: &Artifact) -> String {
-        let change_icon = match artifact.change_type {
-            ChangeType::Add => "\x1b[32m+\x1b[0m",    // Green +
-            ChangeType::Modify => "\x1b[33m~\x1b[0m", // Yellow ~
-            ChangeType::Delete => "\x1b[31m-\x1b[0m", // Red -
-            ChangeType::Rename => "\x1b[36m>\x1b[0m", // Cyan >
-        };
+        let icon = self.change_icon(&artifact.change_type);
 
         let disposition_badge = match artifact.disposition {
             crate::pr_package::ArtifactDisposition::Pending => "[pending]",
@@ -73,39 +132,41 @@ impl TerminalAdapter {
 
         format!(
             "  {} {} {} - {}",
-            change_icon, disposition_badge, artifact.resource_uri, summary
+            icon, disposition_badge, artifact.resource_uri, summary
         )
     }
 
     fn render_artifact_medium(&self, artifact: &Artifact) -> String {
         let mut output = self.render_artifact_top(artifact);
+        let dim = self.dim();
+        let reset = self.reset();
         output.push('\n');
 
         if let Some(tiers) = &artifact.explanation_tiers {
             output.push_str(&format!(
-                "    \x1b[2mExplanation:\x1b[0m {}\n",
+                "    {dim}Explanation:{reset} {}\n",
                 tiers.explanation
             ));
 
             if !tiers.tags.is_empty() {
                 output.push_str(&format!(
-                    "    \x1b[2mTags:\x1b[0m {}\n",
+                    "    {dim}Tags:{reset} {}\n",
                     tiers.tags.join(", ")
                 ));
             }
 
             if !tiers.related_artifacts.is_empty() {
-                output.push_str("    \x1b[2mRelated:\x1b[0m\n");
+                output.push_str(&format!("    {dim}Related:{reset}\n"));
                 for related in &tiers.related_artifacts {
                     output.push_str(&format!("      - {}\n", related));
                 }
             }
         } else if let Some(rationale) = &artifact.rationale {
-            output.push_str(&format!("    \x1b[2mRationale:\x1b[0m {}\n", rationale));
+            output.push_str(&format!("    {dim}Rationale:{reset} {}\n", rationale));
         }
 
         if !artifact.dependencies.is_empty() {
-            output.push_str("    \x1b[2mDependencies:\x1b[0m\n");
+            output.push_str(&format!("    {dim}Dependencies:{reset}\n"));
             for dep in &artifact.dependencies {
                 output.push_str(&format!("      {:?}: {}\n", dep.kind, dep.target_uri));
             }
@@ -116,31 +177,42 @@ impl TerminalAdapter {
 
     fn render_artifact_full(&self, artifact: &Artifact, ctx: &RenderContext) -> String {
         let mut output = self.render_artifact_medium(artifact);
+        let bold = self.bold();
+        let reset = self.reset();
+        let dim = self.dim();
 
         // Fetch and display full diff if provider is available
         if let Some(provider) = ctx.diff_provider {
             match provider.get_diff(&artifact.diff_ref) {
                 Ok(diff) => {
-                    output.push_str("\n    \x1b[1mDiff:\x1b[0m\n");
+                    output.push_str(&format!("\n    {bold}Diff:{reset}\n"));
+                    let green = self.color_code("\x1b[32m");
+                    let red = self.color_code("\x1b[31m");
+                    let cyan = self.color_code("\x1b[36m");
                     for line in diff.lines() {
                         if line.starts_with('+') && !line.starts_with("+++") {
-                            output.push_str(&format!("    \x1b[32m{}\x1b[0m\n", line));
+                            output.push_str(&format!("    {green}{}{reset}\n", line));
                         } else if line.starts_with('-') && !line.starts_with("---") {
-                            output.push_str(&format!("    \x1b[31m{}\x1b[0m\n", line));
+                            output.push_str(&format!("    {red}{}{reset}\n", line));
                         } else if line.starts_with("@@") {
-                            output.push_str(&format!("    \x1b[36m{}\x1b[0m\n", line));
+                            output.push_str(&format!("    {cyan}{}{reset}\n", line));
                         } else {
                             output.push_str(&format!("    {}\n", line));
                         }
                     }
                 }
                 Err(e) => {
-                    output.push_str(&format!("    \x1b[31m[Error loading diff: {}]\x1b[0m\n", e));
+                    output.push_str(&format!(
+                        "    {red}[Error loading diff: {}]{reset}\n",
+                        e,
+                        red = self.color_code("\x1b[31m"),
+                        reset = reset
+                    ));
                 }
             }
         } else {
             output.push_str(&format!(
-                "    \x1b[2m[Diff available at: {}]\x1b[0m\n",
+                "    {dim}[Diff available at: {}]{reset}\n",
                 artifact.diff_ref
             ));
         }
@@ -152,6 +224,9 @@ impl TerminalAdapter {
 impl OutputAdapter for TerminalAdapter {
     fn render(&self, ctx: &RenderContext) -> Result<String, ChangeSetError> {
         let mut output = String::new();
+        let bold = self.bold();
+        let reset = self.reset();
+        let dim = self.dim();
 
         // Header
         output.push_str(&self.render_header(ctx));
@@ -175,7 +250,7 @@ impl OutputAdapter for TerminalAdapter {
         }
 
         output.push_str(&format!(
-            "\x1b[1mChanges ({} artifacts):\x1b[0m\n",
+            "{bold}Changes ({} artifacts):{reset}\n",
             filtered_artifacts.len()
         ));
 
@@ -198,7 +273,9 @@ impl OutputAdapter for TerminalAdapter {
 
         // Footer with review guidance
         if ctx.detail_level == DetailLevel::Top || ctx.detail_level == DetailLevel::Medium {
-            output.push_str("\n\x1b[2mTip: Use --detail full to see complete diffs\x1b[0m\n");
+            output.push_str(&format!(
+                "\n{dim}Tip: Use --detail full to see complete diffs{reset}\n"
+            ));
         }
 
         Ok(output)
@@ -315,6 +392,25 @@ mod tests {
         assert!(output.contains("pending_review"));
         assert!(output.contains("src/auth.rs"));
         assert!(output.contains("Migrated to JWT auth"));
+        // Default (no color) should not contain ANSI escape codes.
+        assert!(!output.contains("\x1b["));
+    }
+
+    #[test]
+    fn render_with_color() {
+        let adapter = TerminalAdapter::with_color(true);
+        let package = test_package();
+        let ctx = RenderContext {
+            package: &package,
+            detail_level: DetailLevel::Top,
+            file_filter: None,
+            diff_provider: None,
+        };
+
+        let output = adapter.render(&ctx).unwrap();
+        assert!(output.contains("Draft"));
+        // Color mode should contain ANSI escape codes.
+        assert!(output.contains("\x1b["));
     }
 
     #[test]
