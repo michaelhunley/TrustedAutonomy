@@ -18,6 +18,7 @@ pub mod output_adapters;
 pub mod pr_package;
 pub mod review_session;
 pub mod review_session_store;
+pub mod supervisor;
 pub mod uri_pattern;
 
 pub use changeset::{ChangeKind, ChangeSet, CommitIntent};
@@ -32,6 +33,9 @@ pub use review_session::{
     SessionNote,
 };
 pub use review_session_store::ReviewSessionStore;
+pub use supervisor::{
+    DependencyGraph, SupervisorAgent, ValidationError, ValidationResult, ValidationWarning,
+};
 pub use uri_pattern::{filter_uris, matches_uri};
 
 // Backwards compatibility: export old names as aliases
