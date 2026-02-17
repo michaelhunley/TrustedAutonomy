@@ -440,13 +440,13 @@ Agent works in Virtual Workspace
 <!-- status: in_progress -->
 **Completed**:
 - ✅ ReviewSession data model with persistent storage (review_session.rs, review_session_store.rs)
-- ✅ Per-artifact comment threads integrated into Artifact model
+- ✅ Per-artifact comment threads integrated into Artifact model (`comments: Option<Vec<Comment>>`)
 - ✅ Session state tracking (Active, Paused, Completed, Abandoned)
 - ✅ Disposition counts and summary methods
-- ✅ 50 new unit tests (total: 258 tests across 12 crates)
+- ✅ CLI review workflow: `ta draft review start/comment/next/finish/list/show`
+- ✅ 50+ new unit tests (total: 258 tests across 12 crates)
 
 **Remaining**:
-- CLI commands for review workflow (`ta draft review start/comment/next/finish`)
 - Supervisor agent that analyzes dependency graph and warns about coupled rejections
 - Discussion workflow implementation for discuss items
 - **Resolution path**: `ta run --follow-up` on a goal with discuss items injects comment threads as structured agent context; the agent addresses each discussed artifact and the resulting PR supersedes the original (see v0.1.2)

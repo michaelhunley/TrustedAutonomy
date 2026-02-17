@@ -741,13 +741,13 @@ You are working on a TA-mediated goal in a staging workspace.
 
 - This directory is a copy of the original project
 - Work normally — Read, Write, Edit, Bash all work as expected
-- When you're done, just exit. TA will diff your changes and create a PR package
+- When you're done, just exit. TA will diff your changes and create a draft for review
 - The human reviewer will see exactly what you changed and why
 
 ## Important
 
 - Do NOT modify files outside this directory
-- All your changes will be captured as a PR for review
+- All your changes will be captured as a draft for human review
 
 ## Before You Exit — Change Summary (REQUIRED)
 
@@ -779,6 +779,14 @@ Rules for per-target descriptions:
 - `depends_on`: list of other file paths this change requires (e.g., if you add a function call, it depends on the file where the function is defined)
 - `depended_by`: list of other file paths that would break if this change is reverted
 - Be honest about dependencies — the reviewer uses this to decide which changes to accept individually
+
+## Plan Updates (REQUIRED if PLAN.md exists)
+
+As you complete planned work items, update PLAN.md to reflect progress:
+- Move completed items from "Remaining" to "Completed" with a ✅ checkmark
+- Update test counts when you add or remove tests
+- Do NOT change the `<!-- status: ... -->` marker — only `ta draft apply` transitions phase status
+- If you complete all remaining items in a phase, note that in your change_summary.json
 
 ## Documentation Updates
 
