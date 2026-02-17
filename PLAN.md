@@ -16,6 +16,25 @@
 
 ---
 
+## Standards & Compliance Reference
+
+TA's architecture maps to emerging AI governance standards. Rather than bolt-on compliance, these standards inform design decisions at the phase where they naturally apply. References below indicate where TA's existing or planned capabilities satisfy a standard's requirements.
+
+| Standard | Relevance to TA | Phase(s) |
+|---|---|---|
+| **ISO/IEC 42001:2023** (AI Management Systems) | Audit trail integrity (hash-chained logs), documented capability grants, human oversight records | Phase 1 (done), v0.3.3 |
+| **ISO/IEC 42005:2025** (AI Impact Assessment) | Risk scoring per draft, policy decision records, impact statements in summaries | Phase 4b (done), v0.3.3 |
+| **IEEE 7001-2021** (Transparency of Autonomous Systems) | Structured decision reasoning, alternatives considered, observable policy enforcement | v0.3.3, v0.4.0 |
+| **IEEE 3152-2024** (Human/Machine Agency Identification) | Agent identity declarations, capability manifests, constitution references | Phase 2 (done), v0.4.0 |
+| **EU AI Act Article 14** (Human Oversight) | Human-in-the-loop checkpoint, approve/reject per artifact, audit trail of decisions | Phase 3 (done), v0.3.0 (done) |
+| **EU AI Act Article 50** (Transparency Obligations) | Transparent interception of external actions, human-readable action summaries | v0.5.0, v0.7.1 |
+| **Singapore IMDA Agentic AI Framework** (Jan 2026) | Agent boundaries, network governance, multi-agent coordination alignment | v0.6.0, v0.7.x, v1.0 |
+| **NIST AI RMF 1.0** (AI Risk Management) | Risk-proportional review, behavioral drift monitoring, escalation triggers | v0.3.3, v0.4.2 |
+
+> **Design principle**: TA achieves compliance through architectural enforcement (staging + policy + checkpoint), not self-declaration. An agent's compliance is *verified by TA's constraints*, not *claimed by the agent*. This is stronger than transparency-only protocols like [AAP](https://github.com/mnemom/aap) — TA doesn't ask agents to declare alignment; it enforces boundaries regardless of what agents declare.
+
+---
+
 ## Phase 0 — Repo Layout & Core Data Model
 <!-- status: done -->
 Workspace structure with 12 crates under `crates/` and `apps/`. Resource URIs (`fs://workspace/<path>`, `gmail://`, etc.), ChangeSet as universal staged mutation, capability manifests, PR package schema.
@@ -472,17 +491,96 @@ A `ta release` command driven by a YAML task script (`.ta/release.yaml`). Each s
 - **Customizable**: Users override with `.ta/release.yaml` in their project
 - **Approval gates**: `requires_approval: true` pauses for human review before proceeding (e.g., before push)
 
+### v0.3.3 — Decision Observability & Reasoning Capture
+<!-- status: pending -->
+**Goal**: Make every decision in the TA pipeline observable — not just *what happened*, but *what was considered and why*. Foundation for drift detection (v0.4.2) and compliance reporting (ISO 42001, IEEE 7001).
+
+> **Research note**: Evaluated [AAP](https://github.com/mnemom/aap) (Agent Alignment Protocol) for this role. AAP provides transparency through self-declared alignment cards and traced decisions, but is a Python/TypeScript decorator-based SDK that can't instrument external agents (Claude Code, Codex). TA's approach is stronger: enforce constraints architecturally, then capture the reasoning of TA's own decision pipeline. The *agent's* internal reasoning is captured via `change_summary.json`; TA's *governance* reasoning is captured here.
+
+#### Data Model: `DecisionReasoning` in `ta-audit`
+```rust
+pub struct DecisionReasoning {
+    /// What alternatives were considered.
+    pub alternatives: Vec<Alternative>,
+    /// Why this outcome was selected.
+    pub rationale: String,
+    /// Values/principles that informed the decision.
+    pub applied_principles: Vec<String>,
+}
+
+pub struct Alternative {
+    pub description: String,
+    pub score: Option<f64>,
+    pub rejected_reason: String,
+}
+```
+Extends `AuditEvent` with an optional `reasoning: Option<DecisionReasoning>` field. Backward-compatible — existing events without reasoning still deserialize.
+
+#### Integration Points
+- **PolicyEngine.evaluate()**: Log which grants were checked, which matched, why allow/deny/require-approval. Captures the full capability evaluation chain, not just the final verdict.
+- **Supervisor.validate()**: Log dependency graph analysis — which warnings were generated, which artifacts triggered them, what the graph structure looked like.
+- **Human review decisions**: Extend ReviewSession comments with structured `reasoning` field — reviewer can explain *why* they approved/rejected, not just leave a text comment.
+- **`ta draft build`**: Log why each artifact was classified (Add/Modify/Delete), what diff heuristics were applied.
+- **`ta draft apply`**: Log conflict detection reasoning — which files conflicted, which were phantom (auto-resolved), what resolution strategy was applied and why.
+
+#### Agent-Side: Extend `change_summary.json`
+Add optional `alternatives_considered` field per change entry:
+```json
+{
+  "path": "src/auth.rs",
+  "what": "Migrated to JWT",
+  "why": "Session tokens don't scale to multiple servers",
+  "alternatives_considered": [
+    { "description": "Sticky sessions", "rejected_reason": "Couples auth to infrastructure" },
+    { "description": "Redis session store", "rejected_reason": "Adds operational dependency" }
+  ]
+}
+```
+Agents that support it get richer review context; agents that don't still work fine (field is optional).
+
+#### CLI
+- `ta audit show <goal-id>` — display decision trail for a goal with reasoning
+- `ta audit export <goal-id> --format json` — structured export for compliance reporting
+
+#### Standards Alignment
+- **ISO/IEC 42001**: Documented decision processes with rationale (Annex A control A.6.2.3)
+- **IEEE 7001**: Transparent autonomous systems — decisions are explainable to stakeholders
+- **NIST AI RMF**: MAP 1.1 (intended purpose documentation), GOVERN 1.3 (decision documentation)
+
 ---
 
 ## v0.4 — Agent Intelligence *(release: tag v0.4.0-alpha)*
 
-### v0.4.0 — Intent-to-Access Planner
+### v0.4.0 — Intent-to-Access Planner & Agent Alignment Profiles
 <!-- status: pending -->
 - LLM "Intent-to-Policy Planner" outputs AgentSetupProposal (JSON)
 - Deterministic Policy Compiler validates proposal (subset of templates, staged semantics, budgets)
 - Agent setup becomes an "Agent PR" requiring approval before activation
 - User goal → proposed agent roster + scoped capabilities + milestone plan
-- agent setup evaluates how to run the agents efficiently at lowest cost (model selection, prompt caching, etc) and advises tradeoffs with human opt in where appropriate
+- Agent setup evaluates how to run the agents efficiently at lowest cost (model selection, prompt caching, etc) and advises tradeoffs with human opt in where appropriate
+
+#### Agent Alignment Profiles (extends YAML agent configs)
+Inspired by [AAP alignment cards](https://github.com/mnemom/aap) but *enforced* rather than self-declared. Each agent's YAML config gains a structured `alignment` block:
+```yaml
+# agents/claude-code.yaml
+alignment:
+  principal: "project-owner"           # Who this agent serves
+  autonomy_envelope:
+    bounded_actions: ["fs_read", "fs_write", "exec: cargo test"]
+    escalation_triggers: ["new_dependency", "security_sensitive", "breaking_change"]
+    forbidden_actions: ["network_external", "credential_access"]
+  constitution: "default-v1"           # Reference to enforcement rules
+  coordination:
+    allowed_collaborators: ["codex", "claude-flow"]
+    shared_resources: ["src/**", "tests/**"]
+```
+- **Key difference from AAP**: These declarations are *compiled into CapabilityManifest grants* by the Policy Compiler. An agent declaring `forbidden_actions: ["network_external"]` gets a manifest with no network grants — it's not a promise, it's a constraint.
+- **Coordination block**: Used by v0.4.1 macro goals and v1.0 virtual office to determine which agents can co-operate on shared resources.
+
+#### Standards Alignment
+- **IEEE 3152-2024**: Agent identity + capability declarations satisfy human/machine agency identification
+- **ISO/IEC 42001**: Agent setup proposals + human approval = documented AI lifecycle management
+- **NIST AI RMF GOVERN 1.1**: Defined roles and responsibilities for each agent in the system
 
 ### v0.4.1 — Macro Goals & Inner-Loop Iteration
 <!-- status: pending -->
@@ -520,6 +618,44 @@ TA injects MCP tools that mirror the CLI structure — same commands, same argum
 - Each sub-goal draft appears in `ta draft list` as a child of the macro goal
 - PLAN.md updates proposed via `ta_plan_update` are held at checkpoint (agent proposes, human approves)
 - Works with existing follow-up goal mechanism — macro goals are the automated version of `--follow-up`
+
+### v0.4.2 — Behavioral Drift Detection
+<!-- status: pending -->
+**Goal**: Detect when an agent's behavior patterns diverge from its historical baseline or declared alignment profile. Uses the decision reasoning data from v0.3.3 and alignment profiles from v0.4.0.
+
+> **Why built-in, not AAP**: AAP's drift detection (`aap drift`) compares traces against self-declared alignment cards. TA's approach compares *actual enforced behavior* across goals — what resources an agent accesses, what kinds of changes it makes, how often it triggers escalation, what rejection rate it has. This is empirical, not declarative.
+
+#### Drift Signals (computed from `ta-audit` event log)
+- **Resource scope drift**: Agent accessing files/URIs outside its historical pattern (e.g., suddenly modifying CI configs when it normally only touches `src/`)
+- **Escalation frequency change**: Significant increase/decrease in policy escalations may indicate changed behavior or stale manifest
+- **Rejection rate drift**: If an agent's drafts start getting rejected more often, something changed
+- **Change volume anomaly**: Unexpectedly large or small diffs compared to historical baseline
+- **Dependency pattern shift**: Agent introducing new external dependencies at unusual rates
+
+#### CLI
+- `ta audit drift <agent-id>` — show drift report comparing recent N goals against historical baseline
+- `ta audit drift --all` — drift summary across all agents
+- `ta audit baseline <agent-id>` — compute and store behavioral baseline from historical data
+- Warning integration: `ta draft build` optionally warns if current goal's behavior diverges from baseline
+
+#### Data Model
+```rust
+pub struct BehavioralBaseline {
+    pub agent_id: String,
+    pub computed_at: DateTime<Utc>,
+    pub goal_count: usize,      // Number of goals in baseline
+    pub resource_patterns: Vec<String>,  // Typical URI patterns accessed
+    pub avg_artifact_count: f64,
+    pub avg_risk_score: f64,
+    pub escalation_rate: f64,   // Fraction of actions triggering escalation
+    pub rejection_rate: f64,    // Fraction of artifacts rejected by reviewers
+}
+```
+
+#### Standards Alignment
+- **NIST AI RMF MEASURE 2.6**: Monitoring AI system behavior for drift from intended purpose
+- **ISO/IEC 42001 A.6.2.6**: Performance monitoring and measurement of AI systems
+- **EU AI Act Article 9**: Risk management system with continuous monitoring
 
 ---
 
@@ -564,6 +700,10 @@ pub struct PendingAction {
 - No Gmail API client. No Slack bot. No Twitter SDK. The MCP servers handle all service-specific logic.
 - TA only adds: interception, capture, display, approval, replay. The governance wrapper.
 
+#### Standards Alignment
+- **EU AI Act Article 50**: Transparency obligations — humans see exactly what the agent wants to do externally before it happens. MCP action summaries satisfy the "inform the natural person" requirement.
+- **ISO/IEC 42001 A.10.3**: Third-party AI component management — MCP servers are third-party components; TA's interception provides the governance wrapper around them.
+
 ---
 
 ## v0.6 — Sandbox Isolation *(release: tag v0.6.0-beta)*
@@ -575,6 +715,8 @@ pub struct PendingAction {
 - CWD enforcement — agents can't escape virtual workspace
 - Command transcripts hashed into audit log
 - Network access policy: allow/deny per-domain (foundation for v0.7 network layer)
+
+> **Standards**: Sandbox isolation directly addresses **Singapore IMDA Agentic AI Framework** (agent boundary enforcement) and **NIST AI RMF GOVERN 1.4** (processes for AI risk management including containment). Command transcripts hashed into audit log satisfy **ISO/IEC 42001** provenance requirements.
 
 ---
 
@@ -665,6 +807,7 @@ Criteria: community interest, standalone utility, maintenance burden. If (b) or 
 - Stable event schema matching `docs/plugins-architecture-guidance.md` hooks
 - Non-interactive approval API: token-based approve/reject (for Slack buttons, email replies)
 - Foundation for notification connectors and virtual office runtime
+- **Compliance event export**: Structured event stream enables external compliance dashboards. Events carry decision reasoning (v0.3.3), drift alerts (v0.4.2), and policy decisions — sufficient for ISO/IEC 42001 continuous monitoring and EU AI Act record-keeping obligations.
 
 ---
 
@@ -706,3 +849,7 @@ Criteria: community interest, standalone utility, maintenance burden. If (b) or 
 - Network governance (v0.7) active by default for all agent roles
 - Community memory (v0.7.4) shared across office roles — one role's solutions available to all
 - Does NOT duplicate orchestration — composes existing tools with role/trigger glue
+- **Multi-agent alignment verification**: Before agents co-operate on shared resources, TA verifies alignment profile compatibility (v0.4.0 profiles). Checks: overlapping resource grants, compatible escalation policies, no conflicting forbidden actions. Conceptually similar to [AAP value coherence handshake](https://github.com/mnemom/aap) but enforced — incompatible agents are blocked from shared-resource goals, not just warned.
+- **Compliance dashboard**: Aggregate decision reasoning (v0.3.3), drift reports (v0.4.2), policy decisions, and approval records into a per-role compliance view. Exportable as ISO/IEC 42001 evidence package for audit.
+
+> **Standards**: Virtual office with defined roles, capability boundaries, human oversight at checkpoints, and continuous drift monitoring satisfies the end-to-end requirements of **ISO/IEC 42001** (AI Management Systems), **EU AI Act** (high-risk AI system requirements including Articles 9, 14, and 50), and **Singapore IMDA Agentic AI Framework** (agent governance for multi-agent systems).
