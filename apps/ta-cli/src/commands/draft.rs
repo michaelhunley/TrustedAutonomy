@@ -18,6 +18,7 @@ use ta_changeset::output_adapters::{
 };
 use ta_changeset::review_session::{ReviewSession, ReviewState};
 use ta_changeset::review_session_store::ReviewSessionStore;
+use ta_changeset::supervisor::{SupervisorAgent, ValidationWarning};
 use ta_changeset::uri_pattern;
 use ta_connector_fs::FsConnector;
 use ta_goal::{GoalRunState, GoalRunStore};
@@ -915,71 +916,8 @@ impl<'a> SelectiveReviewPatterns<'a> {
     }
 }
 
-/// Validate that approved artifacts don't have broken dependencies.
-///
-/// Returns warnings for:
-/// - Approved artifacts that depend on rejected artifacts
-/// - Rejected artifacts that are depended upon by approved artifacts
-///
-/// Each warning includes the source artifact, target artifact, and dependency type.
-fn validate_dependencies(artifacts: &[Artifact]) -> Vec<String> {
-    let mut warnings = Vec::new();
-
-    // Build a URI -> Artifact map for quick lookups.
-    let artifact_map: std::collections::HashMap<&str, &Artifact> = artifacts
-        .iter()
-        .map(|a| (a.resource_uri.as_str(), a))
-        .collect();
-
-    for artifact in artifacts {
-        if artifact.disposition != ArtifactDisposition::Approved {
-            continue;
-        }
-
-        // Check if any dependencies are rejected.
-        for dep in &artifact.dependencies {
-            if dep.kind != DependencyKind::DependsOn {
-                continue;
-            }
-            if let Some(target) = artifact_map.get(dep.target_uri.as_str()) {
-                if target.disposition == ArtifactDisposition::Rejected {
-                    warnings.push(format!(
-                        "Warning: Approved artifact {} depends on rejected artifact {}",
-                        artifact.resource_uri, target.resource_uri
-                    ));
-                } else if target.disposition == ArtifactDisposition::Pending {
-                    warnings.push(format!(
-                        "Warning: Approved artifact {} depends on pending artifact {} (not explicitly approved)",
-                        artifact.resource_uri, target.resource_uri
-                    ));
-                }
-            }
-        }
-    }
-
-    // Check for rejected artifacts that are depended upon by approved artifacts.
-    for artifact in artifacts {
-        if artifact.disposition != ArtifactDisposition::Rejected {
-            continue;
-        }
-
-        for dep in &artifact.dependencies {
-            if dep.kind != DependencyKind::DependedBy {
-                continue;
-            }
-            if let Some(dependent) = artifact_map.get(dep.target_uri.as_str()) {
-                if dependent.disposition == ArtifactDisposition::Approved {
-                    warnings.push(format!(
-                        "Warning: Approved artifact {} will break because its dependency {} is rejected",
-                        dependent.resource_uri, artifact.resource_uri
-                    ));
-                }
-            }
-        }
-    }
-
-    warnings
-}
+// Note: validate_dependencies has been replaced by SupervisorAgent.validate()
+// which provides more comprehensive dependency graph analysis including cycle detection.
 
 /// Assign dispositions to artifacts based on user-provided patterns.
 ///
@@ -1104,17 +1042,75 @@ fn apply_package(
         println!("  Pending:  {} artifact(s)", pending);
         println!();
 
-        // Validate dependencies.
-        let warnings = validate_dependencies(&pkg.changes.artifacts);
-        if !warnings.is_empty() {
+        // Validate dependencies using SupervisorAgent.
+        let supervisor = SupervisorAgent::new(&pkg.changes.artifacts);
+        let validation = supervisor.validate(&pkg.changes.artifacts);
+
+        // Display errors first (structural issues).
+        if validation.has_errors() {
+            println!("Dependency errors:");
+            for error in &validation.errors {
+                match error {
+                    ta_changeset::supervisor::ValidationError::CyclicDependency { cycle } => {
+                        println!("  ❌ Cyclic dependency detected: {}", cycle.join(" → "));
+                    }
+                    ta_changeset::supervisor::ValidationError::SelfDependency { artifact } => {
+                        println!("  ❌ Self-dependency detected: {}", artifact);
+                    }
+                }
+            }
+            println!();
+            anyhow::bail!(
+                "Cannot apply: {} structural error(s) in dependency graph. Fix the agent's change_summary.json.",
+                validation.errors.len()
+            );
+        }
+
+        // Display warnings (disposition conflicts).
+        if validation.has_warnings() {
             println!("Dependency warnings:");
-            for warning in &warnings {
-                println!("  {}", warning);
+            for warning in &validation.warnings {
+                match warning {
+                    ValidationWarning::CoupledRejection {
+                        artifact,
+                        required_by,
+                    } => {
+                        println!(
+                            "  ⚠️  Rejecting {} will break {} artifact(s) that depend on it:",
+                            artifact.split('/').next_back().unwrap_or(artifact),
+                            required_by.len()
+                        );
+                        for req in required_by {
+                            println!("      - {}", req.split('/').next_back().unwrap_or(req));
+                        }
+                    }
+                    ValidationWarning::BrokenDependency {
+                        artifact,
+                        depends_on_rejected,
+                    } => {
+                        println!(
+                            "  ⚠️  Approving {} but it depends on {} rejected artifact(s):",
+                            artifact.split('/').next_back().unwrap_or(artifact),
+                            depends_on_rejected.len()
+                        );
+                        for dep in depends_on_rejected {
+                            println!("      - {}", dep.split('/').next_back().unwrap_or(dep));
+                        }
+                    }
+                    ValidationWarning::DiscussBlockingApproval { artifact, blocking } => {
+                        println!("  ⚠️  {} is marked for discussion but {} approved artifact(s) depend on it:",
+                            artifact.split('/').next_back().unwrap_or(artifact),
+                            blocking.len());
+                        for blk in blocking {
+                            println!("      - {}", blk.split('/').next_back().unwrap_or(blk));
+                        }
+                    }
+                }
             }
             println!();
             anyhow::bail!(
                 "Cannot apply: {} dependency conflict(s) detected. Resolve conflicts and try again.",
-                warnings.len()
+                validation.warnings.len()
             );
         }
 

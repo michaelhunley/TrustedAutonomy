@@ -445,9 +445,9 @@ Agent works in Virtual Workspace
 - ✅ Disposition counts and summary methods
 - ✅ CLI review workflow: `ta draft review start/comment/next/finish/list/show`
 - ✅ 50+ new unit tests (total: 258 tests across 12 crates)
+- ✅ **Supervisor agent** (`crates/ta-changeset/src/supervisor.rs`): Dependency graph analysis with cycle detection, self-dependency detection, coupled rejection warnings, and broken dependency warnings. Integrated into `ta draft apply` with enhanced error/warning display (13 new tests, total: 271 tests)
 
 **Remaining**:
-- Supervisor agent that analyzes dependency graph and warns about coupled rejections
 - Discussion workflow implementation for discuss items
 - **Resolution path**: `ta run --follow-up` on a goal with discuss items injects comment threads as structured agent context; the agent addresses each discussed artifact and the resulting PR supersedes the original (see v0.1.2)
 - **Per-target summary enforcement**: At `ta draft build` time, warn (or error) when artifacts lack a `what` description. Agents should always explain what they did to each target. Lockfiles and generated files get auto-summaries from `default_summary()`, but source files should have agent-provided descriptions.
