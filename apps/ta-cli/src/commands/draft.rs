@@ -16,6 +16,8 @@ use ta_changeset::explanation::ExplanationSidecar;
 use ta_changeset::output_adapters::{
     get_adapter, DetailLevel, DiffProvider, OutputFormat, RenderContext,
 };
+use ta_changeset::review_session::{ReviewSession, ReviewState};
+use ta_changeset::review_session_store::ReviewSessionStore;
 use ta_changeset::uri_pattern;
 use ta_connector_fs::FsConnector;
 use ta_goal::{GoalRunState, GoalRunStore};
@@ -121,6 +123,58 @@ pub enum DraftCommands {
         #[arg(long = "discuss")]
         discuss_patterns: Vec<String>,
     },
+    /// Interactive review session commands.
+    Review {
+        #[command(subcommand)]
+        command: ReviewCommands,
+    },
+}
+
+/// Review session subcommands for multi-turn artifact review.
+#[derive(Subcommand)]
+pub enum ReviewCommands {
+    /// Start or resume a review session for a draft package.
+    Start {
+        /// Draft package ID to review.
+        draft_id: String,
+        /// Reviewer name (defaults to "human-reviewer").
+        #[arg(long, default_value = "human-reviewer")]
+        reviewer: String,
+    },
+    /// Add a comment to an artifact.
+    Comment {
+        /// Artifact URI (e.g., "fs://workspace/src/main.rs").
+        uri: String,
+        /// Comment text.
+        message: String,
+        /// Commenter name (defaults to "human-reviewer").
+        #[arg(long, default_value = "human-reviewer")]
+        commenter: String,
+    },
+    /// Show the next undecided artifact in the current session.
+    Next {
+        /// Show this many pending artifacts (default: 1).
+        #[arg(long, default_value = "1")]
+        count: usize,
+    },
+    /// Finish the review session and show final summary.
+    Finish {
+        /// Session ID to finish (omit to use the most recent active session).
+        #[arg(long)]
+        session: Option<String>,
+    },
+    /// List all review sessions.
+    List {
+        /// Show only sessions for a specific draft package.
+        #[arg(long)]
+        draft: Option<String>,
+    },
+    /// Show details of a review session.
+    Show {
+        /// Session ID to show (omit to use the most recent active session).
+        #[arg(long)]
+        session: Option<String>,
+    },
 }
 
 pub fn execute(cmd: &DraftCommands, config: &GatewayConfig) -> anyhow::Result<()> {
@@ -202,6 +256,22 @@ pub fn execute(cmd: &DraftCommands, config: &GatewayConfig) -> anyhow::Result<()
                 },
             )
         }
+        DraftCommands::Review { command } => execute_review_command(command, config),
+    }
+}
+
+fn execute_review_command(cmd: &ReviewCommands, config: &GatewayConfig) -> anyhow::Result<()> {
+    match cmd {
+        ReviewCommands::Start { draft_id, reviewer } => review_start(config, draft_id, reviewer),
+        ReviewCommands::Comment {
+            uri,
+            message,
+            commenter,
+        } => review_comment(config, uri, message, commenter),
+        ReviewCommands::Next { count } => review_next(config, *count),
+        ReviewCommands::Finish { session } => review_finish(config, session.as_deref()),
+        ReviewCommands::List { draft } => review_list(config, draft.as_deref()),
+        ReviewCommands::Show { session } => review_show(config, session.as_deref()),
     }
 }
 
@@ -1337,6 +1407,360 @@ fn truncate(s: &str, max: usize) -> String {
     } else {
         s.to_string()
     }
+}
+
+// ── Review Session Commands ────────────────────────────────────
+
+/// Start or resume a review session for a draft package.
+fn review_start(config: &GatewayConfig, draft_id: &str, reviewer: &str) -> anyhow::Result<()> {
+    let package_id = Uuid::parse_str(draft_id)?;
+    let pkg = load_package(config, package_id)?;
+
+    // Create the review sessions directory in .ta/review_sessions/
+    let sessions_dir = config.workspace_root.join(".ta/review_sessions");
+    let store = ReviewSessionStore::new(sessions_dir)?;
+
+    // Check if there's already an active session for this draft.
+    let session = if let Some(existing) = store.find_active_for_draft(package_id)? {
+        println!("Resuming existing review session: {}", existing.session_id);
+        existing
+    } else {
+        let new_session = ReviewSession::new(package_id, reviewer.to_string());
+        store.save(&new_session)?;
+        println!("Created new review session: {}", new_session.session_id);
+        new_session
+    };
+
+    println!("\nReview Session");
+    println!("  Session ID:    {}", session.session_id);
+    println!("  Draft Package: {}", package_id);
+    println!("  Reviewer:      {}", session.reviewer);
+    println!("  State:         {:?}", session.state);
+    println!();
+
+    // Show summary of artifacts.
+    let total = pkg.changes.artifacts.len();
+    let counts = session.disposition_counts();
+    let pending = total - counts.approved - counts.rejected - counts.discuss;
+
+    println!("Artifacts: {} total", total);
+    println!("  Approved: {}", counts.approved);
+    println!("  Rejected: {}", counts.rejected);
+    println!("  Discuss:  {}", counts.discuss);
+    println!("  Pending:  {}", pending);
+    println!();
+
+    if pending > 0 {
+        println!("Use 'ta draft review next' to view the next artifact.");
+    } else {
+        println!("All artifacts have been reviewed!");
+        println!("Use 'ta draft review finish' to complete the session.");
+    }
+
+    Ok(())
+}
+
+/// Add a comment to an artifact in the current active session.
+fn review_comment(
+    config: &GatewayConfig,
+    uri: &str,
+    message: &str,
+    commenter: &str,
+) -> anyhow::Result<()> {
+    let sessions_dir = config.workspace_root.join(".ta/review_sessions");
+    let store = ReviewSessionStore::new(sessions_dir)?;
+
+    // Find the most recent active session.
+    let sessions = store.list()?;
+    let mut session = sessions
+        .into_iter()
+        .find(|s| s.state == ReviewState::Active)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "No active review session found. Use 'ta draft review start <draft-id>' first."
+            )
+        })?;
+
+    // Add the comment.
+    session.add_comment(uri, commenter, message);
+    store.save(&session)?;
+
+    println!("Added comment to artifact: {}", uri);
+    println!("  From: {}", commenter);
+    println!("  Text: {}", message);
+    println!();
+
+    // Show the comment thread for this artifact.
+    if let Some(review) = session.artifact_reviews.get(uri) {
+        println!("Comment thread ({} comment(s)):", review.comments.len());
+        for comment in &review.comments.comments {
+            println!(
+                "  [{}] {}: {}",
+                comment.created_at, comment.commenter, comment.text
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Show the next undecided artifact(s) in the current session.
+fn review_next(config: &GatewayConfig, count: usize) -> anyhow::Result<()> {
+    let sessions_dir = config.workspace_root.join(".ta/review_sessions");
+    let store = ReviewSessionStore::new(sessions_dir)?;
+
+    // Find the most recent active session.
+    let sessions = store.list()?;
+    let session = sessions
+        .into_iter()
+        .find(|s| s.state == ReviewState::Active)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "No active review session found. Use 'ta draft review start <draft-id>' first."
+            )
+        })?;
+
+    // Load the draft package to get all artifacts.
+    let pkg = load_package(config, session.draft_package_id)?;
+
+    // Find pending artifacts (those without a decision).
+    let pending: Vec<&Artifact> = pkg
+        .changes
+        .artifacts
+        .iter()
+        .filter(|a| session.get_disposition(&a.resource_uri).is_none())
+        .collect();
+
+    if pending.is_empty() {
+        println!("No pending artifacts. All artifacts have been reviewed!");
+        println!("Use 'ta draft review finish' to complete the session.");
+        return Ok(());
+    }
+
+    // Show up to `count` pending artifacts.
+    let to_show = pending.iter().take(count);
+
+    for (i, artifact) in to_show.enumerate() {
+        println!(
+            "\n[{}/{}] Artifact: {}",
+            i + 1,
+            pending.len(),
+            artifact.resource_uri
+        );
+        println!("  Change Type: {:?}", artifact.change_type);
+
+        // Show explanation if available.
+        if let Some(ref tiers) = artifact.explanation_tiers {
+            if !tiers.summary.is_empty() {
+                println!("  Summary: {}", tiers.summary);
+            }
+            if !tiers.explanation.is_empty() {
+                println!("  Why: {}", tiers.explanation);
+            }
+        } else if let Some(ref rationale) = artifact.rationale {
+            println!("  Rationale: {}", rationale);
+        }
+
+        // Show dependencies.
+        if !artifact.dependencies.is_empty() {
+            println!("  Dependencies:");
+            for dep in &artifact.dependencies {
+                println!("    {:?} {}", dep.kind, dep.target_uri);
+            }
+        }
+    }
+
+    println!();
+    println!("Next steps:");
+    println!(
+        "  - View diff: ta draft view {} --file <path>",
+        session.draft_package_id
+    );
+    println!("  - Comment:   ta draft review comment <uri> 'your comment'");
+    println!("  - More:      ta draft review next --count N");
+    println!("  - Finish:    ta draft review finish");
+
+    Ok(())
+}
+
+/// Finish the review session and show final summary.
+fn review_finish(config: &GatewayConfig, session_id: Option<&str>) -> anyhow::Result<()> {
+    let sessions_dir = config.workspace_root.join(".ta/review_sessions");
+    let store = ReviewSessionStore::new(sessions_dir)?;
+
+    // Load the session.
+    let mut session = if let Some(id) = session_id {
+        let uuid = Uuid::parse_str(id)?;
+        store.load(uuid)?
+    } else {
+        // Use the most recent active session.
+        let sessions = store.list()?;
+        sessions
+            .into_iter()
+            .find(|s| s.state == ReviewState::Active)
+            .ok_or_else(|| anyhow::anyhow!("No active review session found"))?
+    };
+
+    // Finish the session and get disposition summary.
+    let counts = session.finish();
+    store.save(&session)?;
+
+    println!("Review session finished: {}", session.session_id);
+    println!();
+    println!("Final disposition summary:");
+    println!("  Approved: {} artifact(s)", counts.approved);
+    println!("  Rejected: {} artifact(s)", counts.rejected);
+    println!("  Discuss:  {} artifact(s)", counts.discuss);
+    println!("  Pending:  {} artifact(s)", counts.pending);
+    println!();
+
+    if counts.pending > 0 {
+        println!(
+            "⚠️  Warning: {} artifact(s) were not explicitly reviewed.",
+            counts.pending
+        );
+        println!();
+    }
+
+    if session.has_unresolved_discuss() {
+        println!(
+            "⚠️  Warning: {} artifact(s) marked for discussion remain unresolved.",
+            counts.discuss
+        );
+        println!();
+    }
+
+    println!("To apply this review:");
+    println!(
+        "  - View the package: ta draft view {}",
+        session.draft_package_id
+    );
+    if counts.approved > 0 && counts.rejected > 0 {
+        println!("  - Apply selectively based on your review session decisions");
+        println!("    (You'll need to manually specify --approve/--reject patterns)");
+    } else if counts.approved > 0 {
+        println!(
+            "  - Approve all: ta draft approve {}",
+            session.draft_package_id
+        );
+        println!("  - Apply: ta draft apply {}", session.draft_package_id);
+    }
+
+    Ok(())
+}
+
+/// List all review sessions.
+fn review_list(config: &GatewayConfig, draft_filter: Option<&str>) -> anyhow::Result<()> {
+    let sessions_dir = config.workspace_root.join(".ta/review_sessions");
+    let store = ReviewSessionStore::new(sessions_dir)?;
+
+    let all_sessions = store.list()?;
+
+    // Apply draft filter if specified.
+    let sessions: Vec<_> = if let Some(draft_id) = draft_filter {
+        let draft_uuid = Uuid::parse_str(draft_id)?;
+        all_sessions
+            .into_iter()
+            .filter(|s| s.draft_package_id == draft_uuid)
+            .collect()
+    } else {
+        all_sessions
+    };
+
+    if sessions.is_empty() {
+        println!("No review sessions found.");
+        return Ok(());
+    }
+
+    println!(
+        "{:<38} {:<38} {:<16} {:<12}",
+        "SESSION ID", "DRAFT PACKAGE", "REVIEWER", "STATE"
+    );
+    println!("{}", "-".repeat(108));
+
+    for session in &sessions {
+        println!(
+            "{:<38} {:<38} {:<16} {:<12}",
+            session.session_id,
+            session.draft_package_id,
+            truncate(&session.reviewer, 14),
+            format!("{:?}", session.state),
+        );
+    }
+
+    println!("\n{} session(s) total.", sessions.len());
+    Ok(())
+}
+
+/// Show details of a review session.
+fn review_show(config: &GatewayConfig, session_id: Option<&str>) -> anyhow::Result<()> {
+    let sessions_dir = config.workspace_root.join(".ta/review_sessions");
+    let store = ReviewSessionStore::new(sessions_dir)?;
+
+    // Load the session.
+    let session = if let Some(id) = session_id {
+        let uuid = Uuid::parse_str(id)?;
+        store.load(uuid)?
+    } else {
+        // Use the most recent active session.
+        let sessions = store.list()?;
+        sessions
+            .into_iter()
+            .find(|s| s.state == ReviewState::Active)
+            .ok_or_else(|| anyhow::anyhow!("No active review session found"))?
+    };
+
+    println!("Review Session: {}", session.session_id);
+    println!("  Draft Package: {}", session.draft_package_id);
+    println!("  Reviewer:      {}", session.reviewer);
+    println!("  State:         {:?}", session.state);
+    println!("  Created:       {}", session.created_at);
+    println!("  Updated:       {}", session.updated_at);
+    println!();
+
+    // Show disposition counts.
+    let counts = session.disposition_counts();
+    println!("Disposition summary:");
+    println!("  Approved: {}", counts.approved);
+    println!("  Rejected: {}", counts.rejected);
+    println!("  Discuss:  {}", counts.discuss);
+    println!("  Pending:  {}", counts.pending);
+    println!();
+
+    // Show artifact reviews with comments.
+    if !session.artifact_reviews.is_empty() {
+        println!("Artifact reviews ({}):", session.artifact_reviews.len());
+        for (uri, review) in &session.artifact_reviews {
+            println!("\n  {}", uri);
+            println!("    Disposition: {:?}", review.disposition);
+            if let Some(reviewed_at) = review.reviewed_at {
+                println!("    Reviewed at: {}", reviewed_at);
+            }
+            if !review.comments.is_empty() {
+                println!("    Comments ({}):", review.comments.len());
+                for comment in &review.comments.comments {
+                    println!(
+                        "      [{}] {}: {}",
+                        comment.created_at.format("%Y-%m-%d %H:%M:%S"),
+                        comment.commenter,
+                        comment.text
+                    );
+                }
+            }
+        }
+    } else {
+        println!("No artifact reviews yet.");
+    }
+
+    // Show session notes.
+    if !session.session_notes.is_empty() {
+        println!("\nSession notes ({}):", session.session_notes.len());
+        for note in &session.session_notes {
+            println!("  [{}] {}", note.created_at, note.text);
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
