@@ -484,6 +484,43 @@ A `ta release` command driven by a YAML task script (`.ta/release.yaml`). Each s
 - User goal → proposed agent roster + scoped capabilities + milestone plan
 - agent setup evaluates how to run the agents efficiently at lowest cost (model selection, prompt caching, etc) and advises tradeoffs with human opt in where appropriate
 
+### v0.4.1 — Macro Goals & Inner-Loop Iteration
+<!-- status: pending -->
+**Goal**: Let agents stay in a single session, decompose work into sub-goals, submit drafts, and iterate — without exiting and restarting `ta run` each time.
+
+> **Core insight**: Currently each `ta run` session is one goal → one draft → exit. For complex tasks (e.g., "build Trusted Autonomy v0.5"), the agent must exit, the human must approve, then another `ta run` starts. Macro goals keep the agent in-session while maintaining governance at every checkpoint.
+
+#### MCP Tools Exposed to Agent (Passthrough Model)
+TA injects MCP tools that mirror the CLI structure — same commands, same arguments:
+- **`ta_draft`** `action: build|submit|status|list` — package, submit, and query drafts
+- **`ta_goal`** `action: start|status` — create sub-goals, check status
+- **`ta_plan`** `action: read|update` — read plan progress, propose updates
+
+> **Design**: Passthrough mirrors the CLI (`ta draft build` = `ta_draft { action: "build" }`). No separate tool per subcommand — agents learn one pattern, new CLI commands are immediately available as MCP actions. Arguments map 1:1 to CLI flags.
+
+#### Security Boundaries
+- Agent **CAN**: propose sub-goals, build drafts, submit for review, read plan status
+- Agent **CANNOT**: approve its own drafts, apply changes, bypass checkpoints, modify policies
+- Every sub-goal draft goes through the same human review gate as a regular draft
+- Agent sees approval/rejection results and can iterate (revise and resubmit)
+- `ta_draft { action: "submit" }` blocks until human responds (blocking mode) — agent cannot self-approve
+
+#### Execution Modes
+- **Blocking** (default): Agent submits draft, blocks until human responds. Safest — human reviews each step.
+- **Optimistic** (future): Agent continues to next sub-goal while draft is pending. Human reviews asynchronously. Faster but requires rollback capability if earlier draft is rejected.
+- **Hybrid** (future): Agent marks sub-goals as blocking or non-blocking based on risk. High-risk changes block; low-risk ones proceed optimistically.
+
+#### CLI
+- `ta run "Build v0.5" --source . --macro` — starts a macro goal session
+- Agent receives MCP tools for inner-loop iteration alongside standard workspace tools
+- `ta goal status <id>` shows sub-goal tree with approval status
+
+#### Integration
+- Sub-goals inherit the macro goal's plan phase, source dir, and agent config
+- Each sub-goal draft appears in `ta draft list` as a child of the macro goal
+- PLAN.md updates proposed via `ta_plan_update` are held at checkpoint (agent proposes, human approves)
+- Works with existing follow-up goal mechanism — macro goals are the automated version of `--follow-up`
+
 ---
 
 ## v0.5 — MCP Interception & External Actions *(release: tag v0.5.0-alpha)*
