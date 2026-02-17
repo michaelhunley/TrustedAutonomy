@@ -275,7 +275,7 @@ fn show_status(store: &GoalRunStore, id: &str) -> anyhow::Result<()> {
             }
             println!("Staging:  {}", g.workspace_path.display());
             if let Some(pr_id) = g.pr_package_id {
-                println!("PR Pkg:   {}", pr_id);
+                println!("Draft:    {}", pr_id);
             }
         }
         None => {

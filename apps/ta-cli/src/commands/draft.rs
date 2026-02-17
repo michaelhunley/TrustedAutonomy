@@ -668,8 +668,8 @@ fn build_package(
         println!("    {:?}  {}", artifact.change_type, artifact.resource_uri);
     }
     println!();
-    println!("Review with:  ta pr view {}", package_id);
-    println!("Approve with: ta pr approve {}", package_id);
+    println!("Review with:  ta draft view {}", package_id);
+    println!("Approve with: ta draft approve {}", package_id);
 
     Ok(())
 }

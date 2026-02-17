@@ -268,9 +268,9 @@ pub fn execute(
         }
         println!("  {} {}", agent_config.command, shell_quote(&prompt));
         println!();
-        println!("When done, build the PR:");
-        println!("  ta pr build {}", goal_id);
-        println!("  # Or: ta pr build --latest");
+        println!("When done, build the draft:");
+        println!("  ta draft build {}", goal_id);
+        println!("  # Or: ta draft build --latest");
         return Ok(());
     }
 
@@ -316,10 +316,10 @@ pub fn execute(
     match status {
         Ok(exit) => {
             if exit.success() {
-                println!("\nAgent exited. Building PR package...");
+                println!("\nAgent exited. Building draft...");
             } else {
                 println!(
-                    "\nAgent exited with status {}. Building PR package anyway...",
+                    "\nAgent exited with status {}. Building draft anyway...",
                     exit
                 );
             }
@@ -341,8 +341,8 @@ pub fn execute(
                 println!("  cd {}", staging_path.display());
                 println!("  {} {}", agent_config.command, shell_quote(&prompt));
                 println!();
-                println!("When done, build the PR:");
-                println!("  ta pr build {}", goal_id);
+                println!("When done, build the draft:");
+                println!("  ta draft build {}", goal_id);
                 return Ok(());
             }
             return Err(anyhow::anyhow!(
@@ -372,10 +372,10 @@ pub fn execute(
     )?;
 
     println!("\nNext steps:");
-    println!("  ta pr list");
-    println!("  ta pr view <package-id>");
-    println!("  ta pr approve <package-id>");
-    println!("  ta pr apply <package-id> --git-commit");
+    println!("  ta draft list");
+    println!("  ta draft view <draft-id>");
+    println!("  ta draft approve <draft-id>");
+    println!("  ta draft apply <draft-id> --git-commit");
 
     Ok(())
 }
