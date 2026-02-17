@@ -1387,7 +1387,7 @@ pub fn load_package(config: &GatewayConfig, package_id: Uuid) -> anyhow::Result<
     Ok(serde_json::from_str(&json)?)
 }
 
-fn save_package(config: &GatewayConfig, pkg: &DraftPackage) -> anyhow::Result<()> {
+pub fn save_package(config: &GatewayConfig, pkg: &DraftPackage) -> anyhow::Result<()> {
     fs::create_dir_all(&config.pr_packages_dir)?;
     let path = config
         .pr_packages_dir

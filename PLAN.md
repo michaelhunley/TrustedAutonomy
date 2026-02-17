@@ -437,7 +437,7 @@ Agent works in Virtual Workspace
 ## v0.3 — Review & Plan Automation *(release: tag v0.3.0-alpha)*
 
 ### v0.3.0 — Review Sessions
-<!-- status: in_progress -->
+<!-- status: done -->
 **Completed**:
 - ✅ ReviewSession data model with persistent storage (review_session.rs, review_session_store.rs)
 - ✅ Per-artifact comment threads integrated into Artifact model (`comments: Option<Vec<Comment>>`)
@@ -446,10 +446,9 @@ Agent works in Virtual Workspace
 - ✅ CLI review workflow: `ta draft review start/comment/next/finish/list/show`
 - ✅ 50+ new unit tests (total: 258 tests across 12 crates)
 - ✅ **Supervisor agent** (`crates/ta-changeset/src/supervisor.rs`): Dependency graph analysis with cycle detection, self-dependency detection, coupled rejection warnings, and broken dependency warnings. Integrated into `ta draft apply` with enhanced error/warning display (13 new tests, total: 271 tests)
+- ✅ **Discussion workflow implementation**: Comment threads from discuss items are now injected into CLAUDE.md when creating follow-up goals. The `build_parent_context_section` function in `apps/ta-cli/src/commands/run.rs` includes full comment threads, explanation tiers, and agent rationale for each discussed artifact. Agents receive structured discussion history as context, enabling them to address reviewer concerns in follow-up iterations. (2 new tests, total: 273 tests)
 
-**Remaining**:
-- Discussion workflow implementation for discuss items
-- **Resolution path**: `ta run --follow-up` on a goal with discuss items injects comment threads as structured agent context; the agent addresses each discussed artifact and the resulting PR supersedes the original (see v0.1.2)
+**Optional Future Enhancements**:
 - **Per-target summary enforcement**: At `ta draft build` time, warn (or error) when artifacts lack a `what` description. Agents should always explain what they did to each target. Lockfiles and generated files get auto-summaries from `default_summary()`, but source files should have agent-provided descriptions.
 - **Color coding in HTML/web output**: Add syntax-highlighted diffs in the HTML adapter, color-coded disposition badges, and visual grouping by approval status. Extend to markdown adapter where GitHub renders HTML.
 

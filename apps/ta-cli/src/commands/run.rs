@@ -674,14 +674,56 @@ fn build_parent_context_section(
                 .collect();
 
             if !discuss_items.is_empty() {
-                context.push_str("\n### Items for Discussion:\n");
+                context.push_str("\n### Items for Discussion:\n\n");
+                context
+                    .push_str("The following artifacts were marked for discussion during review. ");
+                context.push_str(
+                    "Please address the reviewer's concerns in this follow-up iteration.\n\n",
+                );
+
                 for artifact in discuss_items {
-                    context.push_str(&format!("- {}", artifact.resource_uri));
+                    context.push_str(&format!("#### {}\n\n", artifact.resource_uri));
+
+                    // Include rationale if available.
                     if let Some(ref why) = artifact.rationale {
-                        context.push_str(&format!(" — {}", why));
+                        context.push_str(&format!("**Agent's original rationale:** {}\n\n", why));
                     }
-                    context.push('\n');
+
+                    // Include explanation tiers if available (v0.2.3+).
+                    if let Some(ref tiers) = artifact.explanation_tiers {
+                        if !tiers.summary.is_empty() {
+                            context
+                                .push_str(&format!("**What was changed:** {}\n\n", tiers.summary));
+                        }
+                        if !tiers.explanation.is_empty() {
+                            context.push_str(&format!("**Why:** {}\n\n", tiers.explanation));
+                        }
+                    }
+
+                    // Include comment thread if available (v0.3.0 — the key missing piece!).
+                    if let Some(ref comments) = artifact.comments {
+                        if !comments.is_empty() {
+                            context.push_str("**Review discussion:**\n\n");
+                            for (idx, comment) in comments.comments.iter().enumerate() {
+                                context.push_str(&format!(
+                                    "{}. **{}** ({}): {}\n",
+                                    idx + 1,
+                                    comment.commenter,
+                                    comment.created_at.format("%Y-%m-%d %H:%M UTC"),
+                                    comment.text
+                                ));
+                            }
+                            context.push('\n');
+                        }
+                    }
+
+                    context.push_str("---\n\n");
                 }
+
+                context.push_str("**Your task:** Address each discussion item above. ");
+                context.push_str("For each artifact, either revise it to address the concerns, ");
+                context.push_str("provide clarification in your change_summary.json, or explain ");
+                context.push_str("why the change is correct as-is.\n\n");
             }
         }
     }
@@ -1141,5 +1183,286 @@ pre_launch:
 
         let content = std::fs::read_to_string(staging.path().join(SETTINGS_REL_PATH)).unwrap();
         assert!(content.contains("Bash(rm -rf /*)"));
+    }
+
+    #[test]
+    fn parent_context_injects_comment_threads_for_discuss_items() {
+        use chrono::Utc;
+        use ta_changeset::draft_package::{
+            AgentIdentity, Artifact, ArtifactDisposition, ChangeType, Changes, DraftPackage,
+            DraftStatus, ExplanationTiers, Goal, Iteration, Plan, Provenance, ReviewRequests, Risk,
+            Signatures, Summary, WorkspaceRef,
+        };
+        use ta_changeset::review_session::CommentThread;
+        use ta_goal::GoalRun;
+        use uuid::Uuid;
+
+        let project = TempDir::new().unwrap();
+        let config = GatewayConfig::for_project(project.path());
+        let goal_store = GoalRunStore::new(&config.goals_dir).unwrap();
+
+        // Create a parent goal with a draft package containing discuss items with comments.
+        let parent_goal_id = Uuid::new_v4();
+        let parent_pr_id = Uuid::new_v4();
+
+        let mut parent_goal = GoalRun::new(
+            "Fix auth bug",
+            "Fix the authentication issue",
+            "test-agent",
+            project.path().join(".ta/staging/parent"),
+            project.path().join(".ta/store/parent"),
+        );
+        parent_goal.goal_run_id = parent_goal_id; // Override the UUID for testing
+        parent_goal.pr_package_id = Some(parent_pr_id);
+        parent_goal.source_dir = Some(project.path().to_path_buf());
+        goal_store.save(&parent_goal).unwrap();
+
+        // Create a draft package with discuss items that have comment threads.
+        let mut comment_thread = CommentThread::new();
+        comment_thread.add("reviewer-1", "This needs error handling for null tokens");
+        comment_thread.add("agent-1", "Understood, I'll add validation");
+        comment_thread.add("reviewer-1", "Also consider adding tests for edge cases");
+
+        let artifact_with_comments = Artifact {
+            resource_uri: "fs://workspace/src/auth/middleware.rs".to_string(),
+            change_type: ChangeType::Modify,
+            diff_ref: "changeset:0".to_string(),
+            tests_run: vec![],
+            disposition: ArtifactDisposition::Discuss,
+            rationale: Some("Refactored to use JWT".to_string()),
+            dependencies: vec![],
+            explanation_tiers: Some(ExplanationTiers {
+                summary: "Switched auth from sessions to JWT tokens".to_string(),
+                explanation: "Implemented RS256 signature verification".to_string(),
+                tags: vec!["security".to_string()],
+                related_artifacts: vec![],
+            }),
+            comments: Some(comment_thread),
+        };
+
+        let parent_draft = DraftPackage {
+            package_version: "1.0.0".to_string(),
+            package_id: parent_pr_id,
+            created_at: Utc::now(),
+            goal: Goal {
+                goal_id: parent_goal_id.to_string(),
+                title: "Fix auth bug".to_string(),
+                objective: "Fix authentication".to_string(),
+                success_criteria: vec![],
+                constraints: vec![],
+            },
+            iteration: Iteration {
+                iteration_id: "iter-1".to_string(),
+                sequence: 1,
+                workspace_ref: WorkspaceRef {
+                    ref_type: "staging".to_string(),
+                    ref_name: "staging/1".to_string(),
+                    base_ref: None,
+                },
+            },
+            agent_identity: AgentIdentity {
+                agent_id: "agent-1".to_string(),
+                agent_type: "coder".to_string(),
+                constitution_id: "default".to_string(),
+                capability_manifest_hash: "hash-123".to_string(),
+                orchestrator_run_id: None,
+            },
+            summary: Summary {
+                what_changed: "Auth refactor".to_string(),
+                why: "Modernize auth".to_string(),
+                impact: "1 file changed".to_string(),
+                rollback_plan: "Revert commit".to_string(),
+                open_questions: vec![],
+            },
+            plan: Plan {
+                completed_steps: vec![],
+                next_steps: vec![],
+                decision_log: vec![],
+            },
+            changes: Changes {
+                artifacts: vec![artifact_with_comments],
+                patch_sets: vec![],
+            },
+            risk: Risk {
+                risk_score: 0,
+                findings: vec![],
+                policy_decisions: vec![],
+            },
+            provenance: Provenance {
+                inputs: vec![],
+                tool_trace_hash: "trace-123".to_string(),
+            },
+            review_requests: ReviewRequests {
+                requested_actions: vec![],
+                reviewers: vec![],
+                required_approvals: 1,
+                notes_to_reviewer: None,
+            },
+            signatures: Signatures {
+                package_hash: "hash-456".to_string(),
+                agent_signature: "sig-789".to_string(),
+                gateway_attestation: None,
+            },
+            status: DraftStatus::PendingReview,
+        };
+
+        // Save the draft package.
+        super::super::draft::save_package(&config, &parent_draft).unwrap();
+
+        // Build parent context section.
+        let context = build_parent_context_section(Some(parent_goal_id), &goal_store, &config);
+
+        // Verify the context includes follow-up information.
+        assert!(context.contains("Follow-Up Context"));
+        assert!(context.contains("Fix auth bug"));
+
+        // Verify discuss items are listed.
+        assert!(context.contains("Items for Discussion"));
+        assert!(context.contains("fs://workspace/src/auth/middleware.rs"));
+
+        // Verify original rationale is included.
+        assert!(context.contains("Agent's original rationale:"));
+        assert!(context.contains("Refactored to use JWT"));
+
+        // Verify explanation tiers are included.
+        assert!(context.contains("What was changed:"));
+        assert!(context.contains("Switched auth from sessions to JWT tokens"));
+        assert!(context.contains("Why:"));
+        assert!(context.contains("Implemented RS256 signature verification"));
+
+        // *** THE KEY TEST: Verify comment threads are injected! ***
+        assert!(context.contains("Review discussion:"));
+        assert!(context.contains("reviewer-1"));
+        assert!(context.contains("This needs error handling for null tokens"));
+        assert!(context.contains("agent-1"));
+        assert!(context.contains("Understood, I'll add validation"));
+        assert!(context.contains("Also consider adding tests for edge cases"));
+
+        // Verify guidance is included.
+        assert!(context.contains("Your task:"));
+        assert!(context.contains("Address each discussion item"));
+    }
+
+    #[test]
+    fn parent_context_handles_discuss_items_without_comments() {
+        // Ensure graceful handling when discuss items don't have comment threads yet.
+        use chrono::Utc;
+        use ta_changeset::draft_package::{
+            AgentIdentity, Artifact, ArtifactDisposition, ChangeType, Changes, DraftPackage,
+            DraftStatus, Goal, Iteration, Plan, Provenance, ReviewRequests, Risk, Signatures,
+            Summary, WorkspaceRef,
+        };
+        use ta_goal::GoalRun;
+        use uuid::Uuid;
+
+        let project = TempDir::new().unwrap();
+        let config = GatewayConfig::for_project(project.path());
+        let goal_store = GoalRunStore::new(&config.goals_dir).unwrap();
+
+        let parent_goal_id = Uuid::new_v4();
+        let parent_pr_id = Uuid::new_v4();
+
+        let mut parent_goal = GoalRun::new(
+            "Test goal",
+            "Test objective",
+            "test-agent",
+            project.path().join(".ta/staging/parent"),
+            project.path().join(".ta/store/parent"),
+        );
+        parent_goal.goal_run_id = parent_goal_id; // Override the UUID for testing
+        parent_goal.pr_package_id = Some(parent_pr_id);
+        parent_goal.source_dir = Some(project.path().to_path_buf());
+        goal_store.save(&parent_goal).unwrap();
+
+        // Artifact with Discuss disposition but NO comment thread.
+        let artifact_no_comments = Artifact {
+            resource_uri: "fs://workspace/test.rs".to_string(),
+            change_type: ChangeType::Add,
+            diff_ref: "changeset:0".to_string(),
+            tests_run: vec![],
+            disposition: ArtifactDisposition::Discuss,
+            rationale: Some("Needs review".to_string()),
+            dependencies: vec![],
+            explanation_tiers: None,
+            comments: None, // No comments yet
+        };
+
+        let parent_draft = DraftPackage {
+            package_version: "1.0.0".to_string(),
+            package_id: parent_pr_id,
+            created_at: Utc::now(),
+            goal: Goal {
+                goal_id: parent_goal_id.to_string(),
+                title: "Test".to_string(),
+                objective: "Test".to_string(),
+                success_criteria: vec![],
+                constraints: vec![],
+            },
+            iteration: Iteration {
+                iteration_id: "iter-1".to_string(),
+                sequence: 1,
+                workspace_ref: WorkspaceRef {
+                    ref_type: "staging".to_string(),
+                    ref_name: "staging/1".to_string(),
+                    base_ref: None,
+                },
+            },
+            agent_identity: AgentIdentity {
+                agent_id: "agent-1".to_string(),
+                agent_type: "coder".to_string(),
+                constitution_id: "default".to_string(),
+                capability_manifest_hash: "hash-123".to_string(),
+                orchestrator_run_id: None,
+            },
+            summary: Summary {
+                what_changed: "Test".to_string(),
+                why: "Test".to_string(),
+                impact: "Test".to_string(),
+                rollback_plan: "Test".to_string(),
+                open_questions: vec![],
+            },
+            plan: Plan {
+                completed_steps: vec![],
+                next_steps: vec![],
+                decision_log: vec![],
+            },
+            changes: Changes {
+                artifacts: vec![artifact_no_comments],
+                patch_sets: vec![],
+            },
+            risk: Risk {
+                risk_score: 0,
+                findings: vec![],
+                policy_decisions: vec![],
+            },
+            provenance: Provenance {
+                inputs: vec![],
+                tool_trace_hash: "trace-123".to_string(),
+            },
+            review_requests: ReviewRequests {
+                requested_actions: vec![],
+                reviewers: vec![],
+                required_approvals: 1,
+                notes_to_reviewer: None,
+            },
+            signatures: Signatures {
+                package_hash: "hash-456".to_string(),
+                agent_signature: "sig-789".to_string(),
+                gateway_attestation: None,
+            },
+            status: DraftStatus::PendingReview,
+        };
+
+        super::super::draft::save_package(&config, &parent_draft).unwrap();
+
+        let context = build_parent_context_section(Some(parent_goal_id), &goal_store, &config);
+
+        // Should still show discuss items even without comments.
+        assert!(context.contains("Items for Discussion"));
+        assert!(context.contains("fs://workspace/test.rs"));
+        assert!(context.contains("Needs review"));
+
+        // Should NOT crash or show "Review discussion:" when there are no comments.
+        assert!(!context.contains("Review discussion:"));
     }
 }
