@@ -9,10 +9,10 @@ It is a **trust and control plane** that sits underneath *any* agent or multi-ag
 
 - agents can operate autonomously inside a defined charter
 - all real-world effects are staged, reviewable, and auditable
-- humans remain in control at meaningful boundaries (a pull request at each milestones in simple English with detailed diffs for deep inspection)
+- humans remain in control at meaningful boundaries (a draft at each milestones in simple English with detailed diffs for deep inspection)
 - orchestration layers remain swappable and unaware of the substrate
 
-![Agent changes are collected and presented at goal completion for approval](./OperatingModel.png)
+![Agent changes are collected and presented at goal completion for approval](./product-vision-arch.svg)
 
 ---
 
@@ -25,13 +25,13 @@ The standard answer is to run agents inside a VM with strict network controls an
 TA takes a different approach:
 
 - **Agents work freely** in a staging copy of your project using their native tools. No permission prompts, no special APIs. TA is invisible to the agent.
-- **Nothing reaches the real world** until you review and approve. TA diffs the staging copy against the original and presents changes as a PR-style package — with the agent's rationale for each file.
+- **Nothing reaches the real world** until you review and approve. TA diffs the staging copy against the original and presents changes as a Draft-style package — with the agent's rationale for each file.
 - **You review at goal completion**, not per-action. This is the right abstraction: let the agent finish the task, then evaluate the result as a whole.
 - **Selective approval**: accept the code changes, reject the config changes, discuss the rest. Not all-or-nothing.
 - **Any agent, no lock-in**: Claude Code, Codex, Claude Flow, or any future agent works on top without modification.
 - **Layers with VMs and sandboxes** when warranted — TA adds the semantic review layer that containers alone can't provide.
 
-Today TA mediates filesystem changes. The same staging model in future releases extends to any state change actions including email drafts, database writes, API calls, and any external action — each becoming a reviewable artifact in the same PR package. See [PLAN.md](PLAN.md) for the roadmap.
+Today TA mediates filesystem changes. The same staging model in future releases extends to any state change actions including email drafts, database writes, API calls, and any external action — each becoming a reviewable artifact in the same Draft package. See [PLAN.md](PLAN.md) for the roadmap.
 
 > See [docs/WHY-TA-vs-VM.md](docs/WHY-TA-vs-VM.md) for a detailed comparison of TA's approach vs VM sandboxing.
 
@@ -45,7 +45,7 @@ Trusted Autonomy achieves this by:
 - mediating *all* filesystem, network, execution, and external-service access through MCP tools
 - defaulting **mutations** to *collection* (staging), not execution
 - defaulting **capabilities** to deny unless explicitly granted
-- representing each milestone within a goal as a **Pull Request–like package** for review
+- representing each milestone within a goal as a **draft package** for review
 
 ---
 
@@ -87,10 +87,10 @@ See the [detailed Quick Start](#quick-start-5-minutes) below for full install + 
 
 ## Design principles
 - Normal environment illusion: tools feel like standard filesystem/network access, but all effects are mediated.
-- Default collect (staged-by-default): changes accumulate as pending review artifacts (PR package) rather than applying immediately.
+- Default collect (staged-by-default): changes accumulate as pending review artifacts (Draft package) rather than applying immediately.
 - Capability boundary (default deny): agents can only perform actions explicitly granted by a signed capability manifest.
 - Single chokepoint: all reads/writes and external effects flow through an MCP Gateway with policy enforcement and audit.
-- PR-per-milestone workflow: complex goals are decomposed into major steps, each producing a PR package for approval.
+- Draft-per-milestone workflow: complex goals are decomposed into major steps, each producing a Draft package for approval.
 - Replaceable orchestration: the substrate is the trust layer; planners/swarms are pluggable.
 
 ## Why MCP is the abstraction boundary
@@ -121,7 +121,7 @@ Agents should be able to **read, write, and modify files normally**, without lea
 - Agents interact with filesystem tools exposed via MCP
 - Those tools operate on a **staging workspace** (isolated directory per goal today, sparse virtual file system in the future)
 - Reads snapshot the original file; writes create diffs against the snapshot
-- All writes become **ChangeSets with diffs**, bundled into PR packages
+- All writes become **ChangeSets with diffs**, bundled into Draft packages
 
 ```
 Agent
@@ -130,7 +130,7 @@ MCP ta_fs_read / ta_fs_write
   ↓
 StagingWorkspace (isolated temp directory)
   ↓
-ChangeSet → Diff → PR Package → Human Review → Apply
+ChangeSet → Diff → Draft Package → Human Review → Apply
 ```
 
 ### Why staging directories?
@@ -138,7 +138,7 @@ ChangeSet → Diff → PR Package → Human Review → Apply
 - no kernel drivers, FUSE mounts, or Git dependency
 - native diff/rollback semantics
 - binary changes can be summarized and hashed
-- maps cleanly to PR-style review
+- maps cleanly to Draft-style review
 - each GoalRun gets complete isolation
 
 ### Why not a mounted VFS?
@@ -148,6 +148,8 @@ Kernel-level VFS (FUSE, sandboxfs, etc.) introduces:
 - platform inconsistencies
 
 Those can be added later, but staging workspaces keep the system **portable and maintainable**.
+
+![Current temp abstraction is a staging folder to get devs operational now](./dev-working-example.svg)
 
 ---
 
@@ -198,7 +200,7 @@ So:
 - a post is created, not published
 - a DB mutation is recorded, not applied
 
-All appear in the **same PR package** alongside filesystem changes.
+All appear in the **same Draft package** alongside filesystem changes.
 
 ---
 
@@ -215,7 +217,7 @@ This is the hard security boundary.
 If an agent *does* have permission to write:
 - the write is staged
 - the change is collected
-- a PR package is generated
+- a Draft package is generated
 
 Commit/send/post requires explicit approval or a narrowly scoped write-through capability.
 
@@ -291,7 +293,7 @@ That separation is the core architectural property.
 
 ---
 
-## Why PR-style milestones matter
+## Why Draft-style milestones matter
 
 Continuous human oversight destroys autonomy.  
 Zero oversight destroys trust.
@@ -402,7 +404,7 @@ The key activates when you `cd` into the project and deactivates when you leave.
 ```bash
 cd your-project/
 
-# One command: create staging copy → launch agent → build PR on exit
+# One command: create staging copy → launch agent → build Draft on exit
 ta run "Fix the auth bug" --source .
 
 # Uses Claude Code by default. For other agents:
@@ -410,15 +412,15 @@ ta run "Fix the auth bug" --agent claude-flow --source .
 
 # TA copies your project to .ta/staging/, injects context into CLAUDE.md,
 # launches the agent in the staging copy. Agent works normally.
-# When the agent exits, TA diffs staging vs source and builds a PR package.
+# When the agent exits, TA diffs staging vs source and builds a Draft package.
 
 # Review what the agent did
-ta pr list
-ta pr view <package-id>
+ta draft list
+ta draft view <package-id>
 
 # Approve and apply changes back to your project
-ta pr approve <package-id>
-ta pr apply <package-id> --git-commit
+ta draft approve <package-id>
+ta draft apply <package-id> --git-commit
 ```
 
 That's it. The agent never knew it was in a staging workspace.
@@ -437,9 +439,9 @@ Your Project                     Staging Copy (.ta/staging/)
      |                              Agent works here
      |                              (reads, writes, tests — normal tools)
      |                                    |
-     |                              ta pr build --latest
+     |                              ta draft build --latest
      |                                    |
-     |<--- ta pr apply <id> -------------|  (only approved changes copied back)
+     |<--- ta draft apply <id> -------------|  (only approved changes copied back)
      |
    Your project updated + optional git commit
 ```
@@ -447,7 +449,7 @@ Your Project                     Staging Copy (.ta/staging/)
 TA is invisible to the agent. It works by:
 1. Copying your project to a staging directory (with `.taignore` to skip build artifacts)
 2. Letting the agent work normally in the copy using its native tools
-3. Diffing the staging copy against the original to create a PR package
+3. Diffing the staging copy against the original to create a Draft package
 4. Letting you review, approve, and apply changes back
 
 ---
@@ -470,15 +472,15 @@ claude    # or: codex, or any tool
 #    It doesn't know it's in a staging workspace.
 #    When done, exit the agent.
 
-# 5. Build a PR package from the diff
-ta pr build <goal-id> --summary "Fixed the auth bug"
+# 5. Build a Draft package from the diff
+ta draft build <goal-id> --summary "Fixed the auth bug"
 
 # 6. Review the changes
-ta pr view <package-id>
+ta draft view <package-id>
 
 # 7. Approve and apply back to your project (with optional git commit)
-ta pr approve <package-id>
-ta pr apply <package-id> --git-commit
+ta draft approve <package-id>
+ta draft apply <package-id> --git-commit
 ```
 
 ### One-command shortcut
@@ -559,7 +561,7 @@ ta run "Refactor auth system" --source .
 # Claude Code (default agent) launches in .ta/staging/<goal-id>/
 # It can use mcp__claude-flow__swarm_init, mcp__claude-flow__task_orchestrate,
 # etc. alongside its normal tools.
-# When Claude exits, TA diffs and builds the PR package.
+# When Claude exits, TA diffs and builds the Draft package.
 ```
 
 **Approach B: Hive-mind (spawns Claude Code directly)**
@@ -571,9 +573,9 @@ cd .ta/staging/<goal-id>/
 npx claude-flow@alpha hive-mind init       # required — sets up the hive mind
 npx claude-flow@alpha hive-mind spawn "Refactor auth system" --claude
 # Spawns Claude Code with --dangerously-skip-permissions in the staging dir.
-# When done, return to project root and build the PR:
+# When done, return to project root and build the Draft:
 cd your-project/
-ta pr build <goal-id> --summary "Auth system refactored"
+ta draft build <goal-id> --summary "Auth system refactored"
 ```
 
 > **Note:** `ta run "task" --agent claude-flow --source .` handles `hive-mind init` automatically.
@@ -587,16 +589,16 @@ cd .ta/staging/<goal-id>/
 npx claude-flow@alpha swarm "Refactor auth system" --headless
 # Runs to completion without interaction.
 cd your-project/
-ta pr build <goal-id> --summary "Auth system refactored by swarm"
+ta draft build <goal-id> --summary "Auth system refactored by swarm"
 ```
 
 #### Step 5: Review and apply
 
 ```bash
-ta pr list
-ta pr view <package-id>
-ta pr approve <package-id>
-ta pr apply <package-id> --git-commit
+ta draft list
+ta draft view <package-id>
+ta draft approve <package-id>
+ta draft apply <package-id> --git-commit
 ```
 
 #### CLAUDE.md conflict note
@@ -662,29 +664,29 @@ If no `.taignore` exists, sensible defaults are used. The `.ta/` directory is al
 ## Review Workflow
 
 ```bash
-ta pr list                            # List pending PRs
-ta pr view <package-id>               # View details + diffs
-ta pr approve <package-id>            # Approve
-ta pr deny <package-id> --reason "x"  # Deny with reason
-ta pr apply <package-id> --git-commit # Apply + commit
-ta pr apply <package-id> --submit     # Apply + commit + push + open PR
+ta draft list                            # List pending PRs
+ta draft view <package-id>               # View details + diffs
+ta draft approve <package-id>            # Approve
+ta draft deny <package-id> --reason "x"  # Deny with reason
+ta draft apply <package-id> --git-commit # Apply + commit
+ta draft apply <package-id> --submit     # Apply + commit + push + open Draft
 
 # Selective approval (approve some, reject/discuss others)
-ta pr apply <id> --approve "src/**/*.rs" --reject "*.test.rs" --discuss "config/*"
-ta pr apply <id> --approve all        # Approve everything
-ta pr apply <id> --approve rest       # Approve everything not explicitly matched
+ta draft apply <id> --approve "src/**/*.rs" --reject "*.test.rs" --discuss "config/*"
+ta draft apply <id> --approve all        # Approve everything
+ta draft apply <id> --approve rest       # Approve everything not explicitly matched
 ```
 
 ### Workflow Automation (`.ta/workflow.toml`)
 
-By default, `ta pr apply` only copies files back to your project. To automatically commit, push, and open a pull request, you can either pass CLI flags each time or create a `.ta/workflow.toml` config file to set your preferences once.
+By default, `ta draft apply` only copies files back to your project. To automatically commit, push, and open a draf set of changes (e.g. a pull request in GIT terminology), you can either pass CLI flags each time or create a `.ta/workflow.toml` config file to set your preferences once.
 
 **Option A: CLI flags (no config needed)**
 
 ```bash
-ta pr apply <id> --git-commit         # Commit only
-ta pr apply <id> --git-push           # Commit + push (implies --git-commit)
-ta pr apply <id> --submit             # Commit + push + open PR
+ta draft apply <id> --git-commit         # Commit only
+ta draft apply <id> --git-push           # Commit + push (implies --git-commit)
+ta draft apply <id> --submit             # Commit + push + open Draft
 ```
 
 **Option B: Config file (set once, always active)**
@@ -694,32 +696,32 @@ Create `.ta/workflow.toml` in your project root:
 ```toml
 [submit]
 adapter = "git"          # "git" or "none" (default: "none")
-auto_commit = true       # Commit on every ta pr apply
+auto_commit = true       # Commit on every ta draft apply
 auto_push = true         # Push after commit
-auto_review = true       # Open a PR after push
+auto_review = true       # Open a Draft after push
 
 [submit.git]
 branch_prefix = "ta/"    # Branch naming: ta/<goal-slug>
-target_branch = "main"   # PR target branch
+target_branch = "main"   # Draft target branch
 merge_strategy = "squash" # squash, merge, or rebase
 remote = "origin"        # Git remote name
-# pr_template = ".ta/pr-template.md"  # Optional PR body template
+# pr_template = ".ta/draft-template.md"  # Optional Draft body template
 ```
 
-With this config, `ta pr apply <id>` automatically creates a feature branch, commits, pushes, and opens a GitHub PR — no flags needed.
+With this config, `ta draft apply <id>` automatically creates a feature branch, commits, pushes, and opens a GitHub Draft — no flags needed.
 
 **How it works:**
 - Without `.ta/workflow.toml`: all `auto_*` settings default to `false`. You must use `--git-commit`, `--git-push`, or `--submit` explicitly.
-- With `.ta/workflow.toml`: the `auto_*` settings activate on every `ta pr apply`. CLI flags always work as overrides on top.
+- With `.ta/workflow.toml`: the `auto_*` settings activate on every `ta draft apply`. CLI flags always work as overrides on top.
 - The git adapter auto-detects git repos. If `adapter = "none"` but you're in a git repo and pass `--git-commit`, it uses git automatically.
-- **PR creation requires the [GitHub CLI](https://cli.github.com/)** (`gh`). Install it and run `gh auth login` once.
+- **Draft creation requires the [GitHub CLI](https://cli.github.com/)** (`gh`). Install it and run `gh auth login` once.
 
 **Quick setup from examples:**
 
 ```bash
 mkdir -p .ta
 cp examples/workflow.toml .ta/workflow.toml
-cp examples/pr-template.md .ta/pr-template.md
+cp examples/draft-template.md .ta/draft-template.md
 # Edit .ta/workflow.toml to match your project (branch prefix, target branch, etc.)
 ```
 
@@ -731,13 +733,13 @@ When you need to iterate on feedback or address discuss items:
 
 ```bash
 # Mark items for discussion during initial review
-ta pr apply <id> --approve "src/**" --discuss "config/*"
+ta draft apply <id> --approve "src/**" --discuss "config/*"
 
 # Start a follow-up goal to address feedback
 ta run "Fix config validation" --source . --follow-up
 # - Automatically links to most recent goal
 # - Agent receives parent context (what was approved/rejected/discussed)
-# - New PR supersedes parent PR if parent wasn't applied yet
+# - New Draft supersedes parent Draft if parent wasn't applied yet
 
 # Follow up on a specific goal (ID prefix matching)
 ta run "Address security feedback" --source . --follow-up abc123
@@ -747,7 +749,7 @@ ta run --source . --follow-up --objective-file review-feedback.md
 
 # View goal chain
 ta goal list  # Shows parent relationships: "title (→ parent_id)"
-ta pr list    # Shows superseded PRs: "superseded (abc12345)"
+ta draft list    # Shows superseded PRs: "superseded (abc12345)"
 ```
 
 ---
@@ -771,8 +773,8 @@ claude
 | `ta_fs_write` | Write to staging (creates a ChangeSet with diff) |
 | `ta_fs_list` | List staged files |
 | `ta_fs_diff` | Show diff for a staged file |
-| `ta_pr_build` | Bundle staged changes into a PR package for review |
-| `ta_pr_status` | Check PR package status |
+| `ta_pr_build` | Bundle staged changes into a Draft package for review |
+| `ta_pr_status` | Check Draft package status |
 | `ta_goal_status` | Check GoalRun state |
 | `ta_goal_list` | List all GoalRuns |
 
@@ -784,7 +786,7 @@ claude
 Transparent overlay mode (recommended):
   Agent works in staging copy (native tools)
     → TA diffs staging vs source
-    → PR Package → Human Review → Approve → Apply
+    → Draft Package → Human Review → Approve → Apply
 
 MCP-native mode:
   Agent (Claude Code / Codex / any MCP client)
@@ -798,7 +800,7 @@ MCP-native mode:
     '-- GoalRunStore (ta-goal)          lifecycle management
     |
     v
-  PR Package → Human Review (CLI) → Approve → Apply
+  Draft Package → Human Review (CLI) → Approve → Apply
 ```
 
 Multiple agents can work simultaneously. Each gets an isolated GoalRun with its own staging workspace and capabilities.
@@ -810,7 +812,7 @@ Multiple agents can work simultaneously. Each gets an isolated GoalRun with its 
 ```
 crates/
   ta-audit/               Append-only event log + SHA-256 hash chain
-  ta-changeset/           ChangeSet + PR Package data model + URI pattern matching
+  ta-changeset/           ChangeSet + Draft Package data model + URI pattern matching
   ta-policy/              Capability manifests + default-deny policy engine
   ta-workspace/           Staging + overlay workspace manager + JSON change store
   ta-goal/                GoalRun lifecycle state machine + event dispatch
@@ -825,7 +827,7 @@ crates/
 apps/
   ta-cli/                 CLI: goals, PRs, run, plan, audit, adapters
 schema/
-  pr_package.schema.json  PR package JSON schema
+  pr_package.schema.json  Draft package JSON schema
   capability.schema.json  Capability manifest schema
   agent_setup.schema.json Agent setup proposal schema
 ```
@@ -900,14 +902,14 @@ cargo fmt --all -- --check
 - **YAML agent configs** — discoverable config files for any agent framework (`.ta/agents/`, `~/.config/ta/agents/`)
 - **Settings injection** — auto-configures agent permissions (replaces `--dangerously-skip-permissions`)
 - **Follow-up goals** — `--follow-up` to iterate on review feedback with full parent context injection
-- **Submit adapters** — pluggable VCS integration (git commit/push/PR, or no-VCS file copy)
+- **Submit adapters** — pluggable VCS integration (git commit/push/Draft, or no-VCS file copy)
 - Append-only audit log with SHA-256 hash chain
 - Default-deny capability engine with glob pattern matching
 - Per-artifact review model (disposition, dependencies, rationale)
 - URI-aware pattern matching (scheme-scoped safety — `src/**` can't match `gmail://`)
 - Real MCP server (rmcp 0.14) with 9 tools and policy enforcement
-- CLI: `goal`, `pr`, `run`, `plan`, `audit`, `adapter`, `serve`
-- Plan tracking (`ta plan list/status`, auto-update on `ta pr apply`)
+- CLI: `goal`, `draft`, `run`, `plan`, `audit`, `adapter`, `serve`
+- Plan tracking (`ta plan list/status`, auto-update on `ta draft apply`)
 
 ---
 

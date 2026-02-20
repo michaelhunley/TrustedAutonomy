@@ -1,0 +1,29 @@
+flowchart TD
+  %% =========================
+  %% Practical Working Example Today
+  %% Implement Slack integration feature set for Trusted Autonomy
+  %% =========================
+
+  H1["👤 Human Goal<br/><b>“Implement the Slack integration feature set for Trusted Autonomy.”</b>"]
+
+  TA0["🛡️ Trusted Autonomy (TA)<br/><b>Goal Run</b><br/>• Enforce charter (filesystem only today)<br/>• Collect file mutations as ChangeSets<br/>• Build Draft Package for review"]
+
+  WS["🗂️ [temp] Staging Workspace (filesystem)<br/><i>Temporary isolated copy for the Goal Run</i><br/>• Agent works normally here<br/>• TA diffs vs source"]
+
+  A1["🤖 Coding Agent / Swarm<br/><b>Operates with native tools</b><br/>• edits, searches, runs tests (as allowed)<br/>• TA is invisible"]
+
+  FS["📁 Filesystem (today)<br/>• Read source<br/>• Write in staging<br/>• Capture diffs + binary summaries"]
+
+  DP["📦 Draft Package (today)<br/><b>Semantic diff + agent rationale</b><br/>• Per-file approve / reject / discuss<br/>• Binary changes summarized (hash/size/type)"]
+
+  H2["👤 Human Review<br/><b>Review Draft Package</b><br/>Approve / Reject / Discuss per file"]
+
+  APPLY["✅ Apply Approved File Changes<br/><b>Copy back only approved deltas</b><br/>Optional: create git commit"]
+
+  %% Main flow
+  H1 --> TA0 --> WS --> A1 --> FS --> TA0
+  TA0 --> DP --> H2 --> APPLY
+
+  %% Notes
+  WS -. "Temporary implementation detail (today only)" .-> TA0
+  TA0 -. "Draft = PR-style review artifact, generalized beyond code" .-> DP
