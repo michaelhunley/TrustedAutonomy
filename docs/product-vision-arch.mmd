@@ -11,7 +11,7 @@ flowchart TD
 
   A1["🤖 Agent / Swarm (any framework)<br/><b>Operates normally</b><br/>Claude / Codex / LangChain / Ollama / etc."]
 
-  C1["🔌 Connectors (mediated)<br/>Email • Slack • Docs/Drive • DB • Web • Filesystem • Social"]
+  C1["🔌 Connectors (mediated)<br/> • Email<br/> • Slack<br/> • Docs/Drive<br/> • DB<br/> • Web<br/> • Filesystem<br/> • Social"]
   C2["🌐 Research / Web Access (mediated)<br/>• Sanitized inputs<br/>• Provenance labels<br/>• Instruction-hierarchy firewall"]
 
   DP["📦 Draft Package (semantic review bundle)<br/><b>Changes + rationale + risk flags</b><br/>• Email drafts<br/>• Slack notifications queued<br/>• DB / API mutations staged<br/>• File changes staged"]
@@ -21,13 +21,14 @@ flowchart TD
   APPLY["✅ Apply Approved Changes<br/><b>Commit staged effects to real world</b><br/>Send emails • Post Slack • Write DB • Apply file changes"]
 
   %% Main flow
-  H1 --> TA0 --> VW --> A1 --> TA0
+  H1 --> TA0 --> DP --> H2 --> APPLY
+  TA0 --> VW --> A1
   TA0 --> C1
   TA0 --> C2
+  A1 --> TA0
   C1 --> TA0
   C2 --> TA0
-  TA0 --> DP --> H2 --> APPLY
 
   %% Notes / emphasis
-  A1 -. "TA is transparent to agent framework" .-> TA0
-  DP -. "Single milestone review, not per-action prompts" .-> H2
+  A1 -. "TA is transparent\nto agent framework" .-> TA0
+  DP -. "Single milestone review,\nnot per-action prompts" .-> H2
