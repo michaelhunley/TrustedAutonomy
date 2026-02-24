@@ -493,14 +493,14 @@ Agent works in Virtual Workspace
 - ✅ Git commit message in `ta draft apply` now includes complete draft summary with per-artifact descriptions (`build_commit_message` function)
 - ✅ 16 new tests: plan parsing for sub-phases (4), plan lifecycle (find_next, suggest, history — 8), supervisor plan validation (4)
 
-### v0.3.1.1 — Generic Plan Schema & Session Observability
+### v0.3.1.1 — Configurable Plan Format Parsing
 <!-- status: pending -->
 
-#### Problem: Plan parser is project-specific
+#### Problem
 `plan.rs` hardcodes this project's PLAN.md format (`## v0.X`, `### v0.X.Y`, `<!-- status: -->` markers). Any other project using TA would need to adopt the same markdown conventions or nothing works. The parser should be schema-driven, not format-hardcoded.
 
-**Plan schema extraction** (lowest implementation cost):
-- **`.ta/plan-schema.yaml`**: Declarative config describing how to parse a project's plan document. Shipped with sensible defaults that match common markdown patterns.
+#### Solution: `.ta/plan-schema.yaml`
+Declarative config describing how to parse a project's plan document. Shipped with sensible defaults that match common markdown patterns.
 ```yaml
 # .ta/plan-schema.yaml
 source: PLAN.md                          # or ROADMAP.md, TODO.md, etc.
@@ -510,30 +510,87 @@ phase_patterns:
 status_marker: "<!-- status: (\\w+) -->"   # regex with capture group
 statuses: [done, in_progress, pending]     # valid values
 ```
-- **`ta plan init`**: Interactive or agent-guided command that reads an existing plan document, proposes a schema, and writes `.ta/plan-schema.yaml`. Agent examines headers, markers, and structure — human approves.
+
+#### CLI
+- **`ta plan init`**: Agent-guided schema extraction — reads an existing plan document, proposes a `plan-schema.yaml`, human approves. Zero effort for projects that already have a plan.
 - **`ta plan create`**: Generate a new plan document from a template + schema. Templates for common workflows (feature, bugfix, greenfield).
 - Refactor `parse_plan()` to read schema at runtime instead of hardcoded regexes. Existing behavior preserved as the default schema (zero-config for projects that adopt the current convention).
 
-#### Problem: Terminal output shows garbled HTML entities
-`ta draft view` renders `ÆpendingÅ` instead of `[pending]` — HTML `<span>` tags from the HTML adapter leaking into terminal output, with angle brackets mangled by encoding. Root cause TBD: either the wrong adapter is selected, the draft package JSON contains pre-rendered HTML in a data field, or a terminal encoding mismatch. Fix: ensure `view_package` always passes clean data (not pre-rendered HTML) to adapters, and add an integration test that asserts terminal output contains no HTML tags.
+#### Bug fix: garbled HTML in terminal output
+`ta draft view` renders `ÆpendingÅ` instead of `[pending]` — HTML `<span>` tags leaking into terminal output with encoding corruption. Fix: ensure adapters receive clean data (not pre-rendered HTML) and add regression test asserting terminal output contains no HTML tags.
 
-#### Interactive session mode (`ta run --interactive`)
-**Goal**: Let the human observe agent work in real-time, interrogate the agent mid-session, and resume sessions without re-learning state — all while TA mediates the session invisibly.
+### v0.3.1.2 — Interactive Session Orchestration
+<!-- status: pending -->
 
-- **Observable output**: Agent framework stdout/stderr piped through TA with structured logging. Human sees work in progress. TA captures the stream for audit and context.
-- **Session wrapping**: `ta run --interactive` wraps the agent CLI session (`claude`, `codex`, etc.) so TA controls launch, environment injection, and auto-exit. The agent framework CLI runs inside TA's session envelope — agent doesn't know TA exists.
-- **Human interrogation**: Human can inject questions/guidance into the running session (via a side channel or interleaved stdin). Agent responds using its existing context — no token cost for re-learning.
-- **Context preservation on resume**: On session restore, TA provides agent-framework-native context (Claude's `--resume`, Codex session files, etc.) rather than re-injecting full history. Falls back to CLAUDE.md context injection if native resume unavailable.
+#### Vision
+The human orchestrates construction iteratively across multiple goal sessions — observing agent work, injecting guidance, reviewing drafts, and resuming sessions — through a unified interaction layer. This phase builds the **session interaction protocol** that underpins both the local CLI experience and the future TA web app / messaging integrations (Discord, Slack, email).
+
+> **Design principle**: Every interaction between human and TA is a **message** on a **channel**. The CLI is one channel. A Discord thread is another. The protocol is the same — TA doesn't care where the message came from, only that it's authenticated and routed to the right session.
+
+#### Session Interaction Protocol
+The core abstraction: a `SessionChannel` trait that any frontend implements.
+
+```rust
+/// A bidirectional channel between a human and a TA-mediated agent session.
+pub trait SessionChannel: Send + Sync {
+    /// Display agent output to the human (streaming).
+    fn emit(&self, event: SessionEvent) -> Result<()>;
+    /// Receive human input (blocks until available or timeout).
+    fn receive(&self, timeout: Duration) -> Result<Option<HumanInput>>;
+    /// Channel identity (for audit trail).
+    fn channel_id(&self) -> &str;  // "cli:tty0", "discord:thread:123", "slack:C04..."
+}
+
+pub enum SessionEvent {
+    AgentOutput { stream: Stream, content: String },  // stdout/stderr
+    DraftReady { draft_id: Uuid, summary: String },   // checkpoint
+    GoalComplete { goal_id: Uuid },
+    WaitingForInput { prompt: String },                // agent needs guidance
+}
+
+pub enum HumanInput {
+    Message(String),                    // guidance injected into agent context
+    Approve { draft_id: Uuid },         // inline review
+    Reject { draft_id: Uuid, reason: String },
+    Abort,                              // kill session
+}
+```
+
+#### CLI implementation (`ta run --interactive`)
+The first `SessionChannel` implementation — wraps the agent CLI with PTY capture.
+
+- **Observable output**: Agent stdout/stderr piped through TA, displayed to human, captured for audit.
+- **Session wrapping**: TA launches agent CLI inside a session envelope. Agent doesn't know TA exists. TA controls environment injection and exit.
+- **Human interrogation**: stdin interleaving lets human inject guidance. Agent responds using existing context — no token cost for re-learning state.
+- **Context preservation on resume**: Uses agent-framework-native resume (Claude `--resume`, Codex session files) when available. Falls back to CLAUDE.md context injection.
 - **Per-agent config**: `agents/<name>.yaml` gains `interactive` block:
 ```yaml
 interactive:
-  launch_cmd: "claude --resume {session_id}"  # native resume if supported
-  output_capture: "pty"                        # pty, pipe, or log
-  allow_human_input: true                      # side-channel injection
-  auto_exit_on: "idle_timeout: 300s"           # or "goal_complete"
+  launch_cmd: "claude --resume {session_id}"
+  output_capture: "pty"              # pty, pipe, or log
+  allow_human_input: true
+  auto_exit_on: "idle_timeout: 300s" # or "goal_complete"
 ```
-- **Implementation phases**: (1) PTY wrapping + output capture — works today. (2) Side-channel input — requires agent framework support or stdin interleaving. (3) Native resume integration — per-agent, Claude first.
-- Relates to v0.4.1 (macro goals + inner-loop iteration) — interactive mode is the human-facing complement to the agent-facing MCP tools.
+
+#### MCP integration surface (for messaging channels)
+The `SessionChannel` trait is designed so that messaging platform integrations are thin adapters, not new features. Each maps platform primitives to `SessionEvent` / `HumanInput`:
+
+| Platform | `emit()` | `receive()` | Session identity |
+|----------|----------|-------------|-----------------|
+| CLI (v0.3.1.2) | PTY stdout | stdin | `cli:{tty}` |
+| Discord (future) | Thread message | Thread reply | `discord:{thread_id}` |
+| Slack (future) | Channel message | Thread reply | `slack:{channel}:{ts}` |
+| Email (future) | Reply email | Incoming email | `email:{thread_id}` |
+| Web app (future) | WebSocket push | WebSocket message | `web:{session_id}` |
+
+Each adapter is ~100-200 lines: authenticate, map to `SessionChannel`, route to the correct TA session. All governance (draft review, audit, policy) is handled by TA core — the channel just carries messages.
+
+#### Stepping stones to the TA app
+This phase deliberately builds the protocol layer that the TA local/web app will consume:
+- **Session list + status**: `ta session list` shows active sessions across all channels. Web app renders the same data.
+- **Draft review inline**: Human can approve/reject drafts from within the session (any channel), not just via separate `ta draft approve` commands.
+- **Multi-session orchestration**: Human can have multiple active sessions (different goals/agents) and switch between them. Web app shows them as tabs; Discord shows them as threads.
+- Relates to v0.4.1 (macro goals) — interactive sessions are the human-facing complement to the agent-facing MCP tools in macro goal mode.
 
 ### v0.3.2 — Configurable Release Pipeline (`ta release`)
 <!-- status: pending -->
