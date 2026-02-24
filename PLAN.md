@@ -819,7 +819,32 @@ access:
 > integration. TA handles the governance. Same pattern as filesystem: hold changes at a
 > checkpoint, replay on apply.
 
-### v0.5.0 — MCP Tool Call Interception
+### v0.5.0 — Credential Broker & Identity Abstraction
+<!-- status: pending -->
+**Prerequisite for all external actions**: Agents must never hold raw credentials. TA acts as an identity broker — agents request access, TA provides scoped, short-lived session tokens.
+
+- **Credential vault**: TA stores OAuth tokens, API keys, database credentials in an encrypted local vault (age/sops or OS keychain integration). Agents never see raw secrets.
+- **Scoped session tokens**: When an agent needs to call an MCP server that requires auth, TA issues a scoped bearer token with: limited TTL, restricted actions (read-only vs read-write), restricted resources (which mailbox, which DB table)
+- **OAuth broker**: For services that use OAuth (Gmail, Slack, social media), TA handles the OAuth flow. Agent receives a session token that TA proxies to the real OAuth token. Token refresh is TA's responsibility, not the agent's.
+- **SSO/SAML integration**: Enterprise users can connect TA to their SSO provider. Agent sessions inherit the user's identity but with TA-scoped restrictions.
+- **Credential rotation**: TA can rotate tokens without agent awareness. Agent's session token stays valid; TA maps it to new real credentials.
+- **Audit**: Every credential issuance logged — who (which agent), what (which service, which scope), when, for how long.
+
+```yaml
+# .ta/credentials.yaml (encrypted at rest)
+services:
+  gmail:
+    type: oauth2
+    provider: google
+    scopes: ["gmail.send", "gmail.readonly"]
+    token_ttl: 3600
+  plaid:
+    type: api_key
+    key_ref: "keychain://ta/plaid-production"
+    agent_scope: read_only  # agents can read transactions but not initiate transfers
+```
+
+### v0.5.1 — MCP Tool Call Interception
 <!-- status: pending -->
 **Core**: Intercept outbound MCP tool calls that change external state. Hold them in the draft as pending actions. Replay on apply.
 
@@ -827,125 +852,147 @@ access:
 - **Action classification**: Read-only calls (search, list, get) pass through immediately. State-changing calls (send, post, create, update, delete) are captured and held
 - **Draft action display**: `ta draft view` shows pending actions alongside file artifacts — "Gmail: send to alice@example.com, subject: Q3 Report" with full payload available at `--detail full`
 - **Selective approval**: Same `--approve`/`--reject` pattern works for actions. URI scheme distinguishes them: `mcp://gmail/send`, `mcp://slack/post_message`, etc.
-- **Apply = replay**: `ta draft apply` replays approved MCP calls against the live MCP server. Failed replays are reported with retry option.
+- **Apply = replay**: `ta draft apply` replays approved MCP calls against the live MCP server (using credentials from the vault, never exposed to agent). Failed replays reported with retry option.
+- **Bundled MCP server configs**: Ship default configs for common MCP servers (Google, Slack, Discord, social media, databases). User runs `ta setup connect gmail` → OAuth flow → credentials stored → MCP server config generated.
 - **Data model**: `DraftPackage.changes` gains `pending_actions: Vec<PendingAction>` alongside existing `artifacts` and `patch_sets`
 
 ```rust
 pub struct PendingAction {
     pub action_uri: String,           // mcp://server/tool_name
     pub tool_name: String,            // Original MCP tool name
-    pub arguments: serde_json::Value, // Captured arguments
+    pub arguments: serde_json::Value, // Captured arguments (credentials redacted)
     pub captured_at: DateTime<Utc>,
-    pub disposition: ArtifactDisposition, // Same approval model as file artifacts
-    pub summary: String,              // Human-readable description (LLM-generated)
-    pub reversible: bool,             // Can this action be undone? (send email = no, create draft = yes)
+    pub disposition: ArtifactDisposition,
+    pub summary: String,              // Human-readable description
+    pub reversible: bool,             // Can this action be undone?
+    pub estimated_cost: Option<f64>,  // API call cost estimate if applicable
 }
 ```
 
-#### First integration targets (via existing MCP servers)
-- **Gmail**: Send email, create draft, reply — using Google MCP server
-- **Slack/Discord**: Post message, react — using respective MCP servers
-- **Social media**: Post, schedule — using platform MCP servers
-- **Google Drive/Docs**: Create, update, share — using Google MCP server
-- **Database**: INSERT/UPDATE/DELETE — using DB MCP servers
-
 #### What TA does NOT build
 - No Gmail API client. No Slack bot. No Twitter SDK. The MCP servers handle all service-specific logic.
-- TA only adds: interception, capture, display, approval, replay. The governance wrapper.
+- TA only adds: credential brokering, interception, capture, display, approval, replay.
+
+### v0.5.2 — Minimal Web Review UI
+<!-- status: pending -->
+**Goal**: A single-page web UI served by `ta daemon` at localhost for draft review and approval. Unblocks non-CLI users.
+
+- **Scope**: View draft list, view draft detail (same as `ta draft view`), approve/reject/comment per artifact and per action. That's it.
+- **Implementation**: Static HTML + minimal JS. No framework. Calls TA daemon's JSON API.
+- **Auth**: Localhost-only by default. Optional token auth for LAN access.
+- **Foundation**: This becomes the shell that the full web app (v0.9) fills in.
+
+### v0.5.3 — Notification Channels (bidirectional)
+<!-- status: pending -->
+> Moved up from v0.10 — non-dev users need notifications from day one of MCP usage.
+
+- Outbound: Draft review summaries sent via MCP to email/Slack/Discord
+- Inbound: Approval actions received via MCP (reply-to-approve email, Slack button callback)
+- Unified config: `notification_channel` per role/goal in `.ta/workflow.toml`
+- Bidirectional: outbound notifications + inbound approval actions
+- **Channel adapter trait**: Same `SessionChannel` abstraction from v0.3.1.2 — notifications are just another channel.
 
 #### Standards Alignment
-- **EU AI Act Article 50**: Transparency obligations — humans see exactly what the agent wants to do externally before it happens. MCP action summaries satisfy the "inform the natural person" requirement.
-- **ISO/IEC 42001 A.10.3**: Third-party AI component management — MCP servers are third-party components; TA's interception provides the governance wrapper around them.
+- **EU AI Act Article 50**: Transparency — humans see exactly what the agent wants to do before it happens
+- **ISO/IEC 42001 A.10.3**: Third-party AI component management via governance wrapper
 
 ---
 
-## v0.6 — Sandbox Isolation *(release: tag v0.6.0-beta)*
+## v0.6 — Supervisor & Auto-Approval *(release: tag v0.6.0-alpha)*
 
-### v0.6.0 — Sandbox Runner
+### v0.6.0 — Supervisor Agent & Constitutional Workflows
 <!-- status: pending -->
-- OCI/gVisor sandbox for agent execution
-- Allowlisted command execution (rg, fmt, test profiles)
-- CWD enforcement — agents can't escape virtual workspace
-- Command transcripts hashed into audit log
-- Network access policy: allow/deny per-domain (foundation for v0.7 network layer)
+**Goal**: A TA-internal supervisor agent that verifies agent work stays within constitutional bounds before auto-approving. Enables trust escalation from "approve everything" to "auto-approve within policy."
 
-> **Standards**: Sandbox isolation directly addresses **Singapore IMDA Agentic AI Framework** (agent boundary enforcement) and **NIST AI RMF GOVERN 1.4** (processes for AI risk management including containment). Command transcripts hashed into audit log satisfy **ISO/IEC 42001** provenance requirements.
+> **Key insight**: Auto-approval isn't "skip review." It's "have the supervisor review instead of the human, within bounds the human defined." The human sets the constitution; the supervisor enforces it.
+
+- **Workflow constitution**: Per-workflow YAML defining what's in-bounds for auto-approval:
+```yaml
+# .ta/constitutions/code-review.yaml
+name: "Code changes — low risk"
+auto_approve_when:
+  risk_score_max: 20
+  artifact_count_max: 10
+  file_patterns: ["src/**", "tests/**"]    # only source files
+  no_new_dependencies: true
+  no_security_sensitive_files: true        # no .env, credentials, CI configs
+  change_types: [modify]                   # no deletes, no new files
+  agent_drift_clear: true                  # no drift alerts (v0.4.2)
+escalate_to_human_when:
+  - "any artifact rejected in previous draft for same goal"
+  - "agent accessed files outside file_patterns"
+  - "risk_score > threshold"
+notify_on_auto_approve: true               # always tell the human what was auto-approved
+```
+- **Supervisor verification**: Before auto-approving, the supervisor agent checks:
+  1. All artifacts within constitutional bounds
+  2. No drift alerts active for this agent
+  3. Access constitution (v0.4.3) not violated if one exists
+  4. No new patterns not seen in agent's historical baseline
+- **Trust levels**: None (all manual) → Constitutional (auto within bounds) → Full (auto-approve everything, audit only). Default: None. User escalates explicitly.
+- **Audit trail**: Every auto-approval records: which constitution, which checks passed, supervisor reasoning. Human can audit retroactively.
+- **"TA supervises TA"**: The supervisor itself runs through TA governance — its config is a draft that the human approves. Supervisor can't expand its own authority.
+
+### v0.6.1 — Cost Tracking & Budget Limits
+<!-- status: pending -->
+- Track token usage per goal, per agent, per session
+- Estimated cost displayed in draft summary: "This goal used ~45K tokens ($0.18)"
+- Budget limits in workflow config: `max_cost_per_goal: 5.00`, `max_cost_per_day: 50.00`
+- Agent warned at 80% budget; stopped at 100%. Human can override.
+- Cost history: `ta audit cost --agent claude-code --last 30d`
 
 ---
 
-## v0.7 — Network Abstraction Layer *(release: tag v0.7.0-beta)*
+## v0.7 — Guided Setup & Workflow Templates *(release: tag v0.7.0-alpha)*
 
-> **Separate agent protocol layer**: The network intercept capability may be packaged as a
-> standalone protocol that TA uses but others can adopt independently. Think modern Wireshark
-> with LLM interpretation — understands what traffic means, not just what bytes flow.
+> **Design principle**: All setup operates like a smart agent acting in the user's best interests, with full review via TA's own draft model. "Use TA to build TA user config."
 
-### v0.7.0 — Research: Existing Network Intercept Projects
+### v0.7.0 — Agent-Guided Setup (`ta setup`)
 <!-- status: pending -->
-**Goal**: Survey existing tools before building. Identify what to adopt vs. build.
+**Goal**: A conversational setup flow where a TA agent helps configure workflows, connect services, and create role definitions — and the resulting config is a TA draft the user reviews before activation.
 
-- **Survey targets**:
-  - mitmproxy / mitmproxy-rs — transparent HTTPS interception with Python/Rust API
-  - Wireshark/tshark dissectors — protocol parsing at scale
-  - Envoy/Istio sidecar proxy — service mesh traffic interception patterns
-  - eBPF-based tools (bpftrace, Cilium) — kernel-level packet observation without proxy
-  - Burp Suite / ZAP — security-focused HTTP intercept with plugin systems
-  - OpenTelemetry — distributed tracing as a traffic observation model
-  - pcap/npcap libraries — raw packet capture
-- **Evaluation criteria**:
-  - Can it run as a transparent proxy for a sandboxed process? (v0.6 integration)
-  - Does it handle TLS interception with a local CA?
-  - Can we get structured data (method, URL, headers, body) not just raw bytes?
-  - Rust/C FFI available? Or do we shell out?
-  - License compatibility (Apache-2.0 / MIT preferred)
-- **Output**: Decision document — what to adopt, what to wrap, what to build
+- **`ta setup`**: Launches a TA goal where the agent is the setup assistant. User describes what they want in natural language. Agent proposes:
+  - Workflow config (`.ta/workflow.toml`)
+  - Agent configs (`agents/*.yaml`)
+  - Credential connections (OAuth flows)
+  - Role definitions (for virtual office)
+  - Plan schema (`.ta/plan-schema.yaml`)
+- **Output is a draft**: All proposed configs appear as artifacts in a TA draft. User reviews each config file, approves/rejects/edits. Nothing activates until approved.
+- **Templates**: Pre-built workflow templates for common use cases:
+  - `ta setup --template sw-engineer` — git integration, code review, plan tracking
+  - `ta setup --template email-assistant` — Gmail connection, auto-draft replies, daily digest
+  - `ta setup --template social-media` — scheduled posts, content calendar, engagement tracking
+  - `ta setup --template home-finance` — bank connections (Plaid), transaction categorization, monthly reports
+  - `ta setup --template family-office` — multi-account aggregation, portfolio dashboards, tax document prep
+- **Progressive disclosure**: Start simple, add complexity as needed. Initial setup creates minimal config. User can run `ta setup refine` later to add more.
 
-### v0.7.1 — Network Traffic Capture & Governance
+### v0.7.1 — Domain Workflow Templates
 <!-- status: pending -->
-**Core**: Transparent proxy that captures network traffic from agent processes, classifies it, and holds state-changing requests at a checkpoint.
+**Pre-built workflow definitions for specific domains**. Each template defines roles, triggers, constitutional bounds, and MCP server requirements.
 
-- **Capture layer**: Transparent proxy (likely mitmproxy-based or custom Rust proxy) that agent traffic routes through
-- **Traffic classification**: LLM-assisted categorization of requests:
-  - Read-only (GET, search queries) → pass through, log for audit
-  - State-changing (POST, PUT, DELETE, form submissions) → capture and hold in draft
-  - Sensitive (auth tokens, PII, credentials) → flag for review, never auto-approve
-- **AI summary**: Each captured request gets an LLM-generated plain-English description: "Sending email to 3 recipients with Q3 financial report attached" instead of raw HTTP POST body
-- **Draft integration**: Captured network actions appear in `ta draft view` alongside MCP actions and file changes. URI scheme: `net://api.gmail.com/POST/send`
-- **Replay on apply**: Approved network requests are replayed. Handles auth token refresh, idempotency keys, retry logic.
-- **Fallback for non-MCP agents**: Any agent that makes direct HTTP calls (no MCP) still gets governance via network capture. MCP interception (v0.5) is preferred; network capture is the safety net.
+#### Software Engineering
+- Code review workflow: goal → agent works → draft with diffs + explanations → approve → commit
+- CI/CD integration: `ta release` pipeline, test-before-merge gates
+- Plan-driven development: optional, activates when plan exists
 
-### v0.7.2 — LLM Traffic Intelligence
-<!-- status: pending -->
-**Goal**: The network layer becomes an expert on traffic patterns — learns from public data and community contributions.
+#### Personal Productivity (Email + Social)
+- Email triage: agent categorizes, drafts replies for routine emails, escalates complex ones
+- Social media: content calendar → scheduled post drafts → review → publish
+- Calendar management: meeting prep, follow-up drafts
 
-- **Protocol understanding**: Train/fine-tune models on common API patterns (REST, GraphQL, gRPC) so summaries are accurate and actionable
-- **Security intelligence**: Integrate public vulnerability databases (CVE, NVD), known-bad endpoints, credential leak patterns
-- **Anomaly detection**: Flag unusual traffic — agent calling an API it's never called before, unexpected data exfiltration patterns, credential stuffing
-- **Community traffic patterns**: Opt-in sharing of anonymized traffic signatures (not payloads) — "Gmail send via OAuth looks like X" — so new users get expert-level classification immediately
-- **Training pipeline**: Each approved/rejected traffic decision feeds back into the classifier. Over time, TA learns what each user considers safe vs. risky.
+#### Home Finance
+- **Bank integration**: Plaid MCP server for transaction feeds. TA holds all financial data locally — never in cloud.
+- **Transaction categorization**: Agent categorizes transactions, human reviews miscategorized ones. Learns over time.
+- **Monthly dashboard**: Agent generates spending summary, budget vs actual, investment performance. Output as HTML report (same adapter system as `ta draft view`).
+- **Bill tracking**: Agent monitors recurring charges, flags anomalies (unexpected charges, price increases)
+- **Tax prep**: Agent collects deductible transactions, generates summary for accountant
 
-### v0.7.3 — Standalone Agent Protocol Layer (packaging decision)
-<!-- status: pending -->
-**Decision point**: Package the network intercept + LLM intelligence as:
-- (a) A built-in TA module (current path)
-- (b) A standalone protocol/library that TA depends on but others can use independently
-- (c) Both — library with TA integration as the reference implementation
-
-Criteria: community interest, standalone utility, maintenance burden. If (b) or (c), define the protocol spec and publish separately.
-
-### v0.7.4 — Community Memory
-<!-- status: pending -->
-**Goal**: Shared knowledge base where users and agents contribute solutions to unknowns. When someone solves a problem (integration quirk, error resolution, workflow pattern), that solution becomes available to the community.
-
-**Why after v0.7.2**: Community memory is most valuable when it includes network/traffic pattern intelligence — "Gmail OAuth flow looks like X", "this API returns 429 after Y requests". Without the network intelligence layer, community memory would be limited to code-level patterns. After v0.7.2, community contributions can include traffic signatures, protocol quirks, and security patterns that make the shared knowledge base substantially richer.
-
-- **Memory schema**: Problem → context → solution → confidence score → contributor
-- **Local-first**: Each TA instance maintains its own memory store (existing `ta-audit` append-only log pattern)
-- **Opt-in sharing**: Users can publish solved unknowns to a community registry (anonymized by default)
-- **Agent-accessible**: MCP tool `ta_memory_search` lets agents query community solutions during goal execution
-- **Feedback loop**: Solutions that work get upvoted (automatically, via "did applying this fix the issue?"); stale/wrong solutions decay
-- **Integration with goal context**: CLAUDE.md injection can include relevant community solutions for the current task
-- **Community traffic patterns**: Anonymized traffic signatures from v0.7.2 — "Gmail send via OAuth", "Stripe API charge" — so new users get expert-level classification immediately
-- **Not a chatbot knowledge base** — focused on actionable problem→solution pairs with provenance
+#### Family Office Finance
+- **Multi-account aggregation**: Multiple bank/brokerage accounts across family members. Per-member dashboards.
+- **Tiered access**: Principal sees everything. Advisor sees portfolio. Accountant sees tax-relevant transactions. Enforced via TA's identity/credential system (v0.5.0).
+- **Portfolio reporting**: Agent aggregates positions, generates performance reports, tracks rebalancing needs
+- **Document management**: Agent organizes financial documents (statements, tax forms, contracts) via MCP to Google Drive/local filesystem
+- **Compliance**: Audit trail of every agent access to financial data. Who saw what, when, why.
 
 ---
 
@@ -959,8 +1006,18 @@ Criteria: community interest, standalone utility, maintenance burden. If (b) or 
 - `ta events listen` command — stream JSON events for external consumers
 - Stable event schema matching `docs/plugins-architecture-guidance.md` hooks
 - Non-interactive approval API: token-based approve/reject (for Slack buttons, email replies)
-- Foundation for notification connectors and virtual office runtime
-- **Compliance event export**: Structured event stream enables external compliance dashboards. Events carry decision reasoning (v0.3.3), drift alerts (v0.4.2), and policy decisions — sufficient for ISO/IEC 42001 continuous monitoring and EU AI Act record-keeping obligations.
+- Foundation for virtual office runtime
+- **Compliance event export**: Structured event stream enables external compliance dashboards
+
+### v0.8.1 — Community Memory
+<!-- status: pending -->
+**Goal**: Local-first knowledge base where agents learn from their own history. Opt-in community sharing later.
+
+- **Local memory**: Each TA instance maintains a problem → solution store. Agents query it during goal execution.
+- **Automatic capture**: When a goal completes successfully, TA extracts patterns (what worked, what was rejected and why)
+- **Agent-accessible**: MCP tool `ta_memory_search` lets agents query solutions during goal execution
+- **Opt-in sharing** (future): Publish anonymized solutions to community registry
+- **Not a chatbot knowledge base** — focused on actionable problem→solution pairs with provenance
 
 ---
 
@@ -969,22 +1026,21 @@ Criteria: community interest, standalone utility, maintenance burden. If (b) or 
 ### v0.9.0 — Distribution & Packaging
 <!-- status: pending -->
 - Developer: `cargo run` + local config + Nix
-- Desktop: installer with bundled daemon, git, rg/jq
+- Desktop: installer with bundled daemon, git, rg/jq, common MCP servers
 - Cloud: OCI image for daemon + MCP servers, ephemeral virtual workspaces
-- Web UI for review/approval (localhost → LAN → cloud)
+- Full web UI for review/approval (extends v0.5.2 minimal UI)
+- Mobile-responsive web UI (not a native app — PWA is sufficient for v1.0)
 
----
-
-## v0.10 — Notification Channels *(release: tag v0.10.0-beta)*
-
-### v0.10.0 — Notification Channels
+### v0.9.1 — Sandbox Runner (optional hardening)
 <!-- status: pending -->
-> Leverages MCP interception (v0.5) — TA doesn't build Slack/email clients.
-> Instead, MCP servers handle delivery. TA adds bidirectional approval flows.
-- Outbound: Draft review summaries sent via MCP to email/Slack/Discord
-- Inbound: Approval actions received via MCP (reply-to-approve email, Slack button callback)
-- Unified config: `notification_channel` per role/goal in `.ta/workflow.toml`
-- Bidirectional: outbound notifications + inbound approval actions
+> Moved from v0.6. Optional for users who need kernel-level isolation. Not a prerequisite for v1.0.
+
+- OCI/gVisor sandbox for agent execution
+- Allowlisted command execution (rg, fmt, test profiles)
+- CWD enforcement — agents can't escape virtual workspace
+- Command transcripts hashed into audit log
+- Network access policy: allow/deny per-domain
+- **Enterprise state intercept**: For environments requiring network-level capture, see `docs/enterprise-state-intercept.md`. Integrates with sandbox for traffic routing.
 
 ---
 
@@ -992,17 +1048,33 @@ Criteria: community interest, standalone utility, maintenance burden. If (b) or 
 
 ### v1.0.0 — Virtual Office Runtime
 <!-- status: pending -->
-> Thin orchestration layer that composes TA, Claude Flow, and MCP servers.
+> Thin orchestration layer that composes TA, agent frameworks, and MCP servers.
+
 - Role definition schema (YAML): purpose, triggers, agent, capabilities, notification channel
 - Trigger system: cron scheduler + webhook receiver + TA event listener
 - Office manager daemon: reads role configs, routes triggers, calls `ta run`
 - `ta office start/stop/status` CLI commands
 - Role-scoped TA policies auto-generated from role capability declarations
-- Integration with Claude Flow as the agent coordination backend
-- Network governance (v0.7) active by default for all agent roles
-- Community memory (v0.7.4) shared across office roles — one role's solutions available to all
+- Constitutional auto-approval (v0.6.0) active by default — supervisor reviews routine work
+- Credential broker (v0.5.0) manages all service access — no role holds raw credentials
+- Community memory (v0.8.1) shared across office roles
 - Does NOT duplicate orchestration — composes existing tools with role/trigger glue
-- **Multi-agent alignment verification**: Before agents co-operate on shared resources, TA verifies alignment profile compatibility (v0.4.0 profiles). Checks: overlapping resource grants, compatible escalation policies, no conflicting forbidden actions. Conceptually similar to [AAP value coherence handshake](https://github.com/mnemom/aap) but enforced — incompatible agents are blocked from shared-resource goals, not just warned.
-- **Compliance dashboard**: Aggregate decision reasoning (v0.3.3), drift reports (v0.4.2), policy decisions, and approval records into a per-role compliance view. Exportable as ISO/IEC 42001 evidence package for audit.
+- **Multi-agent alignment verification**: Before agents co-operate on shared resources, TA verifies alignment profile compatibility (v0.4.0 profiles)
+- **Compliance dashboard**: Aggregate decision reasoning, drift reports, cost tracking, and approval records into a per-role compliance view. Exportable as ISO/IEC 42001 evidence package.
 
-> **Standards**: Virtual office with defined roles, capability boundaries, human oversight at checkpoints, and continuous drift monitoring satisfies the end-to-end requirements of **ISO/IEC 42001** (AI Management Systems), **EU AI Act** (high-risk AI system requirements including Articles 9, 14, and 50), and **Singapore IMDA Agentic AI Framework** (agent governance for multi-agent systems).
+> **Standards**: Virtual office with defined roles, capability boundaries, human oversight at checkpoints, and continuous drift monitoring satisfies **ISO/IEC 42001**, **EU AI Act** (Articles 9, 14, 50), and **Singapore IMDA Agentic AI Framework**.
+
+---
+
+## Supervision Frequency: TA vs Standard Agent Usage
+
+> How often does a user interact with TA compared to running Claude/Codex directly?
+
+| Mode | Standard Claude/Codex | TA-mediated |
+|------|----------------------|-------------|
+| **Active coding** | Continuous back-and-forth. User prompts, reads output, prompts again. ~100% attention. | `ta run` launches agent. User checks back when draft is ready. ~10-20% attention. Review takes 2-5 min per draft. |
+| **Overnight/batch** | Not possible — agent exits when session closes. | `ta run` in background. Review next morning. 0% attention during execution. |
+| **Auto-approved (v0.6)** | N/A | Supervisor handles review. User sees daily summary. ~1% attention. Escalations interrupt. |
+| **Virtual office (v1.0)** | N/A | Roles run on triggers. User reviews when notified. Minutes per day for routine workflows. |
+
+**Key shift**: Standard agent usage demands synchronous human attention. TA shifts to asynchronous review — the agent works independently, the human reviews completed work. This gets more asynchronous over time as trust (constitutional auto-approval) increases.
