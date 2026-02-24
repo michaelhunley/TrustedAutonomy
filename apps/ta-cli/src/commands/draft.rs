@@ -1094,57 +1094,39 @@ fn assign_dispositions(
 ///
 ///   Open questions:
 ///     - <question>
+/// Build a git commit message that matches `ta draft view` output.
+///
+/// Format: goal title as subject line, then the same medium-detail rendering
+/// used by `ta draft view` (no color, no ANSI escapes).
 fn build_commit_message(goal: &ta_goal::GoalRun, pkg: &DraftPackage) -> String {
-    let mut msg = String::new();
+    use ta_changeset::output_adapters::{get_adapter, DetailLevel, OutputFormat, RenderContext};
 
-    // Subject line.
-    msg.push_str(&goal.title);
-    msg.push_str("\n\n");
+    // Render using the terminal adapter with no color — same output as `ta draft view`.
+    let ctx = RenderContext {
+        package: pkg,
+        detail_level: DetailLevel::Medium,
+        file_filter: None,
+        diff_provider: None,
+    };
+    let adapter = get_adapter(OutputFormat::Terminal, false);
+    let rendered = adapter
+        .render(&ctx)
+        .unwrap_or_else(|_| format!("{}\n\n{}", goal.title, pkg.summary.what_changed));
 
-    // Draft summary.
-    msg.push_str(&pkg.summary.what_changed);
-    msg.push_str("\n\n");
+    // Git convention: first line is the subject, then blank line, then body.
+    // The terminal adapter starts with "Draft: <id>\nStatus: ...\n..." which isn't
+    // a good subject line. Replace the header with goal title as subject.
+    let body = if let Some(pos) = rendered.find("Changes (") {
+        // Extract from "Changes (...)" onward — the artifact listing.
+        &rendered[pos..]
+    } else {
+        rendered.as_str()
+    };
 
-    // Why and impact.
-    msg.push_str(&format!("Why: {}\n", pkg.summary.why));
-    msg.push_str(&format!("Impact: {}\n", pkg.summary.impact));
-
-    // Per-artifact details.
-    msg.push_str(&format!(
-        "\nChanges ({} file(s)):\n",
-        pkg.changes.artifacts.len()
-    ));
-    for artifact in &pkg.changes.artifacts {
-        let rel_path = artifact
-            .resource_uri
-            .strip_prefix("fs://workspace/")
-            .unwrap_or(&artifact.resource_uri);
-        let summary_line = artifact
-            .explanation_tiers
-            .as_ref()
-            .map(|t| t.summary.as_str())
-            .filter(|s| !s.is_empty())
-            .or(artifact.rationale.as_deref())
-            .unwrap_or("");
-        if summary_line.is_empty() {
-            msg.push_str(&format!("  {:?}  {}\n", artifact.change_type, rel_path));
-        } else {
-            msg.push_str(&format!(
-                "  {:?}  {} — {}\n",
-                artifact.change_type, rel_path, summary_line
-            ));
-        }
-    }
-
-    // Open questions / dependency notes.
-    if !pkg.summary.open_questions.is_empty() {
-        msg.push_str("\nNotes:\n");
-        for q in &pkg.summary.open_questions {
-            msg.push_str(&format!("  - {}\n", q));
-        }
-    }
-
-    msg
+    format!(
+        "{}\n\n{}\nImpact: {}\n\n{}",
+        goal.title, pkg.summary.what_changed, pkg.summary.impact, body
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2157,6 +2139,22 @@ mod tests {
         let log_output = String::from_utf8_lossy(&log.stdout);
         // Subject line is the goal title; summary is in the commit body.
         assert!(log_output.contains("Git test"));
+
+        // Verify full commit message matches ta draft view format.
+        let full_log = std::process::Command::new("git")
+            .args(["log", "-1", "--format=%B"])
+            .current_dir(project.path())
+            .output()
+            .unwrap();
+        let full_msg = String::from_utf8_lossy(&full_log.stdout);
+        // First line is the goal title (subject).
+        assert!(full_msg.starts_with("Git test\n"));
+        // Body includes artifact listing with change icons and disposition badges.
+        assert!(full_msg.contains("Changes ("));
+        assert!(full_msg.contains("[pending]"));
+        assert!(full_msg.contains("fs://workspace/README.md"));
+        // No Debug-format change types like "Modify" — should use ~ + - > icons.
+        assert!(!full_msg.contains("Modify  "));
     }
 
     #[test]
