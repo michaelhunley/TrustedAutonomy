@@ -496,6 +496,19 @@ Agent works in Virtual Workspace
 ### v0.3.1.1 — Configurable Plan Format Parsing
 <!-- status: pending -->
 
+**Completed** (307 tests across 12 crates):
+- ✅ `PlanSchema` data model with `PhasePattern` and YAML serde support (`.ta/plan-schema.yaml`)
+- ✅ `parse_plan_with_schema()` — regex-driven plan parser that replaces hardcoded parsing logic
+- ✅ `parse_plan()` and `load_plan()` now delegate to schema-driven parser with default schema (full backward compatibility)
+- ✅ `update_phase_status_with_schema()` — schema-aware status updates
+- ✅ `PlanSchema::load_or_default()` — loads `.ta/plan-schema.yaml` or falls back to built-in default
+- ✅ `ta plan init` command — auto-detects plan format, proposes schema, writes `.ta/plan-schema.yaml`
+- ✅ `ta plan create` command — generates plan documents from templates (greenfield, feature, bugfix)
+- ✅ `detect_schema_from_content()` — heuristic schema detection for `ta plan init`
+- ✅ Bug fix: `strip_html()` in terminal adapter prevents HTML tags from leaking into terminal output (garbled `ÆpendingÅ` display)
+- ✅ `regex` crate added to workspace dependencies
+- ✅ 13 new tests: schema round-trip (1), schema loading (2), custom schema parsing (2), schema detection (2), template parsing (1), custom schema status update (1), custom schema load_plan (1), invalid regex handling (2), terminal HTML regression (3)
+
 #### Problem
 `plan.rs` hardcodes this project's PLAN.md format (`## v0.X`, `### v0.X.Y`, `<!-- status: -->` markers). Any other project using TA would need to adopt the same markdown conventions or nothing works. The parser should be schema-driven, not format-hardcoded.
 
@@ -517,7 +530,7 @@ statuses: [done, in_progress, pending]     # valid values
 - Refactor `parse_plan()` to read schema at runtime instead of hardcoded regexes. Existing behavior preserved as the default schema (zero-config for projects that adopt the current convention).
 
 #### Bug fix: garbled HTML in terminal output
-`ta draft view` renders `ÆpendingÅ` instead of `[pending]` — HTML `<span>` tags leaking into terminal output with encoding corruption. Fix: ensure adapters receive clean data (not pre-rendered HTML) and add regression test asserting terminal output contains no HTML tags.
+`ta draft view` renders `ÆpendingÅ` instead of `[pending]` — HTML `<span>` tags leaking into terminal output with encoding corruption. Fix: `strip_html()` helper in `TerminalAdapter` sanitizes all user-provided text fields before rendering. Regression test asserts terminal output contains no HTML tags.
 
 ### v0.3.1.2 — Interactive Session Orchestration
 <!-- status: pending -->

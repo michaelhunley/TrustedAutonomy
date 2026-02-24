@@ -9,16 +9,22 @@
 //   ### v0.3.1 — Plan Lifecycle Automation
 //   <!-- status: pending -->
 //
+// v0.3.1.1: Parsing is now schema-driven via `.ta/plan-schema.yaml`.
+// If no schema file is present, a built-in default matching the above format is used.
+//
 // `ta plan list` shows all phases with their status.
 // `ta plan status` shows a summary of progress.
 // `ta plan next` shows the next pending phase and optionally creates a goal for it.
 // `ta plan history` shows plan change history.
+// `ta plan init` extracts a schema from an existing plan document.
+// `ta plan create` generates a new plan from a template.
 // `ta pr apply` auto-updates PLAN.md when a goal with --phase completes.
 
 use std::fmt;
 use std::path::Path;
 
 use clap::Subcommand;
+use regex::Regex;
 use ta_mcp_gateway::GatewayConfig;
 
 #[derive(Subcommand)]
@@ -36,6 +42,27 @@ pub enum PlanCommands {
         /// Phase ID to validate (e.g., "v0.3.1").
         phase: String,
     },
+    /// Extract a plan-schema.yaml from an existing plan document.
+    Init {
+        /// Plan file to analyze (default: PLAN.md).
+        #[arg(long, default_value = "PLAN.md")]
+        source: String,
+        /// Write the schema without prompting for confirmation.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Generate a new plan document from a template.
+    Create {
+        /// Output file path (default: PLAN.md).
+        #[arg(long, default_value = "PLAN.md")]
+        output: String,
+        /// Template: greenfield, feature, or bugfix.
+        #[arg(long, default_value = "greenfield")]
+        template: String,
+        /// Project name for the plan header.
+        #[arg(long)]
+        name: Option<String>,
+    },
 }
 
 pub fn execute(cmd: &PlanCommands, config: &GatewayConfig) -> anyhow::Result<()> {
@@ -45,6 +72,12 @@ pub fn execute(cmd: &PlanCommands, config: &GatewayConfig) -> anyhow::Result<()>
         PlanCommands::Next => show_next(config),
         PlanCommands::History => show_history(config),
         PlanCommands::Validate { phase } => validate_phase(config, phase),
+        PlanCommands::Init { source, yes } => plan_init(config, source, *yes),
+        PlanCommands::Create {
+            output,
+            template,
+            name,
+        } => plan_create(config, output, template, name.as_deref()),
     }
 }
 
@@ -79,49 +112,141 @@ pub struct PlanPhase {
     pub status: PlanStatus,
 }
 
+// ── Schema-driven parsing ────────────────────────────────────────
+
+/// A single phase-header pattern in the schema.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PhasePattern {
+    /// Regex with capturing groups: group 1 = phase ID, group 2 (optional) = title.
+    pub regex: String,
+    /// Human-readable label for what this pattern captures (informational only).
+    #[serde(default)]
+    pub id_capture: String,
+}
+
+/// Schema describing how to parse a project's plan document.
+/// Loaded from `.ta/plan-schema.yaml`. If absent, the built-in default is used.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PlanSchema {
+    /// Path to the plan file, relative to project root (default: "PLAN.md").
+    #[serde(default = "default_source")]
+    pub source: String,
+    /// One or more header patterns for phase detection (evaluated in order, first match wins).
+    pub phase_patterns: Vec<PhasePattern>,
+    /// Regex with one capture group that extracts the status value.
+    pub status_marker: String,
+    /// Recognized status values. Anything not in this list maps to Pending.
+    #[serde(default = "default_statuses")]
+    pub statuses: Vec<String>,
+}
+
+fn default_source() -> String {
+    "PLAN.md".to_string()
+}
+
+fn default_statuses() -> Vec<String> {
+    vec![
+        "done".to_string(),
+        "in_progress".to_string(),
+        "pending".to_string(),
+    ]
+}
+
+impl PlanSchema {
+    /// The built-in default schema — matches the current PLAN.md format.
+    /// Used when no `.ta/plan-schema.yaml` is present.
+    pub fn default_schema() -> Self {
+        PlanSchema {
+            source: "PLAN.md".to_string(),
+            phase_patterns: vec![
+                PhasePattern {
+                    // Matches: "## Phase 4b — Title" and "## Phase 4a.1 — Title"
+                    regex: r"^##\s+Phase[\s\u{a0}]+([0-9a-z.]+)\s+[—\-]\s+(.+)$".to_string(),
+                    id_capture: "phase_number".to_string(),
+                },
+                PhasePattern {
+                    // Matches: "### v0.3.1 — Title" or "### v0.3.1.1 — Title"
+                    regex: r"^###\s+(v[\d.]+[a-z]?)\s+[—\-]\s+(.+)$".to_string(),
+                    id_capture: "version_number".to_string(),
+                },
+            ],
+            status_marker: r"<!--\s*status:\s*(\w+)\s*-->".to_string(),
+            statuses: default_statuses(),
+        }
+    }
+
+    /// Load schema from `.ta/plan-schema.yaml`, falling back to `default_schema()`.
+    pub fn load_or_default(project_root: &Path) -> Self {
+        let schema_path = project_root.join(".ta/plan-schema.yaml");
+        if schema_path.exists() {
+            if let Ok(content) = std::fs::read_to_string(&schema_path) {
+                if let Ok(schema) = serde_yaml::from_str::<PlanSchema>(&content) {
+                    return schema;
+                }
+                eprintln!("Warning: failed to parse .ta/plan-schema.yaml — using default schema");
+            }
+        }
+        Self::default_schema()
+    }
+
+    /// Serialize to YAML string.
+    pub fn to_yaml(&self) -> anyhow::Result<String> {
+        Ok(serde_yaml::to_string(self)?)
+    }
+}
+
 // ── Parsing ──────────────────────────────────────────────────────
 
-/// Parse PLAN.md content into a list of phases.
+/// Parse plan content using a provided schema.
 ///
-/// Supports two header formats:
-///   ## Phase 4b — Per-Artifact Review Model     (top-level phases)
-///   ### v0.3.1 — Plan Lifecycle Automation      (sub-phases under release headers)
+/// Each `phase_patterns` regex is tested against each line.
+/// The first match wins. The regex must have:
+///   - Group 1: phase ID (e.g., "4b", "v0.3.1")
+///   - Group 2 (optional): phase title
 ///
-/// Both expect a `<!-- status: pending -->` marker on the next line.
-pub fn parse_plan(content: &str) -> Vec<PlanPhase> {
-    let mut phases = Vec::new();
-    let lines: Vec<&str> = content.lines().collect();
+/// The status marker regex is tested against the next non-empty line.
+pub fn parse_plan_with_schema(content: &str, schema: &PlanSchema) -> Vec<PlanPhase> {
+    // Pre-compile all regexes. Silently skip invalid ones.
+    let compiled_patterns: Vec<Regex> = schema
+        .phase_patterns
+        .iter()
+        .filter_map(|p| Regex::new(&p.regex).ok())
+        .collect();
 
+    let status_re = match Regex::new(&schema.status_marker) {
+        Ok(r) => r,
+        Err(_) => return vec![],
+    };
+
+    let lines: Vec<&str> = content.lines().collect();
+    let mut phases = Vec::new();
     let mut i = 0;
+
     while i < lines.len() {
         let line = lines[i].trim();
 
-        // Match top-level phase headers: ## Phase <id> — <title>
-        // Support both em dash (—) and regular dash (-).
-        if let Some(rest) = line
-            .strip_prefix("## Phase ")
-            .or_else(|| line.strip_prefix("## Phase\u{a0}"))
-        {
-            let (id, title) = split_phase_header(rest);
-            let status = if i + 1 < lines.len() {
-                parse_status_marker(lines[i + 1])
-            } else {
-                PlanStatus::Pending
-            };
-            phases.push(PlanPhase { id, title, status });
-        }
-        // Match sub-phase headers: ### v0.X.Y — Title
-        // These are versioned sub-phases under release group headers (## v0.X).
-        else if let Some(rest) = line.strip_prefix("### v") {
-            // Re-prepend "v" for the ID.
-            let full = format!("v{}", rest);
-            let (id, title) = split_phase_header(&full);
-            let status = if i + 1 < lines.len() {
-                parse_status_marker(lines[i + 1])
-            } else {
-                PlanStatus::Pending
-            };
-            phases.push(PlanPhase { id, title, status });
+        for pattern in &compiled_patterns {
+            if let Some(caps) = pattern.captures(line) {
+                let id = caps
+                    .get(1)
+                    .map(|m| m.as_str().trim().to_string())
+                    .unwrap_or_default();
+                let title = caps
+                    .get(2)
+                    .map(|m| m.as_str().trim().to_string())
+                    .unwrap_or_default();
+
+                if id.is_empty() {
+                    break;
+                }
+
+                // Strip trailing markup from title (e.g. "*(release)*").
+                let title = title.trim_end_matches(['*', '(', ')']).trim().to_string();
+
+                let status = find_status_in_lookahead(&lines, i + 1, &status_re);
+                phases.push(PlanPhase { id, title, status });
+                break; // First pattern match wins.
+            }
         }
 
         i += 1;
@@ -130,59 +255,89 @@ pub fn parse_plan(content: &str) -> Vec<PlanPhase> {
     phases
 }
 
-/// Split a phase header into (id, title) on em-dash or space-dash-space.
-fn split_phase_header(rest: &str) -> (String, String) {
-    let (id, title) = if let Some(pos) = rest.find(" — ") {
-        (&rest[..pos], rest[pos + " — ".len()..].trim())
-    } else if let Some(pos) = rest.find(" - ") {
-        (&rest[..pos], rest[pos + " - ".len()..].trim())
-    } else {
-        (rest.trim(), "")
-    };
-    (id.trim().to_string(), title.to_string())
-}
-
-/// Parse a status marker comment: `<!-- status: done -->`.
-fn parse_status_marker(line: &str) -> PlanStatus {
-    let trimmed = line.trim();
-    if let Some(rest) = trimmed.strip_prefix("<!-- status:") {
-        if let Some(status_str) = rest.strip_suffix("-->") {
-            return match status_str.trim() {
-                "done" => PlanStatus::Done,
-                "in_progress" => PlanStatus::InProgress,
-                _ => PlanStatus::Pending,
-            };
+/// Look ahead from `start` for a status marker comment.
+/// Checks the immediate next line (matching existing behavior).
+fn find_status_in_lookahead(lines: &[&str], start: usize, status_re: &Regex) -> PlanStatus {
+    if start < lines.len() {
+        let line = lines[start].trim();
+        if let Some(caps) = status_re.captures(line) {
+            let status_str = caps.get(1).map(|m| m.as_str().trim()).unwrap_or("");
+            return parse_status_str(status_str);
         }
     }
     PlanStatus::Pending
 }
 
+fn parse_status_str(s: &str) -> PlanStatus {
+    match s {
+        "done" => PlanStatus::Done,
+        "in_progress" => PlanStatus::InProgress,
+        _ => PlanStatus::Pending,
+    }
+}
+
+/// Parse PLAN.md content into a list of phases (using the default schema).
+///
+/// This is the backward-compatible entry point used by existing code.
+pub fn parse_plan(content: &str) -> Vec<PlanPhase> {
+    parse_plan_with_schema(content, &PlanSchema::default_schema())
+}
+
 /// Update a phase's status in PLAN.md content. Returns the new content.
 ///
-/// Finds the phase by ID (supports both `## Phase <id>` and `### <id>` headers)
+/// Finds the phase by ID using the default schema's patterns
 /// and replaces its status marker.
 pub fn update_phase_status(content: &str, phase_id: &str, new_status: PlanStatus) -> String {
+    update_phase_status_with_schema(content, phase_id, new_status, &PlanSchema::default_schema())
+}
+
+/// Update a phase's status using a provided schema.
+pub fn update_phase_status_with_schema(
+    content: &str,
+    phase_id: &str,
+    new_status: PlanStatus,
+    schema: &PlanSchema,
+) -> String {
+    let compiled_patterns: Vec<Regex> = schema
+        .phase_patterns
+        .iter()
+        .filter_map(|p| Regex::new(&p.regex).ok())
+        .collect();
+
+    let status_re = match Regex::new(&schema.status_marker) {
+        Ok(r) => r,
+        Err(_) => return content.to_string(),
+    };
+
     let lines: Vec<&str> = content.lines().collect();
     let mut result = Vec::with_capacity(lines.len());
-
     let mut i = 0;
+
     while i < lines.len() {
         let line = lines[i];
         let trimmed = line.trim();
 
-        // Check if this is the target phase header.
-        let is_target = extract_phase_id_from_header(trimmed)
-            .map(|id| id == phase_id)
-            .unwrap_or(false);
+        // Check if this line is the target phase header.
+        let mut is_target = false;
+        for pattern in &compiled_patterns {
+            if let Some(caps) = pattern.captures(trimmed) {
+                if let Some(id_match) = caps.get(1) {
+                    if id_match.as_str().trim() == phase_id {
+                        is_target = true;
+                        break;
+                    }
+                }
+            }
+        }
 
         result.push(line.to_string());
 
         // If this is the target phase, replace the next line's status marker.
         if is_target && i + 1 < lines.len() {
             let next_line = lines[i + 1].trim();
-            if next_line.starts_with("<!-- status:") {
+            if status_re.is_match(next_line) {
                 result.push(format!("<!-- status: {} -->", new_status));
-                i += 2; // Skip the old status line.
+                i += 2;
                 continue;
             }
         }
@@ -193,48 +348,17 @@ pub fn update_phase_status(content: &str, phase_id: &str, new_status: PlanStatus
     result.join("\n")
 }
 
-/// Extract phase ID from a header line, supporting both formats:
-/// - `## Phase <id> — <title>` → Some("<id>")
-/// - `### v0.3.1 — <title>` → Some("v0.3.1")
-/// - anything else → None
-fn extract_phase_id_from_header(trimmed: &str) -> Option<String> {
-    // ## Phase <id> — <title>
-    if let Some(rest) = trimmed
-        .strip_prefix("## Phase ")
-        .or_else(|| trimmed.strip_prefix("## Phase\u{a0}"))
-    {
-        let id = if let Some(pos) = rest.find(" — ") {
-            rest[..pos].trim()
-        } else if let Some(pos) = rest.find(" - ") {
-            rest[..pos].trim()
-        } else {
-            rest.trim()
-        };
-        return Some(id.to_string());
-    }
-    // ### v0.X.Y — <title>
-    if let Some(rest) = trimmed.strip_prefix("### v") {
-        let full = format!("v{}", rest);
-        let id = if let Some(pos) = full.find(" — ") {
-            full[..pos].trim()
-        } else if let Some(pos) = full.find(" - ") {
-            full[..pos].trim()
-        } else {
-            full.trim()
-        };
-        return Some(id.to_string());
-    }
-    None
-}
-
 /// Read and parse PLAN.md from a project directory.
+///
+/// Loads `.ta/plan-schema.yaml` if present, otherwise uses the default schema.
 pub fn load_plan(project_root: &Path) -> anyhow::Result<Vec<PlanPhase>> {
-    let plan_path = project_root.join("PLAN.md");
+    let schema = PlanSchema::load_or_default(project_root);
+    let plan_path = project_root.join(&schema.source);
     if !plan_path.exists() {
-        anyhow::bail!("No PLAN.md found in {}", project_root.display());
+        anyhow::bail!("No {} found in {}", schema.source, project_root.display());
     }
     let content = std::fs::read_to_string(&plan_path)?;
-    Ok(parse_plan(&content))
+    Ok(parse_plan_with_schema(&content, &schema))
 }
 
 /// Format a plan phase list as a checklist for CLAUDE.md injection.
@@ -329,6 +453,95 @@ pub fn suggest_next_goal_command(phase: &PlanPhase) -> String {
     format!(
         "ta run \"implement {}\" --source . --phase {}",
         phase.title, phase.id
+    )
+}
+
+// ── Schema detection ─────────────────────────────────────────────
+
+/// Heuristic schema detection from plan content.
+///
+/// Tries the default schema first — if it finds phases, uses it.
+/// Otherwise falls back to a loose heading-based schema.
+fn detect_schema_from_content(content: &str, source: &str) -> PlanSchema {
+    let default = PlanSchema::default_schema();
+    let phases_with_default = parse_plan_with_schema(content, &default);
+    if !phases_with_default.is_empty() {
+        let mut schema = default;
+        schema.source = source.to_string();
+        return schema;
+    }
+
+    // Fallback: generic ## heading pattern.
+    PlanSchema {
+        source: source.to_string(),
+        phase_patterns: vec![PhasePattern {
+            regex: r"^##\s+(.+)$".to_string(),
+            id_capture: "heading_text".to_string(),
+        }],
+        status_marker: r"<!--\s*status:\s*(\w+)\s*-->".to_string(),
+        statuses: default_statuses(),
+    }
+}
+
+// ── Plan templates ───────────────────────────────────────────────
+
+fn greenfield_plan_template(name: &str) -> String {
+    format!(
+        r#"# {name} — Development Plan
+
+## Phase 0 — Project Setup
+<!-- status: pending -->
+Repository layout, tooling, CI/CD.
+
+## Phase 1 — Core Feature
+<!-- status: pending -->
+Implement the primary feature or MVP.
+
+## Phase 2 — Testing & Polish
+<!-- status: pending -->
+Test coverage, documentation, release prep.
+"#,
+        name = name
+    )
+}
+
+fn feature_plan_template(name: &str) -> String {
+    format!(
+        r#"# {name} — Feature Plan
+
+## Phase 1 — Design
+<!-- status: pending -->
+Requirements, API design, interface contracts.
+
+## Phase 2 — Implementation
+<!-- status: pending -->
+Core implementation with unit tests.
+
+## Phase 3 — Integration & Review
+<!-- status: pending -->
+Integration tests, code review, merge.
+"#,
+        name = name
+    )
+}
+
+fn bugfix_plan_template(name: &str) -> String {
+    format!(
+        r#"# {name} — Bug Fix Plan
+
+## Phase 1 — Reproduce
+<!-- status: pending -->
+Reproduce the bug with a failing test.
+
+## Phase 2 — Fix
+<!-- status: pending -->
+Implement the fix, verify the test passes.
+
+## Phase 3 — Regression Tests
+<!-- status: pending -->
+Add regression tests, deploy.
+"#,
+        name = name
     )
 }
 
@@ -513,6 +726,94 @@ fn validate_phase(config: &GatewayConfig, phase_id: &str) -> anyhow::Result<()> 
     Ok(())
 }
 
+fn plan_init(config: &GatewayConfig, source: &str, yes: bool) -> anyhow::Result<()> {
+    let plan_path = config.workspace_root.join(source);
+    if !plan_path.exists() {
+        anyhow::bail!("Plan file not found: {}", plan_path.display());
+    }
+
+    let content = std::fs::read_to_string(&plan_path)?;
+    let schema = detect_schema_from_content(&content, source);
+
+    let schema_path = config.workspace_root.join(".ta/plan-schema.yaml");
+
+    let yaml = schema.to_yaml()?;
+    println!("Proposed .ta/plan-schema.yaml:");
+    println!("---");
+    print!("{}", yaml);
+    println!("---");
+
+    // Show how many phases this schema detects.
+    let phases = parse_plan_with_schema(&content, &schema);
+    println!("This schema detects {} phases.", phases.len());
+    if !phases.is_empty() {
+        println!("First detected:");
+        for p in phases.iter().take(3) {
+            println!("  {} — {} [{}]", p.id, p.title, p.status);
+        }
+    }
+
+    if schema_path.exists() && !yes {
+        println!("\n.ta/plan-schema.yaml already exists. Use --yes to overwrite.");
+        return Ok(());
+    }
+
+    if !yes {
+        print!("\nWrite this schema? [y/N] ");
+        use std::io::Write;
+        std::io::stdout().flush()?;
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+        if !input.trim().eq_ignore_ascii_case("y") {
+            println!("Cancelled.");
+            return Ok(());
+        }
+    }
+
+    std::fs::create_dir_all(config.workspace_root.join(".ta"))?;
+    std::fs::write(&schema_path, yaml)?;
+    println!("Written: {}", schema_path.display());
+    Ok(())
+}
+
+fn plan_create(
+    config: &GatewayConfig,
+    output: &str,
+    template: &str,
+    name: Option<&str>,
+) -> anyhow::Result<()> {
+    let output_path = config.workspace_root.join(output);
+    if output_path.exists() {
+        anyhow::bail!(
+            "{} already exists. Delete it or specify a different --output path.",
+            output
+        );
+    }
+
+    let project_name = name.unwrap_or("My Project");
+    let content = match template {
+        "feature" => feature_plan_template(project_name),
+        "bugfix" => bugfix_plan_template(project_name),
+        _ => greenfield_plan_template(project_name),
+    };
+
+    std::fs::write(&output_path, &content)?;
+    println!("Created: {}", output_path.display());
+
+    // Also write a schema file that matches the template format.
+    let schema_path = config.workspace_root.join(".ta/plan-schema.yaml");
+    if !schema_path.exists() {
+        std::fs::create_dir_all(config.workspace_root.join(".ta"))?;
+        let schema = PlanSchema::default_schema();
+        let yaml = schema.to_yaml()?;
+        std::fs::write(&schema_path, yaml)?;
+        println!("Created: {}", schema_path.display());
+    }
+
+    println!("\nRun 'ta plan list' to see your phases.");
+    Ok(())
+}
+
 fn truncate(s: &str, max: usize) -> String {
     if s.len() > max {
         format!("{}...", &s[..max - 3])
@@ -650,7 +951,7 @@ Release automation.
         assert_eq!(PlanStatus::Pending.to_string(), "pending");
     }
 
-    // ── New tests for v0.3.1 features ──
+    // ── Sub-phase tests ──
 
     #[test]
     fn parse_plan_handles_sub_phases() {
@@ -762,27 +1063,261 @@ Release automation.
         assert!(entries.is_empty());
     }
 
+    // ── v0.3.1.1: Schema-driven parsing tests ──
+
     #[test]
-    fn extract_phase_id_from_top_level_header() {
+    fn default_schema_matches_hardcoded_behavior() {
+        // parse_plan() using the default schema must produce identical output
+        // for both the top-level and sub-phase plan formats.
+        let phases = parse_plan(SAMPLE_PLAN);
+        let schema = PlanSchema::default_schema();
+        let phases_schema = parse_plan_with_schema(SAMPLE_PLAN, &schema);
+        assert_eq!(phases.len(), phases_schema.len());
+        for (old, new) in phases.iter().zip(phases_schema.iter()) {
+            assert_eq!(old.id, new.id, "IDs differ for phase {}", old.id);
+            assert_eq!(old.title, new.title, "Titles differ for phase {}", old.id);
+            assert_eq!(
+                old.status, new.status,
+                "Statuses differ for phase {}",
+                old.id
+            );
+        }
+    }
+
+    #[test]
+    fn default_schema_matches_sub_phases() {
+        let phases = parse_plan(SAMPLE_PLAN_WITH_SUBPHASES);
+        let schema = PlanSchema::default_schema();
+        let phases_schema = parse_plan_with_schema(SAMPLE_PLAN_WITH_SUBPHASES, &schema);
+        assert_eq!(phases.len(), phases_schema.len());
+        for (old, new) in phases.iter().zip(phases_schema.iter()) {
+            assert_eq!(old.id, new.id);
+            assert_eq!(old.status, new.status);
+        }
+    }
+
+    #[test]
+    fn plan_schema_serializes_roundtrip() {
+        let schema = PlanSchema::default_schema();
+        let yaml = schema.to_yaml().unwrap();
+        assert!(yaml.contains("phase_patterns"));
+        assert!(yaml.contains("status_marker"));
+        let roundtripped: PlanSchema = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(roundtripped.source, schema.source);
         assert_eq!(
-            extract_phase_id_from_header("## Phase 4b — Per-Artifact Review Model"),
-            Some("4b".to_string())
+            roundtripped.phase_patterns.len(),
+            schema.phase_patterns.len()
         );
     }
 
     #[test]
-    fn extract_phase_id_from_sub_header() {
-        assert_eq!(
-            extract_phase_id_from_header("### v0.3.1 — Plan Lifecycle Automation"),
-            Some("v0.3.1".to_string())
-        );
+    fn load_or_default_returns_default_when_no_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let schema = PlanSchema::load_or_default(dir.path());
+        assert_eq!(schema.source, "PLAN.md");
+        assert_eq!(schema.phase_patterns.len(), 2);
     }
 
     #[test]
-    fn extract_phase_id_from_unrelated_header() {
-        assert_eq!(
-            extract_phase_id_from_header("## Versioning & Release Policy"),
-            None
-        );
+    fn load_or_default_loads_custom_schema() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".ta")).unwrap();
+        let custom = PlanSchema {
+            source: "ROADMAP.md".to_string(),
+            phase_patterns: vec![PhasePattern {
+                regex: r"^##\s+(.+)$".to_string(),
+                id_capture: "heading".to_string(),
+            }],
+            status_marker: r"<!--\s*status:\s*(\w+)\s*-->".to_string(),
+            statuses: vec!["done".to_string(), "pending".to_string()],
+        };
+        std::fs::write(
+            dir.path().join(".ta/plan-schema.yaml"),
+            serde_yaml::to_string(&custom).unwrap(),
+        )
+        .unwrap();
+        let loaded = PlanSchema::load_or_default(dir.path());
+        assert_eq!(loaded.source, "ROADMAP.md");
+    }
+
+    #[test]
+    fn parse_plan_with_custom_schema() {
+        let content = r#"# My Roadmap
+
+## Setup
+<!-- status: done -->
+Get the project started.
+
+## Feature Alpha
+<!-- status: in_progress -->
+First big feature.
+
+## Release
+<!-- status: pending -->
+Ship it.
+"#;
+        let schema = PlanSchema {
+            source: "ROADMAP.md".to_string(),
+            phase_patterns: vec![PhasePattern {
+                regex: r"^##\s+(.+)$".to_string(),
+                id_capture: "heading".to_string(),
+            }],
+            status_marker: r"<!--\s*status:\s*(\w+)\s*-->".to_string(),
+            statuses: default_statuses(),
+        };
+        let phases = parse_plan_with_schema(content, &schema);
+        assert_eq!(phases.len(), 3);
+        assert_eq!(phases[0].id, "Setup");
+        assert_eq!(phases[0].status, PlanStatus::Done);
+        assert_eq!(phases[1].id, "Feature Alpha");
+        assert_eq!(phases[1].status, PlanStatus::InProgress);
+        assert_eq!(phases[2].id, "Release");
+        assert_eq!(phases[2].status, PlanStatus::Pending);
+    }
+
+    #[test]
+    fn detect_schema_uses_default_for_standard_plan() {
+        let schema = detect_schema_from_content(SAMPLE_PLAN, "PLAN.md");
+        assert_eq!(schema.source, "PLAN.md");
+        let phases = parse_plan_with_schema(SAMPLE_PLAN, &schema);
+        assert!(!phases.is_empty());
+    }
+
+    #[test]
+    fn detect_schema_falls_back_for_unknown_format() {
+        let content = r#"# Random Doc
+
+## Introduction
+No status markers here.
+
+## Methods
+Also no markers.
+"#;
+        let schema = detect_schema_from_content(content, "README.md");
+        // Should have fallen back to the generic heading pattern.
+        assert_eq!(schema.source, "README.md");
+        assert_eq!(schema.phase_patterns.len(), 1);
+        assert!(schema.phase_patterns[0].regex.contains("##"));
+    }
+
+    #[test]
+    fn plan_create_templates_are_parseable() {
+        for (template_fn, expected_phases) in &[
+            (greenfield_plan_template as fn(&str) -> String, 3usize),
+            (feature_plan_template as fn(&str) -> String, 3),
+            (bugfix_plan_template as fn(&str) -> String, 3),
+        ] {
+            let content = template_fn("Test Project");
+            let phases = parse_plan(&content);
+            assert_eq!(
+                phases.len(),
+                *expected_phases,
+                "Template produced wrong phase count"
+            );
+            assert!(phases.iter().all(|p| p.status == PlanStatus::Pending));
+        }
+    }
+
+    #[test]
+    fn update_phase_status_with_custom_schema() {
+        let content = r#"# Roadmap
+
+## Setup
+<!-- status: pending -->
+Get started.
+
+## Build
+<!-- status: pending -->
+Build it.
+"#;
+        let schema = PlanSchema {
+            source: "ROADMAP.md".to_string(),
+            phase_patterns: vec![PhasePattern {
+                regex: r"^##\s+(.+)$".to_string(),
+                id_capture: "heading".to_string(),
+            }],
+            status_marker: r"<!--\s*status:\s*(\w+)\s*-->".to_string(),
+            statuses: default_statuses(),
+        };
+        let updated = update_phase_status_with_schema(content, "Setup", PlanStatus::Done, &schema);
+        let phases = parse_plan_with_schema(&updated, &schema);
+        assert_eq!(phases[0].id, "Setup");
+        assert_eq!(phases[0].status, PlanStatus::Done);
+        assert_eq!(phases[1].id, "Build");
+        assert_eq!(phases[1].status, PlanStatus::Pending);
+    }
+
+    #[test]
+    fn load_plan_with_custom_schema_and_source() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Write a ROADMAP.md
+        std::fs::write(
+            dir.path().join("ROADMAP.md"),
+            r#"# My Roadmap
+
+## Alpha
+<!-- status: done -->
+
+## Beta
+<!-- status: pending -->
+"#,
+        )
+        .unwrap();
+
+        // Write a custom schema pointing to ROADMAP.md
+        std::fs::create_dir_all(dir.path().join(".ta")).unwrap();
+        let schema = PlanSchema {
+            source: "ROADMAP.md".to_string(),
+            phase_patterns: vec![PhasePattern {
+                regex: r"^##\s+(.+)$".to_string(),
+                id_capture: "heading".to_string(),
+            }],
+            status_marker: r"<!--\s*status:\s*(\w+)\s*-->".to_string(),
+            statuses: default_statuses(),
+        };
+        std::fs::write(
+            dir.path().join(".ta/plan-schema.yaml"),
+            serde_yaml::to_string(&schema).unwrap(),
+        )
+        .unwrap();
+
+        // load_plan should use the custom schema and find ROADMAP.md
+        let phases = load_plan(dir.path()).unwrap();
+        assert_eq!(phases.len(), 2);
+        assert_eq!(phases[0].id, "Alpha");
+        assert_eq!(phases[0].status, PlanStatus::Done);
+        assert_eq!(phases[1].id, "Beta");
+        assert_eq!(phases[1].status, PlanStatus::Pending);
+    }
+
+    #[test]
+    fn parse_plan_with_invalid_regex_returns_empty() {
+        let schema = PlanSchema {
+            source: "PLAN.md".to_string(),
+            phase_patterns: vec![PhasePattern {
+                regex: r"[invalid".to_string(),
+                id_capture: "bad".to_string(),
+            }],
+            status_marker: r"<!--\s*status:\s*(\w+)\s*-->".to_string(),
+            statuses: default_statuses(),
+        };
+        let phases = parse_plan_with_schema(SAMPLE_PLAN, &schema);
+        assert!(phases.is_empty());
+    }
+
+    #[test]
+    fn parse_plan_with_invalid_status_regex_returns_empty() {
+        let schema = PlanSchema {
+            source: "PLAN.md".to_string(),
+            phase_patterns: vec![PhasePattern {
+                regex: r"^##\s+Phase\s+(\S+)\s+[—\-]\s+(.+)$".to_string(),
+                id_capture: "phase".to_string(),
+            }],
+            status_marker: r"[invalid".to_string(),
+            statuses: default_statuses(),
+        };
+        let phases = parse_plan_with_schema(SAMPLE_PLAN, &schema);
+        assert!(phases.is_empty());
     }
 }

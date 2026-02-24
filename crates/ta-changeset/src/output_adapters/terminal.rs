@@ -20,6 +20,25 @@ impl TerminalAdapter {
         Self { color }
     }
 
+    /// Strip HTML tags from a string to prevent HTML-rendered content
+    /// from leaking into terminal output (fixes garbled ÆpendingÅ display).
+    fn strip_html(s: &str) -> std::borrow::Cow<'_, str> {
+        if !s.contains('<') {
+            return std::borrow::Cow::Borrowed(s);
+        }
+        let mut out = String::with_capacity(s.len());
+        let mut in_tag = false;
+        for c in s.chars() {
+            match c {
+                '<' => in_tag = true,
+                '>' if in_tag => in_tag = false,
+                _ if !in_tag => out.push(c),
+                _ => {}
+            }
+        }
+        std::borrow::Cow::Owned(out)
+    }
+
     // -- ANSI helpers (return empty strings when color is off) --
 
     fn bold(&self) -> &str {
@@ -85,11 +104,11 @@ impl TerminalAdapter {
             pkg.package_id,
             status_color,
             pkg.status,
-            pkg.goal.title,
+            Self::strip_html(&pkg.goal.title),
             pkg.created_at.format("%Y-%m-%d %H:%M:%S"),
-            pkg.summary.what_changed,
-            pkg.summary.why,
-            pkg.summary.impact,
+            Self::strip_html(&pkg.summary.what_changed),
+            Self::strip_html(&pkg.summary.why),
+            Self::strip_html(&pkg.summary.impact),
             bold = bold,
             reset = reset
         )
@@ -123,12 +142,13 @@ impl TerminalAdapter {
             crate::pr_package::ArtifactDisposition::Discuss => "[discuss]",
         };
 
-        let summary = artifact
+        let summary_raw = artifact
             .explanation_tiers
             .as_ref()
             .map(|t| t.summary.as_str())
             .or(artifact.rationale.as_deref())
             .unwrap_or_else(|| default_summary(&artifact.resource_uri, &artifact.change_type));
+        let summary = Self::strip_html(summary_raw);
 
         format!(
             "  {} {} {} - {}",
@@ -457,5 +477,66 @@ mod tests {
 
         let result = adapter.render(&ctx);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn terminal_output_contains_no_html_tags() {
+        // Regression test for the garbled HTML bug (ÆpendingÅ in terminal output).
+        let adapter = TerminalAdapter::new();
+        let package = test_package();
+        let ctx = RenderContext {
+            package: &package,
+            detail_level: DetailLevel::Medium,
+            file_filter: None,
+            diff_provider: None,
+        };
+        let output = adapter.render(&ctx).unwrap();
+        assert!(
+            !output.contains("<span"),
+            "HTML span tags must not appear in terminal output"
+        );
+        assert!(
+            !output.contains("</span>"),
+            "HTML closing tags must not appear in terminal output"
+        );
+        assert!(
+            output.contains("[pending]"),
+            "Disposition badge must use bracket notation"
+        );
+    }
+
+    #[test]
+    fn strip_html_removes_tags() {
+        assert_eq!(
+            TerminalAdapter::strip_html(r#"<span class="status">pending</span>"#).as_ref(),
+            "pending"
+        );
+        assert_eq!(
+            TerminalAdapter::strip_html("no tags here").as_ref(),
+            "no tags here"
+        );
+        assert_eq!(TerminalAdapter::strip_html("").as_ref(), "");
+    }
+
+    #[test]
+    fn strip_html_sanitizes_summary_fields() {
+        // Simulate a package where the summary contains HTML (as if data was corrupted).
+        let mut package = test_package();
+        package.summary.what_changed =
+            r#"Updated <span class="bold">auth</span> system"#.to_string();
+
+        let adapter = TerminalAdapter::new();
+        let ctx = RenderContext {
+            package: &package,
+            detail_level: DetailLevel::Top,
+            file_filter: None,
+            diff_provider: None,
+        };
+        let output = adapter.render(&ctx).unwrap();
+        assert!(
+            output.contains("Updated auth system"),
+            "HTML should be stripped from summary"
+        );
+        assert!(!output.contains("<span"), "No HTML tags in terminal output");
     }
 }
