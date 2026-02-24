@@ -609,6 +609,21 @@ fn build_package(
         .as_ref()
         .and_then(|cs| cs.dependency_notes.clone());
 
+    // Plan validation: if this goal is linked to a plan phase, validate artifacts.
+    if let Some(ref phase_id) = goal.plan_phase {
+        let phases = super::plan::load_plan(source_dir).unwrap_or_default();
+        let phase_title = phases
+            .iter()
+            .find(|p| p.id == *phase_id)
+            .map(|p| p.title.as_str())
+            .unwrap_or("(unknown phase)");
+        let plan_validation =
+            ta_changeset::supervisor::validate_against_plan(&artifacts, phase_id, phase_title);
+        for note in &plan_validation.notes {
+            eprintln!("Plan validation: {}", note);
+        }
+    }
+
     // Build the draft package.
     let package_id = Uuid::new_v4();
     let pkg = DraftPackage {
@@ -1064,6 +1079,74 @@ fn assign_dispositions(
     (approved, rejected, discussed)
 }
 
+/// Build a complete commit message from goal and draft package.
+///
+/// Format:
+///   <goal title>
+///
+///   <draft summary — what changed>
+///
+///   Why: <objective/motivation>
+///   Impact: <impact assessment>
+///
+///   Changes (<count> file(s)):
+///     <per-artifact summaries with change type>
+///
+///   Open questions:
+///     - <question>
+fn build_commit_message(goal: &ta_goal::GoalRun, pkg: &DraftPackage) -> String {
+    let mut msg = String::new();
+
+    // Subject line.
+    msg.push_str(&goal.title);
+    msg.push_str("\n\n");
+
+    // Draft summary.
+    msg.push_str(&pkg.summary.what_changed);
+    msg.push_str("\n\n");
+
+    // Why and impact.
+    msg.push_str(&format!("Why: {}\n", pkg.summary.why));
+    msg.push_str(&format!("Impact: {}\n", pkg.summary.impact));
+
+    // Per-artifact details.
+    msg.push_str(&format!(
+        "\nChanges ({} file(s)):\n",
+        pkg.changes.artifacts.len()
+    ));
+    for artifact in &pkg.changes.artifacts {
+        let rel_path = artifact
+            .resource_uri
+            .strip_prefix("fs://workspace/")
+            .unwrap_or(&artifact.resource_uri);
+        let summary_line = artifact
+            .explanation_tiers
+            .as_ref()
+            .map(|t| t.summary.as_str())
+            .filter(|s| !s.is_empty())
+            .or(artifact.rationale.as_deref())
+            .unwrap_or("");
+        if summary_line.is_empty() {
+            msg.push_str(&format!("  {:?}  {}\n", artifact.change_type, rel_path));
+        } else {
+            msg.push_str(&format!(
+                "  {:?}  {} — {}\n",
+                artifact.change_type, rel_path, summary_line
+            ));
+        }
+    }
+
+    // Open questions / dependency notes.
+    if !pkg.summary.open_questions.is_empty() {
+        msg.push_str("\nNotes:\n");
+        for q in &pkg.summary.open_questions {
+            msg.push_str(&format!("  - {}\n", q));
+        }
+    }
+
+    msg
+}
+
 #[allow(clippy::too_many_arguments)]
 fn apply_package(
     config: &GatewayConfig,
@@ -1339,25 +1422,9 @@ fn apply_package(
             eprintln!("Warning: adapter prepare failed: {}", e);
         }
 
-        // Commit changes — goal title as subject, summary as body.
+        // Commit changes — goal title as subject, complete draft summary as body.
         println!("Committing changes...");
-        let artifact_lines: String = pkg
-            .changes
-            .artifacts
-            .iter()
-            .map(|a| format!("  {:?}  {}", a.change_type, a.resource_uri))
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        let commit_msg = format!(
-            "{title}\n\nWhat: {what}\nWhy:  {why}\nImpact: {impact}\n\nChanges ({count} file(s)):\n{artifacts}",
-            title = goal.title,
-            what = pkg.summary.what_changed,
-            why = pkg.summary.why,
-            impact = pkg.summary.impact,
-            count = pkg.changes.artifacts.len(),
-            artifacts = artifact_lines,
-        );
+        let commit_msg = build_commit_message(goal, &pkg);
 
         match adapter.commit(goal, &pkg, &commit_msg) {
             Ok(result) => {
@@ -1412,15 +1479,44 @@ fn apply_package(
     };
     save_package(config, &pkg)?;
 
-    // If the goal has a plan_phase, mark it done in PLAN.md.
+    // If the goal has a plan_phase, mark it done in PLAN.md + record history + suggest next.
     if let Some(ref phase) = goal.plan_phase {
         let plan_path = target_dir.join("PLAN.md");
         if plan_path.exists() {
             let content = std::fs::read_to_string(&plan_path)?;
+
+            // Record the old status before updating.
+            let phases_before = super::plan::parse_plan(&content);
+            let old_status = phases_before
+                .iter()
+                .find(|p| p.id == *phase)
+                .map(|p| p.status.clone())
+                .unwrap_or(super::plan::PlanStatus::Pending);
+
             let updated =
                 super::plan::update_phase_status(&content, phase, super::plan::PlanStatus::Done);
-            std::fs::write(&plan_path, updated)?;
+            std::fs::write(&plan_path, &updated)?;
             println!("Updated PLAN.md: Phase {} -> done", phase);
+
+            // Record history.
+            let _ = super::plan::record_history(
+                &target_dir,
+                phase,
+                &old_status,
+                &super::plan::PlanStatus::Done,
+            );
+
+            // Auto-suggest the next pending phase.
+            let phases_after = super::plan::parse_plan(&updated);
+            if let Some(next) = super::plan::find_next_pending(&phases_after, Some(phase.as_str()))
+            {
+                println!();
+                println!("Next pending phase: {} — {}", next.id, next.title);
+                println!(
+                    "  To start: {}",
+                    super::plan::suggest_next_goal_command(next)
+                );
+            }
         }
     }
 

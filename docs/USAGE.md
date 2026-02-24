@@ -534,7 +534,30 @@ Link goals to PLAN.md phases for automatic tracking:
 ta run "Complete Phase 4b" --source . --phase 4b
 
 # When applied, PLAN.md is auto-updated to mark phase done
+# History is recorded to .ta/plan_history.jsonl
+# The next pending phase is auto-suggested
 ```
+
+### Plan Lifecycle Commands
+
+```bash
+# List all plan phases with status
+ta plan list
+
+# Show progress summary
+ta plan status
+
+# Show next pending phase with suggested ta run command
+ta plan next
+
+# Validate a specific phase — shows linked goals and draft summaries
+ta plan validate v0.3.1
+
+# View plan change history (status transitions)
+ta plan history
+```
+
+The plan parser supports both `## Phase <id>` top-level headers and `### v0.X.Y` sub-phase headers with `<!-- status: ... -->` markers.
 
 ### Conflict Detection
 
