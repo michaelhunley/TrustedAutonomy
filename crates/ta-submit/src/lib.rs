@@ -10,6 +10,6 @@ pub mod git;
 pub mod none;
 
 pub use adapter::{CommitResult, PushResult, ReviewResult, SubmitAdapter};
-pub use config::{DiffConfig, GitConfig, SubmitConfig, WorkflowConfig};
+pub use config::{BuildConfig, DiffConfig, GitConfig, SubmitConfig, WorkflowConfig};
 pub use git::GitAdapter;
 pub use none::NoneAdapter;

@@ -467,9 +467,19 @@ Agent works in Virtual Workspace
 - ✅ **Supervisor agent** (`crates/ta-changeset/src/supervisor.rs`): Dependency graph analysis with cycle detection, self-dependency detection, coupled rejection warnings, and broken dependency warnings. Integrated into `ta draft apply` with enhanced error/warning display (13 new tests, total: 271 tests)
 - ✅ **Discussion workflow implementation**: Comment threads from discuss items are now injected into CLAUDE.md when creating follow-up goals. The `build_parent_context_section` function in `apps/ta-cli/src/commands/run.rs` includes full comment threads, explanation tiers, and agent rationale for each discussed artifact. Agents receive structured discussion history as context, enabling them to address reviewer concerns in follow-up iterations. (2 new tests, total: 273 tests)
 
-**Optional Future Enhancements**:
-- **Per-target summary enforcement**: At `ta draft build` time, warn (or error) when artifacts lack a `what` description. Agents should always explain what they did to each target. Lockfiles and generated files get auto-summaries from `default_summary()`, but source files should have agent-provided descriptions.
-- **Color coding in HTML/web output**: Add syntax-highlighted diffs in the HTML adapter, color-coded disposition badges, and visual grouping by approval status. Extend to markdown adapter where GitHub renders HTML.
+- ✅ **Per-target summary enforcement**: At `ta draft build` time, configurable enforcement (ignore/warning/error via `[build] summary_enforcement` in `.ta/workflow.toml`) warns or errors when artifacts lack a `what` description. Lockfiles, config manifests, and docs are auto-exempt via hardcoded list. (3 new tests, total: 289 tests) *(Exemption patterns become configurable in v0.4.0; per-goal access constitutions in v0.4.3)*
+- ✅ **Disposition badges in HTML output**: HTML adapter renders per-artifact disposition badges (pending/approved/rejected/discuss) with color-coded CSS classes. Added `.status.discuss` styling. (3 new tests)
+- ✅ **Config bugfix**: Added `#[serde(default)]` to `WorkflowConfig.submit` field so partial `.ta/workflow.toml` files parse correctly without requiring a `[submit]` section.
+
+### v0.3.0.1 — Consolidate `pr.rs` into `draft.rs`
+<!-- status: pending -->
+**Refactor**: `pr.rs` (2200 lines) is a full copy of `draft.rs` using the old `PRPackage` schema. ~20 functions are duplicated (`build_package`, `enrich_artifact`, `apply_package`, `is_auto_summary_exempt`, etc.). New features must be added to both files, and pr.rs is already behind on schema changes.
+
+- Make `pr.rs` a thin shim: convert `PrCommands` variants → `DraftCommands` variants, delegate to `draft::execute()`
+- Update `run.rs` line 366 to call `draft::DraftCommands::Build` instead of `pr::PrCommands::Build`
+- Remove all duplicated private functions from `pr.rs` (~1800 lines eliminated)
+- Keep `ta pr` as a hidden alias for backward compatibility (already `#[command(hide = true)]`)
+- Verify all existing pr.rs tests pass against the draft.rs implementation
 
 ### v0.3.1 — Plan Lifecycle Automation
 <!-- status: pending -->
@@ -576,6 +586,7 @@ alignment:
 ```
 - **Key difference from AAP**: These declarations are *compiled into CapabilityManifest grants* by the Policy Compiler. An agent declaring `forbidden_actions: ["network_external"]` gets a manifest with no network grants — it's not a promise, it's a constraint.
 - **Coordination block**: Used by v0.4.1 macro goals and v1.0 virtual office to determine which agents can co-operate on shared resources.
+- **Configurable summary exemption patterns**: Replace hardcoded `is_auto_summary_exempt()` with a `.gitignore`-style pattern file (e.g., `.ta/summary-exempt`), seeded by workflow templates and refined by the supervisor agent based on project structure analysis. Patterns would match against `fs://workspace/` URIs. (see v0.3.0 per-target summary enforcement)
 
 #### Standards Alignment
 - **IEEE 3152-2024**: Agent identity + capability declarations satisfy human/machine agency identification
@@ -656,6 +667,32 @@ pub struct BehavioralBaseline {
 - **NIST AI RMF MEASURE 2.6**: Monitoring AI system behavior for drift from intended purpose
 - **ISO/IEC 42001 A.6.2.6**: Performance monitoring and measurement of AI systems
 - **EU AI Act Article 9**: Risk management system with continuous monitoring
+
+### v0.4.3 — Access Constitutions
+<!-- status: pending -->
+**Goal**: Human-authorable or TA-agent-generated "access constitutions" that declare what URIs an agent should need to access to complete a given goal. Serves as a pre-declared intent contract — any deviation from the constitution is a behavioral drift signal.
+
+> **Relationship to v0.4.0**: Alignment profiles describe an agent's *general* capability envelope. Access constitutions are *per-goal* — scoped to a specific task. An agent aligned for `src/**` access (v0.4.0 profile) might have a goal-specific constitution limiting it to `src/commands/draft.rs` and `crates/ta-submit/src/config.rs`.
+
+- **Authoring**: Human writes constitution directly, or TA supervisor agent proposes one based on the goal objective + plan phase + historical access patterns
+- **Format**: URI-scoped pattern list with intent annotations, stored alongside goal metadata
+```yaml
+# .ta/constitutions/goal-<id>.yaml
+access:
+  - pattern: "fs://workspace/src/commands/draft.rs"
+    intent: "Add summary enforcement logic"
+  - pattern: "fs://workspace/crates/ta-submit/src/config.rs"
+    intent: "Add BuildConfig struct"
+  - pattern: "fs://workspace/crates/ta-changeset/src/output_adapters/html.rs"
+    intent: "Add disposition badges"
+```
+- **Enforcement**: At `ta draft build` time, compare actual artifacts against declared access constitution. Undeclared access triggers a warning (or error in strict mode).
+- **Drift integration** (depends on v0.4.2): Constitution violations feed into the behavioral drift detection pipeline as a high-signal indicator.
+
+#### Standards Alignment
+- **IEEE 3152-2024**: Pre-declared intent satisfies transparency requirements for autonomous system actions
+- **NIST AI RMF GOVERN 1.4**: Documented processes for mapping AI system behavior to intended purpose
+- **EU AI Act Article 14**: Human oversight mechanism — constitution is a reviewable, pre-approved scope of action
 
 ---
 

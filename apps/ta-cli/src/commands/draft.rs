@@ -370,6 +370,27 @@ fn enrich_artifact(artifact: &mut Artifact, summary: &ChangeSummary) {
     }
 }
 
+/// Files exempt from summary enforcement — lockfiles, config manifests, docs.
+/// These get auto-summaries from `default_summary()` and don't need agent descriptions.
+fn is_auto_summary_exempt(uri: &str) -> bool {
+    let path = uri.strip_prefix("fs://workspace/").unwrap_or(uri);
+    // Lockfiles
+    path.ends_with("Cargo.lock")
+        || path.ends_with("package-lock.json")
+        || path.ends_with("yarn.lock")
+        || path.ends_with("pnpm-lock.yaml")
+        || path.ends_with("Gemfile.lock")
+        || path.ends_with("poetry.lock")
+    // Config / manifest files
+        || path.ends_with("Cargo.toml")
+        || path.ends_with("package.json")
+        || path.ends_with("pyproject.toml")
+    // Plan / docs
+        || path.ends_with("PLAN.md")
+        || path.ends_with("CHANGELOG.md")
+        || path.ends_with("README.md")
+}
+
 fn build_package(
     config: &GatewayConfig,
     goal_id: &str,
@@ -537,6 +558,41 @@ fn build_package(
             explanation_count,
             artifacts.len()
         );
+    }
+
+    // Summary enforcement: warn or error when non-exempt artifacts lack descriptions.
+    let workflow_config = ta_submit::WorkflowConfig::load_or_default(
+        &config.workspace_root.join(".ta/workflow.toml"),
+    );
+    let enforcement = workflow_config.build.summary_enforcement.as_str();
+    if enforcement != "ignore" {
+        let missing: Vec<&str> = artifacts
+            .iter()
+            .filter(|a| a.explanation_tiers.is_none() && a.rationale.is_none())
+            .filter(|a| !is_auto_summary_exempt(&a.resource_uri))
+            .map(|a| {
+                a.resource_uri
+                    .strip_prefix("fs://workspace/")
+                    .unwrap_or(&a.resource_uri)
+            })
+            .collect();
+        if !missing.is_empty() {
+            let list = missing
+                .iter()
+                .map(|p| format!("  - {}", p))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let msg = format!(
+                "{} artifact(s) missing descriptions (no 'what' in change_summary.json):\n{}",
+                missing.len(),
+                list,
+            );
+            if enforcement == "error" {
+                anyhow::bail!("{}", msg);
+            } else {
+                eprintln!("Warning: {}", msg);
+            }
+        }
     }
 
     // Use agent summary if available and user didn't provide a custom one.
@@ -2582,5 +2638,171 @@ mod tests {
                 artifact.resource_uri
             );
         }
+    }
+
+    #[test]
+    fn auto_summary_exempt_lockfiles() {
+        assert!(is_auto_summary_exempt("fs://workspace/Cargo.lock"));
+        assert!(is_auto_summary_exempt("fs://workspace/package-lock.json"));
+        assert!(is_auto_summary_exempt("fs://workspace/yarn.lock"));
+        assert!(is_auto_summary_exempt("fs://workspace/deep/pnpm-lock.yaml"));
+        assert!(is_auto_summary_exempt("fs://workspace/Gemfile.lock"));
+        assert!(is_auto_summary_exempt("fs://workspace/poetry.lock"));
+    }
+
+    #[test]
+    fn auto_summary_exempt_config_manifests() {
+        assert!(is_auto_summary_exempt("fs://workspace/Cargo.toml"));
+        assert!(is_auto_summary_exempt(
+            "fs://workspace/crates/foo/Cargo.toml"
+        ));
+        assert!(is_auto_summary_exempt("fs://workspace/package.json"));
+        assert!(is_auto_summary_exempt("fs://workspace/pyproject.toml"));
+    }
+
+    #[test]
+    fn auto_summary_exempt_docs() {
+        assert!(is_auto_summary_exempt("fs://workspace/PLAN.md"));
+        assert!(is_auto_summary_exempt("fs://workspace/CHANGELOG.md"));
+        assert!(is_auto_summary_exempt("fs://workspace/README.md"));
+    }
+
+    #[test]
+    fn auto_summary_not_exempt_source_files() {
+        assert!(!is_auto_summary_exempt("fs://workspace/src/main.rs"));
+        assert!(!is_auto_summary_exempt("fs://workspace/src/lib.rs"));
+        assert!(!is_auto_summary_exempt("fs://workspace/tests/test.rs"));
+        assert!(!is_auto_summary_exempt("fs://workspace/build.rs"));
+    }
+
+    #[test]
+    fn summary_enforcement_error_fails_build() {
+        let project = TempDir::new().unwrap();
+        std::fs::write(project.path().join("README.md"), "# Test\n").unwrap();
+        std::fs::create_dir_all(project.path().join("src")).unwrap();
+        std::fs::write(project.path().join("src/main.rs"), "fn main() {}\n").unwrap();
+
+        let config = GatewayConfig::for_project(project.path());
+
+        super::super::goal::execute(
+            &super::super::goal::GoalCommands::Start {
+                title: "Enforcement test".to_string(),
+                source: Some(project.path().to_path_buf()),
+                objective: "Test enforcement".to_string(),
+                agent: "test-agent".to_string(),
+                phase: None,
+                follow_up: None,
+                objective_file: None,
+            },
+            &config,
+        )
+        .unwrap();
+
+        let goal_store = GoalRunStore::new(&config.goals_dir).unwrap();
+        let goals = goal_store.list().unwrap();
+        let goal = &goals[0];
+        let goal_id = goal.goal_run_id.to_string();
+
+        // Write workflow.toml AFTER goal start (so .ta/ dir exists).
+        std::fs::write(
+            project.path().join(".ta/workflow.toml"),
+            "[build]\nsummary_enforcement = \"error\"\n",
+        )
+        .unwrap();
+
+        // Modify a source file (no change_summary.json → no description).
+        std::fs::write(goal.workspace_path.join("src/main.rs"), "fn main() { 1 }\n").unwrap();
+
+        // Build should fail with error enforcement.
+        let result = build_package(&config, &goal_id, "Test", false);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("missing descriptions"));
+    }
+
+    #[test]
+    fn summary_enforcement_ignore_skips_check() {
+        let project = TempDir::new().unwrap();
+        std::fs::write(project.path().join("README.md"), "# Test\n").unwrap();
+        std::fs::create_dir_all(project.path().join("src")).unwrap();
+        std::fs::write(project.path().join("src/main.rs"), "fn main() {}\n").unwrap();
+
+        let config = GatewayConfig::for_project(project.path());
+
+        super::super::goal::execute(
+            &super::super::goal::GoalCommands::Start {
+                title: "Ignore test".to_string(),
+                source: Some(project.path().to_path_buf()),
+                objective: "Test ignore".to_string(),
+                agent: "test-agent".to_string(),
+                phase: None,
+                follow_up: None,
+                objective_file: None,
+            },
+            &config,
+        )
+        .unwrap();
+
+        let goal_store = GoalRunStore::new(&config.goals_dir).unwrap();
+        let goals = goal_store.list().unwrap();
+        let goal = &goals[0];
+        let goal_id = goal.goal_run_id.to_string();
+
+        // Write workflow.toml AFTER goal start.
+        std::fs::write(
+            project.path().join(".ta/workflow.toml"),
+            "[build]\nsummary_enforcement = \"ignore\"\n",
+        )
+        .unwrap();
+
+        std::fs::write(goal.workspace_path.join("src/main.rs"), "fn main() { 1 }\n").unwrap();
+
+        // Build should succeed with ignore enforcement.
+        build_package(&config, &goal_id, "Test", false).unwrap();
+    }
+
+    #[test]
+    fn summary_enforcement_exempt_files_pass_error_mode() {
+        let project = TempDir::new().unwrap();
+        std::fs::write(project.path().join("Cargo.toml"), "[package]\n").unwrap();
+        std::fs::write(project.path().join("Cargo.lock"), "# lock\n").unwrap();
+
+        let config = GatewayConfig::for_project(project.path());
+
+        super::super::goal::execute(
+            &super::super::goal::GoalCommands::Start {
+                title: "Exempt test".to_string(),
+                source: Some(project.path().to_path_buf()),
+                objective: "Test exempt".to_string(),
+                agent: "test-agent".to_string(),
+                phase: None,
+                follow_up: None,
+                objective_file: None,
+            },
+            &config,
+        )
+        .unwrap();
+
+        let goal_store = GoalRunStore::new(&config.goals_dir).unwrap();
+        let goals = goal_store.list().unwrap();
+        let goal = &goals[0];
+        let goal_id = goal.goal_run_id.to_string();
+
+        // Write workflow.toml AFTER goal start.
+        std::fs::write(
+            project.path().join(".ta/workflow.toml"),
+            "[build]\nsummary_enforcement = \"error\"\n",
+        )
+        .unwrap();
+
+        // Only modify exempt files.
+        std::fs::write(
+            goal.workspace_path.join("Cargo.toml"),
+            "[package]\nname = \"test\"\n",
+        )
+        .unwrap();
+
+        // Should pass even in error mode since only exempt files changed.
+        build_package(&config, &goal_id, "Test", false).unwrap();
     }
 }
