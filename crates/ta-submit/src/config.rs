@@ -7,6 +7,7 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct WorkflowConfig {
     /// Submit adapter configuration
+    #[serde(default)]
     pub submit: SubmitConfig,
 
     /// Diff viewing configuration
@@ -16,6 +17,10 @@ pub struct WorkflowConfig {
     /// Display / output configuration
     #[serde(default)]
     pub display: DisplayConfig,
+
+    /// Build configuration
+    #[serde(default)]
+    pub build: BuildConfig,
 }
 
 /// Submit adapter configuration
@@ -134,6 +139,31 @@ fn default_open_external() -> bool {
     true
 }
 
+/// Build pipeline configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BuildConfig {
+    /// Summary enforcement level at `ta draft build` time.
+    /// - "ignore": No check — artifacts without descriptions are silently accepted.
+    /// - "warning" (default): Print a warning listing artifacts missing descriptions.
+    /// - "error": Fail the build if any non-exempt artifact lacks a description.
+    ///
+    /// Exempt files (lockfiles, config manifests, docs) always get auto-summaries.
+    #[serde(default = "default_summary_enforcement")]
+    pub summary_enforcement: String,
+}
+
+impl Default for BuildConfig {
+    fn default() -> Self {
+        Self {
+            summary_enforcement: default_summary_enforcement(),
+        }
+    }
+}
+
+fn default_summary_enforcement() -> String {
+    "warning".to_string()
+}
+
 /// Display / output configuration
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DisplayConfig {
@@ -154,5 +184,49 @@ impl WorkflowConfig {
     /// Try to load config, returning default if file doesn't exist
     pub fn load_or_default(path: &std::path::Path) -> Self {
         Self::load(path).unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_config_defaults_to_warning() {
+        let config = BuildConfig::default();
+        assert_eq!(config.summary_enforcement, "warning");
+    }
+
+    #[test]
+    fn workflow_config_default_has_build_section() {
+        let config = WorkflowConfig::default();
+        assert_eq!(config.build.summary_enforcement, "warning");
+    }
+
+    #[test]
+    fn parse_toml_with_build_section() {
+        let toml = r#"
+[build]
+summary_enforcement = "error"
+"#;
+        let config: WorkflowConfig = toml::from_str(toml).unwrap();
+        assert_eq!(config.build.summary_enforcement, "error");
+    }
+
+    #[test]
+    fn parse_toml_without_build_section_uses_default() {
+        let toml = r#"
+[submit]
+adapter = "git"
+"#;
+        let config: WorkflowConfig = toml::from_str(toml).unwrap();
+        assert_eq!(config.build.summary_enforcement, "warning");
+    }
+
+    #[test]
+    fn load_or_default_returns_default_for_missing_file() {
+        let config = WorkflowConfig::load_or_default(std::path::Path::new("/nonexistent/path"));
+        assert_eq!(config.build.summary_enforcement, "warning");
+        assert_eq!(config.submit.adapter, "none");
     }
 }

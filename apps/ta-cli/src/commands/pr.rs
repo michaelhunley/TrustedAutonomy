@@ -297,6 +297,23 @@ fn enrich_artifact(artifact: &mut Artifact, summary: &ChangeSummary) {
     }
 }
 
+/// Files exempt from summary enforcement — lockfiles, config manifests, docs.
+fn is_auto_summary_exempt(uri: &str) -> bool {
+    let path = uri.strip_prefix("fs://workspace/").unwrap_or(uri);
+    path.ends_with("Cargo.lock")
+        || path.ends_with("package-lock.json")
+        || path.ends_with("yarn.lock")
+        || path.ends_with("pnpm-lock.yaml")
+        || path.ends_with("Gemfile.lock")
+        || path.ends_with("poetry.lock")
+        || path.ends_with("Cargo.toml")
+        || path.ends_with("package.json")
+        || path.ends_with("pyproject.toml")
+        || path.ends_with("PLAN.md")
+        || path.ends_with("CHANGELOG.md")
+        || path.ends_with("README.md")
+}
+
 fn build_package(
     config: &GatewayConfig,
     goal_id: &str,
@@ -464,6 +481,41 @@ fn build_package(
             explanation_count,
             artifacts.len()
         );
+    }
+
+    // Summary enforcement: warn or error when non-exempt artifacts lack descriptions.
+    let workflow_config = ta_submit::WorkflowConfig::load_or_default(
+        &config.workspace_root.join(".ta/workflow.toml"),
+    );
+    let enforcement = workflow_config.build.summary_enforcement.as_str();
+    if enforcement != "ignore" {
+        let missing: Vec<&str> = artifacts
+            .iter()
+            .filter(|a| a.explanation_tiers.is_none() && a.rationale.is_none())
+            .filter(|a| !is_auto_summary_exempt(&a.resource_uri))
+            .map(|a| {
+                a.resource_uri
+                    .strip_prefix("fs://workspace/")
+                    .unwrap_or(&a.resource_uri)
+            })
+            .collect();
+        if !missing.is_empty() {
+            let list = missing
+                .iter()
+                .map(|p| format!("  - {}", p))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let msg = format!(
+                "{} artifact(s) missing descriptions (no 'what' in change_summary.json):\n{}",
+                missing.len(),
+                list,
+            );
+            if enforcement == "error" {
+                anyhow::bail!("{}", msg);
+            } else {
+                eprintln!("Warning: {}", msg);
+            }
+        }
     }
 
     // Use agent summary if available and user didn't provide a custom one.

@@ -2,7 +2,7 @@
 
 use crate::error::ChangeSetError;
 use crate::output_adapters::{DetailLevel, OutputAdapter, RenderContext};
-use crate::pr_package::{Artifact, ChangeType};
+use crate::pr_package::{Artifact, ArtifactDisposition, ChangeType};
 
 #[derive(Default)]
 pub struct HtmlAdapter {}
@@ -10,6 +10,15 @@ pub struct HtmlAdapter {}
 impl HtmlAdapter {
     pub fn new() -> Self {
         Self {}
+    }
+
+    fn disposition_badge(&self, disposition: &ArtifactDisposition) -> &str {
+        match disposition {
+            ArtifactDisposition::Pending => r#"<span class="status pending">pending</span>"#,
+            ArtifactDisposition::Approved => r#"<span class="status approved">approved</span>"#,
+            ArtifactDisposition::Rejected => r#"<span class="status denied">rejected</span>"#,
+            ArtifactDisposition::Discuss => r#"<span class="status discuss">discuss</span>"#,
+        }
     }
 
     fn change_badge(&self, change_type: &ChangeType) -> &str {
@@ -31,6 +40,7 @@ impl HtmlAdapter {
             .status.pending { background: #fef3c7; color: #92400e; }
             .status.approved { background: #d1fae5; color: #065f46; }
             .status.denied { background: #fee2e2; color: #991b1b; }
+            .status.discuss { background: #dbeafe; color: #1e40af; }
             .artifact { background: white; border: 1px solid #e5e7eb; border-radius: 8px; padding: 20px; margin-bottom: 20px; }
             .badge { display: inline-block; width: 24px; height: 24px; text-align: center; border-radius: 4px; font-weight: 700; margin-right: 8px; }
             .badge.add { background: #d1fae5; color: #065f46; }
@@ -113,8 +123,9 @@ impl OutputAdapter for HtmlAdapter {
         for artifact in artifacts {
             html.push_str("<div class=\"artifact\">\n");
             html.push_str(&format!(
-                "{} <strong>{}</strong>\n",
+                "{} {} <strong>{}</strong>\n",
                 self.change_badge(&artifact.change_type),
+                self.disposition_badge(&artifact.disposition),
                 artifact.resource_uri
             ));
 
@@ -175,5 +186,130 @@ impl OutputAdapter for HtmlAdapter {
 
     fn name(&self) -> &str {
         "html"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn disposition_badge_renders_all_variants() {
+        let adapter = HtmlAdapter::new();
+        assert!(adapter
+            .disposition_badge(&ArtifactDisposition::Pending)
+            .contains("pending"));
+        assert!(adapter
+            .disposition_badge(&ArtifactDisposition::Approved)
+            .contains("approved"));
+        assert!(adapter
+            .disposition_badge(&ArtifactDisposition::Rejected)
+            .contains("denied"));
+        assert!(adapter
+            .disposition_badge(&ArtifactDisposition::Discuss)
+            .contains("discuss"));
+    }
+
+    #[test]
+    fn css_includes_discuss_status_class() {
+        let adapter = HtmlAdapter::new();
+        let css = adapter.css();
+        assert!(css.contains(".status.discuss"));
+        assert!(css.contains("#dbeafe"));
+    }
+
+    #[test]
+    fn html_output_includes_disposition_badges() {
+        use crate::draft_package::*;
+        use crate::output_adapters::RenderContext;
+        use chrono::Utc;
+        use uuid::Uuid;
+
+        let mut pkg = DraftPackage {
+            package_version: "1.0.0".to_string(),
+            package_id: Uuid::nil(),
+            created_at: Utc::now(),
+            goal: Goal {
+                goal_id: "g1".to_string(),
+                title: "Test".to_string(),
+                objective: "Test".to_string(),
+                success_criteria: vec![],
+                constraints: vec![],
+            },
+            iteration: Iteration {
+                iteration_id: "i1".to_string(),
+                sequence: 1,
+                workspace_ref: WorkspaceRef {
+                    ref_type: "staging_dir".to_string(),
+                    ref_name: "staging/g1/1".to_string(),
+                    base_ref: None,
+                },
+            },
+            agent_identity: AgentIdentity {
+                agent_id: "a1".to_string(),
+                agent_type: "test".to_string(),
+                constitution_id: "default".to_string(),
+                capability_manifest_hash: "abc".to_string(),
+                orchestrator_run_id: None,
+            },
+            summary: Summary {
+                what_changed: "test".to_string(),
+                why: "test".to_string(),
+                impact: "none".to_string(),
+                rollback_plan: "revert".to_string(),
+                open_questions: vec![],
+            },
+            plan: Plan {
+                completed_steps: vec![],
+                next_steps: vec![],
+                decision_log: vec![],
+            },
+            changes: Changes {
+                artifacts: vec![Artifact {
+                    resource_uri: "fs://workspace/src/main.rs".to_string(),
+                    change_type: ChangeType::Modify,
+                    disposition: ArtifactDisposition::Discuss,
+                    diff_ref: String::new(),
+                    rationale: Some("test rationale".to_string()),
+                    explanation_tiers: None,
+                    comments: None,
+                    tests_run: vec![],
+                    dependencies: vec![],
+                }],
+                patch_sets: vec![],
+            },
+            risk: Risk {
+                risk_score: 0,
+                findings: vec![],
+                policy_decisions: vec![],
+            },
+            provenance: Provenance {
+                inputs: vec![],
+                tool_trace_hash: "hash".to_string(),
+            },
+            review_requests: ReviewRequests {
+                requested_actions: vec![],
+                reviewers: vec![],
+                required_approvals: 1,
+                notes_to_reviewer: None,
+            },
+            signatures: Signatures {
+                package_hash: "hash".to_string(),
+                agent_signature: "sig".to_string(),
+                gateway_attestation: None,
+            },
+            status: DraftStatus::Draft,
+        };
+        pkg.status = DraftStatus::PendingReview;
+
+        let adapter = HtmlAdapter::new();
+        let ctx = RenderContext {
+            package: &pkg,
+            detail_level: DetailLevel::Top,
+            file_filter: None,
+            diff_provider: None,
+        };
+        let html = adapter.render(&ctx).unwrap();
+        assert!(html.contains(r#"class="status discuss""#));
     }
 }
