@@ -218,6 +218,79 @@ impl DependencyGraph {
     }
 }
 
+/// Result of plan validation — checking if completed work matches plan expectations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanValidationResult {
+    /// Whether the draft has content (at least one artifact).
+    pub has_artifacts: bool,
+    /// Number of artifacts in the draft.
+    pub artifact_count: usize,
+    /// Number of artifacts with descriptions (what/rationale populated).
+    pub described_count: usize,
+    /// Informational messages about plan alignment.
+    pub notes: Vec<String>,
+}
+
+impl PlanValidationResult {
+    /// Check if the draft has enough described artifacts to be considered complete.
+    pub fn is_well_described(&self) -> bool {
+        self.has_artifacts && self.described_count > 0
+    }
+}
+
+/// Validate artifacts against plan expectations.
+///
+/// Checks that the draft has meaningful content and that artifacts are described.
+/// This is called by `ta draft build` when a goal has a plan_phase.
+pub fn validate_against_plan(
+    artifacts: &[Artifact],
+    phase_id: &str,
+    phase_title: &str,
+) -> PlanValidationResult {
+    let artifact_count = artifacts.len();
+    let described_count = artifacts
+        .iter()
+        .filter(|a| {
+            a.explanation_tiers
+                .as_ref()
+                .map(|t| !t.summary.is_empty())
+                .unwrap_or(false)
+                || a.rationale.is_some()
+        })
+        .count();
+
+    let mut notes = Vec::new();
+
+    if artifact_count == 0 {
+        notes.push(format!(
+            "No artifacts found for phase {} — {}. Expected code changes.",
+            phase_id, phase_title
+        ));
+    }
+
+    if artifact_count > 0 && described_count == 0 {
+        notes.push(format!(
+            "None of the {} artifacts for phase {} have descriptions. Consider adding a change_summary.json.",
+            artifact_count, phase_id
+        ));
+    }
+
+    let undescribed = artifact_count.saturating_sub(described_count);
+    if undescribed > 0 && described_count > 0 {
+        notes.push(format!(
+            "{}/{} artifacts for phase {} lack descriptions.",
+            undescribed, artifact_count, phase_id
+        ));
+    }
+
+    PlanValidationResult {
+        has_artifacts: artifact_count > 0,
+        artifact_count,
+        described_count,
+        notes,
+    }
+}
+
 /// Supervisor agent that validates artifact dispositions against dependencies.
 pub struct SupervisorAgent {
     graph: DependencyGraph,
@@ -671,5 +744,65 @@ mod tests {
         // Should warn about D being rejected but depended on by B and C
         assert!(result.valid);
         assert!(result.warnings.len() >= 3); // At least coupled rejection for D and broken deps for B, C
+    }
+
+    // ── Plan validation tests ──
+
+    #[test]
+    fn test_plan_validation_empty_artifacts() {
+        let result = validate_against_plan(&[], "v0.3.1", "Plan Lifecycle");
+        assert!(!result.has_artifacts);
+        assert!(!result.is_well_described());
+        assert_eq!(result.notes.len(), 1);
+        assert!(result.notes[0].contains("No artifacts found"));
+    }
+
+    #[test]
+    fn test_plan_validation_undescribed_artifacts() {
+        let artifacts = vec![
+            make_artifact("fs://workspace/a.rs", ArtifactDisposition::Pending, vec![]),
+            make_artifact("fs://workspace/b.rs", ArtifactDisposition::Pending, vec![]),
+        ];
+        let result = validate_against_plan(&artifacts, "v0.3.1", "Plan Lifecycle");
+        assert!(result.has_artifacts);
+        assert_eq!(result.artifact_count, 2);
+        assert_eq!(result.described_count, 0);
+        assert!(!result.is_well_described());
+    }
+
+    #[test]
+    fn test_plan_validation_described_artifacts() {
+        let mut a1 = make_artifact("fs://workspace/a.rs", ArtifactDisposition::Pending, vec![]);
+        a1.explanation_tiers = Some(crate::draft_package::ExplanationTiers {
+            summary: "Added plan validation".to_string(),
+            explanation: String::new(),
+            tags: vec![],
+            related_artifacts: vec![],
+        });
+        let a2 = make_artifact("fs://workspace/b.rs", ArtifactDisposition::Pending, vec![]);
+
+        let result = validate_against_plan(&[a1, a2], "v0.3.1", "Plan Lifecycle");
+        assert!(result.has_artifacts);
+        assert_eq!(result.described_count, 1);
+        assert!(result.is_well_described());
+        // Should note that 1/2 artifacts lack descriptions.
+        assert!(result.notes.iter().any(|n| n.contains("1/2")));
+    }
+
+    #[test]
+    fn test_plan_validation_all_described() {
+        let mut a1 = make_artifact("fs://workspace/a.rs", ArtifactDisposition::Pending, vec![]);
+        a1.rationale = Some("Reason".to_string());
+        let mut a2 = make_artifact("fs://workspace/b.rs", ArtifactDisposition::Pending, vec![]);
+        a2.explanation_tiers = Some(crate::draft_package::ExplanationTiers {
+            summary: "Summary".to_string(),
+            explanation: String::new(),
+            tags: vec![],
+            related_artifacts: vec![],
+        });
+
+        let result = validate_against_plan(&[a1, a2], "v0.3.1", "Plan Lifecycle");
+        assert!(result.is_well_described());
+        assert!(result.notes.is_empty());
     }
 }

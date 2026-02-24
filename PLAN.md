@@ -483,11 +483,15 @@ Agent works in Virtual Workspace
 
 ### v0.3.1 — Plan Lifecycle Automation
 <!-- status: pending -->
-- Supervisor agent reads change_summary.json, validates completed work against plan
-- Completing one phase auto-suggests/creates goal for next pending phase
-- Plan templates for common workflows (feature, bugfix, refactor)
-- `ta plan next` command to create goal for next pending phase
-- Plan versioning and history
+**Completed** (294 tests across 12 crates):
+- ✅ Supervisor `validate_against_plan()` reads change_summary.json, validates completed work against plan at `ta draft build` time (4 new tests)
+- ✅ Completing one phase auto-suggests/creates goal for next pending phase (output after `ta draft apply --phase`)
+- ✅ Plan parser extended to handle `### v0.X.Y` sub-phase headers in addition to `## Phase` top-level headers
+- ✅ `ta plan next` command shows next pending phase and suggests `ta run` command (new CLI command)
+- ✅ `ta plan validate <phase>` command shows phase status, linked goals, and latest draft summary (new CLI command)
+- ✅ Plan versioning and history: status transitions recorded to `.ta/plan_history.jsonl`, viewable via `ta plan history` (new CLI command)
+- ✅ Git commit message in `ta draft apply` now includes complete draft summary with per-artifact descriptions (`build_commit_message` function)
+- ✅ 16 new tests: plan parsing for sub-phases (4), plan lifecycle (find_next, suggest, history — 8), supervisor plan validation (4)
 
 ### v0.3.2 — Configurable Release Pipeline (`ta release`)
 <!-- status: pending -->
