@@ -493,6 +493,48 @@ Agent works in Virtual Workspace
 - ✅ Git commit message in `ta draft apply` now includes complete draft summary with per-artifact descriptions (`build_commit_message` function)
 - ✅ 16 new tests: plan parsing for sub-phases (4), plan lifecycle (find_next, suggest, history — 8), supervisor plan validation (4)
 
+### v0.3.1.1 — Generic Plan Schema & Session Observability
+<!-- status: pending -->
+
+#### Problem: Plan parser is project-specific
+`plan.rs` hardcodes this project's PLAN.md format (`## v0.X`, `### v0.X.Y`, `<!-- status: -->` markers). Any other project using TA would need to adopt the same markdown conventions or nothing works. The parser should be schema-driven, not format-hardcoded.
+
+**Plan schema extraction** (lowest implementation cost):
+- **`.ta/plan-schema.yaml`**: Declarative config describing how to parse a project's plan document. Shipped with sensible defaults that match common markdown patterns.
+```yaml
+# .ta/plan-schema.yaml
+source: PLAN.md                          # or ROADMAP.md, TODO.md, etc.
+phase_patterns:
+  - regex: "^##+ (?:v?[\\d.]+[a-z]? — |Phase \\d+ — )(.+)"
+    id_capture: "version_or_phase_number"
+status_marker: "<!-- status: (\\w+) -->"   # regex with capture group
+statuses: [done, in_progress, pending]     # valid values
+```
+- **`ta plan init`**: Interactive or agent-guided command that reads an existing plan document, proposes a schema, and writes `.ta/plan-schema.yaml`. Agent examines headers, markers, and structure — human approves.
+- **`ta plan create`**: Generate a new plan document from a template + schema. Templates for common workflows (feature, bugfix, greenfield).
+- Refactor `parse_plan()` to read schema at runtime instead of hardcoded regexes. Existing behavior preserved as the default schema (zero-config for projects that adopt the current convention).
+
+#### Problem: Terminal output shows garbled HTML entities
+`ta draft view` renders `ÆpendingÅ` instead of `[pending]` — HTML `<span>` tags from the HTML adapter leaking into terminal output, with angle brackets mangled by encoding. Root cause TBD: either the wrong adapter is selected, the draft package JSON contains pre-rendered HTML in a data field, or a terminal encoding mismatch. Fix: ensure `view_package` always passes clean data (not pre-rendered HTML) to adapters, and add an integration test that asserts terminal output contains no HTML tags.
+
+#### Interactive session mode (`ta run --interactive`)
+**Goal**: Let the human observe agent work in real-time, interrogate the agent mid-session, and resume sessions without re-learning state — all while TA mediates the session invisibly.
+
+- **Observable output**: Agent framework stdout/stderr piped through TA with structured logging. Human sees work in progress. TA captures the stream for audit and context.
+- **Session wrapping**: `ta run --interactive` wraps the agent CLI session (`claude`, `codex`, etc.) so TA controls launch, environment injection, and auto-exit. The agent framework CLI runs inside TA's session envelope — agent doesn't know TA exists.
+- **Human interrogation**: Human can inject questions/guidance into the running session (via a side channel or interleaved stdin). Agent responds using its existing context — no token cost for re-learning.
+- **Context preservation on resume**: On session restore, TA provides agent-framework-native context (Claude's `--resume`, Codex session files, etc.) rather than re-injecting full history. Falls back to CLAUDE.md context injection if native resume unavailable.
+- **Per-agent config**: `agents/<name>.yaml` gains `interactive` block:
+```yaml
+interactive:
+  launch_cmd: "claude --resume {session_id}"  # native resume if supported
+  output_capture: "pty"                        # pty, pipe, or log
+  allow_human_input: true                      # side-channel injection
+  auto_exit_on: "idle_timeout: 300s"           # or "goal_complete"
+```
+- **Implementation phases**: (1) PTY wrapping + output capture — works today. (2) Side-channel input — requires agent framework support or stdin interleaving. (3) Native resume integration — per-agent, Claude first.
+- Relates to v0.4.1 (macro goals + inner-loop iteration) — interactive mode is the human-facing complement to the agent-facing MCP tools.
+
 ### v0.3.2 — Configurable Release Pipeline (`ta release`)
 <!-- status: pending -->
 A `ta release` command driven by a YAML task script (`.ta/release.yaml`). Each step is either a TA goal (agent-driven) or a shell command, with optional approval gates. Replaces `scripts/release.sh` with a composable, extensible pipeline.
