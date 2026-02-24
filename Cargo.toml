@@ -61,5 +61,8 @@ schemars = "1"
 # YAML configuration parsing — used for agent launch configs.
 serde_yaml = "0.9"
 
+# Regex — configurable plan format parsing (v0.3.1.1).
+regex = "1"
+
 # Testing utilities
 tempfile = "3"

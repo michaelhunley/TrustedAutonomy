@@ -555,9 +555,21 @@ ta plan validate v0.3.1
 
 # View plan change history (status transitions)
 ta plan history
+
+# Extract a plan-schema.yaml from an existing plan document
+ta plan init                    # interactive — proposes schema, asks to confirm
+ta plan init --yes              # non-interactive — writes immediately
+ta plan init --source ROADMAP.md  # analyze a different file
+
+# Generate a new plan from a template
+ta plan create                            # greenfield template → PLAN.md
+ta plan create --template feature         # feature template
+ta plan create --template bugfix          # bugfix template
+ta plan create --output ROADMAP.md        # different output file
+ta plan create --name "My Project"        # custom project name
 ```
 
-The plan parser supports both `## Phase <id>` top-level headers and `### v0.X.Y` sub-phase headers with `<!-- status: ... -->` markers.
+The plan parser is schema-driven via `.ta/plan-schema.yaml`. If no schema file exists, a built-in default is used that supports `## Phase <id>` top-level headers and `### v0.X.Y` sub-phase headers with `<!-- status: ... -->` markers. Custom schemas allow any project to define its own plan format using regex patterns.
 
 ### Conflict Detection
 
