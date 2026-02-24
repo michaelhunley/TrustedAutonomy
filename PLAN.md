@@ -473,13 +473,13 @@ Agent works in Virtual Workspace
 
 ### v0.3.0.1 — Consolidate `pr.rs` into `draft.rs`
 <!-- status: pending -->
-**Refactor**: `pr.rs` (2200 lines) is a full copy of `draft.rs` using the old `PRPackage` schema. ~20 functions are duplicated (`build_package`, `enrich_artifact`, `apply_package`, `is_auto_summary_exempt`, etc.). New features must be added to both files, and pr.rs is already behind on schema changes.
-
-- Make `pr.rs` a thin shim: convert `PrCommands` variants → `DraftCommands` variants, delegate to `draft::execute()`
-- Update `run.rs` line 366 to call `draft::DraftCommands::Build` instead of `pr::PrCommands::Build`
-- Remove all duplicated private functions from `pr.rs` (~1800 lines eliminated)
-- Keep `ta pr` as a hidden alias for backward compatibility (already `#[command(hide = true)]`)
-- Verify all existing pr.rs tests pass against the draft.rs implementation
+**Completed**:
+- ✅ `pr.rs` reduced from 2205 lines to ~160 lines: thin shim that converts `PrCommands` → `DraftCommands` and delegates to `draft::execute()`
+- ✅ `run.rs` updated to call `draft::DraftCommands::Build` instead of `pr::PrCommands::Build`
+- ✅ `run.rs` follow-up context updated to use `draft::load_package` and `draft_package::ArtifactDisposition`
+- ✅ All ~20 duplicated private functions removed from `pr.rs` (~2050 lines eliminated)
+- ✅ `ta pr` remains as a hidden alias for backward compatibility
+- ✅ All 278 tests passing (11 duplicate pr.rs tests removed; all functionality covered by draft.rs tests)
 
 ### v0.3.1 — Plan Lifecycle Automation
 <!-- status: pending -->

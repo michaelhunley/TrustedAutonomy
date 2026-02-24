@@ -6,7 +6,7 @@
 // 3. Launches the agent with the goal as its initial prompt
 // 4. When the agent exits, restores injected files and builds a PR package
 //
-// The user then reviews/approves/applies via `ta pr` commands.
+// The user then reviews/approves/applies via `ta draft` commands.
 
 use std::path::Path;
 
@@ -361,9 +361,9 @@ pub fn execute(
         restore_claude_settings(&staging_path)?;
     }
 
-    // 6. Build PR package from the diff.
-    super::pr::execute(
-        &super::pr::PrCommands::Build {
+    // 6. Build draft package from the diff.
+    super::draft::execute(
+        &super::draft::DraftCommands::Build {
             goal_id: goal_id.clone(),
             summary: format!("Changes from goal: {}", title),
             latest: false,
@@ -619,7 +619,7 @@ fn build_parent_context_section(
 
     // If parent has a PR, include artifact dispositions and discuss items.
     if let Some(pr_id) = parent_goal.pr_package_id {
-        use crate::commands::pr::load_package;
+        use crate::commands::draft::load_package;
         if let Ok(parent_pr) = load_package(config, pr_id) {
             let approved = parent_pr
                 .changes
@@ -628,7 +628,7 @@ fn build_parent_context_section(
                 .filter(|a| {
                     matches!(
                         a.disposition,
-                        ta_changeset::pr_package::ArtifactDisposition::Approved
+                        ta_changeset::draft_package::ArtifactDisposition::Approved
                     )
                 })
                 .count();
@@ -639,7 +639,7 @@ fn build_parent_context_section(
                 .filter(|a| {
                     matches!(
                         a.disposition,
-                        ta_changeset::pr_package::ArtifactDisposition::Rejected
+                        ta_changeset::draft_package::ArtifactDisposition::Rejected
                     )
                 })
                 .count();
@@ -650,7 +650,7 @@ fn build_parent_context_section(
                 .filter(|a| {
                     matches!(
                         a.disposition,
-                        ta_changeset::pr_package::ArtifactDisposition::Discuss
+                        ta_changeset::draft_package::ArtifactDisposition::Discuss
                     )
                 })
                 .count();
@@ -668,7 +668,7 @@ fn build_parent_context_section(
                 .filter(|a| {
                     matches!(
                         a.disposition,
-                        ta_changeset::pr_package::ArtifactDisposition::Discuss
+                        ta_changeset::draft_package::ArtifactDisposition::Discuss
                     )
                 })
                 .collect();
