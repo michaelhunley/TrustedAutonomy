@@ -21,9 +21,28 @@ impl TerminalAdapter {
     }
 
     /// Strip HTML tags from a string to prevent HTML-rendered content
-    /// from leaking into terminal output (fixes garbled ÆpendingÅ display).
+    /// from leaking into terminal output.
+    ///
+    /// Only strips sequences that look like real HTML tags (contain attributes,
+    /// slashes, or known tag names). Preserves angle-bracket text that looks
+    /// like code placeholders: `<id>`, `<path>`, `<T>`, etc.
     fn strip_html(s: &str) -> std::borrow::Cow<'_, str> {
         if !s.contains('<') {
+            return std::borrow::Cow::Borrowed(s);
+        }
+        // Only strip if it looks like actual HTML (contains known tags or attributes).
+        // Pattern: <tag ...>, </tag>, <tag/>, or tags with class/style attributes.
+        let has_html = s.contains("</")
+            || s.contains("class=")
+            || s.contains("style=")
+            || s.contains("<span")
+            || s.contains("<div")
+            || s.contains("<br")
+            || s.contains("<p>")
+            || s.contains("<p ")
+            || s.contains("<a ")
+            || s.contains("<img");
+        if !has_html {
             return std::borrow::Cow::Borrowed(s);
         }
         let mut out = String::with_capacity(s.len());
@@ -516,6 +535,28 @@ mod tests {
             "no tags here"
         );
         assert_eq!(TerminalAdapter::strip_html("").as_ref(), "");
+    }
+
+    #[test]
+    fn strip_html_preserves_code_placeholders() {
+        // Angle brackets in code-style text (e.g. <id>, <path>, <T>) should be preserved.
+        assert_eq!(
+            TerminalAdapter::strip_html("ta session show <id>").as_ref(),
+            "ta session show <id>"
+        );
+        assert_eq!(
+            TerminalAdapter::strip_html("Vec<String>").as_ref(),
+            "Vec<String>"
+        );
+        assert_eq!(
+            TerminalAdapter::strip_html("list [--all] and show <id>").as_ref(),
+            "list [--all] and show <id>"
+        );
+        // But actual HTML is still stripped.
+        assert_eq!(
+            TerminalAdapter::strip_html(r#"text <span class="x">inner</span> more"#).as_ref(),
+            "text inner more"
+        );
     }
 
     #[test]
