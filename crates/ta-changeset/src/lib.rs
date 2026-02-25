@@ -14,10 +14,12 @@ pub mod diff_handlers;
 pub mod draft_package;
 pub mod error;
 pub mod explanation;
+pub mod interactive_session_store;
 pub mod output_adapters;
 pub mod pr_package;
 pub mod review_session;
 pub mod review_session_store;
+pub mod session_channel;
 pub mod supervisor;
 pub mod uri_pattern;
 
@@ -27,12 +29,17 @@ pub use diff_handlers::{DiffHandlerError, DiffHandlersConfig, HandlerRule};
 pub use draft_package::{DraftPackage, DraftStatus, ExplanationTiers};
 pub use error::ChangeSetError;
 pub use explanation::ExplanationSidecar;
+pub use interactive_session_store::InteractiveSessionStore;
 pub use output_adapters::{DetailLevel, OutputAdapter, OutputFormat, RenderContext};
 pub use review_session::{
     ArtifactReview, Comment, CommentThread, DispositionCounts, ReviewSession, ReviewState,
     SessionNote,
 };
 pub use review_session_store::ReviewSessionStore;
+pub use session_channel::{
+    HumanInput, InteractiveConfig, InteractiveSession, InteractiveSessionState, OutputStream,
+    SessionChannel, SessionChannelError, SessionEvent, SessionMessage,
+};
 pub use supervisor::{
     DependencyGraph, SupervisorAgent, ValidationError, ValidationResult, ValidationWarning,
 };

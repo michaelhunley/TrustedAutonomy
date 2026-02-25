@@ -88,6 +88,31 @@ pub enum TaEvent {
         target_uri: String,
         timestamp: DateTime<Utc>,
     },
+
+    /// An interactive session was started (v0.3.1.2).
+    SessionStarted {
+        goal_run_id: Uuid,
+        session_id: Uuid,
+        channel_id: String,
+        agent_id: String,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// An interactive session state changed (v0.3.1.2).
+    SessionStateChanged {
+        session_id: Uuid,
+        from_state: String,
+        to_state: String,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// Human sent a message in an interactive session (v0.3.1.2).
+    SessionMessage {
+        session_id: Uuid,
+        sender: String,
+        content_preview: String,
+        timestamp: DateTime<Utc>,
+    },
 }
 
 impl TaEvent {
@@ -101,6 +126,9 @@ impl TaEvent {
             TaEvent::PrDenied { .. } => "pr_denied",
             TaEvent::ChangesApplied { .. } => "changes_applied",
             TaEvent::ChangesetCreated { .. } => "changeset_created",
+            TaEvent::SessionStarted { .. } => "session_started",
+            TaEvent::SessionStateChanged { .. } => "session_state_changed",
+            TaEvent::SessionMessage { .. } => "session_message",
         }
     }
 

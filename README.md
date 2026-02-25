@@ -65,9 +65,9 @@ Trusted Autonomy achieves this by:
 
 ---
 
-## Current status: v0.2.2-alpha
+## Current status: v0.3.2-alpha
 
-**208 tests** across 12 crates. Under active development. See [PLAN.md](PLAN.md) for the full roadmap.
+**334 tests** across 12 crates. Under active development. See [PLAN.md](PLAN.md) for the full roadmap.
 
 This is an early alpha release for feedback. Please note:
 
@@ -426,6 +426,8 @@ ta draft apply <package-id> --git-commit
 That's it. The agent never knew it was in a staging workspace.
 
 > **For detailed usage, configuration options, and troubleshooting, see [docs/USAGE.md](docs/USAGE.md)** or run `ta --help`.
+>
+> **New in v0.3.1.2:** Interactive session orchestration — see [docs/interactive-sessions.md](docs/interactive-sessions.md) for the full guide.
 
 ---
 
@@ -898,6 +900,7 @@ cargo fmt --all -- --check
 - **Transparent overlay mediation** — agents work in staging copies using native tools, TA is invisible
 - **Selective approval** — `--approve "src/**" --reject "*.test.rs" --discuss "config/*"` with dependency warnings
 - **Concurrent session conflict detection** — detects source changes during active goals, prevents stale overwrites
+- **Interactive session orchestration** — `ta run --interactive` for tracked human-agent sessions with lifecycle management. See [docs/interactive-sessions.md](docs/interactive-sessions.md)
 - **External diff routing** — route binary/media files to external tools (`*.uasset` to Unreal, `*.png` to image diff, etc.)
 - **YAML agent configs** — discoverable config files for any agent framework (`.ta/agents/`, `~/.config/ta/agents/`)
 - **Settings injection** — auto-configures agent permissions (replaces `--dangerously-skip-permissions`)
@@ -908,7 +911,7 @@ cargo fmt --all -- --check
 - Per-artifact review model (disposition, dependencies, rationale)
 - URI-aware pattern matching (scheme-scoped safety — `src/**` can't match `gmail://`)
 - Real MCP server (rmcp 0.14) with 9 tools and policy enforcement
-- CLI: `goal`, `draft`, `run`, `plan`, `audit`, `adapter`, `serve`
+- CLI: `goal`, `draft`, `run`, `plan`, `audit`, `adapter`, `session`, `serve`
 - Plan tracking (`ta plan list/status`, auto-update on `ta draft apply`)
 
 ---

@@ -1,10 +1,8 @@
 # Trusted Autonomy — Usage Guide
 
-**Version**: v0.3.0-alpha (In Progress)
+**Version**: v0.3.2-alpha
 
 Complete guide to using Trusted Autonomy for safe, reviewable AI agent workflows.
-
-> **Note**: v0.3.0 Review Sessions infrastructure is implemented but CLI commands are coming soon.
 
 ---
 
@@ -16,12 +14,13 @@ Complete guide to using Trusted Autonomy for safe, reviewable AI agent workflows
 4. [Configuration](#configuration)
 5. [Agent Configuration](#agent-configuration)
 6. [PR Review & Approval](#pr-review--approval)
-7. **[Review Sessions](#review-sessions)** ⭐ NEW in v0.3.0
-8. [External Diff Handlers](#external-diff-handlers)
-9. [Git Integration](#git-integration)
-10. [Advanced Workflows](#advanced-workflows)
-11. [Claude Flow Optimization](#claude-flow-optimization)
-12. [Troubleshooting](#troubleshooting)
+7. [Review Sessions](#review-sessions)
+8. **[Interactive Sessions](#interactive-sessions)** — NEW in v0.3.1.2
+9. [External Diff Handlers](#external-diff-handlers)
+10. [Git Integration](#git-integration)
+11. [Advanced Workflows](#advanced-workflows)
+12. [Claude Flow Optimization](#claude-flow-optimization)
+13. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -341,6 +340,93 @@ When artifacts have `Discuss` disposition:
 - `ta run --follow-up <goal-id>` injects comment threads as structured context
 - Agent addresses each discussed artifact with explanations
 - New PR supersedes the original (see v0.1.2 Follow-Up Goals)
+
+---
+
+## Interactive Sessions
+
+**New in v0.3.1.2** — Interactive session orchestration for human-agent collaboration.
+
+### Starting an Interactive Session
+
+Use `--interactive` to create a session with lifecycle tracking:
+
+```bash
+ta run "Implement feature X" --source . --interactive
+
+# Output:
+# Interactive session: 8a7b6c5d-...
+#   Channel: cli:12345
+# Launching claude in staging workspace...
+#   Mode: interactive (session orchestration enabled)
+```
+
+The session tracks the goal-agent relationship, channel identity, message history, and associated draft reviews.
+
+### Managing Sessions
+
+```bash
+# List active sessions
+ta session list
+
+# Show all sessions (including completed)
+ta session list --all
+
+# View session details and message history
+ta session show <session-id>
+# Accepts full UUID or prefix (e.g., "8a7b")
+```
+
+### Session Lifecycle
+
+Sessions follow this state machine:
+- **Active** — agent running, human connected
+- **Paused** — agent suspended, can be resumed (Active <-> Paused)
+- **Completed** — session finished successfully
+- **Aborted** — session killed by human or error
+
+### Per-Agent Interactive Config
+
+Add an `interactive` block to your agent YAML config (`.ta/agents/<name>.yaml`):
+
+```yaml
+command: claude
+args_template: ["{prompt}"]
+injects_context_file: true
+interactive:
+  enabled: true
+  output_capture: pipe   # pipe, pty, or log
+  allow_human_input: true
+  auto_exit_on: "idle_timeout: 300s"
+  resume_cmd: "claude --resume {session_id}"
+```
+
+### Multi-Session Orchestration
+
+Multiple sessions can run concurrently (different goals, different agents):
+
+```bash
+# Session 1: feature work with Claude
+ta run "Implement auth" --source . --interactive --agent claude-code
+
+# Session 2: testing with Codex
+ta run "Write tests for auth" --source . --interactive --agent codex
+
+# See all active sessions
+ta session list
+```
+
+### Future Channel Adapters
+
+The `SessionChannel` trait is designed for messaging platform adapters:
+
+| Platform | Channel identity | Status |
+|----------|-----------------|--------|
+| CLI | `cli:{pid}` | Implemented |
+| Discord | `discord:{thread_id}` | Future |
+| Slack | `slack:{channel}:{ts}` | Future |
+| Email | `email:{thread_id}` | Future |
+| Web app | `web:{session_id}` | Future |
 
 ---
 
