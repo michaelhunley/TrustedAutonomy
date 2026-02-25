@@ -533,7 +533,7 @@ statuses: [done, in_progress, pending]     # valid values
 `ta draft view` renders `ÆpendingÅ` instead of `[pending]` — HTML `<span>` tags leaking into terminal output with encoding corruption. Fix: `strip_html()` helper in `TerminalAdapter` sanitizes all user-provided text fields before rendering. Regression test asserts terminal output contains no HTML tags.
 
 ### v0.3.1.2 — Interactive Session Orchestration
-<!-- status: pending -->
+<!-- status: done -->
 
 #### Vision
 The human orchestrates construction iteratively across multiple goal sessions — observing agent work, injecting guidance, reviewing drafts, and resuming sessions — through a unified interaction layer. This phase builds the **session interaction protocol** that underpins both the local CLI experience and the future TA web app / messaging integrations (Discord, Slack, email).
