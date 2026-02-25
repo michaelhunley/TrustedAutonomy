@@ -10,6 +10,7 @@
 
 use std::path::Path;
 
+use ta_changeset::{InteractiveSession, InteractiveSessionState, InteractiveSessionStore};
 use ta_goal::GoalRunStore;
 use ta_mcp_gateway::GatewayConfig;
 
@@ -51,6 +52,10 @@ struct AgentLaunchConfig {
     #[serde(default)]
     #[allow(dead_code)]
     description: Option<String>,
+    /// Interactive session configuration (v0.3.1.2).
+    #[serde(default)]
+    #[allow(dead_code)]
+    interactive: Option<ta_changeset::InteractiveConfig>,
 }
 
 /// Pre-launch command configuration (deserialized from YAML).
@@ -132,6 +137,7 @@ fn builtin_agent_config(agent_id: &str) -> AgentLaunchConfig {
             env: Default::default(),
             name: Some("claude-code".to_string()),
             description: Some("Anthropic's Claude Code CLI".to_string()),
+            interactive: None,
         },
         "codex" => AgentLaunchConfig {
             command: "codex".to_string(),
@@ -146,6 +152,7 @@ fn builtin_agent_config(agent_id: &str) -> AgentLaunchConfig {
             env: Default::default(),
             name: Some("codex".to_string()),
             description: Some("OpenAI's Codex CLI".to_string()),
+            interactive: None,
         },
         "claude-flow" => AgentLaunchConfig {
             command: "npx".to_string(),
@@ -169,6 +176,7 @@ fn builtin_agent_config(agent_id: &str) -> AgentLaunchConfig {
             env: Default::default(),
             name: Some("claude-flow".to_string()),
             description: Some("Claude Flow multi-agent orchestration".to_string()),
+            interactive: None,
         },
         _ => AgentLaunchConfig {
             command: agent_id.to_string(),
@@ -179,6 +187,7 @@ fn builtin_agent_config(agent_id: &str) -> AgentLaunchConfig {
             env: Default::default(),
             name: None,
             description: None,
+            interactive: None,
         },
     }
 }
@@ -196,6 +205,7 @@ pub fn execute(
     follow_up: Option<&Option<String>>,
     objective_file: Option<&Path>,
     no_launch: bool,
+    interactive: bool,
 ) -> anyhow::Result<()> {
     let agent_config = agent_launch_config(agent, source);
 
@@ -303,12 +313,28 @@ pub fn execute(
         }
     }
 
-    // 4. Launch the agent in the staging directory.
+    // 4. Create interactive session if --interactive.
+    let mut session_store = if interactive {
+        let store = InteractiveSessionStore::new(config.interactive_sessions_dir.clone())?;
+        let channel_id = format!("cli:{}", std::process::id());
+        let session = InteractiveSession::new(goal.goal_run_id, channel_id, agent.to_string());
+        store.save(&session)?;
+        println!("\nInteractive session: {}", session.session_id);
+        println!("  Channel: {}", session.channel_id);
+        Some((store, session))
+    } else {
+        None
+    };
+
+    // 5. Launch the agent in the staging directory.
     println!(
         "\nLaunching {} in staging workspace...",
         agent_config.command
     );
     println!("  Working dir: {}", staging_path.display());
+    if interactive {
+        println!("  Mode: interactive (session orchestration enabled)");
+    }
     println!();
 
     let status = launch_agent(&agent_config, &staging_path, &prompt);
@@ -325,6 +351,13 @@ pub fn execute(
             }
         }
         Err(e) => {
+            // Mark interactive session as aborted on launch failure.
+            if let Some((ref store, ref mut session)) = session_store {
+                session.log_message("ta-system", &format!("Agent launch failed: {}", e));
+                let _ = session.transition(InteractiveSessionState::Aborted);
+                let _ = store.save(session);
+            }
+
             if e.kind() == std::io::ErrorKind::NotFound {
                 // Restore injected files before returning — agent won't run.
                 if agent_config.injects_context_file {
@@ -353,7 +386,7 @@ pub fn execute(
         }
     }
 
-    // 5. Restore injected files before diffing (removes TA injection).
+    // 6. Restore injected files before diffing (removes TA injection).
     if agent_config.injects_context_file {
         restore_claude_md(&staging_path)?;
     }
@@ -361,7 +394,7 @@ pub fn execute(
         restore_claude_settings(&staging_path)?;
     }
 
-    // 6. Build draft package from the diff.
+    // 7. Build draft package from the diff.
     super::draft::execute(
         &super::draft::DraftCommands::Build {
             goal_id: goal_id.clone(),
@@ -371,11 +404,21 @@ pub fn execute(
         config,
     )?;
 
+    // 8. Mark interactive session as completed.
+    if let Some((store, mut session)) = session_store {
+        session.log_message("ta-system", "Agent exited, draft built");
+        let _ = session.transition(InteractiveSessionState::Completed);
+        store.save(&session)?;
+    }
+
     println!("\nNext steps:");
     println!("  ta draft list");
     println!("  ta draft view <draft-id>");
     println!("  ta draft approve <draft-id>");
     println!("  ta draft apply <draft-id> --git-commit");
+    if interactive {
+        println!("  ta session list");
+    }
 
     Ok(())
 }
@@ -902,6 +945,7 @@ mod tests {
             None,
             None,
             true,
+            false,
         )
         .unwrap();
 

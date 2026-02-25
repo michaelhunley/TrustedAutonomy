@@ -85,6 +85,14 @@ enum Commands {
         /// Don't launch the agent — just set up the workspace.
         #[arg(long)]
         no_launch: bool,
+        /// Run in interactive mode with session orchestration.
+        #[arg(long)]
+        interactive: bool,
+    },
+    /// Manage interactive sessions.
+    Session {
+        #[command(subcommand)]
+        command: commands::session::SessionCommands,
     },
     /// View and track the project development plan.
     Plan {
@@ -166,6 +174,7 @@ fn main() -> anyhow::Result<()> {
             follow_up,
             objective_file,
             no_launch,
+            interactive,
         } => commands::run::execute(
             &config,
             title,
@@ -176,7 +185,9 @@ fn main() -> anyhow::Result<()> {
             follow_up.as_ref(),
             objective_file.as_deref(),
             *no_launch,
+            *interactive,
         ),
+        Commands::Session { command } => commands::session::execute(command, &config),
         Commands::Plan { command } => commands::plan::execute(command, &config),
         Commands::Adapter { command } => commands::adapter::execute(command, &project_root),
         Commands::Serve => commands::serve::execute(&project_root),

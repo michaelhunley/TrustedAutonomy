@@ -32,6 +32,9 @@ pub struct GatewayConfig {
 
     /// Directory for PR package JSON files.
     pub pr_packages_dir: PathBuf,
+
+    /// Directory for interactive session records (v0.3.1.2).
+    pub interactive_sessions_dir: PathBuf,
 }
 
 impl GatewayConfig {
@@ -47,6 +50,7 @@ impl GatewayConfig {
             audit_log: ta_dir.join("audit.jsonl"),
             events_log: ta_dir.join("events.jsonl"),
             pr_packages_dir: ta_dir.join("pr_packages"),
+            interactive_sessions_dir: ta_dir.join("interactive_sessions"),
         }
     }
 }
