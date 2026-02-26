@@ -5,4 +5,4 @@
 set -euo pipefail
 
 export PATH="/nix/var/nix/profiles/default/bin:$HOME/.nix-profile/bin:$PATH"
-exec nix develop --command bash -c "$*"
+exec nix develop --no-warn-dirty --command bash -c "$*"

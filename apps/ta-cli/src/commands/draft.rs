@@ -1640,15 +1640,13 @@ fn apply_package(
                     );
                 }
             } else {
-                eprintln!(
-                    "  ⚠ Plan:  phase '{}' not found in PLAN.md",
-                    phase
-                );
+                eprintln!("  ⚠ Plan:  phase '{}' not found in PLAN.md", phase);
             }
         }
     }
     if git_commit {
-        println!("  Submit: committed{}",
+        println!(
+            "  Submit: committed{}",
             if git_push { " + pushed" } else { "" }
         );
     }
