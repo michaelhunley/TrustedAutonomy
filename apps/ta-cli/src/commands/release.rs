@@ -612,8 +612,6 @@ steps:
       for f in Cargo.toml crates/*/Cargo.toml apps/*/Cargo.toml; do
         [ -f "$f" ] && sed -i.bak '/^\[package\]/,/^\[/s/^version = ".*"/version = "'"${VERSION}"'"/' "$f" && rm -f "${f}.bak"
       done
-      # Update DISCLAIMER.md if it exists
-      [ -f DISCLAIMER.md ] && sed -i.bak 's/^\*\*Version\*\*: .*/\*\*Version\*\*: '"${VERSION}"'/' DISCLAIMER.md && rm -f DISCLAIMER.md.bak
       echo "Versions bumped to ${VERSION}."
 
   - name: Build & verify
@@ -656,19 +654,34 @@ steps:
   - name: Commit and tag
     run: |
       set -e
+      # Ensure we're on main — release commits must land on main.
+      BRANCH="$(git branch --show-current)"
+      if [ "$BRANCH" != "main" ]; then
+        echo "Switching to main (was on $BRANCH)..."
+        git checkout main
+      fi
+      # Commit if there are staged/unstaged changes; skip if tree is clean.
       git add -A
-      git commit -m "Release ${TAG}
+      if git diff --cached --quiet; then
+        echo "Working tree clean — no commit needed (version bumps already committed)."
+      else
+        git commit -m "Release ${TAG}
 
       Bump all crate versions to ${VERSION}."
-      git tag -a "${TAG}" -m "Release ${TAG}"
-      echo "Created commit and tag ${TAG}."
+      fi
+      # Create tag (skip if it already exists).
+      if git rev-parse "${TAG}" >/dev/null 2>&1; then
+        echo "Tag ${TAG} already exists — skipping."
+      else
+        git tag -a "${TAG}" -m "Release ${TAG}"
+        echo "Created tag ${TAG}."
+      fi
 
   - name: Push
     requires_approval: true
     run: |
       set -e
-      BRANCH="$(git branch --show-current)"
-      git push origin "$BRANCH"
+      git push origin main
       git push origin "${TAG}"
       echo "Pushed ${TAG}. GitHub Actions will build the release."
 "#;
