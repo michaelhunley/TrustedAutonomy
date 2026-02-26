@@ -733,6 +733,19 @@ ta draft fix <draft-id> <artifact-uri> --guidance "Consolidate duplicate struct"
 - `build_parent_context_section()` in run.rs — discuss items + comments already injected into follow-up goals
 - `ArtifactDisposition::Discuss` (v0.3.0 Phase 4b) — selective review already identifies items needing attention
 
+### v0.3.5 — Draft Lifecycle Hygiene & Stale State Cleanup
+<!-- status: pending -->
+**Goal**: Automated and manual cleanup of stale draft state. Today, drafts that are manually applied (e.g. hand-merged due to conflicts) remain in `approved` status forever. Staging directories accumulate across sessions. This phase adds housekeeping so TA state stays consistent without manual intervention.
+
+- **`ta draft close <id> [--reason <text>]`**: Manually mark a draft as closed/superseded without applying it. For drafts that were hand-merged, abandoned, or made obsolete by later work. Records reason + timestamp in audit log.
+- **`ta draft gc`**: Garbage-collect stale drafts and staging directories.
+  - Remove staging dirs for drafts in terminal states (Applied, Denied, closed) older than N days (default 7, configurable in `.ta/workflow.toml`)
+  - List what would be removed with `--dry-run`
+  - Optionally archive to `.ta/archive/` instead of deleting (`--archive`)
+- **`ta draft list --stale`**: Show drafts that are in non-terminal states (Approved, PendingReview) but whose staging dirs are older than a threshold — likely forgotten or hand-applied.
+- **Auto-close on follow-up**: When `ta run --follow-up <id>` completes and its draft is applied, auto-close the parent draft if still in Approved/PendingReview state.
+- **Startup health check**: On any `ta` invocation, emit a one-line warning if stale drafts exist (e.g. "1 draft approved but not applied for 3+ days — run `ta draft list --stale`"). Suppressible via config.
+
 ---
 
 ## v0.4 — Agent Intelligence *(release: tag v0.4.0-alpha)*
