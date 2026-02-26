@@ -28,5 +28,5 @@ pub mod log;
 // Re-export the main types at the crate root for convenience.
 // Users can write `use ta_audit::AuditLog` instead of `use ta_audit::log::AuditLog`.
 pub use error::AuditError;
-pub use event::{AuditAction, AuditEvent};
+pub use event::{Alternative, AuditAction, AuditEvent, DecisionReasoning};
 pub use log::AuditLog;

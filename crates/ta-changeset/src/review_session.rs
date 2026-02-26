@@ -213,6 +213,17 @@ impl CommentThread {
             commenter: commenter.to_string(),
             text: text.to_string(),
             created_at: Utc::now(),
+            reasoning: None,
+        });
+    }
+
+    /// Add a comment with structured reasoning to the thread (v0.3.3).
+    pub fn add_with_reasoning(&mut self, commenter: &str, text: &str, reasoning: ReviewReasoning) {
+        self.comments.push(Comment {
+            commenter: commenter.to_string(),
+            text: text.to_string(),
+            created_at: Utc::now(),
+            reasoning: Some(reasoning),
         });
     }
 
@@ -242,6 +253,26 @@ pub struct Comment {
     pub text: String,
     /// When the comment was created.
     pub created_at: DateTime<Utc>,
+    /// Structured reasoning for this review decision (v0.3.3).
+    /// Reviewer can explain *why* they approved/rejected, not just leave text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<ReviewReasoning>,
+}
+
+/// Structured reasoning attached to a review comment (v0.3.3).
+///
+/// Enables compliance reporting: reviewers document *why* they approved or rejected,
+/// what alternatives they considered, and what principles guided the decision.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReviewReasoning {
+    /// The reviewer's rationale for their decision.
+    pub rationale: String,
+    /// Alternatives the reviewer considered.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub alternatives_considered: Vec<String>,
+    /// Principles or policies that informed the decision.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub applied_principles: Vec<String>,
 }
 
 /// Session-level note (not tied to a specific artifact).
@@ -387,5 +418,55 @@ mod tests {
 
         let rejected = session.artifacts_with_disposition(&ArtifactDisposition::Rejected);
         assert_eq!(rejected.len(), 1);
+    }
+
+    // ── v0.3.3 Review Reasoning tests ──
+
+    #[test]
+    fn comment_with_reasoning_round_trip() {
+        let reasoning = ReviewReasoning {
+            rationale: "Change is well-tested and follows conventions".to_string(),
+            alternatives_considered: vec!["Request rework with different approach".to_string()],
+            applied_principles: vec!["code-review-checklist".to_string()],
+        };
+
+        let mut thread = CommentThread::new();
+        thread.add_with_reasoning("reviewer-1", "Approved with minor note", reasoning);
+
+        assert_eq!(thread.len(), 1);
+        assert!(thread.comments[0].reasoning.is_some());
+
+        let r = thread.comments[0].reasoning.as_ref().unwrap();
+        assert!(r.rationale.contains("well-tested"));
+        assert_eq!(r.alternatives_considered.len(), 1);
+        assert_eq!(r.applied_principles.len(), 1);
+    }
+
+    #[test]
+    fn comment_without_reasoning_backward_compatible() {
+        // Old JSON without reasoning field should deserialize fine.
+        let json = r#"{
+            "commenter": "reviewer-1",
+            "text": "Looks good",
+            "created_at": "2026-02-25T12:00:00Z"
+        }"#;
+        let comment: Comment = serde_json::from_str(json).unwrap();
+        assert!(comment.reasoning.is_none());
+    }
+
+    #[test]
+    fn review_reasoning_serialization() {
+        let reasoning = ReviewReasoning {
+            rationale: "Security fix verified".to_string(),
+            alternatives_considered: vec![],
+            applied_principles: vec!["security-first".to_string()],
+        };
+
+        let json = serde_json::to_string(&reasoning).unwrap();
+        let restored: ReviewReasoning = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(restored.rationale, "Security fix verified");
+        // Empty alternatives_considered should be skipped in serialization.
+        assert!(!json.contains("alternatives_considered"));
     }
 }

@@ -618,7 +618,7 @@ A `ta release` command driven by a YAML task script (`.ta/release.yaml`). Each s
 - ✅ **Approval gates**: `requires_approval: true` pauses for human review before proceeding (e.g., before push)
 
 ### v0.3.3 — Decision Observability & Reasoning Capture
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Make every decision in the TA pipeline observable — not just *what happened*, but *what was considered and why*. Foundation for drift detection (v0.4.2) and compliance reporting (ISO 42001, IEEE 7001).
 
 > **Research note**: Evaluated [AAP](https://github.com/mnemom/aap) (Agent Alignment Protocol) for this role. AAP provides transparency through self-declared alignment cards and traced decisions, but is a Python/TypeScript decorator-based SDK that can't instrument external agents (Claude Code, Codex). TA's approach is stronger: enforce constraints architecturally, then capture the reasoning of TA's own decision pipeline. The *agent's* internal reasoning is captured via `change_summary.json`; TA's *governance* reasoning is captured here.
@@ -672,6 +672,19 @@ Agents that support it get richer review context; agents that don't still work f
 - **ISO/IEC 42001**: Documented decision processes with rationale (Annex A control A.6.2.3)
 - **IEEE 7001**: Transparent autonomous systems — decisions are explainable to stakeholders
 - **NIST AI RMF**: MAP 1.1 (intended purpose documentation), GOVERN 1.3 (decision documentation)
+
+#### Completed
+- `DecisionReasoning` + `Alternative` structs in `ta-audit` with `reasoning` field on `AuditEvent`
+- `EvaluationTrace` + `EvaluationStep` in `ta-policy` — full trace from `PolicyEngine::evaluate_with_trace()`
+- `AlternativeConsidered` struct and enriched `DecisionLogEntry` in `ta-changeset`
+- Extended `PolicyDecisionRecord` with `grants_checked`, `matching_grant`, `evaluation_steps`
+- `ReviewReasoning` struct on `Comment` — reviewers can document structured reasoning
+- Extended `ChangeSummaryEntry` with `alternatives_considered` (agent-side)
+- Decision log extraction in `ta draft build` — alternatives flow from change_summary.json into draft packages
+- `ta audit show <goal-id>` — display decision trail with reasoning
+- `ta audit export <goal-id> --format json` — structured compliance export
+- 17 new tests across ta-audit, ta-policy, ta-changeset
+- All backward-compatible — old data deserializes correctly
 
 ---
 

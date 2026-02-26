@@ -28,6 +28,40 @@ pub enum AuditAction {
     Error,
 }
 
+// ── Decision Observability (v0.3.3) ──
+
+/// An alternative that was considered during a decision.
+///
+/// Used in `DecisionReasoning` to document what options were evaluated
+/// and why they were accepted or rejected.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Alternative {
+    /// Description of the alternative considered.
+    pub description: String,
+    /// Optional score or ranking for this alternative.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub score: Option<f64>,
+    /// Why this alternative was rejected (empty string if it was the chosen option).
+    pub rejected_reason: String,
+}
+
+/// Structured reasoning captured for a decision point.
+///
+/// Extends `AuditEvent` to make every decision in the TA pipeline observable —
+/// not just *what happened*, but *what was considered and why*.
+/// Foundation for drift detection (v0.4.2) and compliance reporting (ISO 42001, IEEE 7001).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DecisionReasoning {
+    /// What alternatives were considered.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub alternatives: Vec<Alternative>,
+    /// Why this outcome was selected.
+    pub rationale: String,
+    /// Values/principles that informed the decision (e.g., "default-deny", "least-privilege").
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub applied_principles: Vec<String>,
+}
+
 /// A single audit event — one line in the JSONL audit log.
 ///
 /// `#[derive(Serialize, Deserialize)]` lets serde automatically convert
@@ -66,6 +100,11 @@ pub struct AuditEvent {
     /// Arbitrary additional data. `serde_json::Value` can hold any JSON.
     #[serde(default)]
     pub metadata: serde_json::Value,
+
+    /// Structured reasoning for this decision (v0.3.3).
+    /// Optional — existing events without reasoning still deserialize.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<DecisionReasoning>,
 }
 
 impl AuditEvent {
@@ -84,6 +123,7 @@ impl AuditEvent {
             parent_event_id: None,
             previous_hash: None,
             metadata: serde_json::Value::Null,
+            reasoning: None,
         }
     }
 
@@ -117,6 +157,12 @@ impl AuditEvent {
     /// Set arbitrary metadata and return self.
     pub fn with_metadata(mut self, metadata: serde_json::Value) -> Self {
         self.metadata = metadata;
+        self
+    }
+
+    /// Set structured decision reasoning and return self (v0.3.3).
+    pub fn with_reasoning(mut self, reasoning: DecisionReasoning) -> Self {
+        self.reasoning = Some(reasoning);
         self
     }
 }
@@ -158,5 +204,97 @@ mod tests {
         // Verify that enum variants serialize as snake_case strings, not PascalCase.
         let json = serde_json::to_string(&AuditAction::PolicyDecision).unwrap();
         assert_eq!(json, "\"policy_decision\"");
+    }
+
+    // ── v0.3.3 Decision Reasoning tests ──
+
+    #[test]
+    fn decision_reasoning_serialization_round_trip() {
+        let reasoning = DecisionReasoning {
+            alternatives: vec![
+                Alternative {
+                    description: "Session-based auth".to_string(),
+                    score: Some(0.3),
+                    rejected_reason: "Doesn't scale across servers".to_string(),
+                },
+                Alternative {
+                    description: "API key auth".to_string(),
+                    score: None,
+                    rejected_reason: "Not suitable for user-facing flows".to_string(),
+                },
+            ],
+            rationale: "JWT provides stateless, scalable authentication".to_string(),
+            applied_principles: vec![
+                "least-privilege".to_string(),
+                "defense-in-depth".to_string(),
+            ],
+        };
+
+        let json = serde_json::to_string(&reasoning).unwrap();
+        let restored: DecisionReasoning = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(restored.rationale, reasoning.rationale);
+        assert_eq!(restored.alternatives.len(), 2);
+        assert_eq!(restored.alternatives[0].score, Some(0.3));
+        assert_eq!(restored.alternatives[1].score, None);
+        assert_eq!(restored.applied_principles.len(), 2);
+    }
+
+    #[test]
+    fn event_with_reasoning_round_trip() {
+        let reasoning = DecisionReasoning {
+            alternatives: vec![Alternative {
+                description: "Allow without check".to_string(),
+                score: None,
+                rejected_reason: "Violates default-deny principle".to_string(),
+            }],
+            rationale: "Grant matched for fs.read on workspace/**".to_string(),
+            applied_principles: vec!["default-deny".to_string()],
+        };
+
+        let event = AuditEvent::new("test-agent", AuditAction::PolicyDecision)
+            .with_target("fs://workspace/src/main.rs")
+            .with_reasoning(reasoning);
+
+        let json = serde_json::to_string(&event).unwrap();
+        let restored: AuditEvent = serde_json::from_str(&json).unwrap();
+
+        assert!(restored.reasoning.is_some());
+        let r = restored.reasoning.unwrap();
+        assert_eq!(r.alternatives.len(), 1);
+        assert!(r.rationale.contains("Grant matched"));
+    }
+
+    #[test]
+    fn event_without_reasoning_backward_compatible() {
+        // Old events without reasoning field should deserialize fine.
+        let json = r#"{
+            "event_id": "550e8400-e29b-41d4-a716-446655440000",
+            "timestamp": "2026-02-25T12:00:00Z",
+            "agent_id": "agent-1",
+            "action": "tool_call",
+            "target_uri": "fs://workspace/test.txt",
+            "input_hash": null,
+            "output_hash": null,
+            "parent_event_id": null,
+            "previous_hash": null,
+            "metadata": {}
+        }"#;
+        let event: AuditEvent = serde_json::from_str(json).unwrap();
+        assert!(event.reasoning.is_none());
+    }
+
+    #[test]
+    fn reasoning_skips_empty_fields_in_serialization() {
+        let reasoning = DecisionReasoning {
+            alternatives: vec![],
+            rationale: "Simple allow".to_string(),
+            applied_principles: vec![],
+        };
+        let json = serde_json::to_string(&reasoning).unwrap();
+        // Empty vecs should be skipped.
+        assert!(!json.contains("alternatives"));
+        assert!(!json.contains("applied_principles"));
+        assert!(json.contains("rationale"));
     }
 }

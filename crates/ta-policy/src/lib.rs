@@ -19,5 +19,5 @@ pub mod engine;
 pub mod error;
 
 pub use capability::{CapabilityGrant, CapabilityManifest};
-pub use engine::{PolicyDecision, PolicyEngine, PolicyRequest};
+pub use engine::{EvaluationStep, EvaluationTrace, PolicyDecision, PolicyEngine, PolicyRequest};
 pub use error::PolicyError;

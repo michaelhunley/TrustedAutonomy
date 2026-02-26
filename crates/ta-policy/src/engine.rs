@@ -48,6 +48,36 @@ pub enum PolicyDecision {
     RequireApproval { reason: String },
 }
 
+/// A step in the policy evaluation chain (v0.3.3).
+///
+/// Captures what the engine checked at each stage so the decision trail
+/// is fully observable for compliance reporting and drift detection.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvaluationStep {
+    /// Which check was performed (e.g., "path_traversal", "manifest_lookup").
+    pub check: String,
+    /// The outcome of this check (e.g., "passed", "failed: expired").
+    pub outcome: String,
+    /// Whether this step was the terminal decision point.
+    pub terminal: bool,
+}
+
+/// Full evaluation trace returned alongside a PolicyDecision (v0.3.3).
+///
+/// Records every check performed by `PolicyEngine::evaluate()`, which grants
+/// were inspected, and which matched — enabling full decision observability.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvaluationTrace {
+    /// The final decision.
+    pub decision: PolicyDecision,
+    /// Ordered steps the engine evaluated.
+    pub steps: Vec<EvaluationStep>,
+    /// Which grants were checked (tool.verb on pattern).
+    pub grants_checked: Vec<String>,
+    /// Which grant matched (if any).
+    pub matching_grant: Option<String>,
+}
+
 /// Verbs that always require human approval, regardless of grants.
 /// These represent irreversible side effects.
 const APPROVAL_REQUIRED_VERBS: &[&str] = &["apply", "commit", "send", "post"];
@@ -135,6 +165,186 @@ impl PolicyEngine {
                     "no grant for {}.{} on '{}'",
                     request.tool, request.verb, request.target_uri
                 ),
+            }
+        }
+    }
+
+    /// Evaluate a policy request and return the decision with a full trace (v0.3.3).
+    ///
+    /// Same logic as `evaluate()` but records every step for decision observability.
+    pub fn evaluate_with_trace(&self, request: &PolicyRequest) -> EvaluationTrace {
+        let mut steps = Vec::new();
+        let mut grants_checked = Vec::new();
+        let mut matching_grant = None;
+
+        // Step 1: Path traversal
+        if contains_path_traversal(&request.target_uri) {
+            steps.push(EvaluationStep {
+                check: "path_traversal".to_string(),
+                outcome: format!("failed: traversal detected in '{}'", request.target_uri),
+                terminal: true,
+            });
+            return EvaluationTrace {
+                decision: PolicyDecision::Deny {
+                    reason: format!(
+                        "path traversal detected in target URI: '{}'",
+                        request.target_uri
+                    ),
+                },
+                steps,
+                grants_checked,
+                matching_grant,
+            };
+        }
+        steps.push(EvaluationStep {
+            check: "path_traversal".to_string(),
+            outcome: "passed".to_string(),
+            terminal: false,
+        });
+
+        // Step 2: Manifest lookup
+        let manifest = match self.manifests.get(&request.agent_id) {
+            Some(m) => m,
+            None => {
+                steps.push(EvaluationStep {
+                    check: "manifest_lookup".to_string(),
+                    outcome: format!("failed: no manifest for '{}'", request.agent_id),
+                    terminal: true,
+                });
+                return EvaluationTrace {
+                    decision: PolicyDecision::Deny {
+                        reason: format!("no capability manifest for agent '{}'", request.agent_id),
+                    },
+                    steps,
+                    grants_checked,
+                    matching_grant,
+                };
+            }
+        };
+        steps.push(EvaluationStep {
+            check: "manifest_lookup".to_string(),
+            outcome: format!(
+                "found: {} grants, expires {}",
+                manifest.grants.len(),
+                manifest.expires_at
+            ),
+            terminal: false,
+        });
+
+        // Step 3: Expiry
+        if manifest.is_expired() {
+            steps.push(EvaluationStep {
+                check: "manifest_expiry".to_string(),
+                outcome: "failed: manifest expired".to_string(),
+                terminal: true,
+            });
+            return EvaluationTrace {
+                decision: PolicyDecision::Deny {
+                    reason: format!(
+                        "capability manifest for agent '{}' has expired",
+                        request.agent_id
+                    ),
+                },
+                steps,
+                grants_checked,
+                matching_grant,
+            };
+        }
+        steps.push(EvaluationStep {
+            check: "manifest_expiry".to_string(),
+            outcome: "passed".to_string(),
+            terminal: false,
+        });
+
+        // Collect grant check details
+        for grant in &manifest.grants {
+            let desc = format!(
+                "{}.{} on '{}'",
+                grant.tool, grant.verb, grant.resource_pattern
+            );
+            grants_checked.push(desc.clone());
+            if grant.tool == request.tool
+                && grant.verb == request.verb
+                && matches_resource_pattern(&grant.resource_pattern, &request.target_uri)
+            {
+                matching_grant = Some(desc);
+            }
+        }
+
+        // Step 4: Approval-required verbs
+        if APPROVAL_REQUIRED_VERBS.contains(&request.verb.as_str()) {
+            if matching_grant.is_some() {
+                steps.push(EvaluationStep {
+                    check: "approval_required_verb".to_string(),
+                    outcome: format!(
+                        "verb '{}' requires approval; matching grant found",
+                        request.verb
+                    ),
+                    terminal: true,
+                });
+                return EvaluationTrace {
+                    decision: PolicyDecision::RequireApproval {
+                        reason: format!("verb '{}' requires explicit approval", request.verb),
+                    },
+                    steps,
+                    grants_checked,
+                    matching_grant,
+                };
+            } else {
+                steps.push(EvaluationStep {
+                    check: "approval_required_verb".to_string(),
+                    outcome: format!(
+                        "verb '{}' requires approval; no matching grant",
+                        request.verb
+                    ),
+                    terminal: true,
+                });
+                return EvaluationTrace {
+                    decision: PolicyDecision::Deny {
+                        reason: format!(
+                            "no grant for {}.{} on '{}'",
+                            request.tool, request.verb, request.target_uri
+                        ),
+                    },
+                    steps,
+                    grants_checked,
+                    matching_grant,
+                };
+            }
+        }
+
+        // Step 5: Grant matching
+        if matching_grant.is_some() {
+            steps.push(EvaluationStep {
+                check: "grant_match".to_string(),
+                outcome: "allowed: matching grant found".to_string(),
+                terminal: true,
+            });
+            EvaluationTrace {
+                decision: PolicyDecision::Allow,
+                steps,
+                grants_checked,
+                matching_grant,
+            }
+        } else {
+            steps.push(EvaluationStep {
+                check: "grant_match".to_string(),
+                outcome: format!(
+                    "denied: no grant for {}.{} on '{}'",
+                    request.tool, request.verb, request.target_uri
+                ),
+                terminal: true,
+            });
+            EvaluationTrace {
+                decision: PolicyDecision::Deny {
+                    reason: format!(
+                        "no grant for {}.{} on '{}'",
+                        request.tool, request.verb, request.target_uri
+                    ),
+                },
+                steps,
+                grants_checked,
+                matching_grant,
             }
         }
     }
@@ -526,5 +736,142 @@ mod tests {
         };
         let json = serde_json::to_string(&deny).unwrap();
         assert!(json.contains("\"deny\""));
+    }
+
+    // ── v0.3.3 Evaluation Trace tests ──
+
+    #[test]
+    fn trace_records_allow_steps() {
+        let mut engine = PolicyEngine::new();
+        engine.load_manifest(test_manifest(
+            "agent-1",
+            vec![grant("fs", "read", "fs://workspace/**")],
+        ));
+
+        let trace = engine.evaluate_with_trace(&PolicyRequest {
+            agent_id: "agent-1".to_string(),
+            tool: "fs".to_string(),
+            verb: "read".to_string(),
+            target_uri: "fs://workspace/src/main.rs".to_string(),
+        });
+
+        assert_eq!(trace.decision, PolicyDecision::Allow);
+        // Should have path_traversal, manifest_lookup, manifest_expiry, grant_match steps.
+        assert!(trace.steps.len() >= 4);
+        assert_eq!(trace.steps[0].check, "path_traversal");
+        assert!(!trace.steps[0].terminal);
+        assert!(trace.steps.last().unwrap().terminal);
+        assert_eq!(trace.grants_checked.len(), 1);
+        assert!(trace.matching_grant.is_some());
+    }
+
+    #[test]
+    fn trace_records_deny_no_manifest() {
+        let engine = PolicyEngine::new();
+
+        let trace = engine.evaluate_with_trace(&PolicyRequest {
+            agent_id: "unknown".to_string(),
+            tool: "fs".to_string(),
+            verb: "read".to_string(),
+            target_uri: "fs://workspace/test.txt".to_string(),
+        });
+
+        match &trace.decision {
+            PolicyDecision::Deny { reason } => assert!(reason.contains("no capability manifest")),
+            other => panic!("expected Deny, got {:?}", other),
+        }
+        assert_eq!(trace.steps.len(), 2); // path_traversal + manifest_lookup
+        assert!(trace.steps[1].terminal);
+    }
+
+    #[test]
+    fn trace_records_path_traversal() {
+        let mut engine = PolicyEngine::new();
+        engine.load_manifest(test_manifest(
+            "agent-1",
+            vec![grant("fs", "read", "fs://workspace/**")],
+        ));
+
+        let trace = engine.evaluate_with_trace(&PolicyRequest {
+            agent_id: "agent-1".to_string(),
+            tool: "fs".to_string(),
+            verb: "read".to_string(),
+            target_uri: "fs://workspace/../etc/passwd".to_string(),
+        });
+
+        match &trace.decision {
+            PolicyDecision::Deny { reason } => assert!(reason.contains("path traversal")),
+            other => panic!("expected Deny, got {:?}", other),
+        }
+        assert_eq!(trace.steps.len(), 1);
+        assert!(trace.steps[0].terminal);
+    }
+
+    #[test]
+    fn trace_records_approval_required() {
+        let mut engine = PolicyEngine::new();
+        engine.load_manifest(test_manifest(
+            "agent-1",
+            vec![grant("fs", "apply", "fs://workspace/**")],
+        ));
+
+        let trace = engine.evaluate_with_trace(&PolicyRequest {
+            agent_id: "agent-1".to_string(),
+            tool: "fs".to_string(),
+            verb: "apply".to_string(),
+            target_uri: "fs://workspace/src/main.rs".to_string(),
+        });
+
+        match &trace.decision {
+            PolicyDecision::RequireApproval { .. } => {}
+            other => panic!("expected RequireApproval, got {:?}", other),
+        }
+        assert!(trace.matching_grant.is_some());
+    }
+
+    #[test]
+    fn trace_lists_all_grants_checked() {
+        let mut engine = PolicyEngine::new();
+        engine.load_manifest(test_manifest(
+            "agent-1",
+            vec![
+                grant("fs", "read", "fs://workspace/**"),
+                grant("fs", "write_patch", "fs://workspace/src/**"),
+                grant("web", "fetch", "https://**"),
+            ],
+        ));
+
+        let trace = engine.evaluate_with_trace(&PolicyRequest {
+            agent_id: "agent-1".to_string(),
+            tool: "fs".to_string(),
+            verb: "read".to_string(),
+            target_uri: "fs://workspace/test.txt".to_string(),
+        });
+
+        // All 3 grants should be listed as checked.
+        assert_eq!(trace.grants_checked.len(), 3);
+    }
+
+    #[test]
+    fn trace_serialization_round_trip() {
+        let mut engine = PolicyEngine::new();
+        engine.load_manifest(test_manifest(
+            "agent-1",
+            vec![grant("fs", "read", "fs://workspace/**")],
+        ));
+
+        let trace = engine.evaluate_with_trace(&PolicyRequest {
+            agent_id: "agent-1".to_string(),
+            tool: "fs".to_string(),
+            verb: "read".to_string(),
+            target_uri: "fs://workspace/file.txt".to_string(),
+        });
+
+        let json = serde_json::to_string(&trace).unwrap();
+        let restored: EvaluationTrace = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(restored.decision, trace.decision);
+        assert_eq!(restored.steps.len(), trace.steps.len());
+        assert_eq!(restored.grants_checked.len(), trace.grants_checked.len());
     }
 }
