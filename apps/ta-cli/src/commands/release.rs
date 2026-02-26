@@ -400,7 +400,7 @@ fn execute_agent_step(
 
     // Resolve the `ta` binary path (same binary we're running from).
     let ta_bin = std::env::current_exe()?;
-    let status = Command::new(ta_bin)
+    let status = Command::new(&ta_bin)
         .args(&args)
         .current_dir(&config.workspace_root)
         .status()?;
@@ -412,7 +412,84 @@ fn execute_agent_step(
             status.code()
         );
     }
+
+    // Auto-approve and apply the draft so output files land in the working
+    // directory before the next pipeline step runs. Without this, agent output
+    // stays in staging and subsequent shell steps can't find it.
+    println!("  Auto-applying agent draft...");
+    let latest_draft = find_latest_draft(config)?;
+    if let Some(draft_id) = latest_draft {
+        let id_str = draft_id.to_string();
+
+        // Approve.
+        let approve_status = Command::new(&ta_bin)
+            .args([
+                "draft",
+                "approve",
+                &id_str,
+                "--reviewer",
+                "release-pipeline",
+            ])
+            .current_dir(&config.workspace_root)
+            .status()?;
+        if !approve_status.success() {
+            anyhow::bail!(
+                "Failed to auto-approve draft {} for agent step '{}'",
+                id_str,
+                step.name
+            );
+        }
+
+        // Apply (no git commit — the release pipeline handles commits itself).
+        let apply_status = Command::new(&ta_bin)
+            .args(["draft", "apply", &id_str])
+            .current_dir(&config.workspace_root)
+            .status()?;
+        if !apply_status.success() {
+            anyhow::bail!(
+                "Failed to auto-apply draft {} for agent step '{}'",
+                id_str,
+                step.name
+            );
+        }
+        println!("  Draft {} applied to working directory.", id_str);
+    } else {
+        println!(
+            "  Warning: no draft found after agent step '{}'.",
+            step.name
+        );
+    }
+
     Ok(())
+}
+
+/// Find the most recently created draft package ID.
+fn find_latest_draft(config: &GatewayConfig) -> anyhow::Result<Option<uuid::Uuid>> {
+    let dir = &config.pr_packages_dir;
+    if !dir.exists() {
+        return Ok(None);
+    }
+
+    let mut newest: Option<(std::time::SystemTime, uuid::Uuid)> = None;
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) == Some("json") {
+            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                if let Ok(id) = uuid::Uuid::parse_str(stem) {
+                    if let Ok(meta) = entry.metadata() {
+                        if let Ok(modified) = meta.modified() {
+                            if newest.as_ref().is_none_or(|(t, _)| modified > *t) {
+                                newest = Some((modified, id));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(newest.map(|(_, id)| id))
 }
 
 fn print_step_dry_run(step: &PipelineStep, version: &str, commits: &str, last_tag: Option<&str>) {
