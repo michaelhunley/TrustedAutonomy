@@ -686,6 +686,53 @@ Agents that support it get richer review context; agents that don't still work f
 - 17 new tests across ta-audit, ta-policy, ta-changeset
 - All backward-compatible — old data deserializes correctly
 
+### v0.3.4 — Draft Amendment & Targeted Re-Work
+<!-- status: pending -->
+**Goal**: Let users correct draft issues inline without a full agent re-run. Today the only correction path is a full `ta run --follow-up` cycle — overkill for a 10-line struct deduplication or a typo fix.
+
+#### `ta draft amend` — Human-Provided Corrections
+```bash
+# Replace an artifact's content with a corrected file
+ta draft amend <draft-id> <artifact-uri> --file path/to/corrected.rs
+
+# Apply a patch to an artifact
+ta draft amend <draft-id> <artifact-uri> --patch fix.patch
+
+# Remove an artifact from the draft entirely
+ta draft amend <draft-id> <artifact-uri> --drop
+```
+- Amends the draft package in-place (new artifact content, re-diffs against source)
+- Records `amended_by: "human"` + timestamp in artifact metadata for audit trail
+- Draft remains in review — user can approve/apply after amendment
+- Decision log entry auto-added: "Human amended artifact: <reason>"
+
+#### `ta draft fix` — Scoped Agent Re-Work
+```bash
+# Agent targets only discuss items with your guidance
+ta draft fix <draft-id> --guidance "Remove AgentAlternative, reuse AlternativeConsidered directly"
+
+# Target a specific artifact
+ta draft fix <draft-id> <artifact-uri> --guidance "Consolidate duplicate struct"
+```
+- Creates a **scoped follow-up goal** targeting only discuss/amended artifacts (not the full source tree)
+- Injects: artifact content + comment threads + user guidance into agent context
+- Agent works in a minimal staging copy (only affected files, not full overlay)
+- Builds a new draft that supersedes the original — review + apply as normal
+- Much faster than full `ta run --follow-up` since scope is constrained
+
+#### Usage Documentation
+- Add "Correcting a Draft" section to USAGE.md covering the three correction paths:
+  1. **Small fix**: `ta draft amend` (human edits directly)
+  2. **Agent-assisted fix**: `ta draft fix --guidance` (scoped re-work)
+  3. **Full re-work**: `ta run --follow-up` (complete re-run with discussion context)
+- Document when to use each: amend for typos/renames, fix for logic changes, follow-up for architectural rework
+
+#### Existing Infrastructure This Builds On
+- `ReviewSession` comment threads (v0.3.0) — comments + discuss items already tracked
+- `GoalRun.parent_goal_id` + `PRStatus::Superseded` — follow-up chain already works
+- `build_parent_context_section()` in run.rs — discuss items + comments already injected into follow-up goals
+- `ArtifactDisposition::Discuss` (v0.3.0 Phase 4b) — selective review already identifies items needing attention
+
 ---
 
 ## v0.4 — Agent Intelligence *(release: tag v0.4.0-alpha)*
@@ -822,6 +869,18 @@ access:
 - **IEEE 3152-2024**: Pre-declared intent satisfies transparency requirements for autonomous system actions
 - **NIST AI RMF GOVERN 1.4**: Documented processes for mapping AI system behavior to intended purpose
 - **EU AI Act Article 14**: Human oversight mechanism — constitution is a reviewable, pre-approved scope of action
+
+### v0.4.4 — Interactive Session Completion
+<!-- status: pending -->
+**Goal**: Complete the `ta run --interactive` experience so users can inject mid-session guidance while the agent works. The `SessionChannel` protocol and `InteractiveSession` data model exist (v0.3.1.2) but the CLI handler that connects them to a live agent process is incomplete.
+
+- **PTY capture**: Wrap agent subprocess in a PTY so output streams to the terminal in real-time while TA captures it for session history
+- **Stdin interleaving**: User types guidance mid-session → TA routes it to the agent's stdin (or injects as a message via the agent framework's API)
+- **Guidance logged**: All human injections recorded in `InteractiveSession.messages` with timestamps, available for audit trail and follow-up context
+- **Pause/resume**: `Ctrl+P` pauses agent execution, user reviews current state, types guidance, resumes. `ta run --resume <session-id>` resumes an abandoned session.
+- **Integration with `ta draft fix`** (v0.3.4): If the user spots an issue during interactive review, they can pause the session and switch to `ta draft fix` for targeted correction of the current draft, then resume.
+
+> **Depends on**: v0.3.1.2 (SessionChannel protocol), v0.3.4 (draft amend for inline correction during pause). Enables the full "observe → inject → correct" loop that makes TA review feel conversational rather than batch-oriented.
 
 ---
 
