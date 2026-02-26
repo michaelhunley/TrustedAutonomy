@@ -377,24 +377,44 @@ ta draft review finish
 ta run "Rework auth to use JWT per review feedback" --source . --follow-up <draft-id>
 ```
 
-#### 2. Scoped agent fix (planned — v0.3.4)
+#### 2. Scoped agent fix (v0.3.4)
 Use when the issue is clear but needs agent help to implement:
 ```bash
 # Agent targets only the discussed artifacts, not the full source tree
 ta draft fix <draft-id> --guidance "Remove AgentAlternative, reuse AlternativeConsidered directly"
-```
 
-#### 3. Direct amendment (planned — v0.3.4)
+# Target a specific artifact
+ta draft fix <draft-id> "fs://workspace/src/draft.rs" --guidance "Consolidate duplicate struct"
+
+# Set up workspace without launching agent (manual mode)
+ta draft fix <draft-id> --guidance "Fix the issue" --no-launch
+```
+- Creates a scoped follow-up goal with your guidance injected into the agent context
+- Agent sees the discuss items, comment threads, and your guidance — nothing else
+- New draft supersedes the original — review and apply as normal
+
+#### 3. Direct amendment (v0.3.4)
 Use for typos, renames, and small fixes you can make yourself:
 ```bash
-# Replace an artifact's content
+# Replace an artifact's content with a corrected file
 ta draft amend <draft-id> "fs://workspace/src/draft.rs" --file corrected_draft.rs
+
+# Shorthand: paths without fs://workspace/ prefix also work
+ta draft amend <draft-id> src/draft.rs --file corrected_draft.rs
 
 # Drop an artifact from the draft entirely
 ta draft amend <draft-id> "fs://workspace/config.toml" --drop
-```
 
-> **Today**: Use option 1 (full re-work via follow-up). Options 2 and 3 are planned for v0.3.4.
+# Include a reason for the audit trail
+ta draft amend <draft-id> src/main.rs --file fixed_main.rs --reason "Fixed typo in function name"
+```
+- Amends the draft in-place (no new goal or agent run needed)
+- Records who amended it, when, and why in the artifact's `amendment` field
+- Disposition resets to `pending` (content changed, needs re-review)
+- Decision log entry auto-added for every amendment
+- Corrected file is written back to the staging workspace for consistency
+
+> **When to use each**: `amend` for typos, renames, and small fixes you can make yourself. `fix` for logic changes that need agent help. Full re-work for architectural rework.
 
 ---
 

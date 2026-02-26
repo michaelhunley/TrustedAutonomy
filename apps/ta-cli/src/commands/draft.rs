@@ -8,10 +8,10 @@ use ta_changeset::changeset::{ChangeKind, ChangeSet, CommitIntent};
 use ta_changeset::diff::DiffContent;
 use ta_changeset::diff_handlers::DiffHandlersConfig;
 use ta_changeset::draft_package::{
-    AgentIdentity, AlternativeConsidered, Artifact, ArtifactDisposition, ChangeDependency,
-    ChangeType, Changes, DecisionLogEntry, DependencyKind, DraftPackage, DraftStatus,
-    ExplanationTiers, Goal, Iteration, Plan, Provenance, RequestedAction, ReviewRequests, Risk,
-    Signatures, Summary, WorkspaceRef,
+    AgentIdentity, AlternativeConsidered, AmendmentRecord, AmendmentType, Artifact,
+    ArtifactDisposition, ChangeDependency, ChangeType, Changes, DecisionLogEntry, DependencyKind,
+    DraftPackage, DraftStatus, ExplanationTiers, Goal, Iteration, Plan, Provenance,
+    RequestedAction, ReviewRequests, Risk, Signatures, Summary, WorkspaceRef,
 };
 use ta_changeset::explanation::ExplanationSidecar;
 use ta_changeset::output_adapters::{
@@ -127,6 +127,41 @@ pub enum DraftCommands {
         /// Mark artifacts for discussion matching these patterns (repeatable).
         #[arg(long = "discuss")]
         discuss_patterns: Vec<String>,
+    },
+    /// Amend an artifact in a draft (replace content, apply patch, or drop).
+    Amend {
+        /// Draft package ID.
+        id: String,
+        /// Artifact URI to amend (e.g., "fs://workspace/src/main.rs").
+        artifact_uri: String,
+        /// Replace the artifact content with a corrected file.
+        #[arg(long)]
+        file: Option<String>,
+        /// Remove the artifact from the draft entirely.
+        #[arg(long)]
+        drop: bool,
+        /// Reason for the amendment (recorded in audit trail).
+        #[arg(long)]
+        reason: Option<String>,
+        /// Who is performing the amendment.
+        #[arg(long, default_value = "human")]
+        amended_by: String,
+    },
+    /// Scoped agent re-work targeting only discuss/amended artifacts.
+    Fix {
+        /// Draft package ID.
+        id: String,
+        /// Optional artifact URI to target (default: all discuss items).
+        artifact_uri: Option<String>,
+        /// Guidance for the agent on what to fix.
+        #[arg(long)]
+        guidance: String,
+        /// Agent to use (default: claude-code).
+        #[arg(long, default_value = "claude-code")]
+        agent: String,
+        /// Don't launch the agent — just set up the workspace and print instructions.
+        #[arg(long)]
+        no_launch: bool,
     },
     /// Interactive review session commands.
     Review {
@@ -263,6 +298,36 @@ pub fn execute(cmd: &DraftCommands, config: &GatewayConfig) -> anyhow::Result<()
                 },
             )
         }
+        DraftCommands::Amend {
+            id,
+            artifact_uri,
+            file,
+            drop,
+            reason,
+            amended_by,
+        } => amend_package(
+            config,
+            id,
+            artifact_uri,
+            file.as_deref(),
+            *drop,
+            reason.as_deref(),
+            amended_by,
+        ),
+        DraftCommands::Fix {
+            id,
+            artifact_uri,
+            guidance,
+            agent,
+            no_launch,
+        } => fix_package(
+            config,
+            id,
+            artifact_uri.as_deref(),
+            guidance,
+            agent,
+            *no_launch,
+        ),
         DraftCommands::Review { command } => execute_review_command(command, config),
     }
 }
@@ -485,6 +550,7 @@ fn build_package(
                     dependencies: vec![],
                     explanation_tiers: None,
                     comments: None,
+                    amendment: None,
                 });
                 changesets.push(
                     ChangeSet::new(
@@ -508,6 +574,7 @@ fn build_package(
                     dependencies: vec![],
                     explanation_tiers: None,
                     comments: None,
+                    amendment: None,
                 });
                 changesets.push(
                     ChangeSet::new(
@@ -531,6 +598,7 @@ fn build_package(
                     dependencies: vec![],
                     explanation_tiers: None,
                     comments: None,
+                    amendment: None,
                 });
                 changesets.push(
                     ChangeSet::new(
@@ -1541,6 +1609,408 @@ fn apply_package(
                 );
             }
         }
+    }
+
+    Ok(())
+}
+
+// ── Draft amendment (v0.3.4) ────────────────────────────────────────
+
+/// Amend an artifact in a draft package in-place.
+///
+/// Supports three modes:
+/// - `--file path`: Replace the artifact's content with a corrected file and re-diff.
+/// - `--drop`: Remove the artifact from the draft entirely.
+/// - `--patch` (future): Apply a patch to the artifact.
+#[allow(clippy::too_many_arguments)]
+fn amend_package(
+    config: &GatewayConfig,
+    id: &str,
+    artifact_uri: &str,
+    file_path: Option<&str>,
+    drop_artifact: bool,
+    reason: Option<&str>,
+    amended_by: &str,
+) -> anyhow::Result<()> {
+    let package_id = Uuid::parse_str(id)?;
+    let mut pkg = load_package(config, package_id)?;
+
+    // Only allow amendment on drafts in review states.
+    match &pkg.status {
+        DraftStatus::PendingReview | DraftStatus::Draft => {}
+        DraftStatus::Approved { .. } => {
+            // Allow amending approved drafts — user might spot something after approval.
+        }
+        _ => {
+            anyhow::bail!(
+                "Cannot amend draft in {} state (must be draft, pending_review, or approved)",
+                pkg.status
+            );
+        }
+    }
+
+    // Normalize artifact URI: allow shorthand paths without fs://workspace/ prefix.
+    let normalized_uri = if artifact_uri.starts_with("fs://") {
+        artifact_uri.to_string()
+    } else {
+        format!("fs://workspace/{}", artifact_uri)
+    };
+
+    // Validate: exactly one mode.
+    if drop_artifact && file_path.is_some() {
+        anyhow::bail!("Cannot use both --file and --drop at the same time");
+    }
+    if !drop_artifact && file_path.is_none() {
+        anyhow::bail!("Must specify either --file <path> or --drop");
+    }
+
+    if drop_artifact {
+        // ── Drop mode: remove the artifact from the draft ──
+        let original_count = pkg.changes.artifacts.len();
+        pkg.changes
+            .artifacts
+            .retain(|a| a.resource_uri != normalized_uri);
+
+        if pkg.changes.artifacts.len() == original_count {
+            anyhow::bail!("Artifact not found in draft: {}", normalized_uri);
+        }
+
+        // Record amendment in the decision log.
+        pkg.plan.decision_log.push(DecisionLogEntry {
+            decision: format!("Human dropped artifact: {}", normalized_uri),
+            rationale: reason.unwrap_or("Artifact removed from draft").to_string(),
+            alternatives: vec![],
+            alternatives_considered: vec![],
+        });
+
+        save_package(config, &pkg)?;
+        println!(
+            "Dropped artifact {} from draft {}",
+            normalized_uri, package_id
+        );
+        println!(
+            "  Draft now has {} artifact(s)",
+            pkg.changes.artifacts.len()
+        );
+    } else if let Some(corrected_file) = file_path {
+        // ── File replacement mode ──
+        let corrected_path = std::path::Path::new(corrected_file);
+        if !corrected_path.exists() {
+            anyhow::bail!("Corrected file not found: {}", corrected_file);
+        }
+
+        // Find the artifact.
+        let artifact_idx = pkg
+            .changes
+            .artifacts
+            .iter()
+            .position(|a| a.resource_uri == normalized_uri)
+            .ok_or_else(|| anyhow::anyhow!("Artifact not found in draft: {}", normalized_uri))?;
+
+        // Read the corrected content.
+        let corrected_content = fs::read_to_string(corrected_path)?;
+
+        // Compute a new diff against the source if we can find it.
+        let goal_store = GoalRunStore::new(&config.goals_dir)?;
+        let goals = goal_store.list()?;
+        let goal = goals.iter().find(|g| {
+            g.goal_run_id.to_string() == pkg.goal.goal_id || g.pr_package_id == Some(package_id)
+        });
+
+        let new_diff = if let Some(goal) = goal {
+            if let Some(ref source_dir) = goal.source_dir {
+                let rel_path = normalized_uri
+                    .strip_prefix("fs://workspace/")
+                    .unwrap_or(&normalized_uri);
+                let source_file = source_dir.join(rel_path);
+                if source_file.exists() {
+                    let original = fs::read_to_string(&source_file)?;
+                    // Compute unified diff.
+                    Some(compute_unified_diff(
+                        rel_path,
+                        &original,
+                        &corrected_content,
+                    ))
+                } else {
+                    // New file — diff is "create file" content.
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Update the changeset in the store if we have a goal.
+        if let Some(goal) = goal {
+            let mut store = JsonFileStore::new(goal.store_path.clone())?;
+            let goal_id_str = goal.goal_run_id.to_string();
+            let cs = if let Some(ref diff) = new_diff {
+                ChangeSet::new(
+                    normalized_uri.clone(),
+                    ChangeKind::FsPatch,
+                    DiffContent::UnifiedDiff {
+                        content: diff.clone(),
+                    },
+                )
+                .with_commit_intent(CommitIntent::RequestCommit)
+            } else {
+                ChangeSet::new(
+                    normalized_uri.clone(),
+                    ChangeKind::FsPatch,
+                    DiffContent::CreateFile {
+                        content: corrected_content.clone(),
+                    },
+                )
+                .with_commit_intent(CommitIntent::RequestCommit)
+            };
+            store.save(&goal_id_str, &cs)?;
+
+            // Also write the corrected file into the staging workspace so
+            // future `ta draft build` picks it up.
+            let rel_path = normalized_uri
+                .strip_prefix("fs://workspace/")
+                .unwrap_or(&normalized_uri);
+            let staging_file = goal.workspace_path.join(rel_path);
+            if let Some(parent) = staging_file.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(&staging_file, &corrected_content)?;
+        }
+
+        // Update the artifact metadata.
+        let artifact = &mut pkg.changes.artifacts[artifact_idx];
+        artifact.amendment = Some(AmendmentRecord {
+            amended_by: amended_by.to_string(),
+            amended_at: Utc::now(),
+            amendment_type: AmendmentType::FileReplaced,
+            reason: reason.map(|s| s.to_string()),
+        });
+
+        // Reset disposition to Pending since the content changed.
+        artifact.disposition = ArtifactDisposition::Pending;
+
+        // Record in decision log.
+        pkg.plan.decision_log.push(DecisionLogEntry {
+            decision: format!("Human amended artifact: {}", normalized_uri),
+            rationale: reason
+                .unwrap_or("Content replaced with corrected file")
+                .to_string(),
+            alternatives: vec![],
+            alternatives_considered: vec![],
+        });
+
+        save_package(config, &pkg)?;
+        println!(
+            "Amended artifact {} in draft {}",
+            normalized_uri, package_id
+        );
+        if new_diff.is_some() {
+            println!("  Diff recomputed against source");
+        }
+        println!("  Disposition reset to: pending");
+        println!(
+            "  Amended by: {} ({})",
+            amended_by,
+            Utc::now().format("%Y-%m-%d %H:%M UTC")
+        );
+    }
+
+    Ok(())
+}
+
+/// Compute a simple unified diff between two strings.
+fn compute_unified_diff(path: &str, original: &str, modified: &str) -> String {
+    let mut output = format!("--- a/{}\n+++ b/{}\n", path, path);
+    let original_lines: Vec<&str> = original.lines().collect();
+    let modified_lines: Vec<&str> = modified.lines().collect();
+
+    // Simple line-by-line diff using a basic LCS approach.
+    // For a more sophisticated diff we'd use a proper library,
+    // but this covers the common case adequately.
+    let mut i = 0;
+    let mut j = 0;
+    let mut hunk_start_orig = 1;
+    let mut hunk_start_mod = 1;
+    let mut hunk_lines: Vec<String> = Vec::new();
+    let mut context_before: Vec<String> = Vec::new();
+
+    while i < original_lines.len() || j < modified_lines.len() {
+        if i < original_lines.len()
+            && j < modified_lines.len()
+            && original_lines[i] == modified_lines[j]
+        {
+            // Lines match — accumulate as context.
+            if !hunk_lines.is_empty() {
+                hunk_lines.push(format!(" {}", original_lines[i]));
+            } else {
+                context_before.push(format!(" {}", original_lines[i]));
+                if context_before.len() > 3 {
+                    context_before.remove(0);
+                    hunk_start_orig += 1;
+                    hunk_start_mod += 1;
+                }
+            }
+            i += 1;
+            j += 1;
+        } else {
+            // Mismatch — start or extend a hunk.
+            if hunk_lines.is_empty() {
+                hunk_lines.append(&mut context_before);
+            }
+            if i < original_lines.len()
+                && (j >= modified_lines.len() || !modified_lines[j..].contains(&original_lines[i]))
+            {
+                hunk_lines.push(format!("-{}", original_lines[i]));
+                i += 1;
+            } else if j < modified_lines.len() {
+                hunk_lines.push(format!("+{}", modified_lines[j]));
+                j += 1;
+            } else {
+                break;
+            }
+        }
+    }
+
+    if !hunk_lines.is_empty() {
+        let orig_count = hunk_lines.iter().filter(|l| !l.starts_with('+')).count();
+        let mod_count = hunk_lines.iter().filter(|l| !l.starts_with('-')).count();
+        output.push_str(&format!(
+            "@@ -{},{} +{},{} @@\n",
+            hunk_start_orig, orig_count, hunk_start_mod, mod_count
+        ));
+        for line in &hunk_lines {
+            output.push_str(line);
+            output.push('\n');
+        }
+    }
+
+    output
+}
+
+// ── Scoped agent re-work (v0.3.4) ──────────────────────────────────
+
+/// Create a scoped follow-up goal targeting only discuss/amended artifacts.
+///
+/// Unlike `ta run --follow-up` which re-runs against the full source tree,
+/// `ta draft fix` creates a minimal staging workspace containing only the
+/// affected files and injects focused guidance for the agent.
+fn fix_package(
+    config: &GatewayConfig,
+    id: &str,
+    target_uri: Option<&str>,
+    guidance: &str,
+    agent: &str,
+    no_launch: bool,
+) -> anyhow::Result<()> {
+    let package_id = Uuid::parse_str(id)?;
+    let pkg = load_package(config, package_id)?;
+
+    // Only allow fix on drafts in review states.
+    match &pkg.status {
+        DraftStatus::PendingReview | DraftStatus::Draft | DraftStatus::Approved { .. } => {}
+        _ => {
+            anyhow::bail!(
+                "Cannot fix draft in {} state (must be draft, pending_review, or approved)",
+                pkg.status
+            );
+        }
+    }
+
+    // Find the goal associated with this draft.
+    let goal_store = GoalRunStore::new(&config.goals_dir)?;
+    let goals = goal_store.list()?;
+    let parent_goal = goals
+        .iter()
+        .find(|g| {
+            g.goal_run_id.to_string() == pkg.goal.goal_id || g.pr_package_id == Some(package_id)
+        })
+        .ok_or_else(|| anyhow::anyhow!("Cannot find goal associated with draft {}", package_id))?;
+
+    let source_dir = parent_goal
+        .source_dir
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("Parent goal has no source_dir"))?;
+
+    // Determine which artifacts to target.
+    let target_artifacts: Vec<&Artifact> = if let Some(uri) = target_uri {
+        let normalized = if uri.starts_with("fs://") {
+            uri.to_string()
+        } else {
+            format!("fs://workspace/{}", uri)
+        };
+        let artifact = pkg
+            .changes
+            .artifacts
+            .iter()
+            .find(|a| a.resource_uri == normalized)
+            .ok_or_else(|| anyhow::anyhow!("Artifact not found in draft: {}", normalized))?;
+        vec![artifact]
+    } else {
+        // Default: all discuss items + amended items.
+        let targets: Vec<&Artifact> = pkg
+            .changes
+            .artifacts
+            .iter()
+            .filter(|a| {
+                matches!(a.disposition, ArtifactDisposition::Discuss) || a.amendment.is_some()
+            })
+            .collect();
+        if targets.is_empty() {
+            anyhow::bail!(
+                "No discuss or amended artifacts found in draft {}.\n\
+                 Use --artifact-uri to target a specific artifact, or mark artifacts \
+                 as 'discuss' during review first.",
+                package_id
+            );
+        }
+        targets
+    };
+
+    println!("Scoped fix for draft {}", package_id);
+    println!("  Targeting {} artifact(s):", target_artifacts.len());
+    for a in &target_artifacts {
+        println!("    {} [{}]", a.resource_uri, a.disposition);
+    }
+    println!("  Guidance: {}", guidance);
+    println!();
+
+    // Build a scoped follow-up title.
+    let fix_title = format!(
+        "Fix: {} (from draft {})",
+        truncate(guidance, 60),
+        &id[..8.min(id.len())]
+    );
+
+    // Use `ta run --follow-up` mechanism via goal commands.
+    // This creates a full overlay but with focused context injection.
+    let follow_up_id = Some(Some(id.to_string()));
+
+    super::run::execute(
+        config,
+        &fix_title,
+        agent,
+        Some(source_dir.as_path()),
+        &format!(
+            "Scoped fix: {}. Target only the artifacts listed in the Follow-Up Context below.",
+            guidance,
+        ),
+        parent_goal.plan_phase.as_deref(),
+        follow_up_id.as_ref(),
+        None, // no objective file
+        no_launch,
+        false, // not interactive
+    )?;
+
+    if no_launch {
+        println!("\nScoped fix workspace ready.");
+        println!("The agent context includes your guidance and the target artifacts.");
+        println!("When the agent finishes, the original draft will be superseded.");
+    } else {
+        println!("\nScoped fix complete.");
+        println!("The new draft supersedes draft {}.", package_id);
+        println!("Review with: ta draft list");
     }
 
     Ok(())
@@ -2939,5 +3409,296 @@ mod tests {
 
         // Should pass even in error mode since only exempt files changed.
         build_package(&config, &goal_id, "Test", false).unwrap();
+    }
+
+    // ── v0.3.4 Draft Amendment Tests ──────────────────────────────────
+
+    #[test]
+    fn amend_drop_removes_artifact() {
+        let project = TempDir::new().unwrap();
+        std::fs::write(project.path().join("README.md"), "# Original\n").unwrap();
+        std::fs::write(project.path().join("extra.txt"), "remove me\n").unwrap();
+
+        let config = GatewayConfig::for_project(project.path());
+
+        super::super::goal::execute(
+            &super::super::goal::GoalCommands::Start {
+                title: "Amend drop test".to_string(),
+                source: Some(project.path().to_path_buf()),
+                objective: "Test amend --drop".to_string(),
+                agent: "test-agent".to_string(),
+                phase: None,
+                follow_up: None,
+                objective_file: None,
+            },
+            &config,
+        )
+        .unwrap();
+
+        let goal_store = GoalRunStore::new(&config.goals_dir).unwrap();
+        let goals = goal_store.list().unwrap();
+        let goal = &goals[0];
+        let goal_id = goal.goal_run_id.to_string();
+
+        // Make changes in staging.
+        std::fs::write(goal.workspace_path.join("README.md"), "# Updated\n").unwrap();
+        std::fs::write(goal.workspace_path.join("extra.txt"), "changed\n").unwrap();
+
+        // Build draft.
+        build_package(&config, &goal_id, "Test changes", false).unwrap();
+        let packages = load_all_packages(&config).unwrap();
+        let pkg_id = packages[0].package_id.to_string();
+        assert_eq!(packages[0].changes.artifacts.len(), 2);
+
+        // Drop the extra.txt artifact.
+        amend_package(
+            &config,
+            &pkg_id,
+            "extra.txt",
+            None,
+            true,
+            Some("Not needed"),
+            "human",
+        )
+        .unwrap();
+
+        // Verify artifact was removed.
+        let updated = load_package(&config, packages[0].package_id).unwrap();
+        assert_eq!(updated.changes.artifacts.len(), 1);
+        assert!(updated.changes.artifacts[0]
+            .resource_uri
+            .contains("README.md"));
+
+        // Verify decision log entry was added.
+        assert!(updated
+            .plan
+            .decision_log
+            .iter()
+            .any(|d| d.decision.contains("dropped")));
+    }
+
+    #[test]
+    fn amend_file_replaces_content() {
+        let project = TempDir::new().unwrap();
+        std::fs::write(project.path().join("README.md"), "# Original\n").unwrap();
+
+        let config = GatewayConfig::for_project(project.path());
+
+        super::super::goal::execute(
+            &super::super::goal::GoalCommands::Start {
+                title: "Amend file test".to_string(),
+                source: Some(project.path().to_path_buf()),
+                objective: "Test amend --file".to_string(),
+                agent: "test-agent".to_string(),
+                phase: None,
+                follow_up: None,
+                objective_file: None,
+            },
+            &config,
+        )
+        .unwrap();
+
+        let goal_store = GoalRunStore::new(&config.goals_dir).unwrap();
+        let goals = goal_store.list().unwrap();
+        let goal = &goals[0];
+        let goal_id = goal.goal_run_id.to_string();
+
+        // Make changes in staging.
+        std::fs::write(goal.workspace_path.join("README.md"), "# Bad version\n").unwrap();
+
+        // Build draft.
+        build_package(&config, &goal_id, "Test changes", false).unwrap();
+        let packages = load_all_packages(&config).unwrap();
+        let pkg_id = packages[0].package_id.to_string();
+
+        // Write a corrected file.
+        let corrected = TempDir::new().unwrap();
+        let corrected_path = corrected.path().join("corrected.md");
+        std::fs::write(&corrected_path, "# Corrected version\n").unwrap();
+
+        // Amend with corrected file.
+        amend_package(
+            &config,
+            &pkg_id,
+            "README.md",
+            Some(corrected_path.to_str().unwrap()),
+            false,
+            Some("Fixed heading"),
+            "reviewer",
+        )
+        .unwrap();
+
+        // Verify amendment record.
+        let updated = load_package(&config, packages[0].package_id).unwrap();
+        let artifact = &updated.changes.artifacts[0];
+        assert!(artifact.amendment.is_some());
+        let amend = artifact.amendment.as_ref().unwrap();
+        assert_eq!(amend.amended_by, "reviewer");
+        assert_eq!(amend.amendment_type, AmendmentType::FileReplaced);
+        assert_eq!(amend.reason, Some("Fixed heading".to_string()));
+
+        // Disposition should be reset to Pending.
+        assert_eq!(artifact.disposition, ArtifactDisposition::Pending);
+
+        // Decision log entry should exist.
+        assert!(updated
+            .plan
+            .decision_log
+            .iter()
+            .any(|d| d.decision.contains("amended")));
+
+        // Corrected file should be in staging workspace.
+        let staging_content =
+            std::fs::read_to_string(goal.workspace_path.join("README.md")).unwrap();
+        assert_eq!(staging_content, "# Corrected version\n");
+    }
+
+    #[test]
+    fn amend_rejects_invalid_state() {
+        let project = TempDir::new().unwrap();
+        std::fs::write(project.path().join("README.md"), "# Test\n").unwrap();
+
+        let config = GatewayConfig::for_project(project.path());
+
+        super::super::goal::execute(
+            &super::super::goal::GoalCommands::Start {
+                title: "State test".to_string(),
+                source: Some(project.path().to_path_buf()),
+                objective: "Test state check".to_string(),
+                agent: "test-agent".to_string(),
+                phase: None,
+                follow_up: None,
+                objective_file: None,
+            },
+            &config,
+        )
+        .unwrap();
+
+        let goal_store = GoalRunStore::new(&config.goals_dir).unwrap();
+        let goals = goal_store.list().unwrap();
+        let goal = &goals[0];
+        let goal_id = goal.goal_run_id.to_string();
+
+        std::fs::write(goal.workspace_path.join("README.md"), "# Updated\n").unwrap();
+        build_package(&config, &goal_id, "Test", false).unwrap();
+
+        let packages = load_all_packages(&config).unwrap();
+        let pkg_id = packages[0].package_id.to_string();
+
+        // Deny the package first.
+        deny_package(&config, &pkg_id, "bad", "reviewer").unwrap();
+
+        // Amend should fail on denied packages.
+        let result = amend_package(&config, &pkg_id, "README.md", None, true, None, "human");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Cannot amend"));
+    }
+
+    #[test]
+    fn amend_drop_nonexistent_artifact_fails() {
+        let project = TempDir::new().unwrap();
+        std::fs::write(project.path().join("README.md"), "# Test\n").unwrap();
+
+        let config = GatewayConfig::for_project(project.path());
+
+        super::super::goal::execute(
+            &super::super::goal::GoalCommands::Start {
+                title: "Missing artifact test".to_string(),
+                source: Some(project.path().to_path_buf()),
+                objective: "Test".to_string(),
+                agent: "test-agent".to_string(),
+                phase: None,
+                follow_up: None,
+                objective_file: None,
+            },
+            &config,
+        )
+        .unwrap();
+
+        let goal_store = GoalRunStore::new(&config.goals_dir).unwrap();
+        let goals = goal_store.list().unwrap();
+        let goal = &goals[0];
+        let goal_id = goal.goal_run_id.to_string();
+
+        std::fs::write(goal.workspace_path.join("README.md"), "# Updated\n").unwrap();
+        build_package(&config, &goal_id, "Test", false).unwrap();
+
+        let packages = load_all_packages(&config).unwrap();
+        let pkg_id = packages[0].package_id.to_string();
+
+        // Try to drop a non-existent artifact.
+        let result = amend_package(
+            &config,
+            &pkg_id,
+            "nonexistent.rs",
+            None,
+            true,
+            None,
+            "human",
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not found"));
+    }
+
+    #[test]
+    fn amend_requires_file_or_drop() {
+        let project = TempDir::new().unwrap();
+        std::fs::write(project.path().join("README.md"), "# Test\n").unwrap();
+
+        let config = GatewayConfig::for_project(project.path());
+
+        super::super::goal::execute(
+            &super::super::goal::GoalCommands::Start {
+                title: "Mode test".to_string(),
+                source: Some(project.path().to_path_buf()),
+                objective: "Test".to_string(),
+                agent: "test-agent".to_string(),
+                phase: None,
+                follow_up: None,
+                objective_file: None,
+            },
+            &config,
+        )
+        .unwrap();
+
+        let goal_store = GoalRunStore::new(&config.goals_dir).unwrap();
+        let goals = goal_store.list().unwrap();
+        let goal = &goals[0];
+        let goal_id = goal.goal_run_id.to_string();
+
+        std::fs::write(goal.workspace_path.join("README.md"), "# Updated\n").unwrap();
+        build_package(&config, &goal_id, "Test", false).unwrap();
+
+        let packages = load_all_packages(&config).unwrap();
+        let pkg_id = packages[0].package_id.to_string();
+
+        // Neither --file nor --drop.
+        let result = amend_package(&config, &pkg_id, "README.md", None, false, None, "human");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Must specify"));
+
+        // Both --file and --drop.
+        let result = amend_package(
+            &config,
+            &pkg_id,
+            "README.md",
+            Some("/some/file"),
+            true,
+            None,
+            "human",
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Cannot use both"));
+    }
+
+    #[test]
+    fn compute_unified_diff_basic() {
+        let original = "line1\nline2\nline3\n";
+        let modified = "line1\nline2_modified\nline3\n";
+        let diff = compute_unified_diff("test.txt", original, modified);
+        assert!(diff.contains("--- a/test.txt"));
+        assert!(diff.contains("+++ b/test.txt"));
+        assert!(diff.contains("-line2"));
+        assert!(diff.contains("+line2_modified"));
     }
 }

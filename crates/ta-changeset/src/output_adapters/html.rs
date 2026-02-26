@@ -273,6 +273,7 @@ mod tests {
                     rationale: Some("test rationale".to_string()),
                     explanation_tiers: None,
                     comments: None,
+                    amendment: None,
                     tests_run: vec![],
                     dependencies: vec![],
                 }],

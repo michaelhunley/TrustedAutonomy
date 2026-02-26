@@ -1282,6 +1282,7 @@ pre_launch:
                 related_artifacts: vec![],
             }),
             comments: Some(comment_thread),
+            amendment: None,
         };
 
         let parent_draft = DraftPackage {
@@ -1429,6 +1430,7 @@ pre_launch:
             dependencies: vec![],
             explanation_tiers: None,
             comments: None, // No comments yet
+            amendment: None,
         };
 
         let parent_draft = DraftPackage {
