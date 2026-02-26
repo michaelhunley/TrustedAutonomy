@@ -263,6 +263,15 @@ pub struct PolicyDecisionRecord {
     pub effect: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
+    /// Grants that were checked during evaluation (v0.3.3).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub grants_checked: Vec<String>,
+    /// The grant that matched (if any) (v0.3.3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matching_grant: Option<String>,
+    /// Evaluation steps the policy engine performed (v0.3.3).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evaluation_steps: Vec<String>,
 }
 
 // ---- Provenance ----
@@ -368,6 +377,16 @@ pub struct DecisionLogEntry {
     pub rationale: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub alternatives: Vec<String>,
+    /// Structured alternatives with rejection reasons (v0.3.3).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub alternatives_considered: Vec<AlternativeConsidered>,
+}
+
+/// A structured alternative considered during a decision (v0.3.3).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlternativeConsidered {
+    pub description: String,
+    pub rejected_reason: String,
 }
 
 /// Review status of a draft package (internal tracking, not in JSON schema).
@@ -731,5 +750,87 @@ mod tests {
         }"#;
         let artifact: Artifact = serde_json::from_str(json).unwrap();
         assert!(artifact.explanation_tiers.is_none());
+    }
+
+    // ── v0.3.3 Decision Observability tests ──
+
+    #[test]
+    fn decision_log_entry_with_alternatives_considered() {
+        let entry = DecisionLogEntry {
+            decision: "Migrated to JWT auth".to_string(),
+            rationale: "Session tokens don't scale".to_string(),
+            alternatives: vec![],
+            alternatives_considered: vec![
+                AlternativeConsidered {
+                    description: "Sticky sessions".to_string(),
+                    rejected_reason: "Couples auth to infrastructure".to_string(),
+                },
+                AlternativeConsidered {
+                    description: "Redis session store".to_string(),
+                    rejected_reason: "Adds operational dependency".to_string(),
+                },
+            ],
+        };
+
+        let json = serde_json::to_string(&entry).unwrap();
+        let restored: DecisionLogEntry = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(restored.alternatives_considered.len(), 2);
+        assert_eq!(
+            restored.alternatives_considered[0].description,
+            "Sticky sessions"
+        );
+        assert_eq!(
+            restored.alternatives_considered[1].rejected_reason,
+            "Adds operational dependency"
+        );
+    }
+
+    #[test]
+    fn decision_log_entry_backward_compatible() {
+        // Old JSON without alternatives_considered should deserialize fine.
+        let json = r#"{
+            "decision": "Used JWT",
+            "rationale": "Scalability"
+        }"#;
+        let entry: DecisionLogEntry = serde_json::from_str(json).unwrap();
+        assert!(entry.alternatives.is_empty());
+        assert!(entry.alternatives_considered.is_empty());
+    }
+
+    #[test]
+    fn policy_decision_record_with_trace_fields() {
+        let record = PolicyDecisionRecord {
+            rule_id: "default-deny".to_string(),
+            effect: "allow".to_string(),
+            notes: Some("Grant matched".to_string()),
+            grants_checked: vec!["fs.read on workspace/**".to_string()],
+            matching_grant: Some("fs.read on workspace/**".to_string()),
+            evaluation_steps: vec![
+                "path_traversal: passed".to_string(),
+                "grant_match: allowed".to_string(),
+            ],
+        };
+
+        let json = serde_json::to_string(&record).unwrap();
+        let restored: PolicyDecisionRecord = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(restored.grants_checked.len(), 1);
+        assert!(restored.matching_grant.is_some());
+        assert_eq!(restored.evaluation_steps.len(), 2);
+    }
+
+    #[test]
+    fn policy_decision_record_backward_compatible() {
+        // Old JSON without v0.3.3 fields should deserialize fine.
+        let json = r#"{
+            "rule_id": "test",
+            "effect": "deny",
+            "notes": "No grant"
+        }"#;
+        let record: PolicyDecisionRecord = serde_json::from_str(json).unwrap();
+        assert!(record.grants_checked.is_empty());
+        assert!(record.matching_grant.is_none());
+        assert!(record.evaluation_steps.is_empty());
     }
 }

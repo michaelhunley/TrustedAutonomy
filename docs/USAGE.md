@@ -799,12 +799,27 @@ ta pr apply <frontend-pr-id>
 ### Audit Trail
 
 ```bash
-# View audit log
-ta audit list
+# Verify audit log integrity (hash chain)
+ta audit verify
 
-# Export for compliance
-ta audit export audit.jsonl
+# Show recent audit events
+ta audit tail -n 20
+
+# Display decision trail for a goal with reasoning (v0.3.3)
+ta audit show <goal-id>
+
+# Export structured audit data for compliance reporting (v0.3.3)
+ta audit export <goal-id> --format json
 ```
+
+#### Decision Observability (v0.3.3)
+
+Every decision in the TA pipeline is now observable — not just *what happened*, but *what was considered and why*:
+
+- **Policy decisions** capture which grants were checked, which matched, and why Allow/Deny/RequireApproval was chosen
+- **Agent decisions** can include `alternatives_considered` in `change_summary.json` to document rejected approaches
+- **Review decisions** support structured `reasoning` with rationale, alternatives, and applied principles
+- **Compliance export** includes ISO 42001, IEEE 7001, and NIST AI RMF alignment metadata
 
 ---
 

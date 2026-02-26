@@ -32,8 +32,8 @@ pub use explanation::ExplanationSidecar;
 pub use interactive_session_store::InteractiveSessionStore;
 pub use output_adapters::{DetailLevel, OutputAdapter, OutputFormat, RenderContext};
 pub use review_session::{
-    ArtifactReview, Comment, CommentThread, DispositionCounts, ReviewSession, ReviewState,
-    SessionNote,
+    ArtifactReview, Comment, CommentThread, DispositionCounts, ReviewReasoning, ReviewSession,
+    ReviewState, SessionNote,
 };
 pub use review_session_store::ReviewSessionStore;
 pub use session_channel::{

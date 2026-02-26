@@ -8,9 +8,10 @@ use ta_changeset::changeset::{ChangeKind, ChangeSet, CommitIntent};
 use ta_changeset::diff::DiffContent;
 use ta_changeset::diff_handlers::DiffHandlersConfig;
 use ta_changeset::draft_package::{
-    AgentIdentity, Artifact, ArtifactDisposition, ChangeDependency, ChangeType, Changes,
-    DependencyKind, DraftPackage, DraftStatus, ExplanationTiers, Goal, Iteration, Plan, Provenance,
-    RequestedAction, ReviewRequests, Risk, Signatures, Summary, WorkspaceRef,
+    AgentIdentity, AlternativeConsidered, Artifact, ArtifactDisposition, ChangeDependency,
+    ChangeType, Changes, DecisionLogEntry, DependencyKind, DraftPackage, DraftStatus,
+    ExplanationTiers, Goal, Iteration, Plan, Provenance, RequestedAction, ReviewRequests, Risk,
+    Signatures, Summary, WorkspaceRef,
 };
 use ta_changeset::explanation::ExplanationSidecar;
 use ta_changeset::output_adapters::{
@@ -309,6 +310,9 @@ struct ChangeSummaryEntry {
     depends_on: Vec<String>,
     #[serde(default)]
     depended_by: Vec<String>,
+    /// Alternatives the agent considered for this change (v0.3.3).
+    #[serde(default)]
+    alternatives_considered: Vec<AlternativeConsidered>,
 }
 
 /// Try to load the agent's change summary from the staging workspace.
@@ -368,6 +372,31 @@ fn enrich_artifact(artifact: &mut Artifact, summary: &ChangeSummary) {
             });
         }
     }
+}
+
+/// Extract decision log entries from agent alternatives in change_summary.json (v0.3.3).
+fn extract_decision_log(summary: &ChangeSummary) -> Vec<DecisionLogEntry> {
+    summary
+        .changes
+        .iter()
+        .filter(|entry| !entry.alternatives_considered.is_empty())
+        .map(|entry| DecisionLogEntry {
+            decision: entry
+                .what
+                .clone()
+                .unwrap_or_else(|| format!("Change to {}", entry.path)),
+            rationale: entry
+                .why
+                .clone()
+                .unwrap_or_else(|| "Not specified".to_string()),
+            alternatives: entry
+                .alternatives_considered
+                .iter()
+                .map(|a| format!("{}: {}", a.description, a.rejected_reason))
+                .collect(),
+            alternatives_considered: entry.alternatives_considered.clone(),
+        })
+        .collect()
 }
 
 /// Files exempt from summary enforcement — lockfiles, config manifests, docs.
@@ -609,6 +638,18 @@ fn build_package(
         .as_ref()
         .and_then(|cs| cs.dependency_notes.clone());
 
+    // v0.3.3: Extract decision log from agent alternatives.
+    let decision_log = change_summary
+        .as_ref()
+        .map(extract_decision_log)
+        .unwrap_or_default();
+    if !decision_log.is_empty() {
+        println!(
+            "Decision observability: {} decision(s) with alternatives captured",
+            decision_log.len()
+        );
+    }
+
     // Plan validation: if this goal is linked to a plan phase, validate artifacts.
     if let Some(ref phase_id) = goal.plan_phase {
         let phases = super::plan::load_plan(source_dir).unwrap_or_default();
@@ -663,7 +704,7 @@ fn build_package(
         plan: Plan {
             completed_steps: vec!["Agent completed work in staging".to_string()],
             next_steps: vec!["Review and apply changes".to_string()],
-            decision_log: vec![],
+            decision_log,
         },
         changes: Changes {
             artifacts,
