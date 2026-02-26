@@ -45,7 +45,28 @@ sudo mv ta /usr/local/bin/
 curl -LO https://github.com/trustedautonomy/ta/releases/latest/download/ta-x86_64-unknown-linux-musl.tar.gz
 tar xzf ta-x86_64-unknown-linux-musl.tar.gz
 sudo mv ta /usr/local/bin/
+
+# Linux (ARM64 — Raspberry Pi, AWS Graviton, etc.)
+curl -LO https://github.com/trustedautonomy/ta/releases/latest/download/ta-aarch64-unknown-linux-musl.tar.gz
+tar xzf ta-aarch64-unknown-linux-musl.tar.gz
+sudo mv ta /usr/local/bin/
 ```
+
+### Windows (via WSL2)
+
+There is no native Windows build at this time. Windows users should use [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install) with the Linux binary:
+
+```bash
+# 1. Install WSL2 if you haven't already (run in PowerShell as Administrator)
+wsl --install
+
+# 2. Inside your WSL2 terminal, download the Linux binary
+curl -LO https://github.com/trustedautonomy/ta/releases/latest/download/ta-x86_64-unknown-linux-musl.tar.gz
+tar xzf ta-x86_64-unknown-linux-musl.tar.gz
+sudo mv ta /usr/local/bin/
+```
+
+> **Note**: TA works fully inside WSL2 — filesystem access, git integration, and agent frameworks all function normally. Your Windows files are accessible at `/mnt/c/`. Native Windows support is planned for a future release.
 
 ### From crates.io
 

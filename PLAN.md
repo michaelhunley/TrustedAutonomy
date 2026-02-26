@@ -1117,7 +1117,21 @@ notify_on_auto_approve: true               # always tell the human what was auto
 - Full web UI for review/approval (extends v0.5.2 minimal UI)
 - Mobile-responsive web UI (not a native app — PWA is sufficient for v1.0)
 
-### v0.9.1 — Sandbox Runner (optional hardening)
+### v0.9.1 — Native Windows Support
+<!-- status: pending -->
+**Goal**: First-class Windows experience without requiring WSL, timed for when non-engineers (home finance, family office, personal productivity users) begin adopting TA via v0.7's guided setup and v0.9.0's desktop installer.
+
+- **Windows MSVC build target**: Add `x86_64-pc-windows-msvc` to CI release matrix (GitHub Actions `windows-latest` runner). Ship `.zip` archive with `ta.exe`.
+- **Path handling**: Audit all `Path`/`PathBuf` usage for Unix assumptions (`/` separators, `/tmp`, `/usr/local/bin`). Use `std::path` consistently; replace hard-coded `/` with `std::path::MAIN_SEPARATOR` where needed.
+- **Process management**: Replace Unix-specific signal handling (`SIGTERM`, `SIGINT`) with cross-platform equivalents. Use `ctrlc` crate for Ctrl+C handling on Windows.
+- **Shell command execution**: Agent configs currently assume `bash`. Add `shell` field to agent YAML (`bash`, `powershell`, `cmd`). Default: auto-detect from OS.
+- **Installer**: MSI or NSIS installer bundled with desktop build (v0.9.0). Add to `winget` and `scoop` package managers.
+- **Testing**: Add Windows CI job running full test suite. Gate releases on Windows tests passing.
+- **Known limitations for v0.9.1**: Sandbox runner (v0.9.2) may not support Windows initially — gVisor is Linux-only. Document WSL2 as fallback for sandboxed execution on Windows.
+
+> **Why v0.9.1**: Non-engineer users arrive at v0.7 (guided setup) and v0.9.0 (desktop installer). By v0.9.1, the install experience must be native on all three platforms. Earlier phases target developers who are comfortable with macOS/Linux and WSL.
+
+### v0.9.2 — Sandbox Runner (optional hardening)
 <!-- status: pending -->
 > Moved from v0.6. Optional for users who need kernel-level isolation. Not a prerequisite for v1.0.
 
