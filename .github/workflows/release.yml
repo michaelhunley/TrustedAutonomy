@@ -77,6 +77,7 @@ jobs:
           cp docs/USAGE.md staging/ 2>/dev/null || true
           cp DISCLAIMER.md staging/ 2>/dev/null || true
           cp LICENSE staging/ 2>/dev/null || true
+          cp .release-draft.md staging/RELEASE-NOTES.md 2>/dev/null || true
           mkdir -p artifacts
           cd staging
           tar czf ../artifacts/${{ env.BINARY_NAME }}-${{ steps.get_version.outputs.version }}-${{ matrix.target }}.tar.gz *
@@ -137,6 +138,49 @@ jobs:
           cat SHA256SUMS-*.txt > SHA256SUMS.txt
           rm -f SHA256SUMS-*.txt
 
+      - name: Build release body
+        id: release_body
+        run: |
+          # Start with release notes if .release-draft.md was committed
+          BODY=""
+          if [ -f .release-draft.md ]; then
+            BODY="$(cat .release-draft.md)"
+            BODY="${BODY}
+
+          ---
+
+          "
+          fi
+
+          # Append installation instructions
+          BODY="${BODY}### Installation
+
+          **Cargo**
+          \`\`\`bash
+          cargo install ta-cli
+          \`\`\`
+
+          **Nix**
+          \`\`\`bash
+          nix run github:trustedautonomy/ta
+          \`\`\`
+
+          **Binary download**
+
+          Download the appropriate archive for your platform below. Each includes the \`ta\` binary, \`USAGE.md\`, \`DISCLAIMER.md\`, \`LICENSE\`, and release notes.
+
+          On first run, \`ta\` will prompt you to review and accept the terms of use.
+
+          **Windows users**: There is no native Windows build yet. Use [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install) and download the Linux x86_64 binary. See [USAGE.md](https://github.com/trustedautonomy/ta/blob/main/docs/USAGE.md#windows-via-wsl2) for setup instructions.
+
+          ### Documentation
+
+          - [USAGE.md](https://github.com/trustedautonomy/ta/blob/main/docs/USAGE.md) — Complete usage guide
+          - [DISCLAIMER.md](https://github.com/trustedautonomy/ta/blob/main/DISCLAIMER.md) — Terms of use"
+
+          # Write to file for the release action (handles multiline safely)
+          echo "$BODY" > release-body.md
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -145,33 +189,7 @@ jobs:
           draft: false
           prerelease: ${{ contains(steps.get_version.outputs.version, 'alpha') || contains(steps.get_version.outputs.version, 'beta') }}
           files: artifacts/*
-          body: |
-            ## Release ${{ steps.get_version.outputs.version }}
-
-            ### Installation
-
-            **Cargo**
-            ```bash
-            cargo install ta-cli
-            ```
-
-            **Nix**
-            ```bash
-            nix run github:trustedautonomy/ta
-            ```
-
-            **Binary download**
-
-            Download the appropriate archive for your platform below. Each includes the `ta` binary, `USAGE.md`, `DISCLAIMER.md`, and `LICENSE`.
-
-            On first run, `ta` will prompt you to review and accept the terms of use.
-
-            **Windows users**: There is no native Windows build yet. Use [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install) and download the Linux x86_64 binary. See [USAGE.md](https://github.com/trustedautonomy/ta/blob/main/docs/USAGE.md#windows-via-wsl2) for setup instructions.
-
-            ### Documentation
-
-            - [USAGE.md](https://github.com/trustedautonomy/ta/blob/main/docs/USAGE.md) — Complete usage guide
-            - [DISCLAIMER.md](https://github.com/trustedautonomy/ta/blob/main/DISCLAIMER.md) — Terms of use
+          body_path: release-body.md
 
   publish-crate:
     name: Publish to crates.io

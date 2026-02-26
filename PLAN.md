@@ -753,10 +753,20 @@ ta draft fix <draft-id> <artifact-uri> --guidance "Consolidate duplicate struct"
 - `build_parent_context_section()` in run.rs — discuss items + comments already injected into follow-up goals
 - `ArtifactDisposition::Discuss` (v0.3.0 Phase 4b) — selective review already identifies items needing attention
 
-### v0.3.5 — Draft Lifecycle Hygiene & Stale State Cleanup
+### v0.3.5 — Release Pipeline Fixes & Draft Lifecycle Hygiene
 <!-- status: pending -->
-**Goal**: Automated and manual cleanup of stale draft state. Today, drafts that are manually applied (e.g. hand-merged due to conflicts) remain in `approved` status forever. Staging directories accumulate across sessions. This phase adds housekeeping so TA state stays consistent without manual intervention.
+**Goal**: Fix release pipeline issues discovered during v0.3.3 and v0.3.4 releases, plus add draft lifecycle cleanup tools.
 
+#### Release Pipeline Fixes
+- **Release notes in GitHub Release**: `.release-draft.md` content now included in the GitHub Release body (was using hardcoded template ignoring generated notes)
+- **Release notes in binary archives**: `.release-draft.md` shipped as `RELEASE-NOTES.md` inside each tar.gz
+- **PLAN.md status in commits**: Moved plan phase status update to before git commit so `<!-- status: done -->` is included in the release commit (was written after commit, lost on PR merge)
+- **Post-apply validation**: `ta draft apply` prints state summary with warning if plan status didn't update
+- **DISCLAIMER.md version removed**: Terms hash no longer changes on version bump, so users aren't forced to re-accept terms every release
+- **Commit/tag step robustness**: Checks out main, skips commit if tree clean, skips tag if exists
+- **Nix dirty-tree warning suppressed**: `./dev` uses `--no-warn-dirty`
+
+#### Draft Lifecycle Hygiene
 - **`ta draft close <id> [--reason <text>]`**: Manually mark a draft as closed/superseded without applying it. For drafts that were hand-merged, abandoned, or made obsolete by later work. Records reason + timestamp in audit log.
 - **`ta draft gc`**: Garbage-collect stale drafts and staging directories.
   - Remove staging dirs for drafts in terminal states (Applied, Denied, closed) older than N days (default 7, configurable in `.ta/workflow.toml`)

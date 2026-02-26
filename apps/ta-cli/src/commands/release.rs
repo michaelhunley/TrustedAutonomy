@@ -33,6 +33,7 @@ pub enum ReleaseCommands {
         dry_run: bool,
 
         /// Start from a specific step (1-indexed). Skips earlier steps.
+        /// Run `ta release show` to see step numbers.
         #[arg(long)]
         from_step: Option<usize>,
 
