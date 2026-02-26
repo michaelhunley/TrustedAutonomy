@@ -176,7 +176,8 @@ jobs:
           ### Documentation
 
           - [USAGE.md](https://github.com/trustedautonomy/ta/blob/main/docs/USAGE.md) — Complete usage guide
-          - [DISCLAIMER.md](https://github.com/trustedautonomy/ta/blob/main/DISCLAIMER.md) — Terms of use"
+          - [DISCLAIMER.md](https://github.com/trustedautonomy/ta/blob/main/DISCLAIMER.md) — Terms of use
+          - [Release Notes](.release-draft.md) — What's new in this version"
 
           # Write to file for the release action (handles multiline safely)
           echo "$BODY" > release-body.md
