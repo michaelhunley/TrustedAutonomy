@@ -104,6 +104,11 @@ enum Commands {
         #[command(subcommand)]
         command: commands::adapter::AdapterCommands,
     },
+    /// Run the configurable release pipeline.
+    Release {
+        #[command(subcommand)]
+        command: commands::release::ReleaseCommands,
+    },
     /// Start the MCP server on stdio.
     Serve,
     /// Review and accept the terms of use.
@@ -190,6 +195,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Session { command } => commands::session::execute(command, &config),
         Commands::Plan { command } => commands::plan::execute(command, &config),
         Commands::Adapter { command } => commands::adapter::execute(command, &project_root),
+        Commands::Release { command } => commands::release::execute(command, &config),
         Commands::Serve => commands::serve::execute(&project_root),
         // Already handled above.
         Commands::AcceptTerms | Commands::ViewTerms | Commands::TermsStatus => unreachable!(),
