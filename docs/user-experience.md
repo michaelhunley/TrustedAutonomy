@@ -458,8 +458,9 @@ The current plan phases are mostly in the right order. Key reorderings already m
 3. **Notifications** moved to v0.5.3 (needed immediately when external actions land)
 4. **Supervisor/auto-approval** becomes v0.6 (unlocks async supervision model)
 5. **Network intercept** extracted to enterprise doc (not blocking v1.0)
-6. **Sandbox** becomes optional hardening at v0.9.1 (not a prerequisite)
-7. **Setup wizard + templates** becomes v0.7 (enables non-dev onboarding)
+6. **Native Windows support** at v0.9.1 (when non-engineers arrive via guided setup)
+7. **Sandbox** becomes optional hardening at v0.9.2 (not a prerequisite)
+8. **Setup wizard + templates** becomes v0.7 (enables non-dev onboarding)
 
 ### Strategic positioning
 

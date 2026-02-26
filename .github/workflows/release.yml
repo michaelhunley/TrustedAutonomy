@@ -166,6 +166,8 @@ jobs:
 
             On first run, `ta` will prompt you to review and accept the terms of use.
 
+            **Windows users**: There is no native Windows build yet. Use [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install) and download the Linux x86_64 binary. See [USAGE.md](https://github.com/trustedautonomy/ta/blob/main/docs/USAGE.md#windows-via-wsl2) for setup instructions.
+
             ### Documentation
 
             - [USAGE.md](https://github.com/trustedautonomy/ta/blob/main/docs/USAGE.md) — Complete usage guide
