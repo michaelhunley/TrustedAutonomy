@@ -610,6 +610,92 @@ TA searches for agent configs in priority order:
 
 ---
 
+## Release Pipeline
+
+TA includes a configurable release pipeline driven by YAML. Each step is either a shell command or a TA goal (agent-driven), with optional approval gates.
+
+### Quick start
+
+```bash
+# Run the built-in release pipeline
+ta release run 0.4.0-alpha
+
+# Preview what would run (no side effects)
+ta release run 0.4.0-alpha --dry-run
+
+# Show the pipeline steps
+ta release show
+
+# Create a customizable .ta/release.yaml from the default template
+ta release init
+```
+
+### Pipeline configuration
+
+The pipeline is loaded from (in priority order):
+
+1. `--pipeline <path>` flag (explicit override)
+2. `.ta/release.yaml` in the project root
+3. Built-in default pipeline (compiled into the binary)
+
+### YAML schema
+
+```yaml
+name: my-release
+
+steps:
+  - name: Build & test
+    run: |
+      ./dev cargo build --workspace
+      ./dev cargo test --workspace
+
+  - name: Generate release notes
+    agent:
+      id: claude-code
+      phase: "v0.4.0"
+    objective: |
+      Synthesize release notes for ${TAG}.
+      Commits since ${LAST_TAG}:
+      ${COMMITS}
+    output: .release-draft.md
+
+  - name: Push to remote
+    requires_approval: true
+    run: git push origin main && git push origin ${TAG}
+```
+
+Each step must have either `run` (shell command) or `agent` (TA goal). Steps support:
+
+- **`name`** (required): Human-readable step name
+- **`run`**: Shell command(s) executed via `sh -c`
+- **`agent`**: TA goal with `id` (agent system) and optional `phase`
+- **`objective`**: Description for agent steps (supports variable substitution)
+- **`requires_approval`**: Pause for human confirmation before executing
+- **`output`**: Expected output artifact path (informational)
+- **`working_dir`**: Working directory override (relative to project root)
+- **`env`**: Environment variables for the step
+
+### Variable substitution
+
+These variables are available in `run`, `objective`, `output`, and `env` values:
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `${VERSION}` | Target version | `0.4.0-alpha` |
+| `${TAG}` | Git tag | `v0.4.0-alpha` |
+| `${COMMITS}` | Commit messages since last tag | Multi-line text |
+| `${LAST_TAG}` | Previous git tag | `v0.3.2-alpha` |
+
+### CLI options
+
+```bash
+ta release run <VERSION>        # Run the pipeline
+  --yes                         # Skip approval gates (CI mode)
+  --dry-run                     # Show steps without executing
+  --from-step <N>               # Start from step N (1-indexed)
+  --pipeline <PATH>             # Use a custom pipeline file
+```
+
 ## Advanced Workflows
 
 ### Plan-Linked Goals

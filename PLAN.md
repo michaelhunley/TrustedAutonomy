@@ -609,13 +609,13 @@ This phase deliberately builds the protocol layer that the TA local/web app will
 <!-- status: pending -->
 A `ta release` command driven by a YAML task script (`.ta/release.yaml`). Each step is either a TA goal (agent-driven) or a shell command, with optional approval gates. Replaces `scripts/release.sh` with a composable, extensible pipeline.
 
-- **YAML schema**: Steps with `name`, `agent` or `run`, `objective`, `output`, `requires_approval`
-- **Agent steps**: Create a TA goal for the agent to execute (e.g., synthesize release notes from commits)
-- **Shell steps**: Run build/test/tag commands directly
-- **Commit collection**: Automatically gather commits since last tag as context for agent steps
-- **Built-in pipeline**: Default release.yaml ships with the binary (version bump, verify, release notes, tag)
-- **Customizable**: Users override with `.ta/release.yaml` in their project
-- **Approval gates**: `requires_approval: true` pauses for human review before proceeding (e.g., before push)
+- ✅ **YAML schema**: Steps with `name`, `agent` or `run`, `objective`, `output`, `requires_approval`
+- ✅ **Agent steps**: Create a TA goal for the agent to execute (e.g., synthesize release notes from commits)
+- ✅ **Shell steps**: Run build/test/tag commands directly
+- ✅ **Commit collection**: Automatically gather commits since last tag as context for agent steps
+- ✅ **Built-in pipeline**: Default release.yaml ships with the binary (version bump, verify, release notes, tag)
+- ✅ **Customizable**: Users override with `.ta/release.yaml` in their project
+- ✅ **Approval gates**: `requires_approval: true` pauses for human review before proceeding (e.g., before push)
 
 ### v0.3.3 — Decision Observability & Reasoning Capture
 <!-- status: pending -->
