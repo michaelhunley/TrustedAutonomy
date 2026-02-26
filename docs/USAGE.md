@@ -305,9 +305,7 @@ Each artifact can have a comment thread with multiple comments from:
 
 Comments support markdown formatting for rich feedback.
 
-### CLI Commands (Coming Soon)
-
-The CLI commands for review sessions are planned but not yet implemented. Planned interface:
+### CLI Commands
 
 ```bash
 # Start a new review session for a draft package
@@ -355,12 +353,48 @@ Review Sessions integrate with existing workflows:
 3. **Iterative Review**: Add comments, set dispositions, pause/resume across multiple CLI invocations
 4. **Finish**: `ta draft review finish` applies approved changes (uses existing selective review logic)
 
-### Follow-Up Goals (v0.1.2 Integration)
+### Follow-Up Goals Integration
 
 When artifacts have `Discuss` disposition:
 - `ta run --follow-up <goal-id>` injects comment threads as structured context
 - Agent addresses each discussed artifact with explanations
-- New PR supersedes the original (see v0.1.2 Follow-Up Goals)
+- New draft supersedes the original
+
+### Correcting a Draft
+
+When you spot an issue in a draft (duplicated code, a typo, a wrong approach), you have three correction paths depending on the size of the fix:
+
+#### 1. Full re-work (architectural changes)
+Use when the issue requires rethinking the approach:
+```bash
+# Mark problematic artifacts as Discuss with context
+ta draft review start <draft-id>
+ta draft review comment "fs://workspace/src/auth.rs" "Wrong approach — use JWT not sessions"
+ta draft review discuss "fs://workspace/src/auth.rs"
+ta draft review finish
+
+# Follow-up goal inherits your comments + discuss items
+ta run "Rework auth to use JWT per review feedback" --source . --follow-up <draft-id>
+```
+
+#### 2. Scoped agent fix (planned — v0.3.4)
+Use when the issue is clear but needs agent help to implement:
+```bash
+# Agent targets only the discussed artifacts, not the full source tree
+ta draft fix <draft-id> --guidance "Remove AgentAlternative, reuse AlternativeConsidered directly"
+```
+
+#### 3. Direct amendment (planned — v0.3.4)
+Use for typos, renames, and small fixes you can make yourself:
+```bash
+# Replace an artifact's content
+ta draft amend <draft-id> "fs://workspace/src/draft.rs" --file corrected_draft.rs
+
+# Drop an artifact from the draft entirely
+ta draft amend <draft-id> "fs://workspace/config.toml" --drop
+```
+
+> **Today**: Use option 1 (full re-work via follow-up). Options 2 and 3 are planned for v0.3.4.
 
 ---
 
