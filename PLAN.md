@@ -727,6 +727,26 @@ ta draft fix <draft-id> <artifact-uri> --guidance "Consolidate duplicate struct"
   3. **Full re-work**: `ta run --follow-up` (complete re-run with discussion context)
 - Document when to use each: amend for typos/renames, fix for logic changes, follow-up for architectural rework
 
+#### Completed ✅
+- `ta draft amend <id> <uri> --file <path>`: Replace artifact content with corrected file, recompute diff, record `AmendmentRecord` with `amended_by` + timestamp
+- `ta draft amend <id> <uri> --drop`: Remove artifact from draft, record in decision log
+- `AmendmentRecord` type added to `Artifact` struct (audit trail: who, when, how, why)
+- `AmendmentType` enum: `FileReplaced`, `PatchApplied`, `Dropped`
+- URI normalization: shorthand paths (e.g., `src/main.rs`) auto-expand to `fs://workspace/src/main.rs`
+- Disposition reset to `Pending` after amendment (content changed, needs re-review)
+- Decision log entries auto-added for all amendments
+- Corrected files written back to staging workspace for consistency
+- `ta draft fix <id> --guidance "<text>"`: Scoped follow-up goal targeting discuss/amended artifacts
+- `ta draft fix <id> <uri> --guidance "<text>"`: Target a specific artifact
+- Builds on existing `--follow-up` mechanism with focused context injection
+- New draft supersedes the original via `DraftStatus::Superseded`
+- USAGE.md "Correcting a Draft" section updated (removed "planned" markers)
+- 10 new tests: 4 for `AmendmentRecord` serialization, 6 for `amend_package` integration (drop, file replace, state validation, error cases, diff computation)
+
+#### Remaining
+- `--patch fix.patch` mode for `ta draft amend` (deferred — `--file` covers the common case)
+- Minimal staging workspace for `ta draft fix` (currently uses full overlay like `--follow-up`)
+
 #### Existing Infrastructure This Builds On
 - `ReviewSession` comment threads (v0.3.0) — comments + discuss items already tracked
 - `GoalRun.parent_goal_id` + `PRStatus::Superseded` — follow-up chain already works

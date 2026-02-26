@@ -388,6 +388,7 @@ mod tests {
                         related_artifacts: vec![],
                     }),
                     comments: None,
+                    amendment: None,
                 }],
                 patch_sets: vec![],
             },

@@ -127,6 +127,37 @@ pub struct Artifact {
     /// Comments from ReviewSession are merged here during draft finalization.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub comments: Option<crate::review_session::CommentThread>,
+    /// Amendment record if this artifact was amended after initial creation (v0.3.4).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub amendment: Option<AmendmentRecord>,
+}
+
+/// Record of a human amendment to an artifact (v0.3.4).
+///
+/// Tracks who amended the artifact, when, and how — for audit trail purposes.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AmendmentRecord {
+    /// Who performed the amendment (e.g., "human", reviewer name).
+    pub amended_by: String,
+    /// When the amendment was made.
+    pub amended_at: DateTime<Utc>,
+    /// What kind of amendment was performed.
+    pub amendment_type: AmendmentType,
+    /// Optional reason for the amendment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// The type of amendment applied to an artifact (v0.3.4).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AmendmentType {
+    /// Artifact content replaced with a corrected file (--file).
+    FileReplaced,
+    /// A patch was applied to the artifact (--patch).
+    PatchApplied,
+    /// Artifact was removed from the draft (--drop).
+    Dropped,
 }
 
 /// Per-artifact review disposition.
@@ -482,6 +513,7 @@ mod tests {
                     dependencies: vec![],
                     explanation_tiers: None,
                     comments: None,
+                    amendment: None,
                 }],
                 patch_sets: vec![],
             },
@@ -642,6 +674,7 @@ mod tests {
             }],
             explanation_tiers: None,
             comments: None,
+            amendment: None,
         };
         let json = serde_json::to_string(&artifact).unwrap();
         let restored: Artifact = serde_json::from_str(&json).unwrap();
@@ -730,6 +763,7 @@ mod tests {
                 related_artifacts: vec![],
             }),
             comments: None,
+            amendment: None,
         };
         let json = serde_json::to_string(&artifact).unwrap();
         let restored: Artifact = serde_json::from_str(&json).unwrap();
@@ -832,5 +866,81 @@ mod tests {
         assert!(record.grants_checked.is_empty());
         assert!(record.matching_grant.is_none());
         assert!(record.evaluation_steps.is_empty());
+    }
+
+    // ── v0.3.4 Draft Amendment tests ──
+
+    #[test]
+    fn amendment_record_serialization() {
+        let record = AmendmentRecord {
+            amended_by: "human".to_string(),
+            amended_at: Utc::now(),
+            amendment_type: AmendmentType::FileReplaced,
+            reason: Some("Fixed typo in struct name".to_string()),
+        };
+        let json = serde_json::to_string(&record).unwrap();
+        assert!(json.contains("\"file_replaced\""));
+        assert!(json.contains("\"human\""));
+        let restored: AmendmentRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.amendment_type, AmendmentType::FileReplaced);
+        assert_eq!(
+            restored.reason,
+            Some("Fixed typo in struct name".to_string())
+        );
+    }
+
+    #[test]
+    fn amendment_type_all_variants() {
+        assert_eq!(
+            serde_json::to_string(&AmendmentType::FileReplaced).unwrap(),
+            "\"file_replaced\""
+        );
+        assert_eq!(
+            serde_json::to_string(&AmendmentType::PatchApplied).unwrap(),
+            "\"patch_applied\""
+        );
+        assert_eq!(
+            serde_json::to_string(&AmendmentType::Dropped).unwrap(),
+            "\"dropped\""
+        );
+    }
+
+    #[test]
+    fn artifact_with_amendment_round_trip() {
+        let artifact = Artifact {
+            resource_uri: "fs://workspace/src/lib.rs".to_string(),
+            change_type: ChangeType::Modify,
+            diff_ref: "changeset:0".to_string(),
+            tests_run: vec![],
+            disposition: ArtifactDisposition::Discuss,
+            rationale: Some("Needs dedup".to_string()),
+            dependencies: vec![],
+            explanation_tiers: None,
+            comments: None,
+            amendment: Some(AmendmentRecord {
+                amended_by: "human".to_string(),
+                amended_at: Utc::now(),
+                amendment_type: AmendmentType::FileReplaced,
+                reason: Some("Deduplicated struct".to_string()),
+            }),
+        };
+        let json = serde_json::to_string(&artifact).unwrap();
+        let restored: Artifact = serde_json::from_str(&json).unwrap();
+        assert!(restored.amendment.is_some());
+        let amend = restored.amendment.unwrap();
+        assert_eq!(amend.amended_by, "human");
+        assert_eq!(amend.amendment_type, AmendmentType::FileReplaced);
+    }
+
+    #[test]
+    fn artifact_without_amendment_backward_compatible() {
+        // Old JSON without amendment field should deserialize fine.
+        let json = r#"{
+            "resource_uri": "fs://workspace/test.txt",
+            "change_type": "add",
+            "diff_ref": "changeset:0"
+        }"#;
+        let artifact: Artifact = serde_json::from_str(json).unwrap();
+        assert!(artifact.amendment.is_none());
     }
 }
