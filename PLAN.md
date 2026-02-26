@@ -472,7 +472,7 @@ Agent works in Virtual Workspace
 - ✅ **Config bugfix**: Added `#[serde(default)]` to `WorkflowConfig.submit` field so partial `.ta/workflow.toml` files parse correctly without requiring a `[submit]` section.
 
 ### v0.3.0.1 — Consolidate `pr.rs` into `draft.rs`
-<!-- status: pending -->
+<!-- status: done -->
 **Completed**:
 - ✅ `pr.rs` reduced from 2205 lines to ~160 lines: thin shim that converts `PrCommands` → `DraftCommands` and delegates to `draft::execute()`
 - ✅ `run.rs` updated to call `draft::DraftCommands::Build` instead of `pr::PrCommands::Build`
@@ -482,7 +482,7 @@ Agent works in Virtual Workspace
 - ✅ All 278 tests passing (11 duplicate pr.rs tests removed; all functionality covered by draft.rs tests)
 
 ### v0.3.1 — Plan Lifecycle Automation
-<!-- status: pending -->
+<!-- status: done -->
 **Completed** (294 tests across 12 crates):
 - ✅ Supervisor `validate_against_plan()` reads change_summary.json, validates completed work against plan at `ta draft build` time (4 new tests)
 - ✅ Completing one phase auto-suggests/creates goal for next pending phase (output after `ta draft apply --phase`)
@@ -494,7 +494,7 @@ Agent works in Virtual Workspace
 - ✅ 16 new tests: plan parsing for sub-phases (4), plan lifecycle (find_next, suggest, history — 8), supervisor plan validation (4)
 
 ### v0.3.1.1 — Configurable Plan Format Parsing
-<!-- status: pending -->
+<!-- status: done -->
 
 **Completed** (307 tests across 12 crates):
 - ✅ `PlanSchema` data model with `PhasePattern` and YAML serde support (`.ta/plan-schema.yaml`)
@@ -606,7 +606,7 @@ This phase deliberately builds the protocol layer that the TA local/web app will
 - Relates to v0.4.1 (macro goals) — interactive sessions are the human-facing complement to the agent-facing MCP tools in macro goal mode.
 
 ### v0.3.2 — Configurable Release Pipeline (`ta release`)
-<!-- status: pending -->
+<!-- status: done -->
 A `ta release` command driven by a YAML task script (`.ta/release.yaml`). Each step is either a TA goal (agent-driven) or a shell command, with optional approval gates. Replaces `scripts/release.sh` with a composable, extensible pipeline.
 
 - ✅ **YAML schema**: Steps with `name`, `agent` or `run`, `objective`, `output`, `requires_approval`
@@ -896,6 +896,92 @@ pub struct PendingAction {
 - **EU AI Act Article 50**: Transparency — humans see exactly what the agent wants to do before it happens
 - **ISO/IEC 42001 A.10.3**: Third-party AI component management via governance wrapper
 
+### v0.5.4 — Context Memory Store (ruvector integration)
+<!-- status: pending -->
+**Goal**: Agent-agnostic persistent memory that works across agent frameworks. When a user switches from Claude Code to Codex mid-project, or runs multiple agents in parallel, context doesn't get lost. TA owns the memory — agents consume it.
+
+> **Problem today**: Each agent framework has its own memory (Claude Code's CLAUDE.md/project memory, Codex's session state, Cursor's codebase index). None of it transfers. TA currently relies on "agent-native mechanisms" for session resume, which means TA has no control over context persistence. A user who switches agents mid-goal starts from scratch.
+
+#### Core: `MemoryStore` trait + ruvector backend
+
+```rust
+/// Agent-agnostic memory store. TA owns the memory; agents read/write through it.
+pub trait MemoryStore: Send + Sync {
+    /// Store a memory entry with semantic embedding for retrieval.
+    fn store(&self, entry: MemoryEntry) -> Result<MemoryId>;
+    /// Retrieve entries semantically similar to a query.
+    fn recall(&self, query: &str, limit: usize) -> Result<Vec<MemoryEntry>>;
+    /// Retrieve entries by exact key or tag.
+    fn lookup(&self, key: &str) -> Result<Option<MemoryEntry>>;
+    /// List entries for a goal, agent, or session.
+    fn list(&self, filter: MemoryFilter) -> Result<Vec<MemoryEntry>>;
+    /// Delete or expire entries.
+    fn forget(&self, id: MemoryId) -> Result<()>;
+}
+
+pub struct MemoryEntry {
+    pub id: MemoryId,
+    pub content: String,              // The actual memory (text, structured data, etc.)
+    pub context: MemoryContext,       // Where this came from (goal, agent, session)
+    pub tags: Vec<String>,            // User or agent-applied labels
+    pub created_at: DateTime<Utc>,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub source: MemorySource,         // AgentOutput, HumanGuidance, GoalResult, DraftReview
+}
+
+pub enum MemorySource {
+    AgentOutput { agent_id: String, session_id: Uuid },
+    HumanGuidance { session_id: Uuid },
+    GoalResult { goal_id: Uuid, outcome: GoalOutcome },
+    DraftReview { draft_id: Uuid, decision: String },
+    SystemCapture,  // TA auto-extracted
+}
+```
+
+#### Backends (pluggable via trait)
+- **Filesystem (default, zero-dep)**: JSON files in `.ta/memory/`. Exact-match lookup only. Ships immediately, no extra dependencies. Sufficient for small projects.
+- **ruvector (recommended)**: Rust-native vector database with HNSW indexing. Sub-millisecond semantic recall. Enables "find memories similar to this problem" across thousands of entries. Added as optional cargo feature: `ta-cli --features ruvector`.
+  - [ruvector](https://github.com/ruvnet/ruvector): Rust-native, 61μs p50 latency, SIMD-optimized, self-learning GNN layer
+  - Local-first — no external service required
+  - Embedding generation: use agent LLM or local model (ONNX runtime) for vector generation
+
+#### CLI surface
+```bash
+ta context store "Always use tempfile::tempdir() for test fixtures"  # manual memory
+ta context recall "how do we handle test fixtures"                   # semantic search
+ta context list --goal <id>                                          # list by scope
+ta context forget <id>                                               # delete entry
+```
+
+#### Automatic capture (opt-in per workflow)
+- On goal completion: extract "what worked" patterns from approved drafts
+- On draft rejection: store rejection reason + what the agent tried (learn from mistakes)
+- On human guidance during interactive session: store as reusable context
+- On repeated corrections: auto-promote to persistent memory ("user always wants X")
+
+#### How agents consume memory
+- **Context injection**: When `ta run` launches an agent, TA queries the memory store for relevant entries and injects them into the agent's context (CLAUDE.md injection, system prompt, or MCP tool).
+- **MCP tool**: `ta_memory_recall` MCP tool lets agents query memory mid-session. "Have I solved something like this before?"
+- **Agent-agnostic**: Same memory available to Claude Code, Codex, Cursor, or any agent. Switch agents without losing context.
+
+#### Design decisions to resolve before implementation
+1. **Embedding model**: Use the goal's agent LLM for embeddings (adds API cost per memory op) vs ship a small local model (ONNX, ~50MB). Recommend: local model for embeddings, LLM only for extraction.
+2. **Memory scope**: Per-project (`.ta/memory/`) vs global (`~/.config/ta/memory/`). Recommend: per-project by default, global opt-in for cross-project patterns.
+3. **Conflict on shared memory**: If two agents write contradictory memories, which wins? Recommend: timestamp-based, human arbitrates via `ta context list --conflicts`.
+4. **ruvector maturity**: Evaluate production-readiness before committing. Fallback to filesystem backend must always work.
+5. **Binary size**: ruvector adds ~2-5MB to the binary. Acceptable for desktop; may matter for cloud/edge.
+
+#### Forward-looking: where memory feeds later phases
+
+| Phase | How it uses memory |
+|-------|-------------------|
+| **v0.6.0 Supervisor** | Query past approve/reject decisions to inform auto-approval. "Last 5 times the agent modified CI config, the human rejected 4 of them" → escalate. |
+| **v0.6.1 Cost tracking** | Remember which agent/prompt patterns are cost-efficient vs wasteful. |
+| **v0.7.0 Guided setup** | Remember user preferences from past setup sessions. "User prefers YAML configs" → skip the config format question. |
+| **v0.8.1 Community memory** | ruvector becomes the backing store. Local → shared is just a sync layer on top. |
+| **v0.4.2 Drift detection** | Store agent behavioral baselines as vectors. Detect when new behavior deviates from learned patterns. |
+| **v1.0 Virtual office** | Role-specific memory: "the code reviewer role remembers common review feedback for this codebase." |
+
 ---
 
 ## v0.6 — Supervisor & Auto-Approval *(release: tag v0.6.0-alpha)*
@@ -1011,13 +1097,13 @@ notify_on_auto_approve: true               # always tell the human what was auto
 
 ### v0.8.1 — Community Memory
 <!-- status: pending -->
-**Goal**: Local-first knowledge base where agents learn from their own history. Opt-in community sharing later.
+**Goal**: Opt-in sharing of memory across TA instances. Builds on the `MemoryStore` and ruvector backend from v0.5.4.
 
-- **Local memory**: Each TA instance maintains a problem → solution store. Agents query it during goal execution.
-- **Automatic capture**: When a goal completes successfully, TA extracts patterns (what worked, what was rejected and why)
-- **Agent-accessible**: MCP tool `ta_memory_search` lets agents query solutions during goal execution
-- **Opt-in sharing** (future): Publish anonymized solutions to community registry
-- **Not a chatbot knowledge base** — focused on actionable problem→solution pairs with provenance
+- **Local memory already exists** (v0.5.4): Each TA instance has a `MemoryStore` with automatic capture from goal results, draft reviews, and human guidance.
+- **Community sync layer**: Publish anonymized problem → solution pairs to a shared registry. ruvector's distributed sync (Raft consensus) provides the replication mechanism.
+- **Privacy controls**: User chooses what to share — tag-based opt-in, never auto-publish. PII stripping before publish.
+- **Retrieval**: `ta context recall` searches local memory first, then community registry if opt-in is enabled. Local results ranked higher.
+- **Not a chatbot knowledge base** — focused on actionable problem → solution pairs with provenance and verification status (did this actually work when applied?)
 
 ---
 

@@ -391,19 +391,23 @@ pub fn find_next_pending<'a>(
     phases: &'a [PlanPhase],
     after_phase: Option<&str>,
 ) -> Option<&'a PlanPhase> {
-    let start_idx = if let Some(after) = after_phase {
-        phases
-            .iter()
-            .position(|p| p.id == after)
-            .map(|i| i + 1)
-            .unwrap_or(0)
+    if let Some(after) = after_phase {
+        // Find the current phase's position and search forward from there.
+        if let Some(idx) = phases.iter().position(|p| p.id == after) {
+            // Search forward from the phase after the current one.
+            if let Some(next) = phases[idx + 1..]
+                .iter()
+                .find(|p| p.status == PlanStatus::Pending)
+            {
+                return Some(next);
+            }
+        }
+        // Phase not found or no pending phases after it — don't fall back to
+        // the beginning (which would suggest unrelated earlier phases like v0.1).
+        None
     } else {
-        0
-    };
-
-    phases[start_idx..]
-        .iter()
-        .find(|p| p.status == PlanStatus::Pending)
+        phases.iter().find(|p| p.status == PlanStatus::Pending)
+    }
 }
 
 /// Record a plan phase status change to the history log.
