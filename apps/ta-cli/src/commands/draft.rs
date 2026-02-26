@@ -1484,6 +1484,48 @@ fn apply_package(
         println!("  {}", file);
     }
 
+    // If the goal has a plan_phase, mark it done in PLAN.md + record history + suggest next.
+    // This must happen BEFORE the git commit so the status update is included in the commit.
+    if let Some(ref phase) = goal.plan_phase {
+        let plan_path = target_dir.join("PLAN.md");
+        if plan_path.exists() {
+            let content = std::fs::read_to_string(&plan_path)?;
+
+            // Record the old status before updating.
+            let phases_before = super::plan::parse_plan(&content);
+            let old_status = phases_before
+                .iter()
+                .find(|p| p.id == *phase)
+                .map(|p| p.status.clone())
+                .unwrap_or(super::plan::PlanStatus::Pending);
+
+            let updated =
+                super::plan::update_phase_status(&content, phase, super::plan::PlanStatus::Done);
+            std::fs::write(&plan_path, &updated)?;
+            println!("Updated PLAN.md: Phase {} -> done", phase);
+
+            // Record history.
+            let _ = super::plan::record_history(
+                &target_dir,
+                phase,
+                &old_status,
+                &super::plan::PlanStatus::Done,
+            );
+
+            // Auto-suggest the next pending phase.
+            let phases_after = super::plan::parse_plan(&updated);
+            if let Some(next) = super::plan::find_next_pending(&phases_after, Some(phase.as_str()))
+            {
+                println!();
+                println!("Next pending phase: {} — {}", next.id, next.title);
+                println!(
+                    "  To start: {}",
+                    super::plan::suggest_next_goal_command(next)
+                );
+            }
+        }
+    }
+
     // Submit workflow integration (git or other adapters).
     if git_commit {
         use ta_submit::{GitAdapter, NoneAdapter, SubmitAdapter, WorkflowConfig};
@@ -1570,45 +1612,45 @@ fn apply_package(
     };
     save_package(config, &pkg)?;
 
-    // If the goal has a plan_phase, mark it done in PLAN.md + record history + suggest next.
+    // Post-apply validation summary: confirm state is consistent for the human.
+    println!();
+    println!("── Post-Apply Status ──");
+    println!("  Draft:  {} → applied", id);
+    println!(
+        "  Goal:   {} → applied",
+        goal.goal_run_id.to_string().get(..8).unwrap_or("?")
+    );
     if let Some(ref phase) = goal.plan_phase {
         let plan_path = target_dir.join("PLAN.md");
         if plan_path.exists() {
-            let content = std::fs::read_to_string(&plan_path)?;
-
-            // Record the old status before updating.
-            let phases_before = super::plan::parse_plan(&content);
-            let old_status = phases_before
-                .iter()
-                .find(|p| p.id == *phase)
-                .map(|p| p.status.clone())
-                .unwrap_or(super::plan::PlanStatus::Pending);
-
-            let updated =
-                super::plan::update_phase_status(&content, phase, super::plan::PlanStatus::Done);
-            std::fs::write(&plan_path, &updated)?;
-            println!("Updated PLAN.md: Phase {} -> done", phase);
-
-            // Record history.
-            let _ = super::plan::record_history(
-                &target_dir,
-                phase,
-                &old_status,
-                &super::plan::PlanStatus::Done,
-            );
-
-            // Auto-suggest the next pending phase.
-            let phases_after = super::plan::parse_plan(&updated);
-            if let Some(next) = super::plan::find_next_pending(&phases_after, Some(phase.as_str()))
-            {
-                println!();
-                println!("Next pending phase: {} — {}", next.id, next.title);
-                println!(
-                    "  To start: {}",
-                    super::plan::suggest_next_goal_command(next)
+            let content = std::fs::read_to_string(&plan_path).unwrap_or_default();
+            let phases = super::plan::parse_plan(&content);
+            if let Some(p) = phases.iter().find(|p| p.id == *phase) {
+                let status_str = match p.status {
+                    super::plan::PlanStatus::Done => "done",
+                    super::plan::PlanStatus::InProgress => "in_progress",
+                    super::plan::PlanStatus::Pending => "pending",
+                };
+                if p.status == super::plan::PlanStatus::Done {
+                    println!("  Plan:   {} → {}", phase, status_str);
+                } else {
+                    eprintln!(
+                        "  ⚠ Plan:  {} is still '{}' — expected 'done'. Check PLAN.md.",
+                        phase, status_str
+                    );
+                }
+            } else {
+                eprintln!(
+                    "  ⚠ Plan:  phase '{}' not found in PLAN.md",
+                    phase
                 );
             }
         }
+    }
+    if git_commit {
+        println!("  Submit: committed{}",
+            if git_push { " + pushed" } else { "" }
+        );
     }
 
     Ok(())

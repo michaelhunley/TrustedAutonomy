@@ -687,7 +687,7 @@ Agents that support it get richer review context; agents that don't still work f
 - All backward-compatible — old data deserializes correctly
 
 ### v0.3.4 — Draft Amendment & Targeted Re-Work
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Let users correct draft issues inline without a full agent re-run. Today the only correction path is a full `ta run --follow-up` cycle — overkill for a 10-line struct deduplication or a typo fix.
 
 #### `ta draft amend` — Human-Provided Corrections
