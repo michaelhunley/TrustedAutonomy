@@ -312,7 +312,14 @@ struct ChangeSummaryEntry {
     depended_by: Vec<String>,
     /// Alternatives the agent considered for this change (v0.3.3).
     #[serde(default)]
-    alternatives_considered: Vec<AlternativeConsidered>,
+    alternatives_considered: Vec<AgentAlternative>,
+}
+
+/// An alternative the agent considered and rejected (v0.3.3).
+#[derive(Debug, serde::Deserialize)]
+struct AgentAlternative {
+    description: String,
+    rejected_reason: String,
 }
 
 /// Try to load the agent's change summary from the staging workspace.
@@ -394,7 +401,14 @@ fn extract_decision_log(summary: &ChangeSummary) -> Vec<DecisionLogEntry> {
                 .iter()
                 .map(|a| format!("{}: {}", a.description, a.rejected_reason))
                 .collect(),
-            alternatives_considered: entry.alternatives_considered.clone(),
+            alternatives_considered: entry
+                .alternatives_considered
+                .iter()
+                .map(|a| AlternativeConsidered {
+                    description: a.description.clone(),
+                    rejected_reason: a.rejected_reason.clone(),
+                })
+                .collect(),
         })
         .collect()
 }

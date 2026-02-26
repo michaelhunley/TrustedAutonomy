@@ -618,7 +618,7 @@ A `ta release` command driven by a YAML task script (`.ta/release.yaml`). Each s
 - ✅ **Approval gates**: `requires_approval: true` pauses for human review before proceeding (e.g., before push)
 
 ### v0.3.3 — Decision Observability & Reasoning Capture
-<!-- status: done -->
+<!-- status: pending -->
 **Goal**: Make every decision in the TA pipeline observable — not just *what happened*, but *what was considered and why*. Foundation for drift detection (v0.4.2) and compliance reporting (ISO 42001, IEEE 7001).
 
 > **Research note**: Evaluated [AAP](https://github.com/mnemom/aap) (Agent Alignment Protocol) for this role. AAP provides transparency through self-declared alignment cards and traced decisions, but is a Python/TypeScript decorator-based SDK that can't instrument external agents (Claude Code, Codex). TA's approach is stronger: enforce constraints architecturally, then capture the reasoning of TA's own decision pipeline. The *agent's* internal reasoning is captured via `change_summary.json`; TA's *governance* reasoning is captured here.
@@ -674,64 +674,17 @@ Agents that support it get richer review context; agents that don't still work f
 - **NIST AI RMF**: MAP 1.1 (intended purpose documentation), GOVERN 1.3 (decision documentation)
 
 #### Completed
-- `DecisionReasoning` + `Alternative` structs in `ta-audit` with `reasoning` field on `AuditEvent`
-- `EvaluationTrace` + `EvaluationStep` in `ta-policy` — full trace from `PolicyEngine::evaluate_with_trace()`
-- `AlternativeConsidered` struct and enriched `DecisionLogEntry` in `ta-changeset`
-- Extended `PolicyDecisionRecord` with `grants_checked`, `matching_grant`, `evaluation_steps`
-- `ReviewReasoning` struct on `Comment` — reviewers can document structured reasoning
-- Extended `ChangeSummaryEntry` with `alternatives_considered` (agent-side)
-- Decision log extraction in `ta draft build` — alternatives flow from change_summary.json into draft packages
-- `ta audit show <goal-id>` — display decision trail with reasoning
-- `ta audit export <goal-id> --format json` — structured compliance export
-- 17 new tests across ta-audit, ta-policy, ta-changeset
-- All backward-compatible — old data deserializes correctly
-
-### v0.3.4 — Draft Amendment & Targeted Re-Work
-<!-- status: pending -->
-**Goal**: Let users correct draft issues inline without a full agent re-run. Today the only correction path is a full `ta run --follow-up` cycle — overkill for a 10-line struct deduplication or a typo fix.
-
-#### `ta draft amend` — Human-Provided Corrections
-```bash
-# Replace an artifact's content with a corrected file
-ta draft amend <draft-id> <artifact-uri> --file path/to/corrected.rs
-
-# Apply a patch to an artifact
-ta draft amend <draft-id> <artifact-uri> --patch fix.patch
-
-# Remove an artifact from the draft entirely
-ta draft amend <draft-id> <artifact-uri> --drop
-```
-- Amends the draft package in-place (new artifact content, re-diffs against source)
-- Records `amended_by: "human"` + timestamp in artifact metadata for audit trail
-- Draft remains in review — user can approve/apply after amendment
-- Decision log entry auto-added: "Human amended artifact: <reason>"
-
-#### `ta draft fix` — Scoped Agent Re-Work
-```bash
-# Agent targets only discuss items with your guidance
-ta draft fix <draft-id> --guidance "Remove AgentAlternative, reuse AlternativeConsidered directly"
-
-# Target a specific artifact
-ta draft fix <draft-id> <artifact-uri> --guidance "Consolidate duplicate struct"
-```
-- Creates a **scoped follow-up goal** targeting only discuss/amended artifacts (not the full source tree)
-- Injects: artifact content + comment threads + user guidance into agent context
-- Agent works in a minimal staging copy (only affected files, not full overlay)
-- Builds a new draft that supersedes the original — review + apply as normal
-- Much faster than full `ta run --follow-up` since scope is constrained
-
-#### Usage Documentation
-- Add "Correcting a Draft" section to USAGE.md covering the three correction paths:
-  1. **Small fix**: `ta draft amend` (human edits directly)
-  2. **Agent-assisted fix**: `ta draft fix --guidance` (scoped re-work)
-  3. **Full re-work**: `ta run --follow-up` (complete re-run with discussion context)
-- Document when to use each: amend for typos/renames, fix for logic changes, follow-up for architectural rework
-
-#### Existing Infrastructure This Builds On
-- `ReviewSession` comment threads (v0.3.0) — comments + discuss items already tracked
-- `GoalRun.parent_goal_id` + `PRStatus::Superseded` — follow-up chain already works
-- `build_parent_context_section()` in run.rs — discuss items + comments already injected into follow-up goals
-- `ArtifactDisposition::Discuss` (v0.3.0 Phase 4b) — selective review already identifies items needing attention
+- ✅ `DecisionReasoning` + `Alternative` structs in `ta-audit` with `reasoning` field on `AuditEvent`
+- ✅ `EvaluationTrace` + `EvaluationStep` in `ta-policy` — full trace from `PolicyEngine::evaluate_with_trace()`
+- ✅ `AlternativeConsidered` struct and enriched `DecisionLogEntry` in `ta-changeset`
+- ✅ Extended `PolicyDecisionRecord` with `grants_checked`, `matching_grant`, `evaluation_steps`
+- ✅ `ReviewReasoning` struct on `Comment` — reviewers can document structured reasoning
+- ✅ Extended `ChangeSummaryEntry` with `alternatives_considered` (agent-side)
+- ✅ Decision log extraction in `ta draft build` — alternatives flow from change_summary.json into draft packages
+- ✅ `ta audit show <goal-id>` — display decision trail with reasoning
+- ✅ `ta audit export <goal-id> --format json` — structured compliance export
+- ✅ 17 new tests across ta-audit, ta-policy, ta-changeset (367 total)
+- ✅ All backward-compatible — old data deserializes correctly
 
 ---
 
@@ -869,18 +822,6 @@ access:
 - **IEEE 3152-2024**: Pre-declared intent satisfies transparency requirements for autonomous system actions
 - **NIST AI RMF GOVERN 1.4**: Documented processes for mapping AI system behavior to intended purpose
 - **EU AI Act Article 14**: Human oversight mechanism — constitution is a reviewable, pre-approved scope of action
-
-### v0.4.4 — Interactive Session Completion
-<!-- status: pending -->
-**Goal**: Complete the `ta run --interactive` experience so users can inject mid-session guidance while the agent works. The `SessionChannel` protocol and `InteractiveSession` data model exist (v0.3.1.2) but the CLI handler that connects them to a live agent process is incomplete.
-
-- **PTY capture**: Wrap agent subprocess in a PTY so output streams to the terminal in real-time while TA captures it for session history
-- **Stdin interleaving**: User types guidance mid-session → TA routes it to the agent's stdin (or injects as a message via the agent framework's API)
-- **Guidance logged**: All human injections recorded in `InteractiveSession.messages` with timestamps, available for audit trail and follow-up context
-- **Pause/resume**: `Ctrl+P` pauses agent execution, user reviews current state, types guidance, resumes. `ta run --resume <session-id>` resumes an abandoned session.
-- **Integration with `ta draft fix`** (v0.3.4): If the user spots an issue during interactive review, they can pause the session and switch to `ta draft fix` for targeted correction of the current draft, then resume.
-
-> **Depends on**: v0.3.1.2 (SessionChannel protocol), v0.3.4 (draft amend for inline correction during pause). Enables the full "observe → inject → correct" loop that makes TA review feel conversational rather than batch-oriented.
 
 ---
 
@@ -1189,21 +1130,7 @@ notify_on_auto_approve: true               # always tell the human what was auto
 - Full web UI for review/approval (extends v0.5.2 minimal UI)
 - Mobile-responsive web UI (not a native app — PWA is sufficient for v1.0)
 
-### v0.9.1 — Native Windows Support
-<!-- status: pending -->
-**Goal**: First-class Windows experience without requiring WSL, timed for when non-engineers (home finance, family office, personal productivity users) begin adopting TA via v0.7's guided setup and v0.9.0's desktop installer.
-
-- **Windows MSVC build target**: Add `x86_64-pc-windows-msvc` to CI release matrix (GitHub Actions `windows-latest` runner). Ship `.zip` archive with `ta.exe`.
-- **Path handling**: Audit all `Path`/`PathBuf` usage for Unix assumptions (`/` separators, `/tmp`, `/usr/local/bin`). Use `std::path` consistently; replace hard-coded `/` with `std::path::MAIN_SEPARATOR` where needed.
-- **Process management**: Replace Unix-specific signal handling (`SIGTERM`, `SIGINT`) with cross-platform equivalents. Use `ctrlc` crate for Ctrl+C handling on Windows.
-- **Shell command execution**: Agent configs currently assume `bash`. Add `shell` field to agent YAML (`bash`, `powershell`, `cmd`). Default: auto-detect from OS.
-- **Installer**: MSI or NSIS installer bundled with desktop build (v0.9.0). Add to `winget` and `scoop` package managers.
-- **Testing**: Add Windows CI job running full test suite. Gate releases on Windows tests passing.
-- **Known limitations for v0.9.1**: Sandbox runner (v0.9.2) may not support Windows initially — gVisor is Linux-only. Document WSL2 as fallback for sandboxed execution on Windows.
-
-> **Why v0.9.1**: Non-engineer users arrive at v0.7 (guided setup) and v0.9.0 (desktop installer). By v0.9.1, the install experience must be native on all three platforms. Earlier phases target developers who are comfortable with macOS/Linux and WSL.
-
-### v0.9.2 — Sandbox Runner (optional hardening)
+### v0.9.1 — Sandbox Runner (optional hardening)
 <!-- status: pending -->
 > Moved from v0.6. Optional for users who need kernel-level isolation. Not a prerequisite for v1.0.
 
