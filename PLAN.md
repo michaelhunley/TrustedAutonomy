@@ -767,7 +767,7 @@ ta draft fix <draft-id> <artifact-uri> --guidance "Consolidate duplicate struct"
 - **Nix dirty-tree warning suppressed**: `./dev` uses `--no-warn-dirty`
 
 ### v0.3.6 — Draft Lifecycle Hygiene
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Automated and manual cleanup of stale draft state so TA stays consistent without manual intervention.
 
 - ✅ **`ta draft close <id> [--reason <text>]`**: Manually mark a draft as closed/superseded without applying it. For drafts that were hand-merged, abandoned, or made obsolete by later work. Records reason + timestamp in audit log.
