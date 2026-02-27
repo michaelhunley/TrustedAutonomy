@@ -1042,7 +1042,7 @@ dependencies = [
 
 [[package]]
 name = "ta-cli"
-version = "0.3.5-alpha"
+version = "0.3.6-alpha"
 dependencies = [
  "anyhow",
  "chrono",

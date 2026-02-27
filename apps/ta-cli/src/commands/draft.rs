@@ -2,7 +2,7 @@
 
 use std::fs;
 
-use chrono::Utc;
+use chrono::{Duration, Utc};
 use clap::Subcommand;
 use ta_changeset::changeset::{ChangeKind, ChangeSet, CommitIntent};
 use ta_changeset::diff::DiffContent;
@@ -48,6 +48,9 @@ pub enum DraftCommands {
         /// Filter by goal run ID.
         #[arg(long)]
         goal: Option<String>,
+        /// Show only stale drafts (non-terminal states older than threshold).
+        #[arg(long)]
+        stale: bool,
     },
     /// View draft package details and diffs.
     View {
@@ -168,6 +171,26 @@ pub enum DraftCommands {
         #[command(subcommand)]
         command: ReviewCommands,
     },
+    /// Close a draft without applying (abandoned, hand-merged, or obsolete).
+    Close {
+        /// Draft package ID.
+        id: String,
+        /// Reason for closing.
+        #[arg(long)]
+        reason: Option<String>,
+        /// Who is closing the draft.
+        #[arg(long, default_value = "human-reviewer")]
+        closed_by: String,
+    },
+    /// Garbage-collect stale staging directories for terminal-state drafts.
+    Gc {
+        /// Show what would be removed without actually removing anything.
+        #[arg(long)]
+        dry_run: bool,
+        /// Archive staging dirs to .ta/archive/ instead of deleting.
+        #[arg(long)]
+        archive: bool,
+    },
 }
 
 /// Review session subcommands for multi-turn artifact review.
@@ -217,6 +240,44 @@ pub enum ReviewCommands {
     },
 }
 
+/// Startup health check: warn about stale drafts (v0.3.6).
+/// Called on every `ta` invocation; prints to stderr. Suppressible via [gc] health_check = false.
+pub fn check_stale_drafts(config: &GatewayConfig) {
+    let workflow_config = ta_submit::WorkflowConfig::load_or_default(
+        &config.workspace_root.join(".ta/workflow.toml"),
+    );
+    if !workflow_config.gc.health_check {
+        return;
+    }
+
+    // Only check if pr_packages dir exists.
+    if !config.pr_packages_dir.exists() {
+        return;
+    }
+
+    let Ok(packages) = load_all_packages(config) else {
+        return;
+    };
+
+    let stale_cutoff = Utc::now() - Duration::days(3);
+    let stale_count = packages
+        .iter()
+        .filter(|p| {
+            matches!(
+                p.status,
+                DraftStatus::Approved { .. } | DraftStatus::PendingReview
+            ) && p.created_at < stale_cutoff
+        })
+        .count();
+
+    if stale_count > 0 {
+        eprintln!(
+            "hint: {} draft(s) approved/pending but not applied for 3+ days — run `ta draft list --stale`",
+            stale_count
+        );
+    }
+}
+
 pub fn execute(cmd: &DraftCommands, config: &GatewayConfig) -> anyhow::Result<()> {
     match cmd {
         DraftCommands::Build {
@@ -224,7 +285,7 @@ pub fn execute(cmd: &DraftCommands, config: &GatewayConfig) -> anyhow::Result<()
             summary,
             latest,
         } => build_package(config, goal_id, summary, *latest),
-        DraftCommands::List { goal } => list_packages(config, goal.as_deref()),
+        DraftCommands::List { goal, stale } => list_packages(config, goal.as_deref(), *stale),
         DraftCommands::View {
             id,
             summary,
@@ -329,6 +390,12 @@ pub fn execute(cmd: &DraftCommands, config: &GatewayConfig) -> anyhow::Result<()
             *no_launch,
         ),
         DraftCommands::Review { command } => execute_review_command(command, config),
+        DraftCommands::Close {
+            id,
+            reason,
+            closed_by,
+        } => close_package(config, id, reason.as_deref(), closed_by),
+        DraftCommands::Gc { dry_run, archive } => gc_packages(config, *dry_run, *archive),
     }
 }
 
@@ -829,8 +896,8 @@ fn build_package(
                         DraftStatus::Applied { .. } | DraftStatus::Denied { .. } => {
                             // Parent already applied or denied — no supersession needed.
                         }
-                        DraftStatus::Superseded { .. } => {
-                            // Parent already superseded — nothing to do.
+                        DraftStatus::Superseded { .. } | DraftStatus::Closed { .. } => {
+                            // Parent already superseded or closed — nothing to do.
                         }
                     }
                 }
@@ -860,46 +927,92 @@ fn build_package(
     Ok(())
 }
 
-fn list_packages(config: &GatewayConfig, goal_filter: Option<&str>) -> anyhow::Result<()> {
+fn list_packages(
+    config: &GatewayConfig,
+    goal_filter: Option<&str>,
+    stale_only: bool,
+) -> anyhow::Result<()> {
     let packages = load_all_packages(config)?;
 
-    let filtered: Vec<&DraftPackage> = if let Some(goal_id) = goal_filter {
-        packages
-            .iter()
-            .filter(|p| p.goal.goal_id == goal_id)
-            .collect()
-    } else {
-        packages.iter().collect()
-    };
+    // Load GC config for stale threshold.
+    let workflow_config = ta_submit::WorkflowConfig::load_or_default(
+        &config.workspace_root.join(".ta/workflow.toml"),
+    );
+    let stale_days = workflow_config.gc.stale_threshold_days;
+    let stale_cutoff = Utc::now() - chrono::Duration::days(stale_days as i64);
+
+    let filtered: Vec<&DraftPackage> = packages
+        .iter()
+        .filter(|p| {
+            if let Some(goal_id) = goal_filter {
+                if p.goal.goal_id != goal_id {
+                    return false;
+                }
+            }
+            if stale_only {
+                // Stale = non-terminal state (PendingReview, Approved, Draft) older than threshold.
+                let is_non_terminal = matches!(
+                    p.status,
+                    DraftStatus::Draft | DraftStatus::PendingReview | DraftStatus::Approved { .. }
+                );
+                return is_non_terminal && p.created_at < stale_cutoff;
+            }
+            true
+        })
+        .collect();
 
     if filtered.is_empty() {
-        println!("No draft packages found.");
+        if stale_only {
+            println!("No stale drafts found (threshold: {} days).", stale_days);
+        } else {
+            println!("No draft packages found.");
+        }
         return Ok(());
     }
 
+    if stale_only {
+        println!(
+            "Stale drafts (non-terminal, older than {} days):\n",
+            stale_days
+        );
+    }
+
     println!(
-        "{:<38} {:<30} {:<16} {:<8}",
-        "PACKAGE ID", "GOAL", "STATUS", "FILES"
+        "{:<38} {:<30} {:<16} {:<8} {}",
+        "PACKAGE ID",
+        "GOAL",
+        "STATUS",
+        "FILES",
+        if stale_only { "AGE" } else { "" }
     );
-    println!("{}", "-".repeat(92));
+    println!("{}", "-".repeat(if stale_only { 104 } else { 92 }));
 
     for pkg in &filtered {
         let status_display = match &pkg.status {
             DraftStatus::Superseded { superseded_by } => {
                 format!("superseded ({})", &superseded_by.to_string()[..8])
             }
+            DraftStatus::Closed { .. } => "closed".to_string(),
             _ => format!("{:?}", pkg.status),
         };
 
+        let age_str = if stale_only {
+            let age = Utc::now() - pkg.created_at;
+            format!("{}d", age.num_days())
+        } else {
+            String::new()
+        };
+
         println!(
-            "{:<38} {:<30} {:<16} {:<8}",
+            "{:<38} {:<30} {:<16} {:<8} {}",
             pkg.package_id,
             truncate(&pkg.goal.title, 28),
             status_display,
             pkg.changes.artifacts.len(),
+            age_str,
         );
     }
-    println!("\n{} package(s) total.", filtered.len());
+    println!("\n{} package(s).", filtered.len());
     Ok(())
 }
 
@@ -1612,6 +1725,36 @@ fn apply_package(
     };
     save_package(config, &pkg)?;
 
+    // Auto-close parent draft on follow-up apply (v0.3.6).
+    // If this goal is a follow-up and the parent's draft is still in a reviewable state,
+    // close it automatically since this follow-up supersedes it.
+    if let Some(parent_goal_id) = goal.parent_goal_id {
+        if let Some(parent_goal) = goal_store.get(parent_goal_id)? {
+            if let Some(parent_pr_id) = parent_goal.pr_package_id {
+                if let Ok(mut parent_pkg) = load_package(config, parent_pr_id) {
+                    if matches!(
+                        parent_pkg.status,
+                        DraftStatus::PendingReview | DraftStatus::Approved { .. }
+                    ) {
+                        parent_pkg.status = DraftStatus::Closed {
+                            closed_at: Utc::now(),
+                            reason: Some(format!(
+                                "Auto-closed: follow-up draft {} applied",
+                                pkg.package_id
+                            )),
+                            closed_by: "ta-system".to_string(),
+                        };
+                        let _ = save_package(config, &parent_pkg);
+                        println!(
+                            "  Auto-closed parent draft {} (superseded by this follow-up).",
+                            &parent_pr_id.to_string()[..8]
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     // Post-apply validation summary: confirm state is consistent for the human.
     println!();
     println!("── Post-Apply Status ──");
@@ -2053,6 +2196,167 @@ fn fix_package(
         println!("Review with: ta draft list");
     }
 
+    Ok(())
+}
+
+// ── Draft close (v0.3.6) ────────────────────────────────────────────
+
+/// Close a draft without applying it (abandoned, hand-merged, or obsolete).
+fn close_package(
+    config: &GatewayConfig,
+    id: &str,
+    reason: Option<&str>,
+    closed_by: &str,
+) -> anyhow::Result<()> {
+    let package_id = Uuid::parse_str(id)?;
+    let mut pkg = load_package(config, package_id)?;
+
+    // Only allow closing drafts that are in non-terminal states.
+    match &pkg.status {
+        DraftStatus::Draft | DraftStatus::PendingReview | DraftStatus::Approved { .. } => {}
+        DraftStatus::Applied { .. } => {
+            anyhow::bail!("Draft {} is already applied — cannot close", package_id)
+        }
+        DraftStatus::Denied { .. } => {
+            anyhow::bail!("Draft {} is already denied — cannot close", package_id)
+        }
+        DraftStatus::Superseded { .. } => {
+            anyhow::bail!("Draft {} is already superseded — cannot close", package_id)
+        }
+        DraftStatus::Closed { .. } => {
+            anyhow::bail!("Draft {} is already closed", package_id)
+        }
+    }
+
+    let prev_status = pkg.status.to_string();
+    pkg.status = DraftStatus::Closed {
+        closed_at: Utc::now(),
+        reason: reason.map(|s| s.to_string()),
+        closed_by: closed_by.to_string(),
+    };
+    save_package(config, &pkg)?;
+
+    // Write audit event.
+    if let Ok(mut audit_log) = ta_audit::AuditLog::open(&config.audit_log) {
+        let mut event = ta_audit::AuditEvent::new(closed_by, ta_audit::AuditAction::Approval)
+            .with_target(format!("draft://{}", package_id))
+            .with_metadata(serde_json::json!({
+                "action": "closed",
+                "previous_status": prev_status,
+                "reason": reason.unwrap_or(""),
+            }));
+        let _ = audit_log.append(&mut event);
+    }
+
+    println!("Draft {} closed.", package_id);
+    if let Some(r) = reason {
+        println!("  Reason: {}", r);
+    }
+    println!("  Previous status: {}", prev_status);
+    Ok(())
+}
+
+// ── Draft garbage collection (v0.3.6) ───────────────────────────────
+
+/// Garbage-collect stale staging directories for drafts in terminal states.
+fn gc_packages(config: &GatewayConfig, dry_run: bool, archive: bool) -> anyhow::Result<()> {
+    let workflow_config = ta_submit::WorkflowConfig::load_or_default(
+        &config.workspace_root.join(".ta/workflow.toml"),
+    );
+    let threshold_days = workflow_config.gc.stale_threshold_days;
+    let cutoff = Utc::now() - Duration::days(threshold_days as i64);
+
+    let goal_store = GoalRunStore::new(&config.goals_dir)?;
+    let goals = goal_store.list()?;
+
+    let mut cleaned = 0u32;
+    let mut skipped = 0u32;
+
+    for goal in &goals {
+        // Only GC goals in terminal states.
+        let is_terminal = matches!(
+            goal.state,
+            GoalRunState::Applied | GoalRunState::Completed | GoalRunState::Failed { .. }
+        );
+
+        // Also GC goals whose drafts are in terminal states (Denied, Closed, Superseded).
+        let draft_terminal = goal.pr_package_id.is_some_and(|pr_id| {
+            load_package(config, pr_id).is_ok_and(|pkg| {
+                matches!(
+                    pkg.status,
+                    DraftStatus::Applied { .. }
+                        | DraftStatus::Denied { .. }
+                        | DraftStatus::Closed { .. }
+                        | DraftStatus::Superseded { .. }
+                )
+            })
+        });
+
+        if !(is_terminal || draft_terminal) {
+            continue;
+        }
+
+        // Check age.
+        if goal.updated_at > cutoff {
+            continue;
+        }
+
+        // Check if staging dir exists.
+        if !goal.workspace_path.exists() {
+            continue;
+        }
+
+        if dry_run {
+            println!(
+                "[dry-run] Would remove: {} (goal: {}, state: {}, age: {}d)",
+                goal.workspace_path.display(),
+                &goal.goal_run_id.to_string()[..8],
+                goal.state,
+                (Utc::now() - goal.updated_at).num_days(),
+            );
+            cleaned += 1;
+        } else if archive {
+            let archive_dir = config.workspace_root.join(".ta/archive");
+            std::fs::create_dir_all(&archive_dir)?;
+            let archive_dest = archive_dir.join(goal.goal_run_id.to_string());
+            if archive_dest.exists() {
+                eprintln!(
+                    "Skipping {} — archive already exists",
+                    goal.goal_run_id.to_string().get(..8).unwrap_or("?")
+                );
+                skipped += 1;
+            } else {
+                std::fs::rename(&goal.workspace_path, &archive_dest)?;
+                println!(
+                    "Archived: {} → {}",
+                    goal.workspace_path.display(),
+                    archive_dest.display()
+                );
+                cleaned += 1;
+            }
+        } else {
+            std::fs::remove_dir_all(&goal.workspace_path)?;
+            println!(
+                "Removed: {} (goal: {})",
+                goal.workspace_path.display(),
+                &goal.goal_run_id.to_string()[..8],
+            );
+            cleaned += 1;
+        }
+    }
+
+    if dry_run {
+        println!("\n{} staging dir(s) would be removed.", cleaned);
+    } else {
+        println!(
+            "\n{} staging dir(s) {}.",
+            cleaned,
+            if archive { "archived" } else { "removed" }
+        );
+        if skipped > 0 {
+            println!("{} skipped (archive already exists).", skipped);
+        }
+    }
     Ok(())
 }
 

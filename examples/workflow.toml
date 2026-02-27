@@ -31,3 +31,16 @@ open_external = true
 
 # Optional: Override default path to diff-handlers.toml
 # handlers_file = ".ta/diff-handlers.toml"
+
+# ────────────────────────────────────────────────────────────────────
+# Draft Lifecycle / Garbage Collection Configuration (v0.3.6)
+# ────────────────────────────────────────────────────────────────────
+
+[gc]
+# Days after which terminal-state drafts' staging dirs are eligible for cleanup.
+# Affects `ta draft gc`. Default: 7.
+stale_threshold_days = 7
+
+# Show a one-line warning on `ta` startup if stale drafts exist
+# (approved but not applied for 3+ days). Default: true.
+health_check = true

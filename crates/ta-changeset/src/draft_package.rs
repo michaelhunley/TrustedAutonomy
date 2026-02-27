@@ -442,6 +442,12 @@ pub enum DraftStatus {
     Superseded {
         superseded_by: Uuid,
     },
+    /// This draft has been manually closed (abandoned, hand-merged, or obsolete).
+    Closed {
+        closed_at: DateTime<Utc>,
+        reason: Option<String>,
+        closed_by: String,
+    },
 }
 
 impl std::fmt::Display for DraftStatus {
@@ -453,6 +459,7 @@ impl std::fmt::Display for DraftStatus {
             DraftStatus::Denied { .. } => write!(f, "denied"),
             DraftStatus::Applied { .. } => write!(f, "applied"),
             DraftStatus::Superseded { .. } => write!(f, "superseded"),
+            DraftStatus::Closed { .. } => write!(f, "closed"),
         }
     }
 }
@@ -720,6 +727,33 @@ mod tests {
         let json = serde_json::to_string(&status).unwrap();
         assert!(json.contains("\"superseded\""));
         assert!(json.contains(&superseding_id.to_string()));
+        let restored: DraftStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, status);
+    }
+
+    #[test]
+    fn draft_status_closed_serialization() {
+        let status = DraftStatus::Closed {
+            closed_at: Utc::now(),
+            reason: Some("Hand-merged upstream".to_string()),
+            closed_by: "human-reviewer".to_string(),
+        };
+        assert_eq!(status.to_string(), "closed");
+        let json = serde_json::to_string(&status).unwrap();
+        assert!(json.contains("\"closed\""));
+        assert!(json.contains("Hand-merged upstream"));
+        let restored: DraftStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, status);
+    }
+
+    #[test]
+    fn draft_status_closed_without_reason() {
+        let status = DraftStatus::Closed {
+            closed_at: Utc::now(),
+            reason: None,
+            closed_by: "human-reviewer".to_string(),
+        };
+        let json = serde_json::to_string(&status).unwrap();
         let restored: DraftStatus = serde_json::from_str(&json).unwrap();
         assert_eq!(restored, status);
     }

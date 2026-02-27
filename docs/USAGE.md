@@ -418,6 +418,60 @@ ta draft amend <draft-id> src/main.rs --file fixed_main.rs --reason "Fixed typo 
 
 ---
 
+## Draft Lifecycle Hygiene
+
+**New in v0.3.6** — Tools for cleaning up stale draft state.
+
+### Closing a Draft
+
+Close a draft without applying it (e.g., hand-merged, abandoned, or obsolete):
+
+```bash
+ta draft close <draft-id>
+ta draft close <draft-id> --reason "Hand-merged upstream"
+```
+
+### Finding Stale Drafts
+
+List drafts that are in reviewable states (Draft, PendingReview, Approved) but older than the configured threshold:
+
+```bash
+ta draft list --stale
+```
+
+### Garbage Collection
+
+Remove staging directories for drafts in terminal states (Applied, Denied, Closed) older than N days (default 7):
+
+```bash
+# Preview what would be removed
+ta draft gc --dry-run
+
+# Remove stale staging directories
+ta draft gc
+
+# Archive instead of deleting
+ta draft gc --archive
+```
+
+Configure thresholds in `.ta/workflow.toml`:
+
+```toml
+[gc]
+stale_threshold_days = 7   # Days before staging dirs become eligible for cleanup
+health_check = true        # Show warning on startup if stale drafts exist
+```
+
+### Auto-Close on Follow-Up
+
+When a follow-up goal's draft is applied, TA automatically closes the parent draft if it's still in PendingReview or Approved state.
+
+### Startup Health Check
+
+On every `ta` invocation, a one-line hint is printed to stderr if any drafts have been approved or pending for 3+ days without being applied. Suppress via `[gc] health_check = false`.
+
+---
+
 ## Interactive Sessions
 
 **New in v0.3.1.2** — Interactive session orchestration for human-agent collaboration.
