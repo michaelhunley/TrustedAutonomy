@@ -2404,11 +2404,17 @@ pub fn save_package(config: &GatewayConfig, pkg: &DraftPackage) -> anyhow::Resul
 }
 
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() > max {
-        format!("{}...", &s[..max - 3])
-    } else {
-        s.to_string()
+    if s.len() <= max {
+        return s.to_string();
     }
+    // Find the last char boundary at or before max - 3 to leave room for "...".
+    let end = s
+        .char_indices()
+        .map(|(i, _)| i)
+        .take_while(|&i| i <= max.saturating_sub(3))
+        .last()
+        .unwrap_or(0);
+    format!("{}...", &s[..end])
 }
 
 // ── Review Session Commands ────────────────────────────────────
