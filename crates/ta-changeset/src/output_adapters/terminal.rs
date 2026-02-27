@@ -102,6 +102,7 @@ impl TerminalAdapter {
                 crate::pr_package::PRStatus::Denied { .. } => "\x1b[31m",
                 crate::pr_package::PRStatus::Applied { .. } => "\x1b[32m",
                 crate::pr_package::PRStatus::Superseded { .. } => "\x1b[90m",
+                crate::pr_package::PRStatus::Closed { .. } => "\x1b[90m",
             }
         } else {
             ""

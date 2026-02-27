@@ -21,6 +21,10 @@ pub struct WorkflowConfig {
     /// Build configuration
     #[serde(default)]
     pub build: BuildConfig,
+
+    /// Garbage collection / lifecycle configuration
+    #[serde(default)]
+    pub gc: GcConfig,
 }
 
 /// Submit adapter configuration
@@ -173,6 +177,36 @@ pub struct DisplayConfig {
     pub color: bool,
 }
 
+/// Garbage collection / draft lifecycle configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GcConfig {
+    /// Number of days after which drafts in terminal states (Applied, Denied, Closed)
+    /// become eligible for staging directory cleanup. Default: 7.
+    #[serde(default = "default_stale_threshold_days")]
+    pub stale_threshold_days: u64,
+
+    /// Emit a one-line warning on `ta` startup if stale drafts exist. Default: true.
+    #[serde(default = "default_health_check")]
+    pub health_check: bool,
+}
+
+impl Default for GcConfig {
+    fn default() -> Self {
+        Self {
+            stale_threshold_days: default_stale_threshold_days(),
+            health_check: default_health_check(),
+        }
+    }
+}
+
+fn default_stale_threshold_days() -> u64 {
+    7
+}
+
+fn default_health_check() -> bool {
+    true
+}
+
 impl WorkflowConfig {
     /// Load workflow config from .ta/workflow.toml
     pub fn load(path: &std::path::Path) -> Result<Self, Box<dyn std::error::Error>> {
@@ -221,6 +255,32 @@ adapter = "git"
 "#;
         let config: WorkflowConfig = toml::from_str(toml).unwrap();
         assert_eq!(config.build.summary_enforcement, "warning");
+    }
+
+    #[test]
+    fn gc_config_defaults() {
+        let config = GcConfig::default();
+        assert_eq!(config.stale_threshold_days, 7);
+        assert!(config.health_check);
+    }
+
+    #[test]
+    fn workflow_config_default_has_gc_section() {
+        let config = WorkflowConfig::default();
+        assert_eq!(config.gc.stale_threshold_days, 7);
+        assert!(config.gc.health_check);
+    }
+
+    #[test]
+    fn parse_toml_with_gc_section() {
+        let toml = r#"
+[gc]
+stale_threshold_days = 14
+health_check = false
+"#;
+        let config: WorkflowConfig = toml::from_str(toml).unwrap();
+        assert_eq!(config.gc.stale_threshold_days, 14);
+        assert!(!config.gc.health_check);
     }
 
     #[test]

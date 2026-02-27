@@ -165,6 +165,9 @@ fn main() -> anyhow::Result<()> {
     let project_root = cli.project_root.canonicalize().unwrap_or(cli.project_root);
     let config = GatewayConfig::for_project(&project_root);
 
+    // Startup health check: warn about stale drafts (v0.3.6).
+    commands::draft::check_stale_drafts(&config);
+
     match &cli.command {
         Commands::Goal { command } => commands::goal::execute(command, &config),
         Commands::Draft { command } => commands::draft::execute(command, &config),

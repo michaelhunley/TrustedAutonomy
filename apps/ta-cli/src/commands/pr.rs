@@ -119,7 +119,10 @@ fn to_draft_command(cmd: &PrCommands) -> draft::DraftCommands {
             summary: summary.clone(),
             latest: *latest,
         },
-        PrCommands::List { goal } => draft::DraftCommands::List { goal: goal.clone() },
+        PrCommands::List { goal } => draft::DraftCommands::List {
+            goal: goal.clone(),
+            stale: false,
+        },
         PrCommands::View {
             id,
             summary,
