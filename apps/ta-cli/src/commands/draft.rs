@@ -978,14 +978,10 @@ fn list_packages(
     }
 
     println!(
-        "{:<38} {:<30} {:<16} {:<8} {}",
-        "PACKAGE ID",
-        "GOAL",
-        "STATUS",
-        "FILES",
-        if stale_only { "AGE" } else { "" }
+        "{:<38} {:<30} {:<16} {:<8} AGE",
+        "PACKAGE ID", "GOAL", "STATUS", "FILES"
     );
-    println!("{}", "-".repeat(if stale_only { 104 } else { 92 }));
+    println!("{}", "-".repeat(104));
 
     for pkg in &filtered {
         let status_display = match &pkg.status {
@@ -996,11 +992,13 @@ fn list_packages(
             _ => format!("{:?}", pkg.status),
         };
 
-        let age_str = if stale_only {
-            let age = Utc::now() - pkg.created_at;
+        let age = Utc::now() - pkg.created_at;
+        let age_str = if age.num_days() > 0 {
             format!("{}d", age.num_days())
+        } else if age.num_hours() > 0 {
+            format!("{}h", age.num_hours())
         } else {
-            String::new()
+            format!("{}m", age.num_minutes())
         };
 
         println!(
