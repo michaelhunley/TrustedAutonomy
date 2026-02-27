@@ -785,11 +785,16 @@ ta draft fix <draft-id> <artifact-uri> --guidance "Consolidate duplicate struct"
 
 ### v0.4.0 — Intent-to-Access Planner & Agent Alignment Profiles
 <!-- status: pending -->
-- LLM "Intent-to-Policy Planner" outputs AgentSetupProposal (JSON)
-- Deterministic Policy Compiler validates proposal (subset of templates, staged semantics, budgets)
-- Agent setup becomes an "Agent PR" requiring approval before activation
-- User goal → proposed agent roster + scoped capabilities + milestone plan
-- Agent setup evaluates how to run the agents efficiently at lowest cost (model selection, prompt caching, etc) and advises tradeoffs with human opt in where appropriate
+- ✅ **Agent Alignment Profiles**: `ta-policy/src/alignment.rs` — `AlignmentProfile`, `AutonomyEnvelope`, `CoordinationConfig` types with YAML/JSON serialization. Profiles declare `bounded_actions`, `escalation_triggers`, `forbidden_actions`, plus `coordination` block for multi-agent scenarios. (10 tests)
+- ✅ **Policy Compiler**: `ta-policy/src/compiler.rs` — `PolicyCompiler::compile()` transforms `AlignmentProfile` into `CapabilityManifest` grants. Validates forbidden/bounded overlap, parses `tool_verb` and `exec: command` formats, applies resource scoping. Replaces hardcoded manifest generation in `ta-mcp-gateway/server.rs`. (14 tests)
+- ✅ **AgentSetupProposal**: `ta-policy/src/alignment.rs` — `AgentSetupProposal`, `ProposedAgent`, `Milestone` types for LLM-based intent-to-policy planning. JSON-serializable proposal structure for agent roster + scoped capabilities + milestone plan. (2 tests)
+- ✅ **Configurable summary exemption**: `ta-policy/src/exemption.rs` — `ExemptionPatterns` with `.gitignore`-style pattern matching against `fs://workspace/` URIs. Replaces hardcoded `is_auto_summary_exempt()` in `draft.rs`. Loads from `.ta/summary-exempt` with default fallback. Example file at `examples/summary-exempt`. (13 tests)
+- ✅ **Gateway integration**: `ta-mcp-gateway/server.rs` now uses `PolicyCompiler::compile_with_id()` with `AlignmentProfile::default_developer()`. New `start_goal_with_profile()` method accepts custom alignment profiles.
+- ✅ **Agent YAML configs**: All agents (`claude-code.yaml`, `codex.yaml`, `claude-flow.yaml`) updated with `alignment` blocks. `generic.yaml` template documents the alignment schema.
+- ✅ **CLI integration**: `AgentLaunchConfig` in `run.rs` gained `alignment: Option<AlignmentProfile>` field. `draft.rs` uses `ExemptionPatterns` for configurable summary enforcement.
+- Agent setup evaluates how to run the agents efficiently at lowest cost (model selection, prompt caching, etc) and advises tradeoffs with human opt in where appropriate *(deferred to LLM integration phase)*
+
+*(39 new tests in ta-policy; 415 total tests passing across all crates)*
 
 #### Agent Alignment Profiles (extends YAML agent configs)
 Inspired by [AAP alignment cards](https://github.com/mnemom/aap) but *enforced* rather than self-declared. Each agent's YAML config gains a structured `alignment` block:

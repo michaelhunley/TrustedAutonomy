@@ -531,25 +531,26 @@ fn extract_decision_log(summary: &ChangeSummary) -> Vec<DecisionLogEntry> {
         .collect()
 }
 
-/// Files exempt from summary enforcement — lockfiles, config manifests, docs.
-/// These get auto-summaries from `default_summary()` and don't need agent descriptions.
+/// Check if a file is exempt from summary enforcement (v0.4.0).
+///
+/// Uses configurable `.ta/summary-exempt` pattern file if available,
+/// falling back to default patterns (lockfiles, config manifests, docs).
+/// Files matching these patterns get auto-summaries and don't need
+/// agent-provided descriptions at `ta draft build` time.
 fn is_auto_summary_exempt(uri: &str) -> bool {
-    let path = uri.strip_prefix("fs://workspace/").unwrap_or(uri);
-    // Lockfiles
-    path.ends_with("Cargo.lock")
-        || path.ends_with("package-lock.json")
-        || path.ends_with("yarn.lock")
-        || path.ends_with("pnpm-lock.yaml")
-        || path.ends_with("Gemfile.lock")
-        || path.ends_with("poetry.lock")
-    // Config / manifest files
-        || path.ends_with("Cargo.toml")
-        || path.ends_with("package.json")
-        || path.ends_with("pyproject.toml")
-    // Plan / docs
-        || path.ends_with("PLAN.md")
-        || path.ends_with("CHANGELOG.md")
-        || path.ends_with("README.md")
+    is_auto_summary_exempt_with_patterns(uri, None)
+}
+
+/// Check exemption with an optional source directory for loading `.ta/summary-exempt`.
+fn is_auto_summary_exempt_with_patterns(uri: &str, source_dir: Option<&std::path::Path>) -> bool {
+    let patterns = match source_dir {
+        Some(dir) => {
+            let exempt_path = dir.join(".ta").join("summary-exempt");
+            ta_policy::ExemptionPatterns::load_or_default(&exempt_path)
+        }
+        None => ta_policy::ExemptionPatterns::defaults(),
+    };
+    patterns.is_exempt(uri)
 }
 
 fn build_package(

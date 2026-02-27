@@ -1,6 +1,6 @@
 # Trusted Autonomy — Usage Guide
 
-**Version**: v0.3.2-alpha
+**Version**: v0.4.0-alpha
 
 Complete guide to using Trusted Autonomy for safe, reviewable AI agent workflows.
 
@@ -928,6 +928,149 @@ Every decision in the TA pipeline is now observable — not just *what happened*
 - **Agent decisions** can include `alternatives_considered` in `change_summary.json` to document rejected approaches
 - **Review decisions** support structured `reasoning` with rationale, alternatives, and applied principles
 - **Compliance export** includes ISO 42001, IEEE 7001, and NIST AI RMF alignment metadata
+
+### Agent Alignment Profiles (v0.4.0)
+
+Alignment profiles let you declare **what an agent can do, what it must escalate, and what it must never touch** — before it starts working. TA compiles these declarations into enforceable capability grants. The agent doesn't decide its own permissions; you do.
+
+#### Who this is for
+
+**Team lead / project owner** — You want to let AI agents work autonomously on your codebase, but you need guardrails. Alignment profiles let you say "read anything, write source code, run tests — but never touch credentials or make network calls" in a single config file.
+
+**Developer using TA daily** — You configure agents once per project. When you run `ta run`, the agent gets a capability manifest derived from its alignment profile. If it tries something outside bounds, the policy engine blocks it. You don't have to watch it constantly.
+
+**Non-technical reviewer** — You don't need to write these files yourself. The defaults work out of the box. When reviewing a draft (`ta draft view`), the audit trail shows exactly which capabilities the agent had and whether it stayed within bounds.
+
+#### How it works
+
+Each agent has a YAML config in `agents/`. The `alignment` block declares its constraints:
+
+```yaml
+# agents/claude-code.yaml
+alignment:
+  principal: "project-owner"        # Who authorized this agent
+  autonomy_envelope:
+    bounded_actions:                 # What the agent CAN do
+      - "fs_read"                   # Read any file
+      - "fs_write_patch"            # Write/patch files
+      - "fs_apply"                  # Apply changesets
+      - "exec: cargo test"          # Run tests
+      - "exec: cargo build"         # Build the project
+    escalation_triggers:             # When to pause and ask a human
+      - "new_dependency"            # Adding a new library
+      - "security_sensitive"        # Touching auth, crypto, secrets
+      - "breaking_change"           # Changing public APIs
+    forbidden_actions:               # What the agent must NEVER do
+      - "network_external"          # No outbound network calls
+      - "credential_access"         # No reading secrets/tokens
+  constitution: "default-v1"        # Behavioral ruleset
+  coordination:
+    allowed_collaborators:           # Other agents it can work with
+      - "codex"
+      - "claude-flow"
+    shared_resources:                # Files visible to collaborators
+      - "src/**"
+      - "tests/**"
+      - "crates/**"
+```
+
+When you run `ta run "Fix the login bug"`, TA's **Policy Compiler** reads this profile and produces a `CapabilityManifest` — a set of typed grants scoped to `fs://workspace/**`. The policy engine enforces these grants for every action the agent takes during the goal.
+
+#### Action format reference
+
+| Format | Example | Meaning |
+|--------|---------|---------|
+| `tool_verb` | `fs_read` | Tool = `fs`, verb = `read` |
+| `tool_verb_qualifier` | `fs_write_patch` | Tool = `fs`, verb = `write_patch` |
+| `exec: command` | `exec: cargo test` | Shell command = `cargo test` |
+
+#### Common profiles
+
+**Read-only auditor** — Can read everything, write nothing:
+```yaml
+bounded_actions: ["fs_read"]
+forbidden_actions: ["fs_write_patch", "fs_apply", "network_external", "credential_access"]
+```
+
+**Full developer** (default) — Read, write, build, test. No network or credentials:
+```yaml
+bounded_actions: ["fs_read", "fs_write_patch", "fs_apply", "exec: cargo test", "exec: cargo build"]
+forbidden_actions: ["network_external", "credential_access"]
+```
+
+**Multi-agent orchestrator** — Delegates to other agents, needs coordination:
+```yaml
+bounded_actions: ["fs_read", "fs_write_patch", "fs_apply"]
+forbidden_actions: ["network_external", "credential_access"]
+coordination:
+  allowed_collaborators: ["claude-code", "codex"]
+  shared_resources: ["src/**", "tests/**"]
+```
+
+#### Practical workflows
+
+**Starting a new project with TA:**
+
+1. The default agent configs ship with sensible alignment profiles. Run `ta run "Set up the project"` — it just works.
+2. Review the draft with `ta draft view`. The audit trail confirms the agent stayed within its declared bounds.
+
+**Tightening permissions for a sensitive repo:**
+
+1. Edit `agents/claude-code.yaml` — remove `fs_write_patch` from `bounded_actions`, add it to `escalation_triggers`.
+2. Now the agent can read freely but must ask before writing. Every write gets flagged for human approval.
+
+**Adding a new agent (e.g., a linter):**
+
+1. Copy `agents/generic.yaml` to `agents/my-linter.yaml`.
+2. Uncomment the `alignment` block, set `bounded_actions: ["fs_read", "exec: npm run lint"]`.
+3. Set `forbidden_actions` to everything else. The agent can only read and lint.
+
+**Non-technical user reviewing agent work:**
+
+1. Run `ta draft list` to see pending drafts.
+2. Run `ta draft view <id>` — each changed file shows what the agent did and why.
+3. The alignment profile is recorded in the audit trail. You can verify the agent didn't exceed its declared permissions without reading any code.
+
+### Configurable Summary Exemption (v0.4.0)
+
+When an agent finishes work, `ta draft build` checks that every changed file has a human-readable summary explaining what changed and why. But some files — lockfiles, config manifests, generated files — don't need hand-written summaries.
+
+#### Who this is for
+
+**Any TA user** — The defaults cover common cases (lockfiles, `Cargo.toml`, `PLAN.md`, etc.). You only need to customize this if your project has unusual generated or boilerplate files that keep triggering summary enforcement failures.
+
+#### How it works
+
+Create `.ta/summary-exempt` in your project root with `.gitignore`-style patterns:
+
+```
+# .ta/summary-exempt
+# Files matching these patterns get auto-summaries at draft build time.
+
+# Lockfiles — content is machine-generated
+Cargo.lock
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Config manifests — usually just version bumps
+Cargo.toml
+package.json
+
+# Generated files specific to your project
+**/*.generated.*
+schema/output/**
+```
+
+If this file doesn't exist, TA uses built-in defaults (lockfiles, config manifests, `PLAN.md`, `CHANGELOG.md`, `README.md`).
+
+An example file is provided at `examples/summary-exempt`.
+
+#### When to customize
+
+- Your CI generates files that agents edit (e.g., `schema/output/*.rs`) — add the pattern so draft builds don't fail.
+- You have a monorepo with many `Cargo.toml` files — they're already exempt by default via filename matching.
+- You want *stricter* enforcement — create a `.ta/summary-exempt` with fewer patterns. Only listed patterns are exempt; everything else requires a summary.
 
 ---
 

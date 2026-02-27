@@ -13,3 +13,34 @@ injects_context_file: true
 injects_settings: true
 pre_launch: null
 env: {}
+
+# Agent alignment profile (v0.4.0).
+# Compiled into CapabilityManifest grants by the Policy Compiler.
+# These are enforced constraints, not self-declared promises.
+alignment:
+  principal: "project-owner"
+  autonomy_envelope:
+    bounded_actions:
+      - "fs_read"
+      - "fs_write_patch"
+      - "fs_apply"
+      - "exec: cargo test"
+      - "exec: cargo build"
+      - "exec: cargo clippy"
+      - "exec: cargo fmt"
+    escalation_triggers:
+      - "new_dependency"
+      - "security_sensitive"
+      - "breaking_change"
+    forbidden_actions:
+      - "network_external"
+      - "credential_access"
+  constitution: "default-v1"
+  coordination:
+    allowed_collaborators:
+      - "codex"
+      - "claude-flow"
+    shared_resources:
+      - "src/**"
+      - "tests/**"
+      - "crates/**"

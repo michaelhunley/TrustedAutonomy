@@ -56,6 +56,12 @@ struct AgentLaunchConfig {
     #[serde(default)]
     #[allow(dead_code)]
     interactive: Option<ta_changeset::InteractiveConfig>,
+    /// Agent alignment profile (v0.4.0).
+    /// Compiled into CapabilityManifest grants by the Policy Compiler.
+    /// Read via YAML deserialization; will be used by gateway during goal start.
+    #[serde(default)]
+    #[allow(dead_code)]
+    alignment: Option<ta_policy::AlignmentProfile>,
 }
 
 /// Pre-launch command configuration (deserialized from YAML).
@@ -138,6 +144,7 @@ fn builtin_agent_config(agent_id: &str) -> AgentLaunchConfig {
             name: Some("claude-code".to_string()),
             description: Some("Anthropic's Claude Code CLI".to_string()),
             interactive: None,
+            alignment: Some(ta_policy::AlignmentProfile::default_developer()),
         },
         "codex" => AgentLaunchConfig {
             command: "codex".to_string(),
@@ -153,6 +160,7 @@ fn builtin_agent_config(agent_id: &str) -> AgentLaunchConfig {
             name: Some("codex".to_string()),
             description: Some("OpenAI's Codex CLI".to_string()),
             interactive: None,
+            alignment: Some(ta_policy::AlignmentProfile::default_developer()),
         },
         "claude-flow" => AgentLaunchConfig {
             command: "npx".to_string(),
@@ -177,6 +185,7 @@ fn builtin_agent_config(agent_id: &str) -> AgentLaunchConfig {
             name: Some("claude-flow".to_string()),
             description: Some("Claude Flow multi-agent orchestration".to_string()),
             interactive: None,
+            alignment: Some(ta_policy::AlignmentProfile::default_developer()),
         },
         _ => AgentLaunchConfig {
             command: agent_id.to_string(),
@@ -188,6 +197,7 @@ fn builtin_agent_config(agent_id: &str) -> AgentLaunchConfig {
             name: None,
             description: None,
             interactive: None,
+            alignment: None,
         },
     }
 }

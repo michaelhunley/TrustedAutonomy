@@ -1,0 +1,30 @@
+# Summary exemption patterns for Trusted Autonomy.
+# Files matching these patterns are exempt from summary enforcement —
+# they get auto-summaries and don't need agent-provided descriptions
+# at `ta draft build` time.
+#
+# Format: .gitignore-style glob patterns, one per line.
+# Lines starting with # are comments.
+# Patterns match against the filename portion of fs://workspace/ URIs.
+#
+# Place this file at: .ta/summary-exempt
+#
+# See also: [build] summary_enforcement in .ta/workflow.toml
+
+# Lockfiles
+Cargo.lock
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+Gemfile.lock
+poetry.lock
+
+# Config / manifest files
+Cargo.toml
+package.json
+pyproject.toml
+
+# Plan / docs
+PLAN.md
+CHANGELOG.md
+README.md
