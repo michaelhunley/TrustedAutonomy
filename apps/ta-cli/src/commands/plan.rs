@@ -255,6 +255,17 @@ pub fn parse_plan_with_schema(content: &str, schema: &PlanSchema) -> Vec<PlanPha
     phases
 }
 
+/// Compare phase IDs, normalizing the optional `v` prefix.
+/// e.g., "v0.4.0" matches "0.4.0", "4b" matches "4b".
+pub fn phase_ids_match(parsed_id: &str, phase_id: &str) -> bool {
+    if parsed_id == phase_id {
+        return true;
+    }
+    let norm_parsed = parsed_id.strip_prefix('v').unwrap_or(parsed_id);
+    let norm_phase = phase_id.strip_prefix('v').unwrap_or(phase_id);
+    norm_parsed == norm_phase
+}
+
 /// Look ahead from `start` for a status marker comment.
 /// Checks the immediate next line (matching existing behavior).
 fn find_status_in_lookahead(lines: &[&str], start: usize, status_re: &Regex) -> PlanStatus {
@@ -318,11 +329,13 @@ pub fn update_phase_status_with_schema(
         let trimmed = line.trim();
 
         // Check if this line is the target phase header.
+        // Normalize comparison: "v0.4.0" matches "0.4.0" and vice versa.
         let mut is_target = false;
         for pattern in &compiled_patterns {
             if let Some(caps) = pattern.captures(trimmed) {
                 if let Some(id_match) = caps.get(1) {
-                    if id_match.as_str().trim() == phase_id {
+                    let parsed_id = id_match.as_str().trim();
+                    if phase_ids_match(parsed_id, phase_id) {
                         is_target = true;
                         break;
                     }
@@ -1323,5 +1336,28 @@ Build it.
         };
         let phases = parse_plan_with_schema(SAMPLE_PLAN, &schema);
         assert!(phases.is_empty());
+    }
+
+    #[test]
+    fn phase_ids_match_normalizes_v_prefix() {
+        assert!(phase_ids_match("v0.4.0", "0.4.0"));
+        assert!(phase_ids_match("0.4.0", "v0.4.0"));
+        assert!(phase_ids_match("v0.4.0", "v0.4.0"));
+        assert!(phase_ids_match("0.4.0", "0.4.0"));
+        assert!(phase_ids_match("4b", "4b"));
+        assert!(!phase_ids_match("v0.4.0", "0.3.0"));
+        assert!(!phase_ids_match("4b", "4c"));
+    }
+
+    #[test]
+    fn update_phase_status_matches_without_v_prefix() {
+        // Simulate: PLAN.md has "### v0.4.0 — Title" but goal stores "0.4.0"
+        let plan = "### v0.4.0 — Test Phase\n<!-- status: pending -->\n- item\n";
+        let updated = update_phase_status(plan, "0.4.0", PlanStatus::Done);
+        assert!(
+            updated.contains("<!-- status: done -->"),
+            "Should match v0.4.0 header when given 0.4.0: {}",
+            updated
+        );
     }
 }

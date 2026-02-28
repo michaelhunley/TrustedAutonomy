@@ -1607,12 +1607,31 @@ fn apply_package(
             let phases_before = super::plan::parse_plan(&content);
             let old_status = phases_before
                 .iter()
-                .find(|p| p.id == *phase)
+                .find(|p| super::plan::phase_ids_match(&p.id, phase))
                 .map(|p| p.status.clone())
                 .unwrap_or(super::plan::PlanStatus::Pending);
 
+            eprintln!(
+                "[plan-update] goal phase_id={:?}, matched plan id={:?}, old_status={:?}",
+                phase,
+                phases_before
+                    .iter()
+                    .find(|p| super::plan::phase_ids_match(&p.id, phase))
+                    .map(|p| &p.id),
+                old_status,
+            );
+
             let updated =
                 super::plan::update_phase_status(&content, phase, super::plan::PlanStatus::Done);
+
+            // Verify the update actually changed the content.
+            let changed = updated != content;
+            eprintln!(
+                "[plan-update] content changed={}, writing to {}",
+                changed,
+                plan_path.display()
+            );
+
             std::fs::write(&plan_path, &updated)?;
             println!("Updated PLAN.md: Phase {} -> done", phase);
 
