@@ -821,41 +821,115 @@ alignment:
 - **NIST AI RMF GOVERN 1.1**: Defined roles and responsibilities for each agent in the system
 
 ### v0.4.1 — Macro Goals & Inner-Loop Iteration
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Let agents stay in a single session, decompose work into sub-goals, submit drafts, and iterate — without exiting and restarting `ta run` each time.
 
 > **Core insight**: Currently each `ta run` session is one goal → one draft → exit. For complex tasks (e.g., "build Trusted Autonomy v0.5"), the agent must exit, the human must approve, then another `ta run` starts. Macro goals keep the agent in-session while maintaining governance at every checkpoint.
 
 #### MCP Tools Exposed to Agent (Passthrough Model)
 TA injects MCP tools that mirror the CLI structure — same commands, same arguments:
-- **`ta_draft`** `action: build|submit|status|list` — package, submit, and query drafts
-- **`ta_goal`** `action: start|status` — create sub-goals, check status
-- **`ta_plan`** `action: read|update` — read plan progress, propose updates
+- ✅ **`ta_draft`** `action: build|submit|status|list` — package, submit, and query drafts
+- ✅ **`ta_goal`** (`ta_goal_inner`) `action: start|status` — create sub-goals, check status
+- ✅ **`ta_plan`** `action: read|update` — read plan progress, propose updates
 
 > **Design**: Passthrough mirrors the CLI (`ta draft build` = `ta_draft { action: "build" }`). No separate tool per subcommand — agents learn one pattern, new CLI commands are immediately available as MCP actions. Arguments map 1:1 to CLI flags.
 
 #### Security Boundaries
-- Agent **CAN**: propose sub-goals, build drafts, submit for review, read plan status
-- Agent **CANNOT**: approve its own drafts, apply changes, bypass checkpoints, modify policies
-- Every sub-goal draft goes through the same human review gate as a regular draft
-- Agent sees approval/rejection results and can iterate (revise and resubmit)
-- `ta_draft { action: "submit" }` blocks until human responds (blocking mode) — agent cannot self-approve
+- ✅ Agent **CAN**: propose sub-goals, build drafts, submit for review, read plan status
+- ✅ Agent **CANNOT**: approve its own drafts, apply changes, bypass checkpoints, modify policies
+- ✅ Every sub-goal draft goes through the same human review gate as a regular draft
+- ✅ Agent sees approval/rejection results and can iterate (revise and resubmit)
+- ✅ `ta_draft { action: "submit" }` blocks until human responds (blocking mode) — agent cannot self-approve
 
 #### Execution Modes
-- **Blocking** (default): Agent submits draft, blocks until human responds. Safest — human reviews each step.
+- ✅ **Blocking** (default): Agent submits draft, blocks until human responds. Safest — human reviews each step.
 - **Optimistic** (future): Agent continues to next sub-goal while draft is pending. Human reviews asynchronously. Faster but requires rollback capability if earlier draft is rejected.
 - **Hybrid** (future): Agent marks sub-goals as blocking or non-blocking based on risk. High-risk changes block; low-risk ones proceed optimistically.
 
 #### CLI
-- `ta run "Build v0.5" --source . --macro` — starts a macro goal session
-- Agent receives MCP tools for inner-loop iteration alongside standard workspace tools
-- `ta goal status <id>` shows sub-goal tree with approval status
+- ✅ `ta run "Build v0.5" --source . --macro` — starts a macro goal session
+- ✅ Agent receives MCP tools for inner-loop iteration alongside standard workspace tools
+- ✅ `ta goal status <id>` shows sub-goal tree with approval status
 
 #### Integration
-- Sub-goals inherit the macro goal's plan phase, source dir, and agent config
-- Each sub-goal draft appears in `ta draft list` as a child of the macro goal
-- PLAN.md updates proposed via `ta_plan_update` are held at checkpoint (agent proposes, human approves)
-- Works with existing follow-up goal mechanism — macro goals are the automated version of `--follow-up`
+- ✅ Sub-goals inherit the macro goal's plan phase, source dir, and agent config
+- ✅ Each sub-goal draft appears in `ta draft list` as a child of the macro goal
+- ✅ PLAN.md updates proposed via `ta_plan_update` are held at checkpoint (agent proposes, human approves)
+- ✅ Works with existing follow-up goal mechanism — macro goals are the automated version of `--follow-up`
+
+#### Data Model (v0.4.1)
+- ✅ `GoalRun.is_macro: bool` — marks a goal as a macro session
+- ✅ `GoalRun.parent_macro_id: Option<Uuid>` — links sub-goals to their macro parent
+- ✅ `GoalRun.sub_goal_ids: Vec<Uuid>` — tracks sub-goals within a macro session
+- ✅ `GoalRunState: PrReady → Running` transition for inner-loop iteration
+- ✅ `TaEvent::PlanUpdateProposed` event variant for governance-gated plan updates
+- ✅ CLAUDE.md injection includes macro goal context with MCP tool documentation
+- ✅ 4 new tests (3 in ta-goal, 1 in ta-cli), tool count updated from 9 to 12 in ta-mcp-gateway
+
+### v0.4.1.1 — Runtime Channel Architecture & Macro Session Loop
+<!-- status: pending -->
+**Goal**: Wire up the runtime loop that makes `ta run --macro` actually work end-to-end. Implement a pluggable `ReviewChannel` trait for bidirectional human–agent communication at any interaction point (draft review, approval discussion, plan negotiation, etc.), with a terminal adapter as the default.
+
+> **Core insight**: v0.4.1 laid down the data model and MCP tool definitions. This phase connects them — starting an MCP server alongside the agent, routing tool calls through the review channel, and allowing humans to respond via any medium (terminal, Slack, Discord, email, SMS, etc.). The channel abstraction is not specific to `ta_draft submit` — it covers every interaction point where a human and agent need to communicate.
+
+#### ReviewChannel Trait
+```rust
+/// Bidirectional communication channel between agent and human reviewer.
+/// Implementations handle delivery (terminal, Slack, email, etc.) and
+/// response collection. The trait is interaction-agnostic — it carries
+/// any TA interaction, not just draft reviews.
+#[async_trait]
+pub trait ReviewChannel: Send + Sync {
+    /// Send an interaction request to the human and await their response.
+    async fn request_interaction(&self, request: InteractionRequest) -> Result<InteractionResponse>;
+
+    /// Non-blocking notification (e.g., "agent started sub-goal 3 of 7").
+    async fn notify(&self, notification: Notification) -> Result<()>;
+
+    /// Channel capabilities (supports async? supports rich media? etc.)
+    fn capabilities(&self) -> ChannelCapabilities;
+}
+```
+
+#### InteractionRequest Model
+- **`kind`**: `DraftReview | ApprovalDiscussion | PlanNegotiation | Escalation | Custom(String)`
+- **`context`**: Structured payload (draft ID, goal ID, diff summary, etc.)
+- **`urgency`**: `Blocking | Advisory | Informational`
+- **`metadata`**: Arbitrary key-value pairs for channel-specific rendering
+
+#### Runtime Loop (for `ta run --macro`)
+1. Start MCP gateway server in background thread, bound to a local socket
+2. Launch agent with `--mcp-server` endpoint configured
+3. Agent calls MCP tools → gateway routes to TA core logic
+4. When interaction is needed (draft submit, approval question, plan update), emit `InteractionRequest` through the configured `ReviewChannel`
+5. Channel adapter delivers to human via configured medium
+6. Human responds through same channel
+7. Channel adapter translates response → `InteractionResponse`, unblocks the MCP handler
+8. Agent receives result and continues working
+9. Loop until agent exits or macro goal completes
+
+#### Channel Adapters
+- **`TerminalChannel`** (default): Renders interaction in the terminal, collects response via stdin. Ships with v0.4.1.1.
+- Future adapters (v0.5.3+): Slack, Discord, email, SMS, webhook — each implements `ReviewChannel` and is selected via config.
+
+#### Configuration
+- `ta config set review.channel terminal` (default)
+- Future: `ta config set review.channel slack --channel-id C12345`
+- Channel config stored in `.ta/config.yaml` alongside existing settings
+
+#### Data Model
+- `InteractionRequest`, `InteractionResponse`, `Notification` structs in new `ta-channel` crate
+- `ChannelCapabilities` flags: `supports_async`, `supports_rich_media`, `supports_threads`
+- `ReviewChannelConfig` in ta-workspace config
+
+#### Tests
+- Unit: `TerminalChannel` with mock stdin/stdout
+- Unit: MCP gateway routes `ta_draft submit` → `InteractionRequest`
+- Integration: Full macro session loop with `TerminalChannel` (agent simulator)
+
+#### Standards Alignment
+- NIST AI 600-1 (2.11 Human-AI Configuration): Humans respond through their preferred channel, not forced into terminal
+- ISO 42001 (A.9.4 Communication): Communication channels are configurable and auditable
 
 ### v0.4.2 — Behavioral Drift Detection
 <!-- status: pending -->

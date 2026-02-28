@@ -88,6 +88,11 @@ enum Commands {
         /// Run in interactive mode with session orchestration.
         #[arg(long)]
         interactive: bool,
+        /// Run as a macro goal with inner-loop iteration.
+        /// Agent stays in-session, can decompose work into sub-goals,
+        /// submit drafts for review, and iterate based on feedback.
+        #[arg(long, alias = "macro")]
+        macro_goal: bool,
     },
     /// Manage interactive sessions.
     Session {
@@ -183,6 +188,7 @@ fn main() -> anyhow::Result<()> {
             objective_file,
             no_launch,
             interactive,
+            macro_goal,
         } => commands::run::execute(
             &config,
             title,
@@ -194,6 +200,7 @@ fn main() -> anyhow::Result<()> {
             objective_file.as_deref(),
             *no_launch,
             *interactive,
+            *macro_goal,
         ),
         Commands::Session { command } => commands::session::execute(command, &config),
         Commands::Plan { command } => commands::plan::execute(command, &config),

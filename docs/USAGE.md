@@ -571,6 +571,60 @@ The `SessionChannel` trait is designed for messaging platform adapters:
 
 ---
 
+## Macro Goals & Inner-Loop Iteration
+
+*(v0.4.1)* Macro goals let agents stay in a single session, decompose work into sub-goals, submit drafts for review, and iterate based on feedback — all without exiting and restarting `ta run`.
+
+### Starting a Macro Goal Session
+
+```bash
+ta run "Build v0.5 features" --source . --macro
+```
+
+The agent receives MCP tools (`ta_draft`, `ta_goal_inner`, `ta_plan`) for interacting with TA during the session.
+
+### How It Works
+
+1. Agent works on a logical unit of change
+2. Agent calls `ta_draft { action: "build" }` to package changes
+3. Agent calls `ta_draft { action: "submit" }` to submit for review
+4. Human reviews and approves/denies via `ta draft approve/deny`
+5. Agent receives the result and either continues or revises
+
+### Sub-Goals
+
+Agents can create sub-goals within a macro session:
+
+```
+ta_goal_inner { action: "start", macro_goal_id: "...", title: "Add auth module" }
+```
+
+Sub-goals inherit the macro goal's plan phase, source directory, and agent configuration.
+
+### Viewing Macro Goal Status
+
+```bash
+# Shows sub-goal tree with approval status
+ta goal status <macro-goal-id>
+
+# Drafts show macro context in the list
+ta draft list
+```
+
+### Security Boundaries
+
+- Agents **can**: propose sub-goals, build drafts, submit for review, read plan status
+- Agents **cannot**: approve their own drafts, apply changes, bypass checkpoints
+- Every sub-goal draft goes through the same human review gate
+
+### Execution Modes
+
+- **Blocking** (default, v0.4.1): Agent submits draft and waits for human response
+- **Optimistic** (future): Agent continues while draft is pending
+- **Hybrid** (future): Agent marks sub-goals as blocking or non-blocking based on risk
+
+---
+
 ## External Diff Handlers
 
 ### Use Cases

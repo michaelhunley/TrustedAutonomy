@@ -984,6 +984,9 @@ fn list_packages(
     );
     println!("{}", "-".repeat(104));
 
+    // Load goal store for macro goal context.
+    let goal_store = GoalRunStore::new(&config.goals_dir).ok();
+
     for pkg in &filtered {
         let status_display = match &pkg.status {
             DraftStatus::Superseded { superseded_by } => {
@@ -1002,10 +1005,31 @@ fn list_packages(
             format!("{}m", age.num_minutes())
         };
 
+        // Check if this draft belongs to a macro sub-goal.
+        let goal_display = if let Some(ref store) = goal_store {
+            if let Ok(goal_id) = Uuid::parse_str(&pkg.goal.goal_id) {
+                if let Ok(Some(goal)) = store.get(goal_id) {
+                    if goal.parent_macro_id.is_some() {
+                        format!("  └ {}", truncate(&pkg.goal.title, 24))
+                    } else if goal.is_macro {
+                        format!("[M] {}", truncate(&pkg.goal.title, 24))
+                    } else {
+                        truncate(&pkg.goal.title, 28)
+                    }
+                } else {
+                    truncate(&pkg.goal.title, 28)
+                }
+            } else {
+                truncate(&pkg.goal.title, 28)
+            }
+        } else {
+            truncate(&pkg.goal.title, 28)
+        };
+
         println!(
             "{:<38} {:<30} {:<16} {:<8} {}",
             pkg.package_id,
-            truncate(&pkg.goal.title, 28),
+            goal_display,
             status_display,
             pkg.changes.artifacts.len(),
             age_str,
@@ -2202,6 +2226,7 @@ fn fix_package(
         None, // no objective file
         no_launch,
         false, // not interactive
+        false, // not macro
     )?;
 
     if no_launch {

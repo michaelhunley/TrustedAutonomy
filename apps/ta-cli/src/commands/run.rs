@@ -216,6 +216,7 @@ pub fn execute(
     objective_file: Option<&Path>,
     no_launch: bool,
     interactive: bool,
+    macro_goal: bool,
 ) -> anyhow::Result<()> {
     let agent_config = agent_launch_config(agent, source);
 
@@ -240,6 +241,14 @@ pub fn execute(
     let goal = goals
         .first()
         .ok_or_else(|| anyhow::anyhow!("Failed to find created goal"))?;
+
+    // Mark as macro goal if --macro was specified.
+    if macro_goal {
+        let mut updated_goal = goal.clone();
+        updated_goal.is_macro = true;
+        goal_store.save(&updated_goal)?;
+    }
+
     let goal_id = goal.goal_run_id.to_string();
     let staging_path = goal.workspace_path.clone();
 
@@ -254,6 +263,7 @@ pub fn execute(
             goal.parent_goal_id,
             &goal_store,
             config,
+            macro_goal,
         )?;
     }
     if agent_config.injects_settings {
@@ -344,6 +354,9 @@ pub fn execute(
     println!("  Working dir: {}", staging_path.display());
     if interactive {
         println!("  Mode: interactive (session orchestration enabled)");
+    }
+    if macro_goal {
+        println!("  Mode: macro goal (inner-loop iteration enabled)");
     }
     println!();
 
@@ -784,6 +797,55 @@ fn build_parent_context_section(
     context
 }
 
+/// Build the macro goal context section for CLAUDE.md injection.
+/// Explains the MCP tools available for inner-loop iteration.
+fn build_macro_goal_section(goal_id: &str) -> String {
+    format!(
+        r#"
+## Macro Goal Mode (Inner-Loop Iteration)
+
+This is a **macro goal** session. You can decompose your work into sub-goals,
+submit drafts for human review mid-session, and iterate based on feedback —
+all without exiting.
+
+### Available MCP Tools
+
+Use these tools to interact with TA during your session:
+
+- **`ta_draft`** — Manage draft packages
+  - `action: "build"` — Bundle your current changes into a draft for review
+  - `action: "submit"` — Submit a draft for human review (blocks until response)
+  - `action: "status"` — Check the review status of a draft
+  - `action: "list"` — List all drafts for this goal
+
+- **`ta_goal`** — Manage sub-goals
+  - `action: "start"` — Create a sub-goal within this macro session
+  - `action: "status"` — Check the status of a sub-goal
+
+- **`ta_plan`** — Interact with the project plan
+  - `action: "read"` — Read current plan progress
+  - `action: "update"` — Propose plan updates (held for human approval)
+
+### Workflow
+
+1. Work on a logical unit of change
+2. Call `ta_draft` with `action: "build"` to package your changes
+3. Call `ta_draft` with `action: "submit"` to send for human review
+4. Wait for approval or feedback
+5. If approved, continue to the next sub-goal
+6. If denied, revise and resubmit
+
+### Security Boundaries
+
+- You **CAN**: propose sub-goals, build drafts, submit for review, read plan status
+- You **CANNOT**: approve your own drafts, apply changes, bypass checkpoints
+
+**Macro Goal ID:** {}
+"#,
+        goal_id
+    )
+}
+
 /// Inject a CLAUDE.md file into the staging workspace to orient the agent.
 /// Saves the original content to `.ta/claude_md_original` for later restoration.
 #[allow(clippy::too_many_arguments)]
@@ -796,6 +858,7 @@ fn inject_claude_md(
     parent_goal_id: Option<uuid::Uuid>,
     goal_store: &ta_goal::GoalRunStore,
     config: &GatewayConfig,
+    macro_goal: bool,
 ) -> anyhow::Result<()> {
     let claude_md_path = staging_path.join("CLAUDE.md");
 
@@ -824,6 +887,13 @@ fn inject_claude_md(
     // Build parent context section if this is a follow-up goal.
     let parent_section = build_parent_context_section(parent_goal_id, goal_store, config);
 
+    // Build macro goal section if --macro was specified.
+    let macro_section = if macro_goal {
+        build_macro_goal_section(goal_id)
+    } else {
+        String::new()
+    };
+
     let injected = format!(
         r#"# Trusted Autonomy — Mediated Goal
 
@@ -831,7 +901,7 @@ You are working on a TA-mediated goal in a staging workspace.
 
 **Goal:** {}
 **Goal ID:** {}
-{}{}
+{}{}{}
 ## How this works
 
 - This directory is a copy of the original project
@@ -895,7 +965,7 @@ If your changes affect user-facing behavior (new commands, changed flags, new co
 
 {}
 "#,
-        title, goal_id, plan_section, parent_section, existing_section
+        title, goal_id, plan_section, parent_section, macro_section, existing_section
     );
 
     std::fs::write(&claude_md_path, injected)?;
@@ -956,6 +1026,7 @@ mod tests {
             None,
             true,
             false,
+            false,
         )
         .unwrap();
 
@@ -995,6 +1066,7 @@ mod tests {
             None,
             &goal_store,
             &config,
+            false,
         )
         .unwrap();
 
@@ -1033,6 +1105,7 @@ mod tests {
             None,
             &goal_store,
             &config,
+            false,
         )
         .unwrap();
 
@@ -1066,6 +1139,7 @@ mod tests {
             None,
             &goal_store,
             &config,
+            false,
         )
         .unwrap();
 
@@ -1075,6 +1149,34 @@ mod tests {
         // Restore should remove it.
         restore_claude_md(staging.path()).unwrap();
         assert!(!staging.path().join("CLAUDE.md").exists());
+    }
+
+    #[test]
+    fn inject_claude_md_with_macro_goal_section() {
+        let staging = TempDir::new().unwrap();
+        let config = GatewayConfig::for_project(staging.path());
+        let goal_store = GoalRunStore::new(&config.goals_dir).unwrap();
+
+        inject_claude_md(
+            staging.path(),
+            "Macro goal test",
+            "goal-macro-789",
+            None,
+            None,
+            None,
+            &goal_store,
+            &config,
+            true, // macro_goal = true
+        )
+        .unwrap();
+
+        let claude_md = std::fs::read_to_string(staging.path().join("CLAUDE.md")).unwrap();
+        assert!(claude_md.contains("Macro Goal Mode"));
+        assert!(claude_md.contains("ta_draft"));
+        assert!(claude_md.contains("ta_goal"));
+        assert!(claude_md.contains("ta_plan"));
+        assert!(claude_md.contains("Inner-Loop"));
+        assert!(claude_md.contains("goal-macro-789"));
     }
 
     #[test]
