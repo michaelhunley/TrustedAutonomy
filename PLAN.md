@@ -779,14 +779,6 @@ ta draft fix <draft-id> <artifact-uri> --guidance "Consolidate duplicate struct"
 - ✅ **Auto-close on follow-up**: When `ta run --follow-up <id>` completes and its draft is applied, auto-close the parent draft if still in Approved/PendingReview state.
 - ✅ **Startup health check**: On any `ta` invocation, emit a one-line warning if stale drafts exist (e.g. "1 draft approved but not applied for 3+ days — run `ta draft list --stale`"). Suppressible via config.
 
-### v0.3.7 — CLI UX Polish
-<!-- status: pending -->
-**Goal**: Quality-of-life improvements to reduce friction in daily TA use.
-
-- **Partial ID matching**: Accept UUID prefixes (8+ chars) in all commands that take a draft or goal ID. `ta draft view abc12345` matches `abc12345-xxxx-...`. Applies to: `draft view/approve/deny/apply/close`, `goal status`, `session show`. Currently only `--follow-up` supports prefix matching.
-- **`ta draft apply` on PendingReview**: Allow `ta draft apply` to work directly on PendingReview drafts without requiring a separate `ta draft approve` step. The apply command already supports this in selective-review mode but not in legacy all-or-nothing mode. Keeps `approve` as a distinct command for audit/team workflows but removes the mandatory two-step for single-user use.
-- **Draft view: status badge cleanup**: Ensure disposition badges render cleanly across terminal encodings (no mojibake on non-UTF-8 terminals). Fallback to ASCII-only badges when `LANG` is not UTF-8.
-
 ---
 
 ## v0.4 — Agent Intelligence *(release: tag v0.4.0-alpha)*
@@ -1016,6 +1008,14 @@ access:
 - **Integration with `ta draft fix`** (v0.3.4): During interactive review, pause → `ta draft fix` → resume through the same channel
 
 > **Depends on**: v0.4.1.1 (ReviewChannel + TerminalChannel). Remaining scope after v0.4.1.1 is PTY wrapping for real-time output streaming — the interaction protocol is handled by ReviewChannel.
+
+### v0.4.5 — CLI UX Polish
+<!-- status: pending -->
+**Goal**: Quality-of-life improvements across all CLI commands.
+
+- **Partial ID matching**: Accept 8+ character UUID prefixes in all `ta draft`, `ta goal`, and `ta session` commands (currently requires full UUID)
+- **Apply on PendingReview**: `ta draft apply` works directly on PendingReview drafts without requiring a separate `ta draft approve` first (auto-approves on apply)
+- **Terminal encoding safety**: Ensure disposition badges and status markers render cleanly in all terminal encodings (no garbled characters)
 
 ---
 
