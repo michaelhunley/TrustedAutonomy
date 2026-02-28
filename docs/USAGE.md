@@ -1077,6 +1077,38 @@ TA searches for agent configs in priority order:
 
 ---
 
+## Versioning & Release Lifecycle
+
+### Version Format
+
+TA uses [semver](https://semver.org/): `MAJOR.MINOR.PATCH-prerelease`.
+
+Plan phases in `PLAN.md` use hierarchical IDs for readability (e.g., `v0.4.1.2`). Release versions are strict semver. The conversion:
+
+| Plan Phase | Release Version | `ta release run` |
+|---|---|---|
+| v0.4 | `0.4.0-alpha` | `ta release run 0.4.0-alpha` |
+| v0.4.1 | `0.4.1-alpha` | `ta release run 0.4.1-alpha` |
+| v0.4.1.2 | `0.4.1-alpha.2` | `ta release run 0.4.1-alpha.2` |
+
+### Pre-release Tags
+
+| Tag | Meaning | When |
+|---|---|---|
+| **alpha** | Active development. APIs may change. Not for production. | All `0.x` work (current) |
+| **beta** | Feature-complete for the cycle. APIs stabilizing. Early adopters welcome. | All planned phases for the minor version are done; no known critical bugs |
+| **rc.N** | Release candidate. Bug fixes only. | Beta testing complete; no API changes expected |
+| *(none)* | Stable release. Semver guarantees apply. | RC passes without blockers |
+
+**Current state**: All releases are `alpha`. Beta begins when the core loop is proven (target: v0.8 Department Runtime). Stable `1.0.0` requires all v0.x features hardened, public API frozen, and security audit complete.
+
+**Progression example**:
+```
+0.4.1-alpha → 0.4.1-alpha.1 → 0.4.1-alpha.2 → 0.4.2-alpha → ...
+0.8.0-alpha → 0.8.0-beta → 0.8.0-rc.1 → 0.8.0
+1.0.0-beta → 1.0.0-rc.1 → 1.0.0
+```
+
 ## Release Pipeline
 
 TA includes a configurable release pipeline driven by YAML. Each step is either a shell command or a TA goal (agent-driven), with optional approval gates.

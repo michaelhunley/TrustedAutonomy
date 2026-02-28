@@ -5,11 +5,43 @@
 
 ## Versioning & Release Policy
 
-- **Version format**: `MAJOR.MINOR.PATCH-alpha` (semver). Current: `v0.1.2-alpha`.
+### Plan Phases vs Release Versions
+
+Plan phases use hierarchical IDs for readability (e.g., `v0.4.1.1`). Release versions use strict [semver](https://semver.org/) (`MAJOR.MINOR.PATCH-prerelease`). The mapping:
+
+| Plan Phase Format | Release Version | Example |
+|---|---|---|
+| `vX.Y` | `X.Y.0-alpha` | v0.4 → `0.4.0-alpha` |
+| `vX.Y.Z` | `X.Y.Z-alpha` | v0.4.1 → `0.4.1-alpha` |
+| `vX.Y.Z.N` (sub-phase) | `X.Y.Z-alpha.N` | v0.4.1.2 → `0.4.1-alpha.2` |
+
+**Rule**: The plan phase ID directly determines the release version. No separate mapping table needed — apply the formula above.
+
+### Pre-release Lifecycle
+
+| Tag | Meaning | Criteria to Enter |
+|---|---|---|
+| `alpha` | Active development. APIs may change. Not recommended for production. | Default for all `0.x` work |
+| `beta` | Feature-complete for the release cycle. APIs stabilizing. Suitable for early adopters. | All planned phases for the minor version are done; no known critical bugs |
+| `rc.N` | Release candidate. Only bug fixes accepted. | Beta testing complete; no API changes expected |
+| *(none)* | Stable public release. Semver guarantees apply. | RC period passes without blocking issues |
+
+**Current lifecycle**: All `0.x` releases are `alpha`. Beta begins when the core loop is proven (target: `v0.8` Department Runtime). Stable `1.0.0` requires: all v0.x features hardened, public API frozen, security audit complete.
+
+**Version progression example**:
+```
+0.4.1-alpha → 0.4.1-alpha.1 → 0.4.1-alpha.2 → 0.4.2-alpha → ...
+0.8.0-alpha → 0.8.0-beta → 0.8.0-rc.1 → 0.8.0
+1.0.0-beta → 1.0.0-rc.1 → 1.0.0
+```
+
+### Release Mechanics
+
 - **Release tags**: Each `vX.Y.0` phase is a **release point** — cut a git tag and publish binaries.
 - **Patch phases** (`vX.Y.1`, `vX.Y.2`) are incremental work within a release cycle.
+- **Sub-phases** (`vX.Y.Z.N`) use pre-release dot notation: `ta release run X.Y.Z-alpha.N`
 - **When completing a phase**, the implementing agent MUST:
-  1. Update `version` in `apps/ta-cli/Cargo.toml` to the phase's version (e.g., `0.2.0-alpha`)
+  1. Update `version` in `apps/ta-cli/Cargo.toml` to the phase's release version
   2. Update the "Current State" section in `CLAUDE.md` with the new version and test count
   3. Mark the phase as `done` in this file
 - **Pre-v0.1 phases** (Phase 0–4c) used internal numbering. All phases from v0.1 onward use version-based naming.
@@ -1061,6 +1093,7 @@ access:
 - **Partial ID matching**: Accept 8+ character UUID prefixes in all `ta draft`, `ta goal`, and `ta session` commands (currently requires full UUID)
 - **Apply on PendingReview**: `ta draft apply` works directly on PendingReview drafts without requiring a separate `ta draft approve` first (auto-approves on apply)
 - **Terminal encoding safety**: Ensure disposition badges and status markers render cleanly in all terminal encodings (no garbled characters)
+- **Plan phase in `ta release run`**: Accept plan phase IDs (e.g., `0.4.1.2`) and auto-convert to semver release versions (`0.4.1-alpha.2`) per the versioning policy. Strip `v` prefix if provided.
 
 ---
 
