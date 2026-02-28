@@ -779,6 +779,14 @@ ta draft fix <draft-id> <artifact-uri> --guidance "Consolidate duplicate struct"
 - ✅ **Auto-close on follow-up**: When `ta run --follow-up <id>` completes and its draft is applied, auto-close the parent draft if still in Approved/PendingReview state.
 - ✅ **Startup health check**: On any `ta` invocation, emit a one-line warning if stale drafts exist (e.g. "1 draft approved but not applied for 3+ days — run `ta draft list --stale`"). Suppressible via config.
 
+### v0.3.7 — CLI UX Polish
+<!-- status: pending -->
+**Goal**: Quality-of-life improvements to reduce friction in daily TA use.
+
+- **Partial ID matching**: Accept UUID prefixes (8+ chars) in all commands that take a draft or goal ID. `ta draft view abc12345` matches `abc12345-xxxx-...`. Applies to: `draft view/approve/deny/apply/close`, `goal status`, `session show`. Currently only `--follow-up` supports prefix matching.
+- **`ta draft apply` on PendingReview**: Allow `ta draft apply` to work directly on PendingReview drafts without requiring a separate `ta draft approve` step. The apply command already supports this in selective-review mode but not in legacy all-or-nothing mode. Keeps `approve` as a distinct command for audit/team workflows but removes the mandatory two-step for single-user use.
+- **Draft view: status badge cleanup**: Ensure disposition badges render cleanly across terminal encodings (no mojibake on non-UTF-8 terminals). Fallback to ASCII-only badges when `LANG` is not UTF-8.
+
 ---
 
 ## v0.4 — Agent Intelligence *(release: tag v0.4.0-alpha)*
@@ -997,15 +1005,17 @@ access:
 
 ### v0.4.4 — Interactive Session Completion
 <!-- status: pending -->
-**Goal**: Complete the `ta run --interactive` experience so users can inject mid-session guidance while the agent works. The `SessionChannel` protocol and `InteractiveSession` data model exist (v0.3.1.2) but the CLI handler that connects them to a live agent process is incomplete.
+**Goal**: Complete the `ta run --interactive` experience so users can inject mid-session guidance while the agent works.
+
+> **Note**: The core of this phase is now **absorbed by v0.4.1.1** (ReviewChannel Architecture). The `ReviewChannel` trait with `TerminalChannel` provides the bidirectional human-agent communication loop, including mid-session guidance, pause/resume (channel disconnect/reconnect), and audit-logged interactions. What remains here are the PTY-specific enhancements for real-time agent output streaming.
 
 - **PTY capture**: Wrap agent subprocess in a PTY so output streams to the terminal in real-time while TA captures it for session history
-- **Stdin interleaving**: User types guidance mid-session → TA routes it to the agent's stdin (or injects as a message via the agent framework's API)
-- **Guidance logged**: All human injections recorded in `InteractiveSession.messages` with timestamps, available for audit trail and follow-up context
-- **Pause/resume**: `Ctrl+P` pauses agent execution, user reviews current state, types guidance, resumes. `ta run --resume <session-id>` resumes an abandoned session.
-- **Integration with `ta draft fix`** (v0.3.4): If the user spots an issue during interactive review, they can pause the session and switch to `ta draft fix` for targeted correction of the current draft, then resume.
+- **Stdin interleaving**: User types guidance mid-session → TA routes it via `ReviewChannel` (replaces direct stdin injection)
+- **Guidance logged**: All human injections recorded as `InteractionRequest`/`InteractionResponse` pairs with timestamps
+- **Pause/resume**: `ReviewChannel` disconnect = pause, reconnect = resume. `ta run --resume <session-id>` reattaches to a running session.
+- **Integration with `ta draft fix`** (v0.3.4): During interactive review, pause → `ta draft fix` → resume through the same channel
 
-> **Depends on**: v0.3.1.2 (SessionChannel protocol), v0.3.4 (draft amend for inline correction during pause). Enables the full "observe → inject → correct" loop that makes TA review feel conversational rather than batch-oriented.
+> **Depends on**: v0.4.1.1 (ReviewChannel + TerminalChannel). Remaining scope after v0.4.1.1 is PTY wrapping for real-time output streaming — the interaction protocol is handled by ReviewChannel.
 
 ---
 
@@ -1079,15 +1089,18 @@ pub struct PendingAction {
 - **Auth**: Localhost-only by default. Optional token auth for LAN access.
 - **Foundation**: This becomes the shell that the full web app (v0.9) fills in.
 
-### v0.5.3 — Notification Channels (bidirectional)
+### v0.5.3 — Additional ReviewChannel Adapters
 <!-- status: pending -->
 > Moved up from v0.10 — non-dev users need notifications from day one of MCP usage.
 
-- Outbound: Draft review summaries sent via MCP to email/Slack/Discord
-- Inbound: Approval actions received via MCP (reply-to-approve email, Slack button callback)
-- Unified config: `notification_channel` per role/goal in `.ta/workflow.toml`
-- Bidirectional: outbound notifications + inbound approval actions
-- **Channel adapter trait**: Same `SessionChannel` abstraction from v0.3.1.2 — notifications are just another channel.
+> **Architecture note**: These are implementations of the `ReviewChannel` trait from v0.4.1.1, not a separate notification system. Every interaction point (draft review, approval, plan negotiation, escalation) flows through the same trait — adding a channel adapter means all interactions work through that medium automatically.
+
+- **SlackChannel**: Block Kit cards for draft review, button callbacks for approve/reject/discuss, thread-based discussion
+- **DiscordChannel**: Embed PR summaries, reaction-based approval, slash command for detailed view
+- **EmailChannel**: SMTP-based summaries, IMAP reply parsing for approve/reject
+- **WebhookChannel**: POST `InteractionRequest` to URL, await callback with `InteractionResponse`
+- Unified config: `review.channel` in `.ta/config.yaml` (replaces `notification_channel`)
+- Non-interactive approval API: token-based approval for bot callbacks (Slack buttons, email replies)
 
 #### Standards Alignment
 - **EU AI Act Article 50**: Transparency — humans see exactly what the agent wants to do before it happens

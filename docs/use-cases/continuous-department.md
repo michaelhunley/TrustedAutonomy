@@ -19,225 +19,172 @@ a human reviews and approves before anything goes public.
 
 ---
 
+## The ReviewChannel Architecture (v0.4.1.1)
+
+The key architectural insight: **every TA interaction point is a message through
+a pluggable channel**. Draft review, approval, discussion, plan negotiation,
+escalation — all flow through the same `ReviewChannel` trait.
+
+```
+Agent calls MCP tool (ta_draft submit, ta_plan update, etc.)
+       │
+       ▼
+MCP Gateway routes to TA core logic
+       │
+       ▼
+TA emits InteractionRequest {
+  kind: DraftReview | ApprovalDiscussion | PlanNegotiation | Escalation
+  urgency: Blocking | Advisory | Informational
+  context: { draft_id, goal_id, summary, ... }
+}
+       │
+       ▼
+ReviewChannel delivers to human via configured medium
+       │
+       ├── TerminalChannel (v0.4.1.1) → stdin/stdout
+       ├── SlackChannel (future) → Block Kit card + button callback
+       ├── DiscordChannel (future) → embed + reaction handler
+       ├── EmailChannel (future) → SMTP send + IMAP reply parse
+       └── WebhookChannel (future) → POST to URL, await callback
+       │
+       ▼
+Human responds through same channel
+       │
+       ▼
+InteractionResponse unblocks the MCP handler
+       │
+       ▼
+Agent receives result, continues working
+```
+
+This means:
+- `ta draft approve` is sugar over `InteractionResponse { approve: true }` via CLI
+- A Slack "Approve" button sends the same response via `SlackChannel`
+- The agent doesn't know or care which channel the human used
+- Adding a new channel (SMS, mobile app) requires only implementing the trait
+
+---
+
 ## How It Works with TA (Phase by Phase)
 
-### Today (v0.4.x) — Manual Loop
+### Today (v0.4.1) — Manual Loop with Macro Goals
 
-The department can operate today as a **human-driven loop** using existing TA commands:
+Macro goals (v0.4.1) added the data model: `is_macro`, `parent_macro_id`,
+`sub_goal_ids`, MCP tools (`ta_draft`, `ta_goal_inner`, `ta_plan`), and
+`PrReady → Running` state transition for inner-loop iteration.
 
-```
-Human kicks off goal ──→ Agent works in staging ──→ Draft built
-         ↑                                              │
-         │                                              ▼
-         │                                    Human reviews draft
-         │                                              │
-         │            ┌────────────────────────────────┬┘
-         │            ▼                                ▼
-         │     Approve + Apply                   Discuss items
-         │            │                                │
-         │            ▼                                ▼
-         └──── ta run --follow-up ◄───── corrections needed
-```
+The agent can now decompose work, submit drafts, and continue — but the
+runtime loop and human communication channel aren't wired yet.
 
 ```bash
-# 1. Start the department's first work cycle
-ta run "DevRel: triage this week's GitHub issues and draft responses" \
-  --source ./devrel-workspace --agent claude-code
-
-# 2. Agent works in staging, exits, draft auto-builds
-ta draft view <id> --detail medium
-
-# 3. Human reviews — approve some, discuss others
-ta draft apply <id> --approve "responses/**" --discuss "blog/**"
-
-# 4. Follow-up for discussed items
-ta run "DevRel: revise blog draft per review feedback" \
-  --source ./devrel-workspace --follow-up
-
-# 5. Repeat indefinitely
-```
-
-**What works**: Full audit trail, selective approval, follow-up context injection.
-**What's manual**: Human must kick off each cycle, copy-paste IDs, remember to follow up.
-
----
-
-### v0.4.1 — Macro Goals (Planned)
-
-Macro goals keep the agent in-session across multiple checkpoints instead of
-exiting after one cycle. This is the first step toward continuous operation.
-
-```bash
-# Agent stays alive, periodically checkpoints work as drafts
-ta run "DevRel: ongoing issue triage and response drafting" \
+# Start a macro goal session
+ta run "DevRel: triage this week's GitHub issues" \
   --source ./devrel-workspace --macro
 
-# Agent emits checkpoints:
-#   [checkpoint 1] 3 issue responses drafted → draft abc123
-#   [checkpoint 2] blog post outlined → draft def456
-#   [checkpoint 3] docs improvement PR → draft ghi789
+# Agent works in staging, uses MCP tools to:
+#   ta_draft build → create draft from current changes
+#   ta_draft submit → signal "ready for review"
+#   ta_goal_inner start → create sub-goals for different work items
 
-# Human reviews each checkpoint independently
-ta draft approve abc123   # issue responses look good
-ta draft apply abc123 --git-commit
+# When agent exits, review accumulated drafts
+ta draft list                          # see all drafts with age
+ta draft approve <id>                  # approve first
+ta draft apply <id> --git-commit       # then apply
 
-# Agent continues working, aware that checkpoint 1 was approved
+# Follow-up for discussed items
+ta run "DevRel: revise blog draft" --source ./devrel-workspace --follow-up
 ```
 
-**TA changes needed** (v0.4.1):
-- `--macro` flag on `ta run` that keeps agent process alive
-- Checkpoint protocol: agent signals "draft ready" without exiting
-- `ta draft build --checkpoint` creates draft from current staging state
-- Agent receives approval/rejection events via session channel
-- Session persists across checkpoints (already built in v0.3.1.2)
+**What works**: Macro goal hierarchy, sub-goals, MCP tools, follow-up context.
+**What's manual**: Human must poll `ta draft list`, approve then apply separately.
 
----
+### v0.4.1.1 — Runtime Loop + TerminalChannel (Next)
 
-### v0.4.4 — Interactive Session Completion
+This is the critical phase. It connects the v0.4.1 data model to a live
+human-agent communication loop:
 
-Wire up the session pause/resume mechanism (types exist, logic missing):
+1. `ta run --macro` starts the MCP gateway alongside the agent
+2. Agent calls `ta_draft submit` → MCP handler emits `InteractionRequest`
+3. `TerminalChannel` renders the request in the terminal
+4. Human types response (approve/reject/discuss)
+5. Response flows back to the MCP handler, unblocks the agent
+6. Agent continues working with the feedback
 
 ```bash
-# Department agent is running in macro mode
-# Human needs to give guidance mid-session
-ta session show <id>                    # see current state
-ta session send <id> "Focus on the security issue first"
+# Single command — agent stays alive, human interacts inline
+ta run "DevRel: ongoing triage" --source ./devrel-workspace --macro
 
-# Agent receives message via SessionChannel, adjusts priorities
-# Agent checkpoints a draft for the security response
-ta draft view <id> --detail medium
-
-# Human pauses the session (agent suspends)
-ta session pause <id>
-
-# Later, human resumes
-ta session resume <id>
+# Terminal shows:
+#   [Agent] Built draft abc123: 8 issue responses
+#   [TA] Draft ready for review. Approve? [a]pprove / [r]eject / [d]iscuss
+#   > a
+#   [TA] Approved. Agent continuing...
+#   [Agent] Built draft def456: blog post outline
+#   [TA] Draft ready for review. Approve? [a]pprove / [r]eject / [d]iscuss
+#   > d need more detail on the performance section
+#   [TA] Discussion noted. Agent revising...
 ```
 
-**TA changes needed** (v0.4.4):
-- `ta session resume <id>` wiring (states exist, plumbing missing)
-- `ta session send <id> "message"` for mid-session guidance
-- Agent-side protocol for receiving `HumanInput::Message` during work
+**The department works here** — with one human at a terminal.
 
----
+### v0.5.3+ — Additional ReviewChannel Adapters
 
-### v0.5.3 — Notification Channels
+Adding SlackChannel, DiscordChannel, EmailChannel is now just implementing
+the `ReviewChannel` trait. The core logic doesn't change — only the delivery
+and response collection mechanism.
 
-Remove the requirement that humans sit at a terminal:
-
-```
-Agent checkpoints draft ──→ TA fires on_draft_ready event
-                                    │
-                     ┌──────────────┼──────────────┐
-                     ▼              ▼              ▼
-               Slack card      Email summary    Discord embed
-               [Approve]       Reply APPROVE    React ✅
-               [Reject]        Reply REJECT     React ❌
-               [View]          Link to web UI   /ta view
-                     │              │              │
-                     └──────────────┼──────────────┘
-                                    ▼
-                          TA processes approval
-                          Agent continues or stops
+```yaml
+# .ta/config.yaml
+review:
+  channel: slack
+  slack:
+    channel_id: C12345
+    bot_token_env: SLACK_BOT_TOKEN
 ```
 
-**TA changes needed** (v0.5.3, already in PLAN.md):
-- Notification connector trait (outbound: PR summary, inbound: approval)
-- Email connector: SMTP send + IMAP reply parsing
-- Slack connector: Block Kit cards + button callback handler
-- Non-interactive approval API (token-based, for bot callbacks)
-
----
-
-### v0.7 — Event System & JSON API (Phase 9 in VISION)
-
-Make TA programmable so orchestrators can drive the loop:
-
-```bash
-# Orchestrator listens for TA events
-ta events listen --json | while read event; do
-  case $(echo $event | jq -r .type) in
-    draft_ready)
-      # Notify via Slack
-      slack-post "#devrel" "$(echo $event | jq -r .summary)"
-      ;;
-    draft_approved)
-      # Apply and start next cycle
-      ta draft apply $(echo $event | jq -r .draft_id) --git-commit
-      ta run "DevRel: next triage cycle" --source ./devrel-workspace --follow-up
-      ;;
-  esac
-done
+```
+Agent submits draft ──→ TA emits InteractionRequest
+                              │
+                              ▼
+                     SlackChannel delivers:
+                     ┌──────────────────────────────┐
+                     │ TA Draft Ready                │
+                     │ "8 issue responses drafted"   │
+                     │ [Approve] [Reject] [Discuss]  │
+                     └──────────────────────────────┘
+                              │
+                     Human taps [Approve]
+                              │
+                              ▼
+                     InteractionResponse → agent continues
 ```
 
-**TA changes needed** (new phase, maps to VISION Phase 9):
-- `--json` output mode on all CLI commands
-- `ta events listen` streaming endpoint
-- Webhook callbacks on state transitions
-- Stable event schema (JSON)
+**The department no longer needs a terminal.** Human approves from phone.
 
----
+### v0.8+ — Department Runtime (Full Vision)
 
-### v0.8+ — Virtual Office Runtime (Phase 11 in VISION)
-
-The department becomes a first-class concept:
+Department YAML becomes syntactic sugar over: orchestrator config + alignment
+profile + ReviewChannel config + trigger system.
 
 ```yaml
 # .ta/departments/devrel.yaml
 department: devrel
-description: "Developer Relations — community engagement and content"
-remit: |
-  Monitor GitHub issues, discussions, and social mentions.
-  Draft responses, blog posts, and changelog entries.
-  Suggest documentation improvements.
-  Flag critical issues for human escalation.
-
+remit: "Community engagement and content"
+agent: claude-code
+alignment: devrel-profile
+channel: slack
 schedule:
   - trigger: cron
-    interval: "0 9 * * MON-FRI"     # weekday mornings
-    goal: "DevRel: triage overnight issues and mentions"
-
+    interval: "0 9 * * MON-FRI"
+    goal: "Triage overnight issues"
   - trigger: webhook
     source: github
     event: issues.opened
-    goal: "DevRel: assess and draft response to new issue"
-
-  - trigger: event
-    source: ta
-    event: draft_applied
-    goal: "DevRel: continue with next priority item"
-
-agent: claude-code
-alignment: devrel-profile            # from agents/devrel.yaml
-capabilities:
-  - "fs://workspace/docs/**"
-  - "fs://workspace/blog/**"
-  - "fs://workspace/responses/**"
-  - "github://issues/read"
-  - "github://discussions/read"
-notification_channel: slack:#devrel-reviews
-
+    goal: "Assess and draft response"
 escalation:
   - condition: "risk_score > 7"
     action: "notify slack:#devrel-urgent"
-  - condition: "no_approval_after: 24h"
-    action: "notify email:lead@company.com"
 ```
-
-```bash
-ta department start devrel           # begins continuous operation
-ta department status devrel          # show active goals, pending drafts
-ta department pause devrel           # suspend all triggers
-ta department stop devrel            # graceful shutdown
-```
-
-**TA changes needed** (new phase):
-- Department definition schema (YAML)
-- Trigger system: cron scheduler + webhook receiver + TA event listener
-- `ta department start/stop/status/pause` commands
-- Department-scoped alignment profiles (already designed in v0.4.0)
-- Escalation rules engine
-- Integration point for external orchestrators (Claude Flow, n8n)
 
 ---
 
@@ -247,96 +194,58 @@ ta department stop devrel            # graceful shutdown
 Monday 9:00  │ [cron] DevRel wakes up
              │ ta run "Triage weekend issues" --source ./devrel --macro
              │ Agent reads 12 new issues, drafts 8 responses
-             │ → Draft #1: 8 response files
+             │ → InteractionRequest(DraftReview) → SlackChannel
              │ → Slack: "DevRel: 8 responses ready for review"
-Monday 10:30 │ Human approves 6, discusses 2
+Monday 10:30 │ Human taps Approve on 6, Discuss on 2 via Slack
+             │ → InteractionResponse flows back to agent
              │ → Agent revises 2 discussed items
-             │ → Draft #2: 2 revised responses
-Monday 11:00 │ Human approves all → applied → committed
+             │ → New InteractionRequest(DraftReview) for revisions
+Monday 11:00 │ Human approves all via Slack → applied → committed
              │
-Tuesday 9:00 │ [cron] DevRel wakes up
-             │ Agent reads 3 new issues + 1 trending discussion
-             │ → Draft #3: 3 responses + 1 blog post outline
-             │ → Slack notification
+Tuesday 9:00 │ [cron] DevRel wakes up, same flow
+             │
 Tuesday 14:00│ [webhook] Critical security issue opened
-             │ ta run "Assess security issue #487" --source ./devrel
-             │ Agent analyzes, flags risk_score=9
-             │ → Escalation: notifies #devrel-urgent
-             │ → Draft #4: security response + disclosure template
-Tuesday 14:15│ Human approves security response immediately
+             │ Agent flags risk_score=9
+             │ → InteractionRequest(Escalation, urgency: Blocking)
+             │ → Escalation routes to #devrel-urgent (different channel)
+             │ → Human approves security response immediately
              │
-Wednesday    │ [cron] Normal triage cycle
-             │ Agent notes blog post from Tuesday still in discuss
-             │ → Draft #5: revised blog post + 2 new responses
-             │ ...
+Wednesday    │ [cron] Normal triage cycle continues
 ```
 
 ---
 
 ## Mapping to PLAN.md Phases
 
-The department agent pattern requires these capabilities, mapped to the earliest
-phase where each could land:
-
-| Capability | Earliest Phase | Required? |
+| Capability | Phase | Status |
 |---|---|---|
-| Follow-up goals with context injection | v0.3.0 (done) | Yes |
-| Interactive sessions (types + storage) | v0.3.1.2 (done) | Yes |
-| Alignment profiles per agent | v0.4.0 (done) | Yes |
-| **Macro goals (multi-checkpoint)** | **v0.4.1** | **Critical** |
-| **Session pause/resume wiring** | **v0.4.4** | **Critical** |
-| Behavioral drift detection | v0.4.2 | Nice to have |
-| Per-goal access constitutions | v0.4.3 | Nice to have |
-| Credential broker | v0.5.0 | For external APIs |
-| MCP tool interception | v0.5.1 | For external APIs |
-| **Notification channels** | **v0.5.3** | **Critical** |
-| JSON API on all commands | v0.7 (new) | For orchestration |
-| Event streaming | v0.7 (new) | For orchestration |
-| **Department runtime** | **v0.8+ (new)** | Full vision |
+| Follow-up goals with context injection | v0.3.0 | Done |
+| Interactive sessions (types + storage) | v0.3.1.2 | Done |
+| Alignment profiles per agent | v0.4.0 | Done |
+| Macro goals (data model + MCP tools) | v0.4.1 | Done |
+| **ReviewChannel + TerminalChannel + runtime loop** | **v0.4.1.1** | **Next** |
+| Behavioral drift detection | v0.4.2 | Pending |
+| Per-goal access constitutions | v0.4.3 | Pending |
+| **Slack/Discord/Email channel adapters** | **v0.5.3** | Pending |
+| JSON API on all commands | v0.7 (planned) | Pending |
+| Department runtime | v0.8+ (vision) | Future |
 
 ### Critical Path (minimum viable department)
 
 ```
-v0.4.1 (Macro Goals)
-  → Agent can checkpoint without exiting
-  → Human can review checkpoints while agent continues
+v0.4.1.1 (ReviewChannel + TerminalChannel + runtime loop)
+  → Agent and human communicate inline during macro session
+  → Every interaction point uses the same protocol
+  → Department works at a terminal
 
-v0.4.4 (Session Completion)
-  → Agent can be paused/resumed
-  → Human can send mid-session guidance
-
-v0.5.3 (Notifications)
-  → Human doesn't need to sit at terminal
-  → Approve from Slack/email/Discord
+v0.5.3 (Additional channel adapters)
+  → Human approves from Slack/email/Discord
+  → Department works without a terminal
 ```
 
-Everything else enhances the experience but isn't required for the core loop.
-
----
-
-## Suggested PLAN.md Changes
-
-### Accelerate
-
-1. **v0.4.1 Macro Goals** — move from "planned" to "next". This is the single
-   most important feature for continuous operation. Without it, every cycle
-   requires a full goal teardown/setup.
-
-2. **v0.4.4 Interactive Session Completion** — wire up the existing session
-   types. The `InteractiveSession`, `SessionChannel`, and `HumanInput` types
-   are already built. This is mostly plumbing.
-
-### Add New Phase
-
-3. **v0.7.x Event System & JSON API** — extract from VISION-virtual-office.md
-   Phase 9 into a concrete PLAN.md phase. Scope: `--json` flag on all commands,
-   `ta events listen`, webhook config in `workflow.toml`.
-
-### Defer (Not Needed for MVP)
-
-4. **v0.8+ Department Runtime** — the full `ta department start` experience is
-   post-v1.0. The manual loop (v0.4.x) and notification-driven loop (v0.5.3)
-   are sufficient for early adopters.
+v0.4.4 (Interactive Session Completion) is **absorbed by v0.4.1.1** — the
+ReviewChannel with TerminalChannel IS the session completion mechanism.
+Pause/resume is "channel goes quiet / channel reconnects."
 
 ---
 
@@ -345,9 +254,10 @@ Everything else enhances the experience but isn't required for the core loop.
 TA does NOT become the orchestrator. The department pattern works because:
 
 - **TA** holds the checkpoint: "here's what the agent wants to do, approve it"
-- **Orchestrator** (cron, Claude Flow, n8n, human) decides when to start the next cycle
-- **Notification layer** lets humans approve from wherever they are
+- **ReviewChannel** is the interaction protocol, not a notification layer
+- **Orchestrator** (cron, Claude Flow, n8n, human) decides when to start cycles
+- **Channel adapters** let humans respond from wherever they are
 
-The department YAML (v0.8+) is syntactic sugar over: orchestrator config +
-TA alignment profile + notification channel config. Each piece already has a
-home in the architecture.
+The ReviewChannel trait is the spine that everything hangs on. Adding a new
+interaction medium (SMS, mobile app, web UI) requires only implementing the
+trait — no changes to TA core, the agent, or the MCP gateway.
