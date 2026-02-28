@@ -29,7 +29,10 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use ta_audit::AuditLog;
+use ta_changeset::interaction::{InteractionRequest, Notification};
 use ta_changeset::pr_package::PRPackage;
+use ta_changeset::review_channel::{ReviewChannel, ReviewChannelError};
+use ta_changeset::terminal_channel::AutoApproveChannel;
 use ta_connector_fs::FsConnector;
 use ta_goal::{EventDispatcher, GoalRun, GoalRunState, GoalRunStore, LogSink, TaEvent};
 use ta_policy::{
@@ -189,6 +192,9 @@ pub struct GatewayState {
     pub pr_packages: HashMap<Uuid, PRPackage>,
     pub audit_log: AuditLog,
     pub event_dispatcher: EventDispatcher,
+    /// ReviewChannel for bidirectional human-agent communication (v0.4.1.1).
+    /// Defaults to AutoApproveChannel when no interactive channel is configured.
+    pub review_channel: Box<dyn ReviewChannel>,
 }
 
 impl GatewayState {
@@ -208,6 +214,7 @@ impl GatewayState {
             pr_packages: HashMap::new(),
             audit_log,
             event_dispatcher,
+            review_channel: Box::new(AutoApproveChannel::new()),
         })
     }
 
@@ -330,6 +337,35 @@ impl GatewayState {
 
         self.pr_packages.insert(package_id, pkg);
         Ok(())
+    }
+
+    /// Set a custom ReviewChannel (e.g., TerminalChannel for interactive sessions).
+    pub fn set_review_channel(&mut self, channel: Box<dyn ReviewChannel>) {
+        self.review_channel = channel;
+    }
+
+    /// Route an interaction request through the configured ReviewChannel.
+    /// Returns the human's response. Logs the interaction as an event.
+    pub fn request_review(
+        &self,
+        request: &InteractionRequest,
+    ) -> Result<ta_changeset::interaction::InteractionResponse, ReviewChannelError> {
+        let response = self.review_channel.request_interaction(request)?;
+
+        // Log the interaction for audit trail.
+        tracing::info!(
+            interaction_id = %request.interaction_id,
+            kind = %request.kind,
+            decision = %response.decision,
+            "review channel interaction"
+        );
+
+        Ok(response)
+    }
+
+    /// Send a non-blocking notification through the ReviewChannel.
+    pub fn notify_reviewer(&self, notification: &Notification) -> Result<(), ReviewChannelError> {
+        self.review_channel.notify(notification)
     }
 
     /// Get the agent_id for a goal run.
@@ -851,11 +887,48 @@ impl TaGatewayServer {
                             timestamp: Utc::now(),
                         });
 
+                        // Route through ReviewChannel for interactive review (v0.4.1.1).
+                        let artifact_count = state
+                            .pr_packages
+                            .get(&pkg_id)
+                            .map(|p| p.changes.artifacts.len())
+                            .unwrap_or(0);
+                        let interaction_req =
+                            InteractionRequest::draft_review(pkg_id, &goal.title, artifact_count)
+                                .with_goal_id(goal_run_id);
+
+                        let review_result = state.request_review(&interaction_req);
+
+                        let (review_status, review_decision) = match &review_result {
+                            Ok(resp) => {
+                                let decision_str = format!("{}", resp.decision);
+                                // If approved and this is a macro goal, transition back to Running.
+                                if decision_str == "approved" && goal.is_macro {
+                                    if let Ok(Some(mut g)) = state.goal_store.get(goal_run_id) {
+                                        if g.state == GoalRunState::PrReady {
+                                            let _ = g.transition(GoalRunState::Running);
+                                            let _ = state.goal_store.save(&g);
+                                        }
+                                    }
+                                }
+                                ("reviewed".to_string(), decision_str)
+                            }
+                            Err(_) => {
+                                // Channel error — fall back to pending review.
+                                ("submitted".to_string(), "pending".to_string())
+                            }
+                        };
+
                         let response = serde_json::json!({
                             "draft_id": pkg_id.to_string(),
                             "goal_run_id": goal_run_id.to_string(),
-                            "status": "submitted",
-                            "message": "Draft submitted for human review. Use ta_draft with action: 'status' to check review progress. The human reviewer will approve or deny via `ta draft approve/deny`.",
+                            "status": review_status,
+                            "decision": review_decision,
+                            "message": if review_decision == "pending" {
+                                "Draft submitted for human review. Use ta_draft with action: 'status' to check review progress."
+                            } else {
+                                "Draft reviewed through ReviewChannel."
+                            },
                         });
                         Ok(CallToolResult::success(vec![Content::json(response)
                             .map_err(|e| {
@@ -1157,11 +1230,37 @@ impl TaGatewayServer {
                         timestamp: Utc::now(),
                     });
 
+                // Route through ReviewChannel for plan negotiation (v0.4.1.1).
+                let interaction_req = InteractionRequest::plan_negotiation(phase, status_note)
+                    .with_goal_id(goal_run_id);
+
+                let review_result = state.request_review(&interaction_req);
+
+                let (plan_status, plan_decision) = match &review_result {
+                    Ok(resp) => {
+                        let decision_str = format!("{}", resp.decision);
+                        (
+                            if decision_str == "approved" {
+                                "approved"
+                            } else {
+                                "proposed"
+                            },
+                            decision_str,
+                        )
+                    }
+                    Err(_) => ("proposed", "pending".to_string()),
+                };
+
                 let response = serde_json::json!({
                     "goal_run_id": goal_run_id.to_string(),
                     "phase": phase,
-                    "status": "proposed",
-                    "message": "Plan update proposed. Human must approve via `ta draft approve` before it takes effect.",
+                    "status": plan_status,
+                    "decision": plan_decision,
+                    "message": if plan_decision == "pending" {
+                        "Plan update proposed. Human must approve via `ta draft approve` before it takes effect."
+                    } else {
+                        "Plan update reviewed through ReviewChannel."
+                    },
                 });
                 Ok(CallToolResult::success(vec![Content::json(response)
                     .map_err(|e| {

@@ -867,35 +867,38 @@ TA injects MCP tools that mirror the CLI structure — same commands, same argum
 - ✅ 4 new tests (3 in ta-goal, 1 in ta-cli), tool count updated from 9 to 12 in ta-mcp-gateway
 
 ### v0.4.1.1 — Runtime Channel Architecture & Macro Session Loop
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Wire up the runtime loop that makes `ta run --macro` actually work end-to-end. Implement a pluggable `ReviewChannel` trait for bidirectional human–agent communication at any interaction point (draft review, approval discussion, plan negotiation, etc.), with a terminal adapter as the default.
 
 > **Core insight**: v0.4.1 laid down the data model and MCP tool definitions. This phase connects them — starting an MCP server alongside the agent, routing tool calls through the review channel, and allowing humans to respond via any medium (terminal, Slack, Discord, email, SMS, etc.). The channel abstraction is not specific to `ta_draft submit` — it covers every interaction point where a human and agent need to communicate.
 
-#### ReviewChannel Trait
+#### Completed
+
+- ✅ `ReviewChannel` trait with `request_interaction`, `notify`, `capabilities`, `channel_id` methods
+- ✅ `InteractionRequest` / `InteractionResponse` / `Decision` / `Notification` data model in `ta-changeset::interaction`
+- ✅ `InteractionKind`: `DraftReview | ApprovalDiscussion | PlanNegotiation | Escalation | Custom(String)`
+- ✅ `Urgency`: `Blocking | Advisory | Informational`
+- ✅ `ChannelCapabilities` flags: `supports_async`, `supports_rich_media`, `supports_threads`
+- ✅ `TerminalChannel` adapter: renders interactions to stdout, collects responses from stdin, supports mock I/O for testing
+- ✅ `AutoApproveChannel`: no-op channel for batch/non-interactive mode
+- ✅ `ReviewChannelConfig`: channel type, blocking mode, notification level (stored in `GatewayConfig`)
+- ✅ MCP gateway integration: `ta_draft submit` routes through `ReviewChannel`, returns decision to agent
+- ✅ MCP gateway integration: `ta_plan update` routes through `ReviewChannel`, returns decision to agent
+- ✅ `GatewayState.review_channel`: pluggable channel with `set_review_channel()` method
+- ✅ Macro goal loop: approved drafts transition macro goals `PrReady → Running` for inner-loop iteration
+- ✅ Audit trail: all interactions logged via `tracing::info!` with interaction_id, kind, and decision
+- ✅ 45 new tests across interaction, review_channel, terminal_channel modules (12 + 4 + 18 + 11 existing gateway tests pass)
+
+#### Data Model
+
 ```rust
-/// Bidirectional communication channel between agent and human reviewer.
-/// Implementations handle delivery (terminal, Slack, email, etc.) and
-/// response collection. The trait is interaction-agnostic — it carries
-/// any TA interaction, not just draft reviews.
-#[async_trait]
 pub trait ReviewChannel: Send + Sync {
-    /// Send an interaction request to the human and await their response.
-    async fn request_interaction(&self, request: InteractionRequest) -> Result<InteractionResponse>;
-
-    /// Non-blocking notification (e.g., "agent started sub-goal 3 of 7").
-    async fn notify(&self, notification: Notification) -> Result<()>;
-
-    /// Channel capabilities (supports async? supports rich media? etc.)
+    fn request_interaction(&self, request: &InteractionRequest) -> Result<InteractionResponse, ReviewChannelError>;
+    fn notify(&self, notification: &Notification) -> Result<(), ReviewChannelError>;
     fn capabilities(&self) -> ChannelCapabilities;
+    fn channel_id(&self) -> &str;
 }
 ```
-
-#### InteractionRequest Model
-- **`kind`**: `DraftReview | ApprovalDiscussion | PlanNegotiation | Escalation | Custom(String)`
-- **`context`**: Structured payload (draft ID, goal ID, diff summary, etc.)
-- **`urgency`**: `Blocking | Advisory | Informational`
-- **`metadata`**: Arbitrary key-value pairs for channel-specific rendering
 
 #### Runtime Loop (for `ta run --macro`)
 1. Start MCP gateway server in background thread, bound to a local socket
@@ -910,22 +913,8 @@ pub trait ReviewChannel: Send + Sync {
 
 #### Channel Adapters
 - **`TerminalChannel`** (default): Renders interaction in the terminal, collects response via stdin. Ships with v0.4.1.1.
+- **`AutoApproveChannel`**: Auto-approves all interactions for batch/CI mode.
 - Future adapters (v0.5.3+): Slack, Discord, email, SMS, webhook — each implements `ReviewChannel` and is selected via config.
-
-#### Configuration
-- `ta config set review.channel terminal` (default)
-- Future: `ta config set review.channel slack --channel-id C12345`
-- Channel config stored in `.ta/config.yaml` alongside existing settings
-
-#### Data Model
-- `InteractionRequest`, `InteractionResponse`, `Notification` structs in new `ta-channel` crate
-- `ChannelCapabilities` flags: `supports_async`, `supports_rich_media`, `supports_threads`
-- `ReviewChannelConfig` in ta-workspace config
-
-#### Tests
-- Unit: `TerminalChannel` with mock stdin/stdout
-- Unit: MCP gateway routes `ta_draft submit` → `InteractionRequest`
-- Integration: Full macro session loop with `TerminalChannel` (agent simulator)
 
 #### Standards Alignment
 - NIST AI 600-1 (2.11 Human-AI Configuration): Humans respond through their preferred channel, not forced into terminal
