@@ -1,6 +1,6 @@
 # Trusted Autonomy — Usage Guide
 
-**Version**: v0.4.0-alpha
+**Version**: v0.4.1-alpha
 
 Complete guide to using Trusted Autonomy for safe, reviewable AI agent workflows.
 
@@ -15,12 +15,14 @@ Complete guide to using Trusted Autonomy for safe, reviewable AI agent workflows
 5. [Agent Configuration](#agent-configuration)
 6. [PR Review & Approval](#pr-review--approval)
 7. [Review Sessions](#review-sessions)
-8. **[Interactive Sessions](#interactive-sessions)** — NEW in v0.3.1.2
-9. [External Diff Handlers](#external-diff-handlers)
-10. [Git Integration](#git-integration)
-11. [Advanced Workflows](#advanced-workflows)
-12. [Claude Flow Optimization](#claude-flow-optimization)
-13. [Troubleshooting](#troubleshooting)
+8. [Interactive Sessions](#interactive-sessions)
+9. [Macro Goals & Inner-Loop Iteration](#macro-goals--inner-loop-iteration)
+10. [Interactive Terminal Sessions](#interactive-terminal-sessions) — detailed workflow for v0.4.1.1
+11. [External Diff Handlers](#external-diff-handlers)
+12. [Git Integration](#git-integration)
+13. [Advanced Workflows](#advanced-workflows)
+14. [Claude Flow Optimization](#claude-flow-optimization)
+15. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -486,7 +488,7 @@ On every `ta` invocation, a one-line hint is printed to stderr if any drafts hav
 
 ## Interactive Sessions
 
-**New in v0.3.1.2** — Interactive session orchestration for human-agent collaboration.
+**Introduced in v0.3.1.2** — Interactive session orchestration for human-agent collaboration. Enhanced in v0.4.1.1 with the ReviewChannel architecture.
 
 ### Starting an Interactive Session
 
@@ -557,18 +559,6 @@ ta run "Write tests for auth" --source . --interactive --agent codex
 ta session list
 ```
 
-### Future Channel Adapters
-
-The `SessionChannel` trait is designed for messaging platform adapters:
-
-| Platform | Channel identity | Status |
-|----------|-----------------|--------|
-| CLI | `cli:{pid}` | Implemented |
-| Discord | `discord:{thread_id}` | Future |
-| Slack | `slack:{channel}:{ts}` | Future |
-| Email | `email:{thread_id}` | Future |
-| Web app | `web:{session_id}` | Future |
-
 ---
 
 ## Macro Goals & Inner-Loop Iteration
@@ -622,6 +612,277 @@ ta draft list
 - **Blocking** (default, v0.4.1): Agent submits draft and waits for human response
 - **Optimistic** (future): Agent continues while draft is pending
 - **Hybrid** (future): Agent marks sub-goals as blocking or non-blocking based on risk
+
+---
+
+## Interactive Terminal Sessions
+
+**New in v0.4.1.1** — Detailed guide to running interactive macro goal sessions in your terminal, where the agent works continuously and you review drafts inline without leaving the session.
+
+### Overview
+
+When you run `ta run --macro`, TA starts the agent and an MCP gateway server side by side. The agent calls MCP tools (`ta_draft`, `ta_goal_inner`, `ta_plan`) to interact with TA during the session. When the agent needs human input — a draft review, an approval question, a plan update — TA renders the request directly in your terminal and waits for your response. The agent stays alive the whole time.
+
+This is the **inner-loop iteration** pattern: the agent proposes, you decide, the agent continues. No exit-and-restart cycle.
+
+### Starting a Macro Session
+
+```bash
+ta run "Refactor auth module and add tests" --source . --macro
+```
+
+Output:
+```
+Goal created: a1b2c3d4-...
+  Source: /home/you/project
+  Agent: claude-code
+  Mode: macro goal (inner-loop iteration enabled)
+
+Launching claude in staging workspace...
+  Workspace: ~/.ta/staging/a1b2c3d4/
+  MCP gateway: listening on local socket
+```
+
+The agent now has access to three MCP tools:
+
+| Tool | Purpose |
+|------|---------|
+| `ta_draft` | Build and submit draft packages for review |
+| `ta_goal_inner` | Create and manage sub-goals within the macro session |
+| `ta_plan` | Read plan progress and propose plan updates |
+
+### What a Session Looks Like
+
+Here's a realistic terminal session. The agent works autonomously, pausing only when it needs your input:
+
+```
+[Agent] Working on auth module refactor...
+[Agent] Extracted JWT validation into separate module.
+[Agent] Built draft abc123: 4 files changed
+
+  ┌─────────────────────────────────────────────────┐
+  │ Draft Ready for Review                          │
+  │                                                 │
+  │ Draft: abc123                                   │
+  │ Files: src/auth/mod.rs, src/auth/jwt.rs,        │
+  │        src/auth/middleware.rs, src/lib.rs        │
+  │ Summary: Extract JWT validation into dedicated  │
+  │          module, add middleware helper           │
+  │                                                 │
+  │ [a]pprove  [r]eject  [d]iscuss  [v]iew diff     │
+  └─────────────────────────────────────────────────┘
+> a
+
+  ✓ Approved. Agent continuing...
+
+[Agent] Starting sub-goal: "Add unit tests for JWT module"
+[Agent] Built draft def456: 2 files changed
+
+  ┌─────────────────────────────────────────────────┐
+  │ Draft Ready for Review                          │
+  │                                                 │
+  │ Draft: def456 (sub-goal: "Add unit tests")      │
+  │ Files: tests/auth_jwt_test.rs, src/auth/jwt.rs  │
+  │ Summary: 12 unit tests covering token parsing,  │
+  │          expiry validation, and error cases      │
+  │                                                 │
+  │ [a]pprove  [r]eject  [d]iscuss  [v]iew diff     │
+  └─────────────────────────────────────────────────┘
+> d the error case tests should also cover malformed headers
+
+  ✐ Discussion noted. Agent revising...
+
+[Agent] Added malformed header test cases.
+[Agent] Built draft ghi789: 1 file changed
+
+  ┌─────────────────────────────────────────────────┐
+  │ Draft Ready for Review (revision)               │
+  │                                                 │
+  │ Draft: ghi789                                   │
+  │ Files: tests/auth_jwt_test.rs                   │
+  │ Summary: Added 3 tests for malformed JWT        │
+  │          headers (missing alg, empty payload,   │
+  │          truncated signature)                   │
+  │                                                 │
+  │ [a]pprove  [r]eject  [d]iscuss  [v]iew diff     │
+  └─────────────────────────────────────────────────┘
+> a
+
+  ✓ Approved. Agent continuing...
+
+[Agent] All sub-goals complete. Macro goal finished.
+  3 drafts: 2 approved, 1 superseded
+```
+
+### Response Options
+
+When a draft is presented for review, you have four options:
+
+| Key | Action | What happens |
+|-----|--------|-------------|
+| `a` | **Approve** | Draft is approved. Agent continues to next work item. |
+| `r` | **Reject** | Draft is rejected with your reason. Agent revises or moves on. |
+| `d` | **Discuss** | Add a comment. Type your feedback after `d`. Agent receives it and revises. |
+| `v` | **View diff** | Show the full diff inline before deciding. Returns to the prompt after. |
+
+For discuss and reject, type your feedback on the same line:
+
+```
+> d please use consistent error types — see src/error.rs
+> r this duplicates the existing validation in middleware.rs
+```
+
+### Viewing Diffs Inline
+
+Press `v` at the review prompt to see the full diff:
+
+```
+> v
+
+--- a/src/auth/jwt.rs
++++ b/src/auth/jwt.rs
+@@ -1,5 +1,24 @@
++use jsonwebtoken::{decode, DecodingKey, Validation};
++use crate::error::AuthError;
++
++pub fn validate_token(token: &str) -> Result<Claims, AuthError> {
++    let key = DecodingKey::from_secret(b"secret");
++    let data = decode::<Claims>(token, &key, &Validation::default())?;
++    Ok(data.claims)
++}
+...
+
+  [a]pprove  [r]eject  [d]iscuss
+> a
+```
+
+### Sub-Goal Decomposition
+
+The agent can break work into sub-goals. Each sub-goal produces its own draft:
+
+```
+[Agent] Creating sub-goal 1 of 3: "Extract JWT validation"
+[Agent] Creating sub-goal 2 of 3: "Add middleware helper"
+[Agent] Creating sub-goal 3 of 3: "Write integration tests"
+```
+
+Sub-goals inherit the macro goal's workspace, plan phase, and agent configuration. You review each sub-goal's draft independently — approve some, discuss others, reject if needed.
+
+Check the sub-goal tree at any time from another terminal:
+
+```bash
+ta goal status <macro-goal-id>
+
+# Output:
+# Goal: a1b2c3d4 — "Refactor auth module and add tests"
+#   State: Running (macro)
+#   Sub-goals:
+#     ├── e5f6g7h8 — "Extract JWT validation"     ✓ Approved
+#     ├── i9j0k1l2 — "Add middleware helper"       ⏳ PendingReview
+#     └── m3n4o5p6 — "Write integration tests"     ◌ Running
+```
+
+### Plan Updates
+
+The agent can propose plan status updates during the session:
+
+```
+  ┌─────────────────────────────────────────────────┐
+  │ Plan Update Proposed                            │
+  │                                                 │
+  │ Phase: v0.4.1.1                                 │
+  │ Note: "Auth module refactored, tests passing.   │
+  │        JWT extraction complete."                │
+  │                                                 │
+  │ [a]pprove  [r]eject                             │
+  └─────────────────────────────────────────────────┘
+> a
+```
+
+Plan updates are governance-gated: the agent proposes, you approve. The agent cannot unilaterally mark plan phases as done.
+
+### Monitoring from Another Terminal
+
+While a macro session runs, you can use standard TA commands from a second terminal:
+
+```bash
+# See all drafts from the current macro session
+ta draft list
+
+# View a specific draft's details
+ta draft view <draft-id>
+
+# Check session status
+ta session list
+
+# View session message history
+ta session show <session-id>
+```
+
+### Configuration
+
+Macro sessions use the `TerminalChannel` by default. No configuration is needed for terminal-based interaction.
+
+Future channel adapters (Slack, Discord, email) will be selectable via config:
+
+```yaml
+# .ta/config.yaml (future, v0.5.3+)
+review:
+  channel: terminal    # default — renders in your terminal
+  # channel: slack     # future — sends Block Kit cards to Slack
+  # channel: discord   # future — embed + reaction handler
+```
+
+The `ReviewChannel` trait is interaction-agnostic — it carries draft reviews, approval discussions, plan negotiations, and escalations through the same protocol. Adding a new channel requires only implementing the trait; no changes to TA core or the MCP gateway.
+
+### Combining `--macro` with `--interactive`
+
+The `--interactive` flag adds session lifecycle tracking (session ID, message history, state transitions) on top of `--macro`:
+
+```bash
+ta run "Refactor auth" --source . --macro --interactive
+
+# Output includes both:
+#   Interactive session: 8a7b6c5d-...
+#     Channel: cli:12345
+#   Mode: macro goal (inner-loop iteration enabled)
+```
+
+This gives you:
+- **`--macro`**: MCP tools for the agent, inner-loop draft/review cycle
+- **`--interactive`**: Session tracking, message history, pause/resume lifecycle
+
+For most workflows, `--macro` alone is sufficient. Add `--interactive` when you want session history persistence and the ability to resume sessions.
+
+### Tips for Effective Macro Sessions
+
+**Keep sub-goals focused.** A macro session works best when the agent decomposes work into small, reviewable units. If a draft touches 20+ files, consider asking the agent to break it down further.
+
+**Use discuss for guidance, not just critique.** The discuss response is your main tool for steering the agent. Instead of rejecting, discuss: "good direction, but use the existing `AuthError` type from `src/error.rs`".
+
+**Review diffs before approving.** Press `v` to see the full diff. This is especially important for changes to public APIs, config files, and security-sensitive code.
+
+**Let the agent finish.** The agent receives your feedback and revises automatically. You don't need to re-explain the goal — it has full context from the macro session.
+
+**Watch for drift.** In longer sessions, check that the agent's work stays aligned with the original goal. If the agent starts proposing unrelated changes, reject and redirect.
+
+### Troubleshooting Interactive Sessions
+
+**Agent doesn't pause for review**: Ensure you used `--macro`. Without it, the agent has no MCP tools and exits after one pass.
+
+**Draft prompt doesn't appear**: The MCP gateway may not have started. Check for port conflicts or MCP server errors in the agent output.
+
+**Session shows "Aborted"**: The agent process crashed or was killed. Check the session log:
+```bash
+ta session show <session-id>
+```
+
+**Want to review later instead of inline**: You can ignore the terminal prompt (Ctrl+C the session), then review offline:
+```bash
+ta draft list
+ta draft approve <draft-id>
+# The agent won't continue, but the draft is approved for later apply
+```
 
 ---
 
