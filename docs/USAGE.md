@@ -226,6 +226,18 @@ description = "Unity scene"
 
 ## PR Review & Approval
 
+### Approve vs Apply
+
+TA separates **approval** (a human judgment) from **application** (file copy + commit). This is intentional:
+
+- **Audit separation** — the approval event records *who* reviewed and *when*, distinct from when changes were applied. Important for compliance and traceability.
+- **Selective apply** — approve the whole draft, then apply with `--approve src/** --reject tests/**` to control which files land.
+- **Conflict check** — approve first, then run apply which detects conflicts with changes made since the goal started. If conflicts exist, you can resolve before committing.
+- **Batch workflow** — review and approve several drafts, then apply them in dependency order.
+- **Team handoff (future)** — one person reviews and approves, another applies at the right time.
+
+For simple single-user workflows, you can combine them: `ta draft apply <id>` works on PendingReview drafts directly (skipping explicit approve).
+
 ### View PR Details
 
 ```bash

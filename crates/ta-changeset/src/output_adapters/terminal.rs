@@ -170,8 +170,9 @@ impl TerminalAdapter {
             .unwrap_or_else(|| default_summary(&artifact.resource_uri, &artifact.change_type));
         let summary = Self::strip_html(summary_raw);
 
+        // File path on its own line, summary on next line indented to match.
         format!(
-            "  {} {} {} - {}",
+            "  {} {} {}\n    {}",
             icon, disposition_badge, artifact.resource_uri, summary
         )
     }
@@ -184,7 +185,7 @@ impl TerminalAdapter {
 
         if let Some(tiers) = &artifact.explanation_tiers {
             output.push_str(&format!(
-                "    {dim}Explanation:{reset} {}\n",
+                "\n    {dim}Explanation:{reset} {}\n",
                 tiers.explanation
             ));
 
@@ -202,7 +203,7 @@ impl TerminalAdapter {
                 }
             }
         } else if let Some(rationale) = &artifact.rationale {
-            output.push_str(&format!("    {dim}Rationale:{reset} {}\n", rationale));
+            output.push_str(&format!("\n    {dim}Rationale:{reset} {}\n", rationale));
         }
 
         if !artifact.dependencies.is_empty() {
