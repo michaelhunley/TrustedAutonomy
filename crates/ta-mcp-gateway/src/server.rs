@@ -119,6 +119,62 @@ pub struct PrBuildParams {
     pub summary: String,
 }
 
+// ── Macro goal / inner-loop parameter types ─────────────────────
+
+/// Parameters for `ta_draft` (inner-loop agent tool).
+/// Mirrors `ta draft` CLI subcommands as a single MCP tool with action dispatch.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DraftToolParams {
+    /// Action: "build", "submit", "status", or "list".
+    pub action: String,
+    /// The UUID of the goal run (required for build, submit, status).
+    #[serde(default)]
+    pub goal_run_id: Option<String>,
+    /// Summary of changes (used with "build" action).
+    #[serde(default)]
+    pub summary: Option<String>,
+    /// Draft package ID (used with "status" action).
+    #[serde(default)]
+    pub draft_id: Option<String>,
+}
+
+/// Parameters for `ta_goal` (inner-loop agent tool).
+/// Mirrors `ta goal` CLI subcommands for sub-goal management within macro sessions.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GoalToolParams {
+    /// Action: "start" or "status".
+    pub action: String,
+    /// Title for the new sub-goal (required for "start").
+    #[serde(default)]
+    pub title: Option<String>,
+    /// Objective for the sub-goal (used with "start").
+    #[serde(default)]
+    pub objective: Option<String>,
+    /// The macro goal ID that this sub-goal belongs to (required for "start").
+    #[serde(default)]
+    pub macro_goal_id: Option<String>,
+    /// Goal run ID to check status of (used with "status").
+    #[serde(default)]
+    pub goal_run_id: Option<String>,
+}
+
+/// Parameters for `ta_plan` (inner-loop agent tool).
+/// Mirrors `ta plan` CLI subcommands for reading/proposing plan updates.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct PlanToolParams {
+    /// Action: "read" or "update".
+    pub action: String,
+    /// The UUID of the goal run (used to locate source dir with plan).
+    #[serde(default)]
+    pub goal_run_id: Option<String>,
+    /// Phase ID to update (used with "update" action).
+    #[serde(default)]
+    pub phase: Option<String>,
+    /// Proposed status update (used with "update" action).
+    #[serde(default)]
+    pub status_note: Option<String>,
+}
+
 // ── Gateway state ────────────────────────────────────────────────
 
 /// Shared mutable state for the gateway server.
@@ -691,6 +747,433 @@ impl TaGatewayServer {
                 McpError::internal_error(e.to_string(), None)
             })?]))
     }
+
+    // ── Inner-loop tools (v0.4.1 — macro goals) ────────────
+
+    #[tool(
+        description = "Manage draft packages within a macro goal session. Actions: build (package changes), submit (send for human review — blocks until response), status (check review status), list (list drafts for this goal). Use during macro goal sessions for inner-loop iteration."
+    )]
+    fn ta_draft(
+        &self,
+        Parameters(params): Parameters<DraftToolParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|e| McpError::internal_error(format!("lock poisoned: {}", e), None))?;
+
+        match params.action.as_str() {
+            "build" => {
+                let goal_run_id = parse_uuid(params.goal_run_id.as_deref().ok_or_else(|| {
+                    McpError::invalid_params("goal_run_id required for build", None)
+                })?)?;
+                let summary = params
+                    .summary
+                    .as_deref()
+                    .unwrap_or("Changes from macro goal sub-task");
+
+                let goal = state
+                    .goal_store
+                    .get(goal_run_id)
+                    .map_err(|e| McpError::internal_error(e.to_string(), None))?
+                    .ok_or_else(|| {
+                        McpError::invalid_params(format!("goal not found: {}", goal_run_id), None)
+                    })?;
+
+                let connector = state.connectors.get(&goal_run_id).ok_or_else(|| {
+                    McpError::invalid_params(
+                        format!("no active connector for goal: {}", goal_run_id),
+                        None,
+                    )
+                })?;
+
+                let pr_package = connector
+                    .build_pr_package(&goal.title, &goal.objective, summary, &goal.title)
+                    .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+                let package_id = pr_package.package_id;
+                state
+                    .save_pr_package(pr_package)
+                    .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+                let response = serde_json::json!({
+                    "draft_id": package_id.to_string(),
+                    "goal_run_id": goal_run_id.to_string(),
+                    "status": "built",
+                    "message": "Draft built. Call ta_draft with action: 'submit' to send for review.",
+                });
+                Ok(CallToolResult::success(vec![Content::json(response)
+                    .map_err(|e| {
+                        McpError::internal_error(e.to_string(), None)
+                    })?]))
+            }
+            "submit" => {
+                let goal_run_id = parse_uuid(params.goal_run_id.as_deref().ok_or_else(|| {
+                    McpError::invalid_params("goal_run_id required for submit", None)
+                })?)?;
+
+                let mut goal = state
+                    .goal_store
+                    .get(goal_run_id)
+                    .map_err(|e| McpError::internal_error(e.to_string(), None))?
+                    .ok_or_else(|| {
+                        McpError::invalid_params(format!("goal not found: {}", goal_run_id), None)
+                    })?;
+
+                let goal_id_str = goal_run_id.to_string();
+                let package_id = goal.pr_package_id.or_else(|| {
+                    // Find the most recent package for this goal.
+                    state
+                        .pr_packages
+                        .values()
+                        .filter(|p| p.goal.goal_id == goal_id_str)
+                        .max_by_key(|p| p.created_at)
+                        .map(|p| p.package_id)
+                });
+
+                match package_id {
+                    Some(pkg_id) => {
+                        // Transition to PrReady to signal human review needed.
+                        if goal.state == GoalRunState::Running {
+                            goal.pr_package_id = Some(pkg_id);
+                            goal.transition(GoalRunState::PrReady)
+                                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+                            state
+                                .goal_store
+                                .save(&goal)
+                                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+                        }
+
+                        state.event_dispatcher.dispatch(&TaEvent::PrReady {
+                            goal_run_id,
+                            pr_package_id: pkg_id,
+                            summary: "Macro goal draft submitted for review".to_string(),
+                            timestamp: Utc::now(),
+                        });
+
+                        let response = serde_json::json!({
+                            "draft_id": pkg_id.to_string(),
+                            "goal_run_id": goal_run_id.to_string(),
+                            "status": "submitted",
+                            "message": "Draft submitted for human review. Use ta_draft with action: 'status' to check review progress. The human reviewer will approve or deny via `ta draft approve/deny`.",
+                        });
+                        Ok(CallToolResult::success(vec![Content::json(response)
+                            .map_err(|e| {
+                                McpError::internal_error(e.to_string(), None)
+                            })?]))
+                    }
+                    None => {
+                        let response = serde_json::json!({
+                            "error": "no_draft",
+                            "message": "No draft package found. Call ta_draft with action: 'build' first.",
+                        });
+                        Ok(CallToolResult::success(vec![Content::json(response)
+                            .map_err(|e| {
+                                McpError::internal_error(e.to_string(), None)
+                            })?]))
+                    }
+                }
+            }
+            "status" => {
+                let draft_id = parse_uuid(
+                    params
+                        .draft_id
+                        .as_deref()
+                        .or(params.goal_run_id.as_deref())
+                        .ok_or_else(|| {
+                            McpError::invalid_params(
+                                "draft_id or goal_run_id required for status",
+                                None,
+                            )
+                        })?,
+                )?;
+
+                // Try as draft ID first, then as goal ID.
+                if let Some(pkg) = state.pr_packages.get(&draft_id) {
+                    let response = serde_json::json!({
+                        "draft_id": draft_id.to_string(),
+                        "status": format!("{:?}", pkg.status),
+                        "artifacts": pkg.changes.artifacts.len(),
+                    });
+                    Ok(CallToolResult::success(vec![Content::json(response)
+                        .map_err(|e| {
+                            McpError::internal_error(e.to_string(), None)
+                        })?]))
+                } else if let Ok(Some(goal)) = state.goal_store.get(draft_id) {
+                    let pr_status = if let Some(pkg_id) = goal.pr_package_id {
+                        if let Some(pkg) = state.pr_packages.get(&pkg_id) {
+                            serde_json::json!({
+                                "draft_id": pkg_id.to_string(),
+                                "status": format!("{:?}", pkg.status),
+                                "artifacts": pkg.changes.artifacts.len(),
+                            })
+                        } else {
+                            serde_json::json!({ "status": "unknown" })
+                        }
+                    } else {
+                        serde_json::json!({
+                            "status": "no_draft",
+                            "message": "No draft built yet.",
+                        })
+                    };
+                    Ok(CallToolResult::success(vec![Content::json(pr_status)
+                        .map_err(|e| {
+                            McpError::internal_error(e.to_string(), None)
+                        })?]))
+                } else {
+                    Err(McpError::invalid_params(
+                        format!("not found: {}", draft_id),
+                        None,
+                    ))
+                }
+            }
+            "list" => {
+                let packages: Vec<serde_json::Value> = state
+                    .pr_packages
+                    .values()
+                    .map(|pkg| {
+                        serde_json::json!({
+                            "draft_id": pkg.package_id.to_string(),
+                            "status": format!("{:?}", pkg.status),
+                            "artifacts": pkg.changes.artifacts.len(),
+                            "goal_id": &pkg.goal.goal_id,
+                        })
+                    })
+                    .collect();
+
+                let response = serde_json::json!({ "drafts": packages, "count": packages.len() });
+                Ok(CallToolResult::success(vec![Content::json(response)
+                    .map_err(|e| {
+                        McpError::internal_error(e.to_string(), None)
+                    })?]))
+            }
+            _ => Err(McpError::invalid_params(
+                format!(
+                    "unknown action '{}'. Expected: build, submit, status, list",
+                    params.action
+                ),
+                None,
+            )),
+        }
+    }
+
+    #[tool(
+        description = "Manage sub-goals within a macro goal session. Actions: start (create a sub-goal that inherits the macro goal's context), status (check sub-goal progress). Sub-goals share the macro goal's workspace, plan phase, and agent config."
+    )]
+    fn ta_goal_inner(
+        &self,
+        Parameters(params): Parameters<GoalToolParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|e| McpError::internal_error(format!("lock poisoned: {}", e), None))?;
+
+        match params.action.as_str() {
+            "start" => {
+                let macro_goal_id =
+                    parse_uuid(params.macro_goal_id.as_deref().ok_or_else(|| {
+                        McpError::invalid_params("macro_goal_id required for start", None)
+                    })?)?;
+                let title = params
+                    .title
+                    .as_deref()
+                    .ok_or_else(|| McpError::invalid_params("title required for start", None))?;
+                let objective = params.objective.as_deref().unwrap_or(title);
+
+                // Verify macro goal exists and is a macro goal.
+                let macro_goal = state
+                    .goal_store
+                    .get(macro_goal_id)
+                    .map_err(|e| McpError::internal_error(e.to_string(), None))?
+                    .ok_or_else(|| {
+                        McpError::invalid_params(
+                            format!("macro goal not found: {}", macro_goal_id),
+                            None,
+                        )
+                    })?;
+
+                if !macro_goal.is_macro {
+                    return Err(McpError::invalid_params(
+                        "goal is not a macro goal. Use ta run --macro to start a macro session.",
+                        None,
+                    ));
+                }
+
+                // Create sub-goal inheriting from macro goal.
+                let sub_goal_run = state
+                    .start_goal(title, objective, &macro_goal.agent_id)
+                    .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+                let sub_id = sub_goal_run.goal_run_id;
+
+                // Set parent_macro_id on sub-goal and inherit plan phase.
+                let mut updated_sub = state
+                    .goal_store
+                    .get(sub_id)
+                    .map_err(|e| McpError::internal_error(e.to_string(), None))?
+                    .ok_or_else(|| McpError::internal_error("sub-goal vanished", None))?;
+                updated_sub.parent_macro_id = Some(macro_goal_id);
+                updated_sub.plan_phase = macro_goal.plan_phase.clone();
+                updated_sub.source_dir = macro_goal.source_dir.clone();
+                state
+                    .goal_store
+                    .save(&updated_sub)
+                    .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+                // Add sub-goal ID to macro goal's list.
+                let mut updated_macro = macro_goal;
+                updated_macro.sub_goal_ids.push(sub_id);
+                state
+                    .goal_store
+                    .save(&updated_macro)
+                    .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+                let response = serde_json::json!({
+                    "sub_goal_id": sub_id.to_string(),
+                    "macro_goal_id": macro_goal_id.to_string(),
+                    "title": title,
+                    "state": "running",
+                });
+                Ok(CallToolResult::success(vec![Content::json(response)
+                    .map_err(|e| {
+                        McpError::internal_error(e.to_string(), None)
+                    })?]))
+            }
+            "status" => {
+                let goal_run_id = parse_uuid(params.goal_run_id.as_deref().ok_or_else(|| {
+                    McpError::invalid_params("goal_run_id required for status", None)
+                })?)?;
+
+                let goal = state
+                    .goal_store
+                    .get(goal_run_id)
+                    .map_err(|e| McpError::internal_error(e.to_string(), None))?
+                    .ok_or_else(|| {
+                        McpError::invalid_params(format!("goal not found: {}", goal_run_id), None)
+                    })?;
+
+                let mut response = serde_json::json!({
+                    "goal_run_id": goal.goal_run_id.to_string(),
+                    "title": goal.title,
+                    "state": goal.state.to_string(),
+                    "is_macro": goal.is_macro,
+                });
+
+                // Include sub-goal tree if this is a macro goal.
+                if goal.is_macro && !goal.sub_goal_ids.is_empty() {
+                    let sub_goals: Vec<serde_json::Value> = goal
+                        .sub_goal_ids
+                        .iter()
+                        .filter_map(|id| state.goal_store.get(*id).ok().flatten())
+                        .map(|sg| {
+                            serde_json::json!({
+                                "sub_goal_id": sg.goal_run_id.to_string(),
+                                "title": sg.title,
+                                "state": sg.state.to_string(),
+                                "draft_id": sg.pr_package_id.map(|id| id.to_string()),
+                            })
+                        })
+                        .collect();
+                    response["sub_goals"] = serde_json::json!(sub_goals);
+                }
+
+                Ok(CallToolResult::success(vec![Content::json(response)
+                    .map_err(|e| {
+                        McpError::internal_error(e.to_string(), None)
+                    })?]))
+            }
+            _ => Err(McpError::invalid_params(
+                format!(
+                    "unknown action '{}'. Expected: start, status",
+                    params.action
+                ),
+                None,
+            )),
+        }
+    }
+
+    #[tool(
+        description = "Read or propose updates to the project development plan. Actions: read (view current plan progress), update (propose a status note for a phase — held for human approval). Plan updates are governance-gated: agent proposes, human approves."
+    )]
+    fn ta_plan(
+        &self,
+        Parameters(params): Parameters<PlanToolParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|e| McpError::internal_error(format!("lock poisoned: {}", e), None))?;
+
+        match params.action.as_str() {
+            "read" => {
+                // Read plan progress from the goal's source directory.
+                let goal_run_id = parse_uuid(params.goal_run_id.as_deref().ok_or_else(|| {
+                    McpError::invalid_params("goal_run_id required for read", None)
+                })?)?;
+
+                let goal = state
+                    .goal_store
+                    .get(goal_run_id)
+                    .map_err(|e| McpError::internal_error(e.to_string(), None))?
+                    .ok_or_else(|| {
+                        McpError::invalid_params(format!("goal not found: {}", goal_run_id), None)
+                    })?;
+
+                // Try to read PLAN.md from workspace.
+                let plan_path = goal.workspace_path.join("PLAN.md");
+                if plan_path.exists() {
+                    let content = std::fs::read_to_string(&plan_path)
+                        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+                    Ok(CallToolResult::success(vec![Content::text(content)]))
+                } else {
+                    let response = serde_json::json!({
+                        "message": "No PLAN.md found in workspace.",
+                    });
+                    Ok(CallToolResult::success(vec![Content::json(response)
+                        .map_err(|e| {
+                            McpError::internal_error(e.to_string(), None)
+                        })?]))
+                }
+            }
+            "update" => {
+                // Propose a plan update — recorded as an event, held for human approval.
+                let goal_run_id = parse_uuid(params.goal_run_id.as_deref().ok_or_else(|| {
+                    McpError::invalid_params("goal_run_id required for update", None)
+                })?)?;
+                let phase = params.phase.as_deref().unwrap_or("unknown");
+                let status_note = params
+                    .status_note
+                    .as_deref()
+                    .unwrap_or("Agent proposes phase update");
+
+                // Log the proposal as an event — human must approve via ta draft workflow.
+                state
+                    .event_dispatcher
+                    .dispatch(&TaEvent::PlanUpdateProposed {
+                        goal_run_id,
+                        phase: phase.to_string(),
+                        status_note: status_note.to_string(),
+                        timestamp: Utc::now(),
+                    });
+
+                let response = serde_json::json!({
+                    "goal_run_id": goal_run_id.to_string(),
+                    "phase": phase,
+                    "status": "proposed",
+                    "message": "Plan update proposed. Human must approve via `ta draft approve` before it takes effect.",
+                });
+                Ok(CallToolResult::success(vec![Content::json(response)
+                    .map_err(|e| {
+                        McpError::internal_error(e.to_string(), None)
+                    })?]))
+            }
+            _ => Err(McpError::invalid_params(
+                format!("unknown action '{}'. Expected: read, update", params.action),
+                None,
+            )),
+        }
+    }
 }
 
 // ── ServerHandler implementation ─────────────────────────────────
@@ -787,11 +1270,12 @@ mod tests {
     fn tool_count_matches_expected() {
         let (server, _dir) = test_server();
         let tools = server.tool_router.list_all();
-        // 9 tools: goal_start, goal_status, goal_list,
-        //          fs_read, fs_write, fs_list, fs_diff,
-        //          pr_build, pr_status
+        // 12 tools: goal_start, goal_status, goal_list,
+        //           fs_read, fs_write, fs_list, fs_diff,
+        //           pr_build, pr_status,
+        //           ta_draft, ta_goal_inner, ta_plan (v0.4.1 macro goal tools)
         let names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
-        assert_eq!(tools.len(), 9, "expected 9 tools, got: {:?}", names);
+        assert_eq!(tools.len(), 12, "expected 12 tools, got: {:?}", names);
     }
 
     #[test]

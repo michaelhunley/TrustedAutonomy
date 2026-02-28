@@ -230,7 +230,15 @@ fn list_goals(store: &GoalRunStore, state: Option<&str>) -> anyhow::Result<()> {
     println!("{}", "-".repeat(94));
 
     for g in &goals {
-        let title_with_chain = if let Some(parent_id) = g.parent_goal_id {
+        let title_with_chain = if g.is_macro {
+            format!("[M] {}", truncate(&g.title, 24))
+        } else if let Some(ref macro_id) = g.parent_macro_id {
+            format!(
+                "  └ {} (← {})",
+                truncate(&g.title, 16),
+                &macro_id.to_string()[..8]
+            )
+        } else if let Some(parent_id) = g.parent_goal_id {
             format!(
                 "{} (→ {})",
                 truncate(&g.title, 20),
@@ -273,9 +281,40 @@ fn show_status(store: &GoalRunStore, id: &str) -> anyhow::Result<()> {
             if let Some(parent_id) = g.parent_goal_id {
                 println!("Parent:   {} (follow-up)", parent_id);
             }
+            if let Some(ref macro_id) = g.parent_macro_id {
+                println!("Macro:    {} (sub-goal of macro)", macro_id);
+            }
+            if g.is_macro {
+                println!("Mode:     macro goal (inner-loop iteration)");
+            }
             println!("Staging:  {}", g.workspace_path.display());
             if let Some(pr_id) = g.pr_package_id {
                 println!("Draft:    {}", pr_id);
+            }
+
+            // Show sub-goal tree for macro goals.
+            if g.is_macro && !g.sub_goal_ids.is_empty() {
+                println!("\nSub-goals ({}):", g.sub_goal_ids.len());
+                for sub_id in &g.sub_goal_ids {
+                    match store.get(*sub_id)? {
+                        Some(sg) => {
+                            let draft_status = sg
+                                .pr_package_id
+                                .map(|id| format!(" [draft: {}]", &id.to_string()[..8]))
+                                .unwrap_or_default();
+                            println!(
+                                "  {} {} [{}]{}",
+                                &sub_id.to_string()[..8],
+                                truncate(&sg.title, 40),
+                                sg.state,
+                                draft_status,
+                            );
+                        }
+                        None => {
+                            println!("  {} (not found)", sub_id);
+                        }
+                    }
+                }
             }
         }
         None => {

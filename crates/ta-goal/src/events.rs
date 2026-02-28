@@ -113,6 +113,15 @@ pub enum TaEvent {
         content_preview: String,
         timestamp: DateTime<Utc>,
     },
+
+    /// Agent proposed a plan update within a macro goal session (v0.4.1).
+    /// Held for human approval — the update is not applied automatically.
+    PlanUpdateProposed {
+        goal_run_id: Uuid,
+        phase: String,
+        status_note: String,
+        timestamp: DateTime<Utc>,
+    },
 }
 
 impl TaEvent {
@@ -129,6 +138,7 @@ impl TaEvent {
             TaEvent::SessionStarted { .. } => "session_started",
             TaEvent::SessionStateChanged { .. } => "session_state_changed",
             TaEvent::SessionMessage { .. } => "session_message",
+            TaEvent::PlanUpdateProposed { .. } => "plan_update_proposed",
         }
     }
 

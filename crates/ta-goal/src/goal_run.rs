@@ -96,6 +96,9 @@ impl GoalRunState {
                 | (GoalRunState::Applied, GoalRunState::Completed)
                 // Allow going back from UnderReview to Running (denied PR, try again)
                 | (GoalRunState::UnderReview, GoalRunState::Running)
+                // Macro goals: allow PrReady → Running for inner-loop iteration.
+                // Agent submits a sub-goal draft, then continues working on the next one.
+                | (GoalRunState::PrReady, GoalRunState::Running)
         )
     }
 }
@@ -147,6 +150,18 @@ pub struct GoalRun {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_snapshot: Option<serde_json::Value>,
 
+    /// Whether this is a macro goal (supports inner-loop iteration with sub-goals).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_macro: bool,
+
+    /// Parent macro goal ID for sub-goals created during a macro session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_macro_id: Option<Uuid>,
+
+    /// IDs of sub-goals created within this macro goal session.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sub_goal_ids: Vec<Uuid>,
+
     /// The PR package ID, if one has been built.
     pub pr_package_id: Option<Uuid>,
 
@@ -180,6 +195,9 @@ impl GoalRun {
             plan_phase: None,
             parent_goal_id: None,
             source_snapshot: None,
+            is_macro: false,
+            parent_macro_id: None,
+            sub_goal_ids: Vec::new(),
             pr_package_id: None,
             created_at: now,
             updated_at: now,
@@ -324,6 +342,52 @@ mod tests {
         assert!(json.contains("\"parent_goal_id\""));
         let restored: GoalRun = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.parent_goal_id, Some(parent_id));
+    }
+
+    #[test]
+    fn macro_goal_pr_ready_to_running() {
+        let mut gr = test_goal_run();
+        gr.is_macro = true;
+        gr.transition(GoalRunState::Configured).unwrap();
+        gr.transition(GoalRunState::Running).unwrap();
+        gr.transition(GoalRunState::PrReady).unwrap();
+        // Macro goals can go back to Running for inner-loop iteration.
+        gr.transition(GoalRunState::Running).unwrap();
+        assert_eq!(gr.state, GoalRunState::Running);
+    }
+
+    #[test]
+    fn macro_goal_fields_serialization_round_trip() {
+        let mut gr = test_goal_run();
+        gr.is_macro = true;
+        let sub_id = Uuid::new_v4();
+        gr.sub_goal_ids = vec![sub_id];
+        let parent_macro = Uuid::new_v4();
+        gr.parent_macro_id = Some(parent_macro);
+
+        let json = serde_json::to_string_pretty(&gr).unwrap();
+        assert!(json.contains("\"is_macro\""));
+        assert!(json.contains("\"parent_macro_id\""));
+        assert!(json.contains("\"sub_goal_ids\""));
+
+        let restored: GoalRun = serde_json::from_str(&json).unwrap();
+        assert!(restored.is_macro);
+        assert_eq!(restored.parent_macro_id, Some(parent_macro));
+        assert_eq!(restored.sub_goal_ids, vec![sub_id]);
+    }
+
+    #[test]
+    fn macro_fields_default_omitted_from_json() {
+        let gr = test_goal_run();
+        let json = serde_json::to_string_pretty(&gr).unwrap();
+        assert!(!json.contains("is_macro"));
+        assert!(!json.contains("parent_macro_id"));
+        assert!(!json.contains("sub_goal_ids"));
+        // Backward compat: JSON without these fields deserializes fine.
+        let restored: GoalRun = serde_json::from_str(&json).unwrap();
+        assert!(!restored.is_macro);
+        assert!(restored.parent_macro_id.is_none());
+        assert!(restored.sub_goal_ids.is_empty());
     }
 
     #[test]
