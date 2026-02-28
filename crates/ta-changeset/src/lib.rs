@@ -14,13 +14,16 @@ pub mod diff_handlers;
 pub mod draft_package;
 pub mod error;
 pub mod explanation;
+pub mod interaction;
 pub mod interactive_session_store;
 pub mod output_adapters;
 pub mod pr_package;
+pub mod review_channel;
 pub mod review_session;
 pub mod review_session_store;
 pub mod session_channel;
 pub mod supervisor;
+pub mod terminal_channel;
 pub mod uri_pattern;
 
 pub use changeset::{ChangeKind, ChangeSet, CommitIntent};
@@ -29,8 +32,13 @@ pub use diff_handlers::{DiffHandlerError, DiffHandlersConfig, HandlerRule};
 pub use draft_package::{DraftPackage, DraftStatus, ExplanationTiers};
 pub use error::ChangeSetError;
 pub use explanation::ExplanationSidecar;
+pub use interaction::{
+    ChannelCapabilities, Decision, InteractionKind, InteractionRequest, InteractionResponse,
+    Notification, NotificationLevel, Urgency,
+};
 pub use interactive_session_store::InteractiveSessionStore;
 pub use output_adapters::{DetailLevel, OutputAdapter, OutputFormat, RenderContext};
+pub use review_channel::{ReviewChannel, ReviewChannelConfig, ReviewChannelError};
 pub use review_session::{
     ArtifactReview, Comment, CommentThread, DispositionCounts, ReviewReasoning, ReviewSession,
     ReviewState, SessionNote,
@@ -43,6 +51,7 @@ pub use session_channel::{
 pub use supervisor::{
     DependencyGraph, SupervisorAgent, ValidationError, ValidationResult, ValidationWarning,
 };
+pub use terminal_channel::{AutoApproveChannel, TerminalChannel};
 pub use uri_pattern::{filter_uris, matches_uri};
 
 // Backwards compatibility: export old names as aliases

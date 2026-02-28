@@ -8,6 +8,7 @@
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use ta_changeset::review_channel::ReviewChannelConfig;
 
 /// Configuration for the MCP gateway server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,6 +36,10 @@ pub struct GatewayConfig {
 
     /// Directory for interactive session records (v0.3.1.2).
     pub interactive_sessions_dir: PathBuf,
+
+    /// ReviewChannel configuration (v0.4.1.1).
+    #[serde(default)]
+    pub review_channel: ReviewChannelConfig,
 }
 
 impl GatewayConfig {
@@ -51,6 +56,7 @@ impl GatewayConfig {
             events_log: ta_dir.join("events.jsonl"),
             pr_packages_dir: ta_dir.join("pr_packages"),
             interactive_sessions_dir: ta_dir.join("interactive_sessions"),
+            review_channel: ReviewChannelConfig::default(),
         }
     }
 }
