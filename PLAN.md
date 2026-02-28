@@ -784,7 +784,7 @@ ta draft fix <draft-id> <artifact-uri> --guidance "Consolidate duplicate struct"
 ## v0.4 — Agent Intelligence *(release: tag v0.4.0-alpha)*
 
 ### v0.4.0 — Intent-to-Access Planner & Agent Alignment Profiles
-<!-- status: pending -->
+<!-- status: done -->
 - ✅ **Agent Alignment Profiles**: `ta-policy/src/alignment.rs` — `AlignmentProfile`, `AutonomyEnvelope`, `CoordinationConfig` types with YAML/JSON serialization. Profiles declare `bounded_actions`, `escalation_triggers`, `forbidden_actions`, plus `coordination` block for multi-agent scenarios. (10 tests)
 - ✅ **Policy Compiler**: `ta-policy/src/compiler.rs` — `PolicyCompiler::compile()` transforms `AlignmentProfile` into `CapabilityManifest` grants. Validates forbidden/bounded overlap, parses `tool_verb` and `exec: command` formats, applies resource scoping. Replaces hardcoded manifest generation in `ta-mcp-gateway/server.rs`. (14 tests)
 - ✅ **AgentSetupProposal**: `ta-policy/src/alignment.rs` — `AgentSetupProposal`, `ProposedAgent`, `Milestone` types for LLM-based intent-to-policy planning. JSON-serializable proposal structure for agent roster + scoped capabilities + milestone plan. (2 tests)
