@@ -25,6 +25,10 @@ pub struct WorkflowConfig {
     /// Garbage collection / lifecycle configuration
     #[serde(default)]
     pub gc: GcConfig,
+
+    /// Follow-up goal behavior configuration
+    #[serde(default)]
+    pub follow_up: FollowUpConfig,
 }
 
 /// Submit adapter configuration
@@ -203,6 +207,44 @@ fn default_stale_threshold_days() -> u64 {
     7
 }
 
+/// Follow-up goal behavior configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FollowUpConfig {
+    /// Default mode for --follow-up: "extend" reuses parent staging, "standalone" creates fresh copy.
+    #[serde(default = "default_follow_up_mode")]
+    pub default_mode: String,
+
+    /// Auto-supersede parent draft when building from same staging directory.
+    #[serde(default = "default_auto_supersede")]
+    pub auto_supersede: bool,
+
+    /// Re-snapshot source before applying when source has changed since goal start.
+    #[serde(default = "default_rebase_on_apply")]
+    pub rebase_on_apply: bool,
+}
+
+impl Default for FollowUpConfig {
+    fn default() -> Self {
+        Self {
+            default_mode: default_follow_up_mode(),
+            auto_supersede: default_auto_supersede(),
+            rebase_on_apply: default_rebase_on_apply(),
+        }
+    }
+}
+
+fn default_follow_up_mode() -> String {
+    "extend".to_string()
+}
+
+fn default_auto_supersede() -> bool {
+    true
+}
+
+fn default_rebase_on_apply() -> bool {
+    true
+}
+
 fn default_health_check() -> bool {
     true
 }
@@ -288,5 +330,35 @@ health_check = false
         let config = WorkflowConfig::load_or_default(std::path::Path::new("/nonexistent/path"));
         assert_eq!(config.build.summary_enforcement, "warning");
         assert_eq!(config.submit.adapter, "none");
+    }
+
+    #[test]
+    fn follow_up_config_defaults() {
+        let config = FollowUpConfig::default();
+        assert_eq!(config.default_mode, "extend");
+        assert!(config.auto_supersede);
+        assert!(config.rebase_on_apply);
+    }
+
+    #[test]
+    fn workflow_config_default_has_follow_up_section() {
+        let config = WorkflowConfig::default();
+        assert_eq!(config.follow_up.default_mode, "extend");
+        assert!(config.follow_up.auto_supersede);
+        assert!(config.follow_up.rebase_on_apply);
+    }
+
+    #[test]
+    fn parse_toml_with_follow_up_section() {
+        let toml = r#"
+[follow_up]
+default_mode = "standalone"
+auto_supersede = false
+rebase_on_apply = false
+"#;
+        let config: WorkflowConfig = toml::from_str(toml).unwrap();
+        assert_eq!(config.follow_up.default_mode, "standalone");
+        assert!(!config.follow_up.auto_supersede);
+        assert!(!config.follow_up.rebase_on_apply);
     }
 }

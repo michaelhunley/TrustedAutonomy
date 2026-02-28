@@ -284,8 +284,19 @@ ta run "Fix clippy warnings from review" --follow-up
 
 # With detailed context
 ta run --follow-up --objective-file review-notes.md --source .
+```
 
-# The follow-up PR supersedes the parent (single unified diff)
+**Staging Reuse (v0.4.1.2)**: When the parent goal's staging directory still exists, `--follow-up` prompts to reuse it. Choosing "yes" (the default) means iterative work accumulates into a single unified draft — no disconnected packages.
+
+- **Extend** (default): Reuses parent staging. `ta draft build` produces a unified diff superseding the previous draft.
+- **Standalone**: Declines the prompt (or `follow_up.default_mode = "standalone"` in `.ta/workflow.toml`). Creates a fresh copy — both drafts remain independently reviewable.
+
+```toml
+# .ta/workflow.toml — follow-up behavior
+[follow_up]
+default_mode = "extend"       # "extend" or "standalone"
+auto_supersede = true          # auto-supersede parent draft when extending
+rebase_on_apply = true         # re-snapshot source for sequential applies
 ```
 
 ---
@@ -478,7 +489,7 @@ health_check = true        # Show warning on startup if stale drafts exist
 
 ### Auto-Close on Follow-Up
 
-When a follow-up goal's draft is applied, TA automatically closes the parent draft if it's still in PendingReview or Approved state.
+When a follow-up goal's draft is applied, TA automatically closes the parent draft if it's still in PendingReview or Approved state. **v0.4.1.2**: Auto-close only applies when the follow-up shares the same staging directory as the parent (extend case). Standalone follow-ups with separate staging leave the parent draft independently reviewable.
 
 ### Startup Health Check
 

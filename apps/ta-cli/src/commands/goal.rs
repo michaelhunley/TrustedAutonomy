@@ -8,6 +8,116 @@ use ta_mcp_gateway::GatewayConfig;
 use ta_workspace::{ExcludePatterns, OverlayWorkspace};
 use uuid::Uuid;
 
+/// Check if the parent's staging directory can be reused (exists and config allows it).
+///
+/// Returns `Some(parent_goal)` if eligible, `None` otherwise.
+/// The caller decides whether to actually extend (based on user prompt or forced decision).
+fn check_parent_staging_eligible(
+    store: &GoalRunStore,
+    parent_goal_id: Uuid,
+    config: &GatewayConfig,
+) -> anyhow::Result<Option<ta_goal::GoalRun>> {
+    let parent = store
+        .get(parent_goal_id)?
+        .ok_or_else(|| anyhow::anyhow!("Parent goal {} not found", parent_goal_id))?;
+
+    // Check if parent staging directory still exists.
+    if !parent.workspace_path.exists() {
+        return Ok(None);
+    }
+
+    // Load workflow config for follow-up preferences.
+    let workflow_config = ta_submit::WorkflowConfig::load_or_default(
+        &config.workspace_root.join(".ta/workflow.toml"),
+    );
+
+    if workflow_config.follow_up.default_mode == "standalone" {
+        return Ok(None);
+    }
+
+    Ok(Some(parent))
+}
+
+/// Decide whether a follow-up goal should extend the parent's staging directory.
+///
+/// Returns `Some(parent_goal)` if the parent's staging exists and should be reused,
+/// or `None` if a fresh staging copy should be created.
+fn should_extend_parent_staging(
+    store: &GoalRunStore,
+    parent_goal_id: Uuid,
+    config: &GatewayConfig,
+) -> anyhow::Result<Option<ta_goal::GoalRun>> {
+    let parent = match check_parent_staging_eligible(store, parent_goal_id, config)? {
+        Some(p) => p,
+        None => return Ok(None),
+    };
+
+    // Show the parent's draft info if available.
+    if let Some(pr_id) = parent.pr_package_id {
+        eprintln!(
+            "Parent goal \"{}\" has staging at {} (draft: {})",
+            parent.title,
+            parent.workspace_path.display(),
+            &pr_id.to_string()[..8]
+        );
+    } else {
+        eprintln!(
+            "Parent goal \"{}\" has staging at {}",
+            parent.title,
+            parent.workspace_path.display()
+        );
+    }
+
+    // Prompt user (default yes). In non-interactive contexts (tests, CI),
+    // fall back to the configured default.
+    eprint!("Continue in staging for \"{}\"? [Y/n] ", parent.title);
+
+    // Read response — accept empty/y/Y as yes.
+    let mut input = String::new();
+    if std::io::stdin().read_line(&mut input).is_ok() {
+        let trimmed = input.trim().to_lowercase();
+        if trimmed.is_empty() || trimmed == "y" || trimmed == "yes" {
+            return Ok(Some(parent));
+        }
+    }
+
+    Ok(None)
+}
+
+/// Start a follow-up goal that extends the parent's staging directory.
+/// Used by both the interactive path and tests.
+#[allow(clippy::too_many_arguments)]
+pub fn start_goal_extending_parent(
+    config: &GatewayConfig,
+    store: &GoalRunStore,
+    title: &str,
+    objective: &str,
+    agent: &str,
+    phase: Option<&str>,
+    parent: &ta_goal::GoalRun,
+    parent_goal_id: Uuid,
+) -> anyhow::Result<ta_goal::GoalRun> {
+    let mut goal = ta_goal::GoalRun::new(
+        title,
+        objective,
+        agent,
+        parent.workspace_path.clone(),
+        config.store_dir.join(Uuid::new_v4().to_string()),
+    );
+    goal.parent_goal_id = Some(parent_goal_id);
+    goal.store_path = config.store_dir.join(goal.goal_run_id.to_string());
+    goal.source_dir = parent.source_dir.clone();
+    goal.plan_phase = phase.map(|p| p.to_string());
+    // Reuse the parent's source snapshot so diffs are against the original source.
+    goal.source_snapshot = parent.source_snapshot.clone();
+
+    goal.transition(GoalRunState::Configured)?;
+    goal.transition(GoalRunState::Running)?;
+
+    store.save(&goal)?;
+    Ok(goal)
+}
+
 #[derive(Subcommand)]
 pub enum GoalCommands {
     /// Start a new goal run with an overlay workspace.
@@ -164,49 +274,79 @@ fn start_goal(
         None => config.workspace_root.clone(),
     };
 
-    // Create the GoalRun first to get the ID.
-    let mut goal = ta_goal::GoalRun::new(
-        title,
-        &final_objective,
-        agent,
-        PathBuf::new(), // placeholder — set after overlay creation
-        config.store_dir.join("placeholder"), // placeholder — set after overlay creation
-    );
+    // v0.4.1.2: Check if we should extend the parent's staging directory.
+    let extend_parent = if let Some(pid) = parent_goal_id {
+        should_extend_parent_staging(store, pid, config)?
+    } else {
+        None
+    };
 
-    // Set parent goal ID if this is a follow-up.
-    goal.parent_goal_id = parent_goal_id;
+    if let Some(ref parent) = extend_parent {
+        // v0.4.1.2: Reuse parent's staging directory — no fresh copy needed.
+        let pid = parent_goal_id.unwrap(); // safe: extend_parent is Some only when parent_goal_id is Some
+        let goal = start_goal_extending_parent(
+            config,
+            store,
+            title,
+            &final_objective,
+            agent,
+            phase,
+            parent,
+            pid,
+        )?;
 
-    let goal_id = goal.goal_run_id.to_string();
+        println!(
+            "Goal started: {} (extending parent staging)",
+            goal.goal_run_id
+        );
+        println!("  Title:   {}", goal.title);
+        println!("  Parent:  {}", parent.goal_run_id);
+        println!("  Staging: {} (reused)", goal.workspace_path.display());
+        println!();
+        println!("Agent workspace ready. To enter:");
+        println!("  cd {}", goal.workspace_path.display());
+    } else {
+        // Fresh staging copy (original behavior or standalone follow-up).
+        let mut goal = ta_goal::GoalRun::new(
+            title,
+            &final_objective,
+            agent,
+            PathBuf::new(), // placeholder — set after overlay creation
+            config.store_dir.join("placeholder"), // placeholder
+        );
+        goal.parent_goal_id = parent_goal_id;
+        let goal_id = goal.goal_run_id.to_string();
 
-    // Create overlay workspace: copy source → staging.
-    // V1 TEMPORARY: Load exclude patterns from .taignore or defaults.
-    let excludes = ExcludePatterns::load(&source_dir);
-    let overlay = OverlayWorkspace::create(&goal_id, &source_dir, &config.staging_dir, excludes)?;
+        // V1 TEMPORARY: Load exclude patterns from .taignore or defaults.
+        let excludes = ExcludePatterns::load(&source_dir);
+        let overlay =
+            OverlayWorkspace::create(&goal_id, &source_dir, &config.staging_dir, excludes)?;
 
-    // v0.2.1: Capture source snapshot for conflict detection.
-    let snapshot_json = overlay
-        .snapshot()
-        .and_then(|snap| serde_json::to_value(snap).ok());
+        // v0.2.1: Capture source snapshot for conflict detection.
+        let snapshot_json = overlay
+            .snapshot()
+            .and_then(|snap| serde_json::to_value(snap).ok());
 
-    // Update goal with actual paths.
-    goal.workspace_path = overlay.staging_dir().to_path_buf();
-    goal.store_path = config.store_dir.join(&goal_id);
-    goal.source_dir = Some(source_dir);
-    goal.plan_phase = phase.map(|p| p.to_string());
-    goal.source_snapshot = snapshot_json;
+        // Update goal with actual paths.
+        goal.workspace_path = overlay.staging_dir().to_path_buf();
+        goal.store_path = config.store_dir.join(&goal_id);
+        goal.source_dir = Some(source_dir);
+        goal.plan_phase = phase.map(|p| p.to_string());
+        goal.source_snapshot = snapshot_json;
 
-    // Transition: Created → Configured → Running.
-    goal.transition(GoalRunState::Configured)?;
-    goal.transition(GoalRunState::Running)?;
+        // Transition: Created → Configured → Running.
+        goal.transition(GoalRunState::Configured)?;
+        goal.transition(GoalRunState::Running)?;
 
-    store.save(&goal)?;
+        store.save(&goal)?;
 
-    println!("Goal started: {}", goal.goal_run_id);
-    println!("  Title:   {}", goal.title);
-    println!("  Staging: {}", overlay.staging_dir().display());
-    println!();
-    println!("Agent workspace ready. To enter:");
-    println!("  cd {}", overlay.staging_dir().display());
+        println!("Goal started: {}", goal.goal_run_id);
+        println!("  Title:   {}", goal.title);
+        println!("  Staging: {}", overlay.staging_dir().display());
+        println!();
+        println!("Agent workspace ready. To enter:");
+        println!("  cd {}", overlay.staging_dir().display());
+    }
 
     Ok(())
 }
@@ -399,6 +539,93 @@ mod tests {
         assert!(goals[0].workspace_path.exists());
         assert!(goals[0].workspace_path.join("README.md").exists());
         assert!(goals[0].workspace_path.join("src/main.rs").exists());
+    }
+
+    // ── v0.4.1.2 tests: follow-up draft continuity ──
+
+    #[test]
+    fn follow_up_extend_reuses_parent_staging() {
+        let project = TempDir::new().unwrap();
+        std::fs::write(project.path().join("README.md"), "# Test\n").unwrap();
+
+        let config = GatewayConfig::for_project(project.path());
+        let store = GoalRunStore::new(&config.goals_dir).unwrap();
+
+        // Create parent goal.
+        start_goal(
+            &config,
+            &store,
+            "Parent goal",
+            Some(project.path()),
+            "Parent objective",
+            "test-agent",
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let goals = store.list().unwrap();
+        let parent = &goals[0];
+        let parent_id = parent.goal_run_id;
+        let parent_workspace = parent.workspace_path.clone();
+
+        // Create follow-up that extends parent staging.
+        let follow_up = start_goal_extending_parent(
+            &config,
+            &store,
+            "Follow-up goal",
+            "Follow-up objective",
+            "test-agent",
+            None,
+            parent,
+            parent_id,
+        )
+        .unwrap();
+
+        // Follow-up should reuse the same workspace path.
+        assert_eq!(follow_up.workspace_path, parent_workspace);
+        assert_eq!(follow_up.parent_goal_id, Some(parent_id));
+        assert_eq!(follow_up.source_dir, parent.source_dir);
+        assert_eq!(follow_up.state, GoalRunState::Running);
+
+        // Both goals stored.
+        let all_goals = store.list().unwrap();
+        assert_eq!(all_goals.len(), 2);
+    }
+
+    #[test]
+    fn check_parent_staging_returns_none_when_staging_missing() {
+        let project = TempDir::new().unwrap();
+        std::fs::write(project.path().join("README.md"), "# Test\n").unwrap();
+
+        let config = GatewayConfig::for_project(project.path());
+        let store = GoalRunStore::new(&config.goals_dir).unwrap();
+
+        // Create parent goal.
+        start_goal(
+            &config,
+            &store,
+            "Parent goal",
+            Some(project.path()),
+            "Parent objective",
+            "test-agent",
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let goals = store.list().unwrap();
+        let parent_id = goals[0].goal_run_id;
+        let parent_workspace = goals[0].workspace_path.clone();
+
+        // Remove parent staging directory.
+        std::fs::remove_dir_all(&parent_workspace).unwrap();
+
+        // check_parent_staging_eligible should return None.
+        let result = check_parent_staging_eligible(&store, parent_id, &config).unwrap();
+        assert!(result.is_none());
     }
 
     #[test]

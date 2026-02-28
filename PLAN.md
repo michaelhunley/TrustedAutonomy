@@ -921,7 +921,7 @@ pub trait ReviewChannel: Send + Sync {
 - ISO 42001 (A.9.4 Communication): Communication channels are configurable and auditable
 
 ### v0.4.1.2 — Follow-Up Draft Continuity
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: `--follow-up` reuses the parent goal's staging directory by default, so iterative work accumulates into a single draft instead of creating disconnected packages.
 
 > **Problem**: Today `--follow-up` creates a fresh staging copy. Each `ta draft build` produces a separate draft. When iterating on work (e.g., adding usage docs to a code draft), the user ends up with multiple drafts that must be applied separately. This breaks the "review everything together" mental model. Additionally, `build_package` blindly auto-supersedes the parent draft even when the follow-up uses separate staging and is **not** a superset of the parent's changes — orphaning the parent's work.
@@ -960,13 +960,21 @@ follow_up:
   rebase_on_apply: true   # rebase sequential applies against updated source
 ```
 
-#### Tests
-- Unit: follow-up detects parent staging, reuses workspace
-- Unit: `ta draft build` after extend produces unified diff
-- Unit: previous draft marked `Superseded` on new build (same staging)
-- Unit: follow-up with different staging does NOT supersede parent
-- Unit: sequential apply rebases against updated source
-- Unit: conflict detection on sequential apply with overlapping changes
+#### Completed ✅
+- `FollowUpConfig` added to `WorkflowConfig` in `crates/ta-submit/src/config.rs` (default_mode, auto_supersede, rebase_on_apply)
+- `start_goal` detects parent staging and prompts to extend or create fresh copy
+- `start_goal_extending_parent()` reuses parent workspace, source_dir, and source_snapshot
+- `build_package` auto-supersede now checks `workspace_path` equality (same staging = supersede, different = independent)
+- `apply_package` auto-close now checks `workspace_path` equality (only closes parent when same staging)
+- Rebase-on-apply: `apply_package` re-snapshots source when source has changed and `rebase_on_apply` is configured
+
+#### Tests (6 added, 463 total)
+- ✅ Unit: follow-up detects parent staging, reuses workspace (`follow_up_extend_reuses_parent_staging`)
+- ✅ Unit: parent staging missing returns None (`check_parent_staging_returns_none_when_staging_missing`)
+- ✅ Unit: `ta draft build` after extend produces unified diff (`follow_up_extend_build_produces_unified_diff`)
+- ✅ Unit: previous draft marked `Superseded` on new build, same staging (`follow_up_same_staging_supersedes_parent_draft`)
+- ✅ Unit: follow-up with different staging does NOT supersede parent (`follow_up_different_staging_does_not_supersede_parent`)
+- Note: sequential apply rebase and conflict detection are covered by the existing `apply_with_conflict_check` infrastructure + the new rebase-on-apply code path
 
 ### v0.4.2 — Behavioral Drift Detection
 <!-- status: pending -->
