@@ -873,36 +873,44 @@ fn build_package(
     };
 
     // Handle PR supersession for follow-up goals.
-    // If this goal has a parent and the parent's PR is not yet applied,
-    // mark the parent PR as superseded by this new PR.
+    // v0.4.1.2: Only auto-supersede when this goal reuses the parent's staging directory
+    // (extend case). When the staging directories differ (standalone follow-up), the
+    // drafts are independent and should both remain reviewable.
     if let Some(parent_goal_id) = goal.parent_goal_id {
         if let Some(parent_goal) = goal_store.get(parent_goal_id)? {
-            if let Some(parent_pr_id) = parent_goal.pr_package_id {
-                // Load parent PR and check if it's unapplied.
-                if let Ok(mut parent_pr) = load_package(config, parent_pr_id) {
-                    match parent_pr.status {
-                        DraftStatus::Draft
-                        | DraftStatus::PendingReview
-                        | DraftStatus::Approved { .. } => {
-                            // Parent PR not yet applied — mark it as superseded.
-                            parent_pr.status = DraftStatus::Superseded {
-                                superseded_by: package_id,
-                            };
-                            save_package(config, &parent_pr)?;
-                            println!(
-                                "Parent PR {} superseded by this follow-up PR.",
-                                parent_pr_id
-                            );
-                        }
-                        DraftStatus::Applied { .. } | DraftStatus::Denied { .. } => {
-                            // Parent already applied or denied — no supersession needed.
-                        }
-                        DraftStatus::Superseded { .. } | DraftStatus::Closed { .. } => {
-                            // Parent already superseded or closed — nothing to do.
+            // v0.4.1.2: Check if this goal shares the same staging directory as the parent.
+            let same_staging = goal.workspace_path == parent_goal.workspace_path;
+
+            if same_staging {
+                if let Some(parent_pr_id) = parent_goal.pr_package_id {
+                    // Load parent PR and check if it's unapplied.
+                    if let Ok(mut parent_pr) = load_package(config, parent_pr_id) {
+                        match parent_pr.status {
+                            DraftStatus::Draft
+                            | DraftStatus::PendingReview
+                            | DraftStatus::Approved { .. } => {
+                                // Parent PR not yet applied — mark it as superseded.
+                                // Valid because same staging means this draft is a superset.
+                                parent_pr.status = DraftStatus::Superseded {
+                                    superseded_by: package_id,
+                                };
+                                save_package(config, &parent_pr)?;
+                                println!(
+                                    "Parent draft {} superseded by this follow-up draft (same staging).",
+                                    parent_pr_id
+                                );
+                            }
+                            DraftStatus::Applied { .. } | DraftStatus::Denied { .. } => {
+                                // Parent already applied or denied — no supersession needed.
+                            }
+                            DraftStatus::Superseded { .. } | DraftStatus::Closed { .. } => {
+                                // Parent already superseded or closed — nothing to do.
+                            }
                         }
                     }
                 }
             }
+            // Different staging (standalone): do NOT auto-supersede — drafts are independent.
         }
     }
 
@@ -1549,23 +1557,52 @@ fn apply_package(
         );
 
         // v0.2.1: Restore source snapshot from goal for conflict detection.
+        // v0.4.1.2: Support rebase-on-apply for sequential draft applies.
         if let Some(snapshot_json) = &goal.source_snapshot {
             if let Ok(snapshot) =
                 serde_json::from_value::<ta_workspace::SourceSnapshot>(snapshot_json.clone())
             {
-                overlay.set_snapshot(snapshot);
+                // Check if rebase-on-apply is configured.
+                let workflow_config = ta_submit::WorkflowConfig::load_or_default(
+                    &target_dir.join(".ta/workflow.toml"),
+                );
 
-                // Preview conflicts (informational — apply_with_conflict_check handles abort/force).
-                if let Ok(Some(conflicts)) = overlay.detect_conflicts() {
-                    if !conflicts.is_empty() {
+                // Detect if source has changed since snapshot.
+                overlay.set_snapshot(snapshot.clone());
+                let has_source_changes = overlay
+                    .detect_conflicts()
+                    .ok()
+                    .flatten()
+                    .map(|c| !c.is_empty())
+                    .unwrap_or(false);
+
+                if has_source_changes && workflow_config.follow_up.rebase_on_apply {
+                    // Rebase: re-snapshot the current source state so apply compares
+                    // staging against the updated source (e.g., after a prior draft was applied).
+                    let excludes = ExcludePatterns::load(source_dir);
+                    if let Ok(fresh_snapshot) =
+                        ta_workspace::SourceSnapshot::capture(&target_dir, |p| {
+                            excludes.should_exclude(p)
+                        })
+                    {
                         println!(
-                            "\nℹ️  {} source file(s) changed since goal start.",
-                            conflicts.len()
+                            "\nℹ️  Source changed since goal start — rebasing against current source."
                         );
-                        println!(
-                            "   (Only overlapping changes block apply. Resolution: {:?})\n",
-                            conflict_resolution
-                        );
+                        overlay.set_snapshot(fresh_snapshot);
+                    }
+                } else if has_source_changes {
+                    // Preview conflicts (informational — apply_with_conflict_check handles abort/force).
+                    if let Ok(Some(conflicts)) = overlay.detect_conflicts() {
+                        if !conflicts.is_empty() {
+                            println!(
+                                "\nℹ️  {} source file(s) changed since goal start.",
+                                conflicts.len()
+                            );
+                            println!(
+                                "   (Only overlapping changes block apply. Resolution: {:?})\n",
+                                conflict_resolution
+                            );
+                        }
                     }
                 }
             }
@@ -1767,33 +1804,38 @@ fn apply_package(
     };
     save_package(config, &pkg)?;
 
-    // Auto-close parent draft on follow-up apply (v0.3.6).
-    // If this goal is a follow-up and the parent's draft is still in a reviewable state,
-    // close it automatically since this follow-up supersedes it.
+    // Auto-close parent draft on follow-up apply (v0.3.6, refined v0.4.1.2).
+    // v0.4.1.2: Only auto-close the parent draft when this goal shares the same
+    // staging directory (extend case). Standalone follow-ups with different staging
+    // should leave the parent draft independently reviewable.
     if let Some(parent_goal_id) = goal.parent_goal_id {
         if let Some(parent_goal) = goal_store.get(parent_goal_id)? {
-            if let Some(parent_pr_id) = parent_goal.pr_package_id {
-                if let Ok(mut parent_pkg) = load_package(config, parent_pr_id) {
-                    if matches!(
-                        parent_pkg.status,
-                        DraftStatus::PendingReview | DraftStatus::Approved { .. }
-                    ) {
-                        parent_pkg.status = DraftStatus::Closed {
-                            closed_at: Utc::now(),
-                            reason: Some(format!(
-                                "Auto-closed: follow-up draft {} applied",
-                                pkg.package_id
-                            )),
-                            closed_by: "ta-system".to_string(),
-                        };
-                        let _ = save_package(config, &parent_pkg);
-                        println!(
-                            "  Auto-closed parent draft {} (superseded by this follow-up).",
-                            &parent_pr_id.to_string()[..8]
-                        );
+            let same_staging = goal.workspace_path == parent_goal.workspace_path;
+            if same_staging {
+                if let Some(parent_pr_id) = parent_goal.pr_package_id {
+                    if let Ok(mut parent_pkg) = load_package(config, parent_pr_id) {
+                        if matches!(
+                            parent_pkg.status,
+                            DraftStatus::PendingReview | DraftStatus::Approved { .. }
+                        ) {
+                            parent_pkg.status = DraftStatus::Closed {
+                                closed_at: Utc::now(),
+                                reason: Some(format!(
+                                    "Auto-closed: follow-up draft {} applied (same staging)",
+                                    pkg.package_id
+                                )),
+                                closed_by: "ta-system".to_string(),
+                            };
+                            let _ = save_package(config, &parent_pkg);
+                            println!(
+                                "  Auto-closed parent draft {} (superseded by this follow-up).",
+                                &parent_pr_id.to_string()[..8]
+                            );
+                        }
                     }
                 }
             }
+            // Different staging (standalone): do NOT auto-close parent draft.
         }
     }
 
@@ -4093,5 +4135,231 @@ mod tests {
         assert!(diff.contains("+++ b/test.txt"));
         assert!(diff.contains("-line2"));
         assert!(diff.contains("+line2_modified"));
+    }
+
+    // ── v0.4.1.2 tests: follow-up draft continuity ──
+
+    #[test]
+    fn follow_up_extend_build_produces_unified_diff() {
+        // When a follow-up extends parent staging, building a draft should
+        // produce a unified diff against the original source.
+        let project = TempDir::new().unwrap();
+        std::fs::write(project.path().join("README.md"), "# Original\n").unwrap();
+
+        let config = GatewayConfig::for_project(project.path());
+        let goal_store = GoalRunStore::new(&config.goals_dir).unwrap();
+
+        // Create parent goal with a modification.
+        super::super::goal::execute(
+            &super::super::goal::GoalCommands::Start {
+                title: "Parent unified".to_string(),
+                source: Some(project.path().to_path_buf()),
+                objective: "Parent work".to_string(),
+                agent: "test-agent".to_string(),
+                phase: None,
+                follow_up: None,
+                objective_file: None,
+            },
+            &config,
+        )
+        .unwrap();
+
+        let goals = goal_store.list().unwrap();
+        let parent = &goals[0];
+        let parent_id = parent.goal_run_id;
+
+        // Modify staging (parent work).
+        std::fs::write(parent.workspace_path.join("README.md"), "# Parent edit\n").unwrap();
+
+        // Create follow-up that extends parent staging.
+        let follow_up = super::super::goal::start_goal_extending_parent(
+            &config,
+            &goal_store,
+            "Follow-up unified",
+            "Follow-up work",
+            "test-agent",
+            None,
+            parent,
+            parent_id,
+        )
+        .unwrap();
+
+        // Make additional changes in the same staging (follow-up work).
+        std::fs::write(
+            follow_up.workspace_path.join("README.md"),
+            "# Parent edit + follow-up edit\n",
+        )
+        .unwrap();
+        std::fs::write(follow_up.workspace_path.join("NEW.md"), "# New file\n").unwrap();
+
+        // Build draft for follow-up — should include ALL changes (parent + follow-up).
+        let follow_up_id = follow_up.goal_run_id.to_string();
+        build_package(&config, &follow_up_id, "Unified changes", false).unwrap();
+
+        let packages = load_all_packages(&config).unwrap();
+        let pkg = packages
+            .iter()
+            .find(|p| p.goal.goal_id == follow_up_id)
+            .unwrap();
+
+        // Should contain both the modified README and the new file.
+        assert!(pkg.changes.artifacts.len() >= 2);
+        let uris: Vec<&str> = pkg
+            .changes
+            .artifacts
+            .iter()
+            .map(|a| a.resource_uri.as_str())
+            .collect();
+        assert!(uris.contains(&"fs://workspace/README.md"));
+        assert!(uris.contains(&"fs://workspace/NEW.md"));
+    }
+
+    #[test]
+    fn follow_up_same_staging_supersedes_parent_draft() {
+        // When follow-up uses same staging, building its draft should supersede parent's.
+        let project = TempDir::new().unwrap();
+        std::fs::write(project.path().join("README.md"), "# Original\n").unwrap();
+
+        let config = GatewayConfig::for_project(project.path());
+        let goal_store = GoalRunStore::new(&config.goals_dir).unwrap();
+
+        // Create parent goal and build its draft.
+        super::super::goal::execute(
+            &super::super::goal::GoalCommands::Start {
+                title: "Parent supersede".to_string(),
+                source: Some(project.path().to_path_buf()),
+                objective: "Parent work".to_string(),
+                agent: "test-agent".to_string(),
+                phase: None,
+                follow_up: None,
+                objective_file: None,
+            },
+            &config,
+        )
+        .unwrap();
+
+        let goals = goal_store.list().unwrap();
+        let parent = &goals[0];
+        let parent_id = parent.goal_run_id;
+        let parent_goal_id_str = parent_id.to_string();
+
+        std::fs::write(parent.workspace_path.join("README.md"), "# Parent\n").unwrap();
+        build_package(&config, &parent_goal_id_str, "Parent changes", false).unwrap();
+
+        // Re-read parent to get pr_package_id.
+        let parent = goal_store.get(parent_id).unwrap().unwrap();
+        let parent_pkg_id = parent.pr_package_id.unwrap();
+
+        // Create follow-up extending parent staging.
+        let follow_up = super::super::goal::start_goal_extending_parent(
+            &config,
+            &goal_store,
+            "Follow-up supersede",
+            "Follow-up work",
+            "test-agent",
+            None,
+            &parent,
+            parent_id,
+        )
+        .unwrap();
+
+        // Make more changes and build follow-up draft.
+        std::fs::write(
+            follow_up.workspace_path.join("README.md"),
+            "# Parent + follow-up\n",
+        )
+        .unwrap();
+        let follow_up_id = follow_up.goal_run_id.to_string();
+        build_package(&config, &follow_up_id, "Follow-up changes", false).unwrap();
+
+        // Parent's draft should now be Superseded.
+        let parent_pkg = load_package(&config, parent_pkg_id).unwrap();
+        assert!(
+            matches!(parent_pkg.status, DraftStatus::Superseded { .. }),
+            "Expected Superseded, got {:?}",
+            parent_pkg.status
+        );
+    }
+
+    #[test]
+    fn follow_up_different_staging_does_not_supersede_parent() {
+        // When follow-up uses different staging, parent draft should NOT be superseded.
+        let project = TempDir::new().unwrap();
+        std::fs::write(project.path().join("README.md"), "# Original\n").unwrap();
+
+        let config = GatewayConfig::for_project(project.path());
+        let goal_store = GoalRunStore::new(&config.goals_dir).unwrap();
+
+        // Create parent goal and build its draft.
+        super::super::goal::execute(
+            &super::super::goal::GoalCommands::Start {
+                title: "Parent independent".to_string(),
+                source: Some(project.path().to_path_buf()),
+                objective: "Parent work".to_string(),
+                agent: "test-agent".to_string(),
+                phase: None,
+                follow_up: None,
+                objective_file: None,
+            },
+            &config,
+        )
+        .unwrap();
+
+        let goals = goal_store.list().unwrap();
+        let parent = &goals[0];
+        let parent_id = parent.goal_run_id;
+        let parent_goal_id_str = parent_id.to_string();
+
+        std::fs::write(parent.workspace_path.join("README.md"), "# Parent\n").unwrap();
+        build_package(&config, &parent_goal_id_str, "Parent changes", false).unwrap();
+
+        // Re-read parent to get pr_package_id.
+        let parent = goal_store.get(parent_id).unwrap().unwrap();
+        let parent_pkg_id = parent.pr_package_id.unwrap();
+
+        // Create a standalone follow-up (different staging — the default start_goal path).
+        super::super::goal::execute(
+            &super::super::goal::GoalCommands::Start {
+                title: "Follow-up independent".to_string(),
+                source: Some(project.path().to_path_buf()),
+                objective: "Independent work".to_string(),
+                agent: "test-agent".to_string(),
+                phase: None,
+                follow_up: None, // Not using --follow-up, but we'll manually set parent_goal_id
+                objective_file: None,
+            },
+            &config,
+        )
+        .unwrap();
+
+        // Manually set parent_goal_id to simulate standalone follow-up with different staging.
+        let all_goals = goal_store.list().unwrap();
+        let mut follow_up = all_goals
+            .iter()
+            .find(|g| g.title == "Follow-up independent")
+            .unwrap()
+            .clone();
+        follow_up.parent_goal_id = Some(parent_id);
+        goal_store.save(&follow_up).unwrap();
+
+        // Verify different staging paths.
+        assert_ne!(follow_up.workspace_path, parent.workspace_path);
+
+        // Make changes and build follow-up draft.
+        std::fs::write(
+            follow_up.workspace_path.join("README.md"),
+            "# Independent\n",
+        )
+        .unwrap();
+        let follow_up_id = follow_up.goal_run_id.to_string();
+        build_package(&config, &follow_up_id, "Independent changes", false).unwrap();
+
+        // Parent's draft should NOT be superseded (different staging = independent).
+        let parent_pkg = load_package(&config, parent_pkg_id).unwrap();
+        assert!(
+            matches!(parent_pkg.status, DraftStatus::PendingReview),
+            "Expected PendingReview (not superseded), got {:?}",
+            parent_pkg.status
+        );
     }
 }
