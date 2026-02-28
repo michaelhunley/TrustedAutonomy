@@ -224,6 +224,7 @@ Wednesday    │ [cron] Normal triage cycle continues
 | Alignment profiles per agent | v0.4.0 | Done |
 | Macro goals (data model + MCP tools) | v0.4.1 | Done |
 | **ReviewChannel + TerminalChannel + runtime loop** | **v0.4.1.1** | **Next** |
+| **Follow-up draft continuity (extend staging + merge)** | **v0.4.1.2** | **Pending** |
 | Behavioral drift detection | v0.4.2 | Pending |
 | Per-goal access constitutions | v0.4.3 | Pending |
 | **Slack/Discord/Email channel adapters** | **v0.5.3** | Pending |

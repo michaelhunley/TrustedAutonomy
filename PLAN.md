@@ -920,6 +920,54 @@ pub trait ReviewChannel: Send + Sync {
 - NIST AI 600-1 (2.11 Human-AI Configuration): Humans respond through their preferred channel, not forced into terminal
 - ISO 42001 (A.9.4 Communication): Communication channels are configurable and auditable
 
+### v0.4.1.2 — Follow-Up Draft Continuity
+<!-- status: pending -->
+**Goal**: `--follow-up` reuses the parent goal's staging directory by default, so iterative work accumulates into a single draft instead of creating disconnected packages.
+
+> **Problem**: Today `--follow-up` creates a fresh staging copy. Each `ta draft build` produces a separate draft. When iterating on work (e.g., adding usage docs to a code draft), the user ends up with multiple drafts that must be applied separately. This breaks the "review everything together" mental model. Additionally, `build_package` blindly auto-supersedes the parent draft even when the follow-up uses separate staging and is **not** a superset of the parent's changes — orphaning the parent's work.
+
+#### Default Behavior: Extend Existing Staging
+When `--follow-up` detects the parent goal's staging directory still exists:
+1. List open drafts from the parent goal (and any ancestors in the follow-up chain)
+2. Prompt: `"Continue in staging for <parent_title>? [Y/n]"` — default yes, with the most recent draft shown
+3. If yes: reuse the parent's staging directory, create a new goal linked to the same workspace
+4. Next `ta draft build` diffs against the original source → produces a single unified draft that supersedes the previous one
+5. Previous draft auto-transitions to `Superseded` status (valid here because new draft is a superset)
+
+#### Standalone Option
+If the user declines to extend:
+- Fresh staging copy as today
+- `ta draft build` produces an independent draft
+- **No auto-supersede** — both drafts remain independently reviewable and appliable
+
+#### Fix Auto-Supersede Logic
+Current `build_package` unconditionally supersedes the parent draft on follow-up. Change to:
+- **Same staging directory** (extend case): auto-supersede is correct — new draft is a superset
+- **Different staging directory** (standalone case): do NOT auto-supersede — drafts are independent
+
+#### Sequential Apply with Rebase
+When multiple drafts target the same source and the user applies them in succession:
+- Second `ta draft apply` detects the source has changed since its snapshot (first draft was just applied)
+- Rebase-style merge: re-diffs staging against updated source, applies cleanly if no conflicts
+- On conflict: same conflict resolution flow as existing `apply_with_conflict_check()`
+
+#### Configuration
+```yaml
+# .ta/config.yaml
+follow_up:
+  default_mode: extend    # extend | standalone
+  auto_supersede: true    # auto-supersede parent draft when extending (only when same staging)
+  rebase_on_apply: true   # rebase sequential applies against updated source
+```
+
+#### Tests
+- Unit: follow-up detects parent staging, reuses workspace
+- Unit: `ta draft build` after extend produces unified diff
+- Unit: previous draft marked `Superseded` on new build (same staging)
+- Unit: follow-up with different staging does NOT supersede parent
+- Unit: sequential apply rebases against updated source
+- Unit: conflict detection on sequential apply with overlapping changes
+
 ### v0.4.2 — Behavioral Drift Detection
 <!-- status: pending -->
 **Goal**: Detect when an agent's behavior patterns diverge from its historical baseline or declared alignment profile. Uses the decision reasoning data from v0.3.3 and alignment profiles from v0.4.0.
