@@ -19,7 +19,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use chrono::{Duration, Utc};
+use chrono::Utc;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::*;
@@ -32,7 +32,9 @@ use ta_audit::AuditLog;
 use ta_changeset::pr_package::PRPackage;
 use ta_connector_fs::FsConnector;
 use ta_goal::{EventDispatcher, GoalRun, GoalRunState, GoalRunStore, LogSink, TaEvent};
-use ta_policy::{CapabilityGrant, CapabilityManifest, PolicyDecision, PolicyEngine, PolicyRequest};
+use ta_policy::{
+    AlignmentProfile, CompilerOptions, PolicyCompiler, PolicyDecision, PolicyEngine, PolicyRequest,
+};
 use ta_workspace::{JsonFileStore, StagingWorkspace};
 
 use crate::config::GatewayConfig;
@@ -169,30 +171,14 @@ impl GatewayState {
         // Override the random ID so we control it.
         goal_run.goal_run_id = goal_run_id;
 
-        // Issue a default developer manifest (fs.read + fs.write_patch on workspace).
-        let manifest = CapabilityManifest {
-            manifest_id: goal_run.manifest_id,
-            agent_id: agent_id.to_string(),
-            grants: vec![
-                CapabilityGrant {
-                    tool: "fs".to_string(),
-                    verb: "read".to_string(),
-                    resource_pattern: "fs://workspace/**".to_string(),
-                },
-                CapabilityGrant {
-                    tool: "fs".to_string(),
-                    verb: "write_patch".to_string(),
-                    resource_pattern: "fs://workspace/**".to_string(),
-                },
-                CapabilityGrant {
-                    tool: "fs".to_string(),
-                    verb: "apply".to_string(),
-                    resource_pattern: "fs://workspace/**".to_string(),
-                },
-            ],
-            issued_at: Utc::now(),
-            expires_at: Utc::now() + Duration::hours(8),
-        };
+        // Compile a default developer manifest via the Policy Compiler (v0.4.0).
+        // Uses AlignmentProfile::default_developer() which grants fs read/write/apply
+        // on workspace and denies network/credential access.
+        let profile = AlignmentProfile::default_developer();
+        let options = CompilerOptions::default();
+        let manifest =
+            PolicyCompiler::compile_with_id(goal_run.manifest_id, agent_id, &profile, &options)
+                .map_err(|e| GatewayError::Other(format!("policy compilation failed: {}", e)))?;
         self.policy_engine.load_manifest(manifest);
 
         // Create staging workspace and change store for this goal.
@@ -207,6 +193,49 @@ impl GatewayState {
         self.goal_store.save(&goal_run)?;
 
         // Emit events.
+        self.event_dispatcher
+            .dispatch(&TaEvent::goal_created(goal_run_id, title, agent_id));
+
+        Ok(goal_run)
+    }
+
+    /// Start a new goal with a custom alignment profile (v0.4.0).
+    ///
+    /// Like `start_goal`, but compiles the provided AlignmentProfile into
+    /// the capability manifest instead of using the default developer profile.
+    pub fn start_goal_with_profile(
+        &mut self,
+        title: &str,
+        objective: &str,
+        agent_id: &str,
+        profile: &AlignmentProfile,
+        resource_scope: Option<Vec<String>>,
+    ) -> Result<GoalRun, GatewayError> {
+        let goal_run_id = Uuid::new_v4();
+        let staging_path = self.config.staging_dir.join(goal_run_id.to_string());
+        let store_path = self.config.store_dir.join(goal_run_id.to_string());
+
+        let mut goal_run = GoalRun::new(title, objective, agent_id, staging_path, store_path);
+        goal_run.goal_run_id = goal_run_id;
+
+        let options = CompilerOptions {
+            resource_scope: resource_scope.unwrap_or_else(|| vec!["fs://workspace/**".to_string()]),
+            validity_hours: 8,
+        };
+        let manifest =
+            PolicyCompiler::compile_with_id(goal_run.manifest_id, agent_id, profile, &options)
+                .map_err(|e| GatewayError::Other(format!("policy compilation failed: {}", e)))?;
+        self.policy_engine.load_manifest(manifest);
+
+        let staging = StagingWorkspace::new(goal_run_id.to_string(), &self.config.staging_dir)?;
+        let store = JsonFileStore::new(self.config.store_dir.join(goal_run_id.to_string()))?;
+        let connector = FsConnector::new(goal_run_id.to_string(), staging, store, agent_id);
+        self.connectors.insert(goal_run_id, connector);
+
+        goal_run.transition(GoalRunState::Configured)?;
+        goal_run.transition(GoalRunState::Running)?;
+        self.goal_store.save(&goal_run)?;
+
         self.event_dispatcher
             .dispatch(&TaEvent::goal_created(goal_run_id, title, agent_id));
 

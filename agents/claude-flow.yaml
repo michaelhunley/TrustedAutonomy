@@ -22,3 +22,28 @@ pre_launch:
     - "hive-mind"
     - "init"
 env: {}
+
+# Agent alignment profile (v0.4.0).
+alignment:
+  principal: "project-owner"
+  autonomy_envelope:
+    bounded_actions:
+      - "fs_read"
+      - "fs_write_patch"
+      - "fs_apply"
+    escalation_triggers:
+      - "new_dependency"
+      - "security_sensitive"
+      - "breaking_change"
+    forbidden_actions:
+      - "network_external"
+      - "credential_access"
+  constitution: "default-v1"
+  coordination:
+    allowed_collaborators:
+      - "claude-code"
+      - "codex"
+    shared_resources:
+      - "src/**"
+      - "tests/**"
+      - "crates/**"

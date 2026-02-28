@@ -45,3 +45,27 @@ env: {}
 # env:
 #   MY_AGENT_MODE: "autonomous"
 #   MY_AGENT_LOG_LEVEL: "info"
+
+# Agent alignment profile (v0.4.0).
+# Compiled into CapabilityManifest grants by the Policy Compiler.
+# These are enforced constraints, not self-declared promises.
+#
+# alignment:
+#   principal: "project-owner"           # Who this agent serves
+#   autonomy_envelope:
+#     bounded_actions:                   # Actions the agent CAN perform
+#       - "fs_read"
+#       - "fs_write"
+#       - "exec: cargo test"
+#     escalation_triggers:               # Conditions that require human approval
+#       - "new_dependency"
+#       - "security_sensitive"
+#     forbidden_actions:                 # Actions the agent MUST NEVER perform
+#       - "network_external"
+#       - "credential_access"
+#   constitution: "default-v1"           # Enforcement rules template
+#   coordination:                        # Multi-agent collaboration rules
+#     allowed_collaborators:
+#       - "claude-code"
+#     shared_resources:
+#       - "src/**"
