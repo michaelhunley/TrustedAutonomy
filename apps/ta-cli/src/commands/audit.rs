@@ -1,7 +1,7 @@
-// audit.rs — Audit subcommands: verify, tail, show, export.
+// audit.rs — Audit subcommands: verify, tail, show, export, drift, baseline.
 
 use clap::Subcommand;
-use ta_audit::{AuditEvent, AuditLog};
+use ta_audit::{AuditEvent, AuditLog, BaselineStore, DraftSummary, DriftSeverity};
 use ta_mcp_gateway::GatewayConfig;
 
 #[derive(Subcommand)]
@@ -36,6 +36,28 @@ pub enum AuditCommands {
         /// Output format.
         #[arg(long, default_value = "json")]
         format: ExportFormat,
+        /// Path to audit log (defaults to .ta/audit.jsonl).
+        #[arg(long)]
+        log: Option<String>,
+    },
+    /// Show behavioral drift report for an agent (v0.4.2).
+    Drift {
+        /// Agent ID to check (omit with --all for all agents).
+        agent_id: Option<String>,
+        /// Show drift summary for all agents with stored baselines.
+        #[arg(long)]
+        all: bool,
+        /// Path to audit log (defaults to .ta/audit.jsonl).
+        #[arg(long)]
+        log: Option<String>,
+        /// Number of recent goals to compare against baseline.
+        #[arg(long, default_value = "5")]
+        window: usize,
+    },
+    /// Compute and store a behavioral baseline for an agent (v0.4.2).
+    Baseline {
+        /// Agent ID to compute baseline for.
+        agent_id: String,
         /// Path to audit log (defaults to .ta/audit.jsonl).
         #[arg(long)]
         log: Option<String>,
@@ -133,10 +155,194 @@ pub fn execute(cmd: &AuditCommands, config: &GatewayConfig) -> anyhow::Result<()
         } => {
             export_audit(config, goal_id, format, log.as_deref())?;
         }
+
+        AuditCommands::Drift {
+            agent_id,
+            all,
+            log,
+            window,
+        } => {
+            execute_drift(config, agent_id.as_deref(), *all, log.as_deref(), *window)?;
+        }
+
+        AuditCommands::Baseline { agent_id, log } => {
+            execute_baseline(config, agent_id, log.as_deref())?;
+        }
     }
 
     Ok(())
 }
+
+// ── Drift subcommand (v0.4.2) ──
+
+fn baselines_dir(config: &GatewayConfig) -> std::path::PathBuf {
+    config.workspace_root.join(".ta").join("baselines")
+}
+
+/// Load draft package summaries from the pr_packages directory.
+fn load_draft_summaries(config: &GatewayConfig) -> anyhow::Result<Vec<DraftSummary>> {
+    let dir = &config.pr_packages_dir;
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut summaries = Vec::new();
+    for entry in std::fs::read_dir(dir)? {
+        let path = entry?.path();
+        if path.extension().is_some_and(|ext| ext == "json") {
+            if let Ok(data) = std::fs::read_to_string(&path) {
+                if let Ok(pkg) = serde_json::from_str::<ta_changeset::DraftPackage>(&data) {
+                    let rejected = matches!(pkg.status, ta_changeset::DraftStatus::Denied { .. });
+                    let dep_count = pkg
+                        .changes
+                        .artifacts
+                        .iter()
+                        .filter(|a| ta_audit::drift::is_dependency_file(&a.resource_uri))
+                        .count();
+                    summaries.push(DraftSummary {
+                        agent_id: pkg.agent_identity.agent_id,
+                        artifact_count: pkg.changes.artifacts.len(),
+                        risk_score: pkg.risk.risk_score,
+                        rejected,
+                        dependency_artifact_count: dep_count,
+                    });
+                }
+            }
+        }
+    }
+    Ok(summaries)
+}
+
+fn execute_drift(
+    config: &GatewayConfig,
+    agent_id: Option<&str>,
+    all: bool,
+    log_path: Option<&str>,
+    window: usize,
+) -> anyhow::Result<()> {
+    let store = BaselineStore::new(baselines_dir(config));
+
+    // Determine which agents to report on.
+    let agents: Vec<String> = if all {
+        store.list_agents()?
+    } else if let Some(id) = agent_id {
+        vec![id.to_string()]
+    } else {
+        anyhow::bail!("Provide an agent ID or use --all");
+    };
+
+    if agents.is_empty() {
+        println!("No baselines found. Run `ta audit baseline <agent-id>` first.");
+        return Ok(());
+    }
+
+    // Load audit events.
+    let audit_path = log_path
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| config.audit_log.clone());
+    let events = if audit_path.exists() {
+        AuditLog::read_all(&audit_path)?
+    } else {
+        Vec::new()
+    };
+
+    // Load draft summaries.
+    let drafts = load_draft_summaries(config)?;
+
+    for agent in &agents {
+        let baseline = match store.load(agent)? {
+            Some(b) => b,
+            None => {
+                println!(
+                    "{}: no baseline found (run `ta audit baseline {}`)",
+                    agent, agent
+                );
+                continue;
+            }
+        };
+
+        let report = ta_audit::drift::compute_drift(&baseline, &events, &drafts, window);
+
+        println!("Drift report for {}", agent);
+        println!("{}", "=".repeat(50));
+        println!(
+            "Baseline: {} goals, computed {}",
+            baseline.goal_count,
+            baseline.computed_at.format("%Y-%m-%d %H:%M"),
+        );
+        println!("Window: {} recent goals", window);
+        println!(
+            "Overall: {}",
+            match report.overall_severity {
+                DriftSeverity::Normal => "NORMAL — no significant drift",
+                DriftSeverity::Warning => "WARNING — notable behavioral changes",
+                DriftSeverity::Alert => "ALERT — significant behavioral divergence",
+            }
+        );
+
+        if report.findings.is_empty() {
+            println!("  No drift signals detected.");
+        } else {
+            println!();
+            for finding in &report.findings {
+                let icon = match finding.severity {
+                    DriftSeverity::Normal => " ",
+                    DriftSeverity::Warning => "!",
+                    DriftSeverity::Alert => "X",
+                };
+                println!("[{}] {:?}: {}", icon, finding.signal, finding.description);
+                if let (Some(bv), Some(cv)) = (finding.baseline_value, finding.current_value) {
+                    println!("    baseline={:.2}  current={:.2}", bv, cv);
+                }
+            }
+        }
+        println!();
+    }
+
+    Ok(())
+}
+
+fn execute_baseline(
+    config: &GatewayConfig,
+    agent_id: &str,
+    log_path: Option<&str>,
+) -> anyhow::Result<()> {
+    let audit_path = log_path
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| config.audit_log.clone());
+
+    let events = if audit_path.exists() {
+        AuditLog::read_all(&audit_path)?
+    } else {
+        Vec::new()
+    };
+    let drafts = load_draft_summaries(config)?;
+
+    let baseline = ta_audit::drift::compute_baseline(agent_id, &events, &drafts);
+
+    let store = BaselineStore::new(baselines_dir(config));
+    store.save(&baseline)?;
+
+    println!("Baseline stored for {}", agent_id);
+    println!("  Goals in sample: {}", baseline.goal_count);
+    println!("  Resource patterns: {}", baseline.resource_patterns.len());
+    println!("  Avg artifact count: {:.1}", baseline.avg_artifact_count);
+    println!("  Avg risk score: {:.1}", baseline.avg_risk_score);
+    println!(
+        "  Escalation rate: {:.1}%",
+        baseline.escalation_rate * 100.0
+    );
+    println!("  Rejection rate: {:.1}%", baseline.rejection_rate * 100.0);
+    println!(
+        "  Stored at: {}",
+        baselines_dir(config)
+            .join(format!("{}.json", agent_id))
+            .display()
+    );
+
+    Ok(())
+}
+
+// ── Existing subcommands ──
 
 /// Filter events related to a specific goal.
 fn events_for_goal(events: &[AuditEvent], goal_id: &str) -> Vec<AuditEvent> {

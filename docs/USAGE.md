@@ -1,6 +1,6 @@
 # Trusted Autonomy — Usage Guide
 
-**Version**: v0.4.1-alpha
+**Version**: v0.4.2-alpha
 
 Complete guide to using Trusted Autonomy for safe, reviewable AI agent workflows.
 
@@ -1288,7 +1288,28 @@ ta audit show <goal-id>
 
 # Export structured audit data for compliance reporting (v0.3.3)
 ta audit export <goal-id> --format json
+
+# Compute and store a behavioral baseline for an agent (v0.4.2)
+ta audit baseline <agent-id>
+
+# Show behavioral drift report (v0.4.2)
+ta audit drift <agent-id>
+
+# Drift summary across all agents with stored baselines (v0.4.2)
+ta audit drift --all
 ```
+
+#### Behavioral Drift Detection (v0.4.2)
+
+TA monitors agent behavior for drift from historical baselines. Five drift signals are computed from the audit log and draft package history:
+
+- **Resource scope drift** — accessing URIs outside the agent's historical pattern
+- **Escalation frequency change** — significant shifts in policy escalation rate
+- **Rejection rate drift** — drafts getting rejected more or less often
+- **Change volume anomaly** — unexpectedly large or small diffs
+- **Dependency pattern shift** — unusual rate of new external dependency changes
+
+Baselines are stored in `.ta/baselines/<agent-id>.json` and computed from all historical audit events and draft packages for that agent. Use `ta audit baseline <agent-id>` to create or update a baseline, then `ta audit drift <agent-id>` to compare recent behavior.
 
 #### Decision Observability (v0.3.3)
 

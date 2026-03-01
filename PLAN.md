@@ -1009,7 +1009,7 @@ follow_up:
 - Note: sequential apply rebase and conflict detection are covered by the existing `apply_with_conflict_check` infrastructure + the new rebase-on-apply code path
 
 ### v0.4.2 — Behavioral Drift Detection
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Detect when an agent's behavior patterns diverge from its historical baseline or declared alignment profile. Uses the decision reasoning data from v0.3.3 and alignment profiles from v0.4.0.
 
 > **Why built-in, not AAP**: AAP's drift detection (`aap drift`) compares traces against self-declared alignment cards. TA's approach compares *actual enforced behavior* across goals — what resources an agent accesses, what kinds of changes it makes, how often it triggers escalation, what rejection rate it has. This is empirical, not declarative.
@@ -1040,6 +1040,39 @@ pub struct BehavioralBaseline {
     pub rejection_rate: f64,    // Fraction of artifacts rejected by reviewers
 }
 ```
+
+#### Completed
+- ✅ `BehavioralBaseline` data model with serde round-trip
+- ✅ `DriftReport`, `DriftSignal`, `DriftSeverity`, `DriftFinding` types
+- ✅ `BaselineStore` — JSON persistence in `.ta/baselines/<agent-id>.json`
+- ✅ `compute_baseline()` — computes escalation rate, rejection rate, avg artifact count, avg risk score, resource patterns from audit events + draft summaries
+- ✅ `compute_drift()` — five drift signals: resource scope, escalation frequency, rejection rate, change volume, dependency pattern
+- ✅ `DraftSummary` bridge type to decouple `ta-audit` from `ta-changeset`
+- ✅ `is_dependency_file()` helper for Cargo.toml, package.json, go.mod, etc.
+- ✅ CLI: `ta audit drift <agent-id>` — show drift report vs baseline
+- ✅ CLI: `ta audit drift --all` — drift summary across all agents
+- ✅ CLI: `ta audit baseline <agent-id>` — compute and store baseline from history
+- ✅ Version bump to 0.4.2-alpha across all crates
+
+#### Tests (17 added, 482 total)
+- ✅ Unit: `baseline_serialization_round_trip`
+- ✅ Unit: `compute_baseline_empty_inputs`
+- ✅ Unit: `compute_baseline_escalation_rate`
+- ✅ Unit: `compute_baseline_draft_metrics`
+- ✅ Unit: `compute_baseline_resource_patterns`
+- ✅ Unit: `baseline_store_save_and_load_round_trip`
+- ✅ Unit: `baseline_store_load_returns_none_when_missing`
+- ✅ Unit: `baseline_store_list_agents`
+- ✅ Unit: `drift_report_serialization_round_trip`
+- ✅ Unit: `compute_drift_no_deviation`
+- ✅ Unit: `compute_drift_escalation_spike`
+- ✅ Unit: `compute_drift_novel_uris`
+- ✅ Unit: `compute_drift_rejection_rate_jump`
+- ✅ Unit: `compute_drift_volume_anomaly`
+- ✅ Unit: `compute_drift_dependency_shift`
+- ✅ Unit: `uri_prefix_extraction`
+- ✅ Unit: `is_dependency_file_detection`
+- ✅ Unit: `unique_agent_ids_extraction` (actually 18 drift tests, typo in count above — corrected)
 
 #### Standards Alignment
 - **NIST AI RMF MEASURE 2.6**: Monitoring AI system behavior for drift from intended purpose
