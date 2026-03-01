@@ -10,11 +10,15 @@
 
 use std::path::Path;
 
-use ta_changeset::{InteractiveSession, InteractiveSessionState, InteractiveSessionStore};
+use ta_changeset::{
+    InteractionKind, InteractionRequest, InteractionResponse, InteractiveSession,
+    InteractiveSessionState, InteractiveSessionStore, Urgency,
+};
 use ta_goal::GoalRunStore;
 use ta_mcp_gateway::GatewayConfig;
 
 use super::plan;
+use super::pty_capture;
 
 // ── Per-agent launch configuration ──────────────────────────────
 
@@ -207,7 +211,7 @@ fn builtin_agent_config(agent_id: &str) -> AgentLaunchConfig {
 #[allow(clippy::too_many_arguments)]
 pub fn execute(
     config: &GatewayConfig,
-    title: &str,
+    title: Option<&str>,
     agent: &str,
     source: Option<&Path>,
     objective: &str,
@@ -217,7 +221,17 @@ pub fn execute(
     no_launch: bool,
     interactive: bool,
     macro_goal: bool,
+    resume: Option<&str>,
 ) -> anyhow::Result<()> {
+    // ── Resume an existing session ──────────────────────────────
+    if let Some(session_id_prefix) = resume {
+        return execute_resume(config, session_id_prefix, agent);
+    }
+
+    let title = title.ok_or_else(|| {
+        anyhow::anyhow!("Title is required (use --resume to resume an existing session)")
+    })?;
+
     let agent_config = agent_launch_config(agent, source);
 
     // 1. Start the goal (creates overlay workspace).
@@ -353,17 +367,22 @@ pub fn execute(
     );
     println!("  Working dir: {}", staging_path.display());
     if interactive {
-        println!("  Mode: interactive (session orchestration enabled)");
+        println!("  Mode: interactive (PTY capture + session orchestration)");
     }
     if macro_goal {
         println!("  Mode: macro goal (inner-loop iteration enabled)");
     }
     println!();
 
-    let status = launch_agent(&agent_config, &staging_path, &prompt);
+    // Choose launch mode: PTY-interactive or simple.
+    let launch_result = if interactive {
+        launch_agent_interactive(&agent_config, &staging_path, &prompt, &mut session_store)
+    } else {
+        launch_agent(&agent_config, &staging_path, &prompt).map(|exit| (exit, Vec::new()))
+    };
 
-    match status {
-        Ok(exit) => {
+    match launch_result {
+        Ok((exit, guidance_log)) => {
             if exit.success() {
                 println!("\nAgent exited. Building draft...");
             } else {
@@ -371,6 +390,14 @@ pub fn execute(
                     "\nAgent exited with status {}. Building draft anyway...",
                     exit
                 );
+            }
+
+            // Log guidance interactions to session if any.
+            if let Some((ref store, ref mut session)) = session_store {
+                for (req, resp) in &guidance_log {
+                    session.log_message("ta-system", &format!("Guidance: {} → {}", req, resp));
+                }
+                store.save(session)?;
             }
         }
         Err(e) => {
@@ -441,9 +468,160 @@ pub fn execute(
     println!("  ta draft apply <draft-id> --git-commit");
     if interactive {
         println!("  ta session list");
+        println!("  ta session show <session-id>");
     }
 
     Ok(())
+}
+
+/// Resume an existing interactive session by re-launching the agent in its workspace.
+fn execute_resume(
+    config: &GatewayConfig,
+    session_id_prefix: &str,
+    agent: &str,
+) -> anyhow::Result<()> {
+    let store = InteractiveSessionStore::new(config.interactive_sessions_dir.clone())?;
+    let goal_store = GoalRunStore::new(&config.goals_dir)?;
+
+    // Find the session by ID or prefix.
+    let mut session = find_session_by_prefix(&store, session_id_prefix)?;
+
+    // Validate session state — must be paused or active to resume.
+    if !session.is_alive() {
+        anyhow::bail!(
+            "Session {} is {} — cannot resume",
+            session.session_id,
+            session.state
+        );
+    }
+
+    // Transition from Paused → Active if needed.
+    if session.state == InteractiveSessionState::Paused {
+        session.transition(InteractiveSessionState::Active)?;
+    }
+
+    // Look up the goal to find the staging workspace.
+    let goal = goal_store
+        .list()?
+        .into_iter()
+        .find(|g| g.goal_run_id == session.goal_id)
+        .ok_or_else(|| anyhow::anyhow!("Goal {} not found for session", session.goal_id))?;
+
+    let staging_path = &goal.workspace_path;
+    if !staging_path.exists() {
+        anyhow::bail!(
+            "Staging workspace no longer exists: {}",
+            staging_path.display()
+        );
+    }
+
+    let agent_config = agent_launch_config(agent, goal.source_dir.as_deref());
+
+    // Build resume command: use agent config's resume_cmd if available,
+    // otherwise use the standard launch command.
+    let resume_cmd = agent_config
+        .interactive
+        .as_ref()
+        .and_then(|ic| ic.resume_cmd.as_deref())
+        .map(|cmd| cmd.replace("{session_id}", &session.session_id.to_string()));
+
+    // Update channel ID for this terminal.
+    session.channel_id = format!("cli:{}", std::process::id());
+    session.log_message("ta-system", "Session resumed");
+    store.save(&session)?;
+
+    println!("\nResuming session: {}", session.session_id);
+    println!("  Goal: {}", session.goal_id);
+    println!("  Agent: {}", session.agent_id);
+    println!("  Workspace: {}", staging_path.display());
+    println!("  Mode: interactive (PTY capture)");
+    println!();
+
+    let mut session_store = Some((store, session));
+
+    let launch_result = if let Some(ref cmd_str) = resume_cmd {
+        // Use the resume command from agent config.
+        let parts: Vec<&str> = cmd_str.split_whitespace().collect();
+        let (cmd, args) = parts
+            .split_first()
+            .ok_or_else(|| anyhow::anyhow!("Empty resume command"))?;
+
+        let resume_config = AgentLaunchConfig {
+            command: cmd.to_string(),
+            args_template: args.iter().map(|a| a.to_string()).collect(),
+            injects_context_file: false,
+            injects_settings: false,
+            pre_launch: None,
+            env: agent_config.env.clone(),
+            name: None,
+            description: None,
+            interactive: None,
+            alignment: None,
+        };
+
+        launch_agent_interactive(&resume_config, staging_path, "", &mut session_store)
+    } else {
+        // Re-launch with the original prompt (empty for resume).
+        launch_agent_interactive(&agent_config, staging_path, "", &mut session_store)
+    };
+
+    match launch_result {
+        Ok((exit, _guidance_log)) => {
+            if exit.success() {
+                println!("\nAgent exited successfully.");
+            } else {
+                println!("\nAgent exited with status {}.", exit);
+            }
+        }
+        Err(e) => {
+            if let Some((ref store, ref mut session)) = session_store {
+                session.log_message("ta-system", &format!("Resume launch failed: {}", e));
+                let _ = session.transition(InteractiveSessionState::Aborted);
+                let _ = store.save(session);
+            }
+            return Err(anyhow::anyhow!("Failed to resume agent: {}", e));
+        }
+    }
+
+    // Mark session as paused (can be resumed again) or completed.
+    if let Some((store, mut session)) = session_store {
+        session.log_message("ta-system", "Agent exited from resumed session");
+        // Transition to Paused so it can be resumed again, not Completed.
+        let _ = session.transition(InteractiveSessionState::Paused);
+        store.save(&session)?;
+        println!("\nSession paused. To resume again:");
+        println!("  ta run --resume {}", &session.session_id.to_string()[..8]);
+    }
+
+    Ok(())
+}
+
+/// Find a session by full UUID or prefix match.
+fn find_session_by_prefix(
+    store: &InteractiveSessionStore,
+    prefix: &str,
+) -> anyhow::Result<InteractiveSession> {
+    // Try exact UUID parse first.
+    if let Ok(uuid) = uuid::Uuid::parse_str(prefix) {
+        return Ok(store.load(uuid)?);
+    }
+
+    // Prefix match.
+    let all = store.list()?;
+    let matches: Vec<_> = all
+        .into_iter()
+        .filter(|s| s.session_id.to_string().starts_with(prefix))
+        .collect();
+
+    match matches.len() {
+        0 => anyhow::bail!("No session found matching '{}'", prefix),
+        1 => Ok(matches.into_iter().next().unwrap()),
+        n => anyhow::bail!(
+            "Ambiguous prefix '{}' matches {} sessions. Use a longer prefix.",
+            prefix,
+            n
+        ),
+    }
 }
 
 // ── Agent launch ────────────────────────────────────────────────
@@ -468,6 +646,80 @@ fn launch_agent(
     }
 
     cmd.status()
+}
+
+/// Launch an agent in interactive PTY mode with stdin interleaving and guidance logging.
+///
+/// Returns the exit status and a log of (InteractionRequest, InteractionResponse) pairs
+/// for every human guidance message injected during the session.
+fn launch_agent_interactive(
+    config: &AgentLaunchConfig,
+    staging_path: &Path,
+    prompt: &str,
+    session_store: &mut Option<(InteractiveSessionStore, InteractiveSession)>,
+) -> std::io::Result<(
+    std::process::ExitStatus,
+    Vec<(InteractionRequest, InteractionResponse)>,
+)> {
+    // Build args with template substitution.
+    let args: Vec<String> = config
+        .args_template
+        .iter()
+        .map(|t| t.replace("{prompt}", prompt))
+        .collect();
+
+    // Launch via PTY.
+    let pty_config = pty_capture::PtyLaunchConfig {
+        command: &config.command,
+        args,
+        working_dir: staging_path,
+        env_vars: &config.env,
+        output_sink: None, // Default: TerminalSink (stdout). Replace for Slack/email.
+    };
+
+    let result = pty_capture::run_interactive_pty(pty_config)?;
+
+    // Convert captured human inputs into InteractionRequest/Response pairs for audit.
+    let mut guidance_log = Vec::new();
+    for input in &result.human_inputs {
+        let request = InteractionRequest::new(
+            InteractionKind::Custom("guidance".to_string()),
+            serde_json::json!({
+                "text": input.text,
+                "timestamp": input.timestamp.to_rfc3339(),
+            }),
+            Urgency::Advisory,
+        );
+
+        let response =
+            InteractionResponse::new(request.interaction_id, ta_changeset::Decision::Approve)
+                .with_reasoning(&input.text)
+                .with_responder("cli:stdin");
+
+        // Log to interactive session.
+        if let Some((ref store, ref mut session)) = session_store {
+            session.log_message("human", &input.text);
+            let _ = store.save(session);
+        }
+
+        guidance_log.push((request, response));
+    }
+
+    // Log captured agent output to session (summary only, not full output).
+    if let Some((ref store, ref mut session)) = session_store {
+        let total_bytes: usize = result.captured_output.iter().map(|c| c.data.len()).sum();
+        session.log_message(
+            "ta-system",
+            &format!(
+                "PTY session captured {} bytes of agent output, {} human inputs",
+                total_bytes,
+                result.human_inputs.len()
+            ),
+        );
+        let _ = store.save(session);
+    }
+
+    Ok((result.exit_status, guidance_log))
 }
 
 /// Simple shell quoting for display purposes.
@@ -1017,7 +1269,7 @@ mod tests {
         // Run with --no-launch to avoid actually starting the agent.
         execute(
             &config,
-            "Test goal",
+            Some("Test goal"),
             "claude-code",
             Some(project.path()),
             "Test objective",
@@ -1027,6 +1279,7 @@ mod tests {
             true,
             false,
             false,
+            None,
         )
         .unwrap();
 

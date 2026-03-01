@@ -1124,16 +1124,16 @@ access:
 - ✅ Unit: `constitution_violation_finding_none_when_empty`, `constitution_violation_finding_warning_for_few`, `constitution_violation_finding_alert_for_majority`, `constitution_violation_signal_serialization`
 
 ### v0.4.4 — Interactive Session Completion
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Complete the `ta run --interactive` experience so users can inject mid-session guidance while the agent works.
 
 > **Note**: The core of this phase is now **absorbed by v0.4.1.1** (ReviewChannel Architecture). The `ReviewChannel` trait with `TerminalChannel` provides the bidirectional human-agent communication loop, including mid-session guidance, pause/resume (channel disconnect/reconnect), and audit-logged interactions. What remains here are the PTY-specific enhancements for real-time agent output streaming.
 
-- **PTY capture**: Wrap agent subprocess in a PTY so output streams to the terminal in real-time while TA captures it for session history
-- **Stdin interleaving**: User types guidance mid-session → TA routes it via `ReviewChannel` (replaces direct stdin injection)
-- **Guidance logged**: All human injections recorded as `InteractionRequest`/`InteractionResponse` pairs with timestamps
-- **Pause/resume**: `ReviewChannel` disconnect = pause, reconnect = resume. `ta run --resume <session-id>` reattaches to a running session.
-- **Integration with `ta draft fix`** (v0.3.4): During interactive review, pause → `ta draft fix` → resume through the same channel
+- ✅ **PTY capture**: Wrap agent subprocess in a PTY so output streams to the terminal in real-time while TA captures it for session history
+- ✅ **Stdin interleaving**: User types guidance mid-session → TA routes it via `ReviewChannel` (replaces direct stdin injection)
+- ✅ **Guidance logged**: All human injections recorded as `InteractionRequest`/`InteractionResponse` pairs with timestamps
+- ✅ **Pause/resume**: `ReviewChannel` disconnect = pause, reconnect = resume. `ta run --resume <session-id>` reattaches to a running session.
+- ✅ **Integration with `ta draft fix`** (v0.3.4): During interactive review, pause → `ta draft fix` → resume through the same channel
 
 > **Depends on**: v0.4.1.1 (ReviewChannel + TerminalChannel). Remaining scope after v0.4.1.1 is PTY wrapping for real-time output streaming — the interaction protocol is handled by ReviewChannel.
 

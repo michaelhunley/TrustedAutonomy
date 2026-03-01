@@ -2305,7 +2305,7 @@ fn fix_package(
 
     super::run::execute(
         config,
-        &fix_title,
+        Some(&fix_title),
         agent,
         Some(source_dir.as_path()),
         &format!(
@@ -2318,6 +2318,7 @@ fn fix_package(
         no_launch,
         false, // not interactive
         false, // not macro
+        None,  // not resuming
     )?;
 
     if no_launch {

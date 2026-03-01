@@ -1,6 +1,6 @@
 # Trusted Autonomy — Usage Guide
 
-**Version**: v0.4.2-alpha
+**Version**: v0.4.4-alpha
 
 Complete guide to using Trusted Autonomy for safe, reviewable AI agent workflows.
 
@@ -499,11 +499,11 @@ On every `ta` invocation, a one-line hint is printed to stderr if any drafts hav
 
 ## Interactive Sessions
 
-**Introduced in v0.3.1.2** — Interactive session orchestration for human-agent collaboration. Enhanced in v0.4.1.1 with the ReviewChannel architecture.
+**Introduced in v0.3.1.2** — Interactive session orchestration for human-agent collaboration. Enhanced in v0.4.1.1 with ReviewChannel architecture and v0.4.4 with PTY capture and session resume.
 
 ### Starting an Interactive Session
 
-Use `--interactive` to create a session with lifecycle tracking:
+Use `--interactive` to create a session with PTY capture and lifecycle tracking:
 
 ```bash
 ta run "Implement feature X" --source . --interactive
@@ -512,10 +512,35 @@ ta run "Implement feature X" --source . --interactive
 # Interactive session: 8a7b6c5d-...
 #   Channel: cli:12345
 # Launching claude in staging workspace...
-#   Mode: interactive (session orchestration enabled)
+#   Mode: interactive (PTY capture + session orchestration)
 ```
 
-The session tracks the goal-agent relationship, channel identity, message history, and associated draft reviews.
+In interactive mode (v0.4.4):
+- Agent runs in a **pseudo-terminal (PTY)** — output streams to your terminal in real-time while TA captures it for session history
+- You can **type guidance mid-session** — your input is forwarded to the agent's stdin through the PTY
+- All human input is **logged as InteractionRequest/InteractionResponse pairs** with timestamps for audit
+- Sessions support **pause/resume** — exit and reattach later
+
+### Resuming Sessions
+
+When an interactive session exits, it transitions to **Paused** state. Resume it with:
+
+```bash
+# Resume by session ID (full or prefix)
+ta run --resume 8a7b6c5d
+
+# Or use the session subcommand
+ta session resume 8a7b6c5d
+
+# With a different agent
+ta session resume 8a7b6c5d --agent codex
+```
+
+The resume flow:
+1. Looks up the session and its associated goal/workspace
+2. Transitions the session from Paused → Active
+3. Re-launches the agent in the same staging workspace via PTY
+4. All new guidance is appended to the existing session log
 
 ### Managing Sessions
 
@@ -529,15 +554,18 @@ ta session list --all
 # View session details and message history
 ta session show <session-id>
 # Accepts full UUID or prefix (e.g., "8a7b")
+
+# Resume a paused session
+ta session resume <session-id>
 ```
 
 ### Session Lifecycle
 
 Sessions follow this state machine:
-- **Active** — agent running, human connected
-- **Paused** — agent suspended, can be resumed (Active <-> Paused)
-- **Completed** — session finished successfully
-- **Aborted** — session killed by human or error
+- **Active** — agent running, human connected via PTY
+- **Paused** — agent exited, can be resumed (Active → Paused → Active)
+- **Completed** — session finished successfully (draft built)
+- **Aborted** — session killed by error
 
 ### Per-Agent Interactive Config
 
@@ -549,11 +577,13 @@ args_template: ["{prompt}"]
 injects_context_file: true
 interactive:
   enabled: true
-  output_capture: pipe   # pipe, pty, or log
+  output_capture: pty    # pty (real-time), pipe, or log
   allow_human_input: true
   auto_exit_on: "idle_timeout: 300s"
   resume_cmd: "claude --resume {session_id}"
 ```
+
+The `resume_cmd` is used when resuming a session — `{session_id}` is replaced with the session UUID.
 
 ### Multi-Session Orchestration
 

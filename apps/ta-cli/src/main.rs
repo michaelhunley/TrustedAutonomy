@@ -63,7 +63,7 @@ enum Commands {
     /// Run an agent in a TA-mediated staging workspace.
     Run {
         /// Goal title describing what to accomplish.
-        title: String,
+        title: Option<String>,
         /// Agent system to use (claude-code, codex, etc.).
         #[arg(long, default_value = "claude-code")]
         agent: String,
@@ -85,7 +85,7 @@ enum Commands {
         /// Don't launch the agent — just set up the workspace.
         #[arg(long)]
         no_launch: bool,
-        /// Run in interactive mode with session orchestration.
+        /// Run in interactive mode with PTY capture and session orchestration.
         #[arg(long)]
         interactive: bool,
         /// Run as a macro goal with inner-loop iteration.
@@ -93,6 +93,9 @@ enum Commands {
         /// submit drafts for review, and iterate based on feedback.
         #[arg(long, alias = "macro")]
         macro_goal: bool,
+        /// Resume an existing interactive session (ID or prefix).
+        #[arg(long)]
+        resume: Option<String>,
     },
     /// Manage interactive sessions.
     Session {
@@ -189,9 +192,10 @@ fn main() -> anyhow::Result<()> {
             no_launch,
             interactive,
             macro_goal,
+            resume,
         } => commands::run::execute(
             &config,
-            title,
+            title.as_deref(),
             agent,
             source.as_deref(),
             objective,
@@ -201,6 +205,7 @@ fn main() -> anyhow::Result<()> {
             *no_launch,
             *interactive,
             *macro_goal,
+            resume.as_deref(),
         ),
         Commands::Session { command } => commands::session::execute(command, &config),
         Commands::Plan { command } => commands::plan::execute(command, &config),
