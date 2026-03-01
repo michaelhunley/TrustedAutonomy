@@ -1124,7 +1124,7 @@ access:
 - ✅ Unit: `constitution_violation_finding_none_when_empty`, `constitution_violation_finding_warning_for_few`, `constitution_violation_finding_alert_for_majority`, `constitution_violation_signal_serialization`
 
 ### v0.4.4 — Interactive Session Completion
-<!-- status: done -->
+<!-- status: pending -->
 **Goal**: Complete the `ta run --interactive` experience so users can inject mid-session guidance while the agent works.
 
 > **Note**: The core of this phase is now **absorbed by v0.4.1.1** (ReviewChannel Architecture). The `ReviewChannel` trait with `TerminalChannel` provides the bidirectional human-agent communication loop, including mid-session guidance, pause/resume (channel disconnect/reconnect), and audit-logged interactions. What remains here are the PTY-specific enhancements for real-time agent output streaming.

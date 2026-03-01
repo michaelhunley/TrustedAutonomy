@@ -187,7 +187,7 @@ impl PtySession {
             // Create a new session and set controlling terminal.
             unsafe {
                 libc::setsid();
-                libc::ioctl(slave_fd, libc::TIOCSCTTY.into(), 0);
+                libc::ioctl(slave_fd, libc::TIOCSCTTY as libc::c_ulong, 0);
             }
 
             // Redirect stdio to slave PTY.
