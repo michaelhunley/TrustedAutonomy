@@ -1,10 +1,13 @@
-// goal.rs — Goal subcommands: start, list, status.
+// goal.rs — Goal subcommands: start, list, status, constitution.
 
 use std::path::PathBuf;
 
 use clap::Subcommand;
 use ta_goal::{GoalRunState, GoalRunStore};
 use ta_mcp_gateway::GatewayConfig;
+use ta_policy::constitution::{
+    AccessConstitution, ConstitutionEntry, ConstitutionStore, EnforcementMode,
+};
 use ta_workspace::{ExcludePatterns, OverlayWorkspace};
 use uuid::Uuid;
 
@@ -159,6 +162,42 @@ pub enum GoalCommands {
         /// Goal run ID.
         id: String,
     },
+    /// Manage access constitutions for goals (v0.4.3).
+    Constitution {
+        #[command(subcommand)]
+        command: ConstitutionCommands,
+    },
+}
+
+/// Access constitution subcommands (v0.4.3).
+#[derive(Subcommand)]
+pub enum ConstitutionCommands {
+    /// View the access constitution for a goal.
+    View {
+        /// Goal run ID.
+        goal_id: String,
+    },
+    /// Create or update an access constitution for a goal.
+    Set {
+        /// Goal run ID.
+        goal_id: String,
+        /// URI patterns to declare (repeatable, format: "pattern:intent").
+        #[arg(long = "access", required = true)]
+        access_entries: Vec<String>,
+        /// Enforcement mode: warning (default) or error.
+        #[arg(long, default_value = "warning")]
+        enforcement: String,
+    },
+    /// Propose an access constitution based on an agent's historical patterns.
+    Propose {
+        /// Goal run ID.
+        goal_id: String,
+        /// Agent ID to base the proposal on.
+        #[arg(long)]
+        agent: Option<String>,
+    },
+    /// List all goals that have constitutions.
+    List,
 }
 
 /// Find a parent goal by ID prefix, or return the latest goal if no prefix given.
@@ -238,6 +277,7 @@ pub fn execute(cmd: &GoalCommands, config: &GatewayConfig) -> anyhow::Result<()>
         GoalCommands::List { state } => list_goals(&store, state.as_deref()),
         GoalCommands::Status { id } => show_status(&store, id),
         GoalCommands::Delete { id } => delete_goal(&store, id),
+        GoalCommands::Constitution { command } => execute_constitution(command, config, &store),
     }
 }
 
@@ -486,6 +526,150 @@ fn delete_goal(store: &GoalRunStore, id: &str) -> anyhow::Result<()> {
         None => {
             eprintln!("Goal run not found: {}", id);
             std::process::exit(1);
+        }
+    }
+
+    Ok(())
+}
+
+// ── Constitution subcommands (v0.4.3) ──
+
+fn execute_constitution(
+    cmd: &ConstitutionCommands,
+    config: &GatewayConfig,
+    goal_store: &GoalRunStore,
+) -> anyhow::Result<()> {
+    let store = ConstitutionStore::for_workspace(&config.workspace_root);
+
+    match cmd {
+        ConstitutionCommands::View { goal_id } => match store.load(goal_id)? {
+            Some(c) => {
+                println!("Access Constitution for goal {}", c.goal_id);
+                println!("{}", "=".repeat(50));
+                println!("Created by: {}", c.created_by);
+                println!("Created at: {}", c.created_at.format("%Y-%m-%d %H:%M"));
+                println!("Enforcement: {}", c.enforcement);
+                println!();
+
+                if c.access.is_empty() {
+                    println!("  (no access entries declared)");
+                } else {
+                    println!("{:<50} INTENT", "PATTERN");
+                    println!("{}", "-".repeat(80));
+                    for entry in &c.access {
+                        println!("{:<50} {}", entry.pattern, entry.intent);
+                    }
+                }
+            }
+            None => {
+                println!("No access constitution found for goal {}", goal_id);
+                println!(
+                    "Create one with: ta goal constitution set {} --access 'pattern:intent'",
+                    goal_id
+                );
+            }
+        },
+
+        ConstitutionCommands::Set {
+            goal_id,
+            access_entries,
+            enforcement,
+        } => {
+            let enforcement_mode = match enforcement.as_str() {
+                "error" => EnforcementMode::Error,
+                _ => EnforcementMode::Warning,
+            };
+
+            let access: Vec<ConstitutionEntry> = access_entries
+                .iter()
+                .map(|entry| {
+                    // Parse "pattern:intent" format.
+                    if let Some((pattern, intent)) = entry.split_once(':') {
+                        ConstitutionEntry {
+                            pattern: pattern.trim().to_string(),
+                            intent: intent.trim().to_string(),
+                        }
+                    } else {
+                        ConstitutionEntry {
+                            pattern: entry.trim().to_string(),
+                            intent: "(no intent specified)".to_string(),
+                        }
+                    }
+                })
+                .collect();
+
+            let constitution = AccessConstitution {
+                goal_id: goal_id.clone(),
+                created_by: "human".to_string(),
+                created_at: chrono::Utc::now(),
+                access,
+                enforcement: enforcement_mode,
+            };
+
+            store.save(&constitution)?;
+            println!(
+                "Access constitution saved for goal {} ({} entries, enforcement: {})",
+                goal_id,
+                constitution.access.len(),
+                enforcement_mode,
+            );
+        }
+
+        ConstitutionCommands::Propose { goal_id, agent } => {
+            // Resolve the agent ID from the goal if not specified.
+            let goal_uuid = Uuid::parse_str(goal_id)?;
+            let goal = goal_store
+                .get(goal_uuid)?
+                .ok_or_else(|| anyhow::anyhow!("Goal not found: {}", goal_id))?;
+            let agent_id = agent.as_deref().unwrap_or(&goal.agent_id);
+
+            // Load baseline patterns for this agent.
+            let baselines_dir = config.workspace_root.join(".ta").join("baselines");
+            let baseline_store = ta_audit::BaselineStore::new(baselines_dir);
+            let patterns = match baseline_store.load(agent_id)? {
+                Some(b) => b.resource_patterns,
+                None => {
+                    println!(
+                        "No baseline found for agent '{}'. Run `ta audit baseline {}` first.",
+                        agent_id, agent_id
+                    );
+                    println!("Proposing constitution from goal objective only...");
+                    Vec::new()
+                }
+            };
+
+            let constitution =
+                ta_policy::constitution::propose_constitution(goal_id, &goal.objective, &patterns);
+
+            store.save(&constitution)?;
+            println!("Proposed access constitution for goal {}", goal_id);
+            println!("  Agent: {}", agent_id);
+            println!("  Entries: {}", constitution.access.len());
+            println!("  Enforcement: {}", constitution.enforcement);
+            println!();
+            for entry in &constitution.access {
+                println!("  {} — {}", entry.pattern, entry.intent);
+            }
+            println!();
+            println!("Review with: ta goal constitution view {}", goal_id);
+        }
+
+        ConstitutionCommands::List => {
+            let goals = store.list_goals()?;
+            if goals.is_empty() {
+                println!("No access constitutions found.");
+                return Ok(());
+            }
+
+            println!("{:<40} ENTRIES  ENFORCEMENT", "GOAL ID");
+            println!("{}", "-".repeat(70));
+
+            for goal_id in &goals {
+                if let Ok(Some(c)) = store.load(goal_id) {
+                    println!("{:<40} {:<8} {}", goal_id, c.access.len(), c.enforcement,);
+                }
+            }
+            println!("\n{} constitution(s) total.", goals.len());
         }
     }
 

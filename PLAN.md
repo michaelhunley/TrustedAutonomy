@@ -1080,7 +1080,7 @@ pub struct BehavioralBaseline {
 - **EU AI Act Article 9**: Risk management system with continuous monitoring
 
 ### v0.4.3 — Access Constitutions
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Human-authorable or TA-agent-generated "access constitutions" that declare what URIs an agent should need to access to complete a given goal. Serves as a pre-declared intent contract — any deviation from the constitution is a behavioral drift signal.
 
 > **Relationship to v0.4.0**: Alignment profiles describe an agent's *general* capability envelope. Access constitutions are *per-goal* — scoped to a specific task. An agent aligned for `src/**` access (v0.4.0 profile) might have a goal-specific constitution limiting it to `src/commands/draft.rs` and `crates/ta-submit/src/config.rs`.
@@ -1104,6 +1104,24 @@ access:
 - **IEEE 3152-2024**: Pre-declared intent satisfies transparency requirements for autonomous system actions
 - **NIST AI RMF GOVERN 1.4**: Documented processes for mapping AI system behavior to intended purpose
 - **EU AI Act Article 14**: Human oversight mechanism — constitution is a reviewable, pre-approved scope of action
+
+#### Completed
+- ✅ **Data model**: `AccessConstitution`, `ConstitutionEntry`, `EnforcementMode` types in `ta-policy::constitution` module with YAML/JSON serialization
+- ✅ **Storage**: `ConstitutionStore` for `.ta/constitutions/goal-<id>.yaml` with load/save/list operations
+- ✅ **Validation**: `validate_constitution()` function compares artifact URIs against declared access patterns using scheme-aware glob matching
+- ✅ **Enforcement**: At `ta draft build` time, constitution is loaded and validated; violations trigger warning or error based on `EnforcementMode`
+- ✅ **Drift integration**: New `ConstitutionViolation` drift signal added to `DriftSignal` enum in `ta-audit`; `constitution_violation_finding()` generates drift findings from undeclared access
+- ✅ **CLI**: `ta goal constitution view|set|propose|list` subcommands for creating, viewing, and managing per-goal constitutions
+- ✅ **Proposal**: `propose_constitution()` generates a constitution from agent baseline patterns for automated authoring
+- ✅ **Agent identity**: `constitution_id` in `AgentIdentity` now populated with actual constitution reference when one exists
+
+#### Tests (22 new, 504 total)
+- ✅ Unit: `constitution_yaml_round_trip`, `constitution_json_round_trip`, `enforcement_mode_defaults_to_warning`, `enforcement_mode_display`
+- ✅ Unit: `validate_all_declared_passes`, `validate_detects_undeclared_access`, `validate_detects_unused_entries`, `validate_explicit_uri_patterns`, `validate_scheme_mismatch_is_undeclared`, `validate_empty_constitution_flags_everything`, `validate_empty_artifacts_passes`
+- ✅ Unit: `store_save_and_load_round_trip`, `store_load_returns_none_when_missing`, `store_list_goals`, `store_list_empty_dir`
+- ✅ Unit: `pattern_matches_bare_path`, `pattern_matches_glob`, `pattern_matches_explicit_uri`
+- ✅ Unit: `propose_from_historical_patterns`
+- ✅ Unit: `constitution_violation_finding_none_when_empty`, `constitution_violation_finding_warning_for_few`, `constitution_violation_finding_alert_for_majority`, `constitution_violation_signal_serialization`
 
 ### v0.4.4 — Interactive Session Completion
 <!-- status: pending -->

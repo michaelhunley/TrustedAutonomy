@@ -29,8 +29,8 @@ pub mod log;
 // Re-export the main types at the crate root for convenience.
 // Users can write `use ta_audit::AuditLog` instead of `use ta_audit::log::AuditLog`.
 pub use drift::{
-    BaselineStore, BehavioralBaseline, DraftSummary, DriftFinding, DriftReport, DriftSeverity,
-    DriftSignal,
+    constitution_violation_finding, BaselineStore, BehavioralBaseline, DraftSummary, DriftFinding,
+    DriftReport, DriftSeverity, DriftSignal,
 };
 pub use error::AuditError;
 pub use event::{Alternative, AuditAction, AuditEvent, DecisionReasoning};
