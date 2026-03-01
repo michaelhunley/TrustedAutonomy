@@ -760,6 +760,50 @@ fn build_package(
         }
     }
 
+    // v0.4.3: Constitution enforcement — check artifacts against declared access constitution.
+    let constitution_store = ta_policy::ConstitutionStore::for_workspace(&config.workspace_root);
+    if let Ok(Some(constitution)) = constitution_store.load(&goal_id) {
+        let artifact_uris: Vec<&str> = artifacts.iter().map(|a| a.resource_uri.as_str()).collect();
+        let validation =
+            ta_policy::constitution::validate_constitution(&constitution, &artifact_uris);
+
+        if !validation.passed() {
+            let list = validation
+                .undeclared
+                .iter()
+                .map(|u| format!("  - {}", u.strip_prefix("fs://workspace/").unwrap_or(u)))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let msg = format!(
+                "Access constitution violation: {} artifact(s) not declared in constitution for goal {}:\n{}",
+                validation.undeclared.len(),
+                goal_id,
+                list,
+            );
+
+            match constitution.enforcement {
+                ta_policy::EnforcementMode::Error => {
+                    anyhow::bail!("{}", msg);
+                }
+                ta_policy::EnforcementMode::Warning => {
+                    eprintln!("Warning: {}", msg);
+                }
+            }
+        } else {
+            println!(
+                "Constitution check: all {} artifact(s) within declared scope",
+                validation.declared.len()
+            );
+        }
+
+        if !validation.unused.is_empty() {
+            eprintln!(
+                "Note: {} constitution entry/entries had no matching artifact(s)",
+                validation.unused.len()
+            );
+        }
+    }
+
     // Use agent summary if available and user didn't provide a custom one.
     let effective_summary = if summary == "Changes from agent work" {
         change_summary
@@ -826,7 +870,12 @@ fn build_package(
         agent_identity: AgentIdentity {
             agent_id: goal.agent_id.clone(),
             agent_type: "coding".to_string(),
-            constitution_id: "default".to_string(),
+            constitution_id: constitution_store
+                .load(&goal_id)
+                .ok()
+                .flatten()
+                .map(|c| format!("goal-{}", c.goal_id))
+                .unwrap_or_else(|| "default".to_string()),
             capability_manifest_hash: goal.manifest_id.to_string(),
             orchestrator_run_id: None,
         },

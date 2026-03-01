@@ -26,6 +26,7 @@
 pub mod alignment;
 pub mod capability;
 pub mod compiler;
+pub mod constitution;
 pub mod engine;
 pub mod error;
 pub mod exemption;
@@ -36,6 +37,10 @@ pub use alignment::{
 };
 pub use capability::{CapabilityGrant, CapabilityManifest};
 pub use compiler::{CompilerError, CompilerOptions, PolicyCompiler};
+pub use constitution::{
+    AccessConstitution, ConstitutionEntry, ConstitutionError, ConstitutionStore,
+    ConstitutionValidation, EnforcementMode,
+};
 pub use engine::{EvaluationStep, EvaluationTrace, PolicyDecision, PolicyEngine, PolicyRequest};
 pub use error::PolicyError;
 pub use exemption::ExemptionPatterns;

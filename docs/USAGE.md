@@ -1311,6 +1311,42 @@ TA monitors agent behavior for drift from historical baselines. Five drift signa
 
 Baselines are stored in `.ta/baselines/<agent-id>.json` and computed from all historical audit events and draft packages for that agent. Use `ta audit baseline <agent-id>` to create or update a baseline, then `ta audit drift <agent-id>` to compare recent behavior.
 
+#### Access Constitutions (v0.4.3)
+
+Access constitutions declare what URIs an agent *should* need to access for a specific goal — a pre-declared intent contract. Unlike alignment profiles (which describe an agent's general capabilities), constitutions are per-goal and scoped to a specific task.
+
+```bash
+# Create a constitution for a goal (human-authored)
+ta goal constitution set <goal-id> \
+  --access "src/commands/draft.rs:Add constitution enforcement" \
+  --access "crates/ta-policy/src/**:Constitution data model" \
+  --enforcement warning
+
+# Propose a constitution based on the agent's historical patterns
+ta goal constitution propose <goal-id>
+
+# View a goal's constitution
+ta goal constitution view <goal-id>
+
+# List all goals with constitutions
+ta goal constitution list
+```
+
+At `ta draft build` time, TA compares the actual artifacts against the constitution. Undeclared access triggers a warning (default) or error (`--enforcement error`). Constitution violations also feed into the behavioral drift pipeline as a high-signal `ConstitutionViolation` drift indicator.
+
+Constitution files are stored at `.ta/constitutions/goal-<id>.yaml`:
+
+```yaml
+goal_id: "abc-123"
+created_by: "human"
+enforcement: warning
+access:
+  - pattern: "src/commands/draft.rs"
+    intent: "Add constitution enforcement logic"
+  - pattern: "crates/ta-policy/src/**"
+    intent: "New constitution module"
+```
+
 #### Decision Observability (v0.3.3)
 
 Every decision in the TA pipeline is now observable — not just *what happened*, but *what was considered and why*:

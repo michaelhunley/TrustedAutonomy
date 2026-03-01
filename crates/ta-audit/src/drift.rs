@@ -60,6 +60,8 @@ pub enum DriftSignal {
     ChangeVolume,
     /// Unusual rate of dependency-related changes.
     DependencyPattern,
+    /// Agent accessed URIs not declared in the goal's access constitution (v0.4.3).
+    ConstitutionViolation,
 }
 
 /// How severe the drift is.
@@ -504,6 +506,39 @@ pub fn unique_agent_ids(events: &[AuditEvent]) -> Vec<String> {
         .collect();
     ids.sort();
     ids
+}
+
+/// Create a drift finding from access constitution violations (v0.4.3).
+///
+/// Constitution violations are always at least Warning severity, and become
+/// Alert when more than half the artifacts are undeclared.
+pub fn constitution_violation_finding(
+    undeclared_uris: &[String],
+    total_artifacts: usize,
+) -> Option<DriftFinding> {
+    if undeclared_uris.is_empty() {
+        return None;
+    }
+
+    let fraction = undeclared_uris.len() as f64 / total_artifacts.max(1) as f64;
+    let severity = if fraction > 0.5 {
+        DriftSeverity::Alert
+    } else {
+        DriftSeverity::Warning
+    };
+
+    let examples: Vec<&str> = undeclared_uris.iter().take(3).map(|s| s.as_str()).collect();
+    Some(DriftFinding {
+        signal: DriftSignal::ConstitutionViolation,
+        severity,
+        description: format!(
+            "{} artifact(s) accessed outside declared constitution (e.g., {})",
+            undeclared_uris.len(),
+            examples.join(", "),
+        ),
+        baseline_value: Some(0.0),
+        current_value: Some(undeclared_uris.len() as f64),
+    })
 }
 
 /// Check whether a URI looks like a dependency manifest file.
@@ -1030,5 +1065,43 @@ mod tests {
         ];
         let ids = unique_agent_ids(&events);
         assert_eq!(ids, vec!["agent-a", "agent-b", "agent-c"]);
+    }
+
+    // ── Constitution violation drift (v0.4.3) ──
+
+    #[test]
+    fn constitution_violation_finding_none_when_empty() {
+        let result = constitution_violation_finding(&[], 5);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn constitution_violation_finding_warning_for_few() {
+        let undeclared = vec!["fs://workspace/extra.rs".to_string()];
+        let finding = constitution_violation_finding(&undeclared, 5).unwrap();
+        assert_eq!(finding.signal, DriftSignal::ConstitutionViolation);
+        assert_eq!(finding.severity, DriftSeverity::Warning);
+        assert!(finding.description.contains("1 artifact(s)"));
+    }
+
+    #[test]
+    fn constitution_violation_finding_alert_for_majority() {
+        let undeclared = vec![
+            "fs://workspace/a.rs".to_string(),
+            "fs://workspace/b.rs".to_string(),
+            "fs://workspace/c.rs".to_string(),
+        ];
+        let finding = constitution_violation_finding(&undeclared, 4).unwrap();
+        assert_eq!(finding.signal, DriftSignal::ConstitutionViolation);
+        assert_eq!(finding.severity, DriftSeverity::Alert);
+    }
+
+    #[test]
+    fn constitution_violation_signal_serialization() {
+        let signal = DriftSignal::ConstitutionViolation;
+        let json = serde_json::to_string(&signal).unwrap();
+        assert_eq!(json, "\"constitution_violation\"");
+        let restored: DriftSignal = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, DriftSignal::ConstitutionViolation);
     }
 }
