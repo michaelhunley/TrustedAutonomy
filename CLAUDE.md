@@ -59,12 +59,11 @@ This applies to both manual work and TA-mediated goals. When `ta pr apply --git-
 
 ## Current State
 
-- **Current version**: `0.2.2-alpha`
-- **208 tests passing** across 12 crates (run `ta plan list` for full status)
+- **Current version**: `0.4.4-alpha`
 - See **PLAN.md** for the canonical development roadmap with per-phase status
 - `ta plan list` / `ta plan status` show current progress
 - Goals can link to plan phases: `ta run "title" --source . --phase 4b`
-- `ta pr apply` auto-updates PLAN.md when a phase completes
+- `ta draft apply` auto-updates PLAN.md when a phase completes
 
 ## Version Management
 
