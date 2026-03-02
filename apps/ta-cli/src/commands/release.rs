@@ -781,6 +781,31 @@ steps:
         echo "Created tag ${TAG}."
       fi
 
+  - name: Update version tracking
+    run: |
+      set -e
+      TODAY=$(date +%Y-%m-%d)
+      cat > version.json <<VEOF
+      {
+        "committed": "${VERSION}",
+        "deployed": "${VERSION}",
+        "committed_at": "${TODAY}",
+        "deployed_at": "${TODAY}",
+        "deployed_tag": "${TAG}"
+      }
+      VEOF
+      # Update README badges.
+      if [ -f README.md ]; then
+        sed -i.bak "s|latest-v[0-9a-z.\-]*-blue|latest-v${VERSION}-blue|" README.md
+        sed -i.bak "s|released-v[0-9a-z.\-]*-green|released-v${VERSION}-green|" README.md
+        rm -f README.md.bak
+      fi
+      git add version.json README.md
+      if ! git diff --cached --quiet; then
+        git commit --amend --no-edit
+        echo "Updated version tracking and README badges."
+      fi
+
   - name: Push
     requires_approval: true
     run: |

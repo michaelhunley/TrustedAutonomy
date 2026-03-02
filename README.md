@@ -1,5 +1,9 @@
 # Trusted Autonomy
 
+![Latest](https://img.shields.io/badge/latest-v0.4.5--alpha-blue)
+![Released](https://img.shields.io/badge/released-v0.4.1--alpha-green)
+![License](https://img.shields.io/badge/license-Apache--2.0-orange)
+
 **Trusted Autonomy** is a local-first, Rust-based substrate for running autonomous AI agents **safely**, **reviewably**, and **without changing how agents behave**.
 
 It is not an agent framework.  
@@ -31,9 +35,12 @@ TA takes a different approach:
 - **Any agent, no lock-in**: Claude Code, Codex, Claude Flow, or any future agent works on top without modification.
 - **Layers with VMs and sandboxes** when warranted — TA adds the semantic review layer that containers alone can't provide.
 
-Today TA mediates filesystem changes. The same staging model in future releases extends to any state change actions including email drafts, database writes, API calls, and any external action — each becoming a reviewable artifact in the same Draft package. See [PLAN.md](PLAN.md) for the roadmap.
+Today TA mediates filesystem changes. The same staging model in future releases extends to any state change actions including email drafts, database writes, API calls, and any external action — each becoming a reviewable artifact in the same Draft package.
 
-> See [docs/WHY-TA-vs-VM.md](docs/WHY-TA-vs-VM.md) for a detailed comparison of TA's approach vs VM sandboxing.
+> **[User Guide](docs/USAGE.md)** — quick start, workflows, configuration, and troubleshooting
+> **[Roadmap](docs/USAGE.md#roadmap)** — what's done, what's next, and the vision
+> **[PLAN.md](PLAN.md)** — detailed development plan with per-phase status
+> **[WHY-TA-vs-VM.md](docs/WHY-TA-vs-VM.md)** — comparison of TA's approach vs VM sandboxing
 
 ---
 
