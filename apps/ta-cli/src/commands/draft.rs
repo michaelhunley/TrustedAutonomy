@@ -571,7 +571,7 @@ fn build_package(
                 anyhow::anyhow!("No running goal found (use a goal ID or start a goal first)")
             })?
     } else {
-        let goal_uuid = Uuid::parse_str(goal_id)?;
+        let goal_uuid = resolve_goal_id_from_store(goal_id, &goal_store)?;
         goal_store
             .get(goal_uuid)?
             .ok_or_else(|| anyhow::anyhow!("Goal run not found: {}", goal_id))?
@@ -1067,7 +1067,7 @@ fn list_packages(
             if let Ok(goal_id) = Uuid::parse_str(&pkg.goal.goal_id) {
                 if let Ok(Some(goal)) = store.get(goal_id) {
                     if goal.parent_macro_id.is_some() {
-                        format!("  └ {}", truncate(&pkg.goal.title, 24))
+                        format!("  +- {}", truncate(&pkg.goal.title, 24))
                     } else if goal.is_macro {
                         format!("[M] {}", truncate(&pkg.goal.title, 24))
                     } else {
@@ -1153,7 +1153,7 @@ fn view_package(
     format_str: &str,
     color: bool,
 ) -> anyhow::Result<()> {
-    let package_id = Uuid::parse_str(id)?;
+    let package_id = resolve_draft_id(id, config)?;
     let pkg = load_package(config, package_id)?;
 
     // Parse detail level and format.
@@ -1233,7 +1233,7 @@ fn view_package(
 }
 
 fn approve_package(config: &GatewayConfig, id: &str, reviewer: &str) -> anyhow::Result<()> {
-    let package_id = Uuid::parse_str(id)?;
+    let package_id = resolve_draft_id(id, config)?;
     let mut pkg = load_package(config, package_id)?;
 
     if !matches!(pkg.status, DraftStatus::PendingReview) {
@@ -1272,7 +1272,7 @@ fn deny_package(
     reason: &str,
     reviewer: &str,
 ) -> anyhow::Result<()> {
-    let package_id = Uuid::parse_str(id)?;
+    let package_id = resolve_draft_id(id, config)?;
     let mut pkg = load_package(config, package_id)?;
 
     if !matches!(pkg.status, DraftStatus::PendingReview) {
@@ -1442,7 +1442,7 @@ fn apply_package(
     conflict_resolution: ta_workspace::ConflictResolution,
     patterns: SelectiveReviewPatterns,
 ) -> anyhow::Result<()> {
-    let package_id = Uuid::parse_str(id)?;
+    let package_id = resolve_draft_id(id, config)?;
     let mut pkg = load_package(config, package_id)?;
 
     // Check if selective review is enabled.
@@ -1492,10 +1492,10 @@ fn apply_package(
             for error in &validation.errors {
                 match error {
                     ta_changeset::supervisor::ValidationError::CyclicDependency { cycle } => {
-                        println!("  ❌ Cyclic dependency detected: {}", cycle.join(" → "));
+                        println!("  [!] Cyclic dependency detected: {}", cycle.join(" -> "));
                     }
                     ta_changeset::supervisor::ValidationError::SelfDependency { artifact } => {
-                        println!("  ❌ Self-dependency detected: {}", artifact);
+                        println!("  [!] Self-dependency detected: {}", artifact);
                     }
                 }
             }
@@ -1516,7 +1516,7 @@ fn apply_package(
                         required_by,
                     } => {
                         println!(
-                            "  ⚠️  Rejecting {} will break {} artifact(s) that depend on it:",
+                            "  [warn] Rejecting {} will break {} artifact(s) that depend on it:",
                             artifact.split('/').next_back().unwrap_or(artifact),
                             required_by.len()
                         );
@@ -1529,7 +1529,7 @@ fn apply_package(
                         depends_on_rejected,
                     } => {
                         println!(
-                            "  ⚠️  Approving {} but it depends on {} rejected artifact(s):",
+                            "  [warn] Approving {} but it depends on {} rejected artifact(s):",
                             artifact.split('/').next_back().unwrap_or(artifact),
                             depends_on_rejected.len()
                         );
@@ -1538,7 +1538,7 @@ fn apply_package(
                         }
                     }
                     ValidationWarning::DiscussBlockingApproval { artifact, blocking } => {
-                        println!("  ⚠️  {} is marked for discussion but {} approved artifact(s) depend on it:",
+                        println!("  [warn] {} is marked for discussion but {} approved artifact(s) depend on it:",
                             artifact.split('/').next_back().unwrap_or(artifact),
                             blocking.len());
                         for blk in blocking {
@@ -1568,10 +1568,20 @@ fn apply_package(
 
         println!("Applying {} approved artifact(s)...", approved_count);
     } else {
-        // Legacy all-or-nothing mode: require Approved status.
-        if !matches!(pkg.status, DraftStatus::Approved { .. }) {
+        // All-or-nothing mode: accept Approved or PendingReview (auto-approve on apply).
+        if matches!(pkg.status, DraftStatus::PendingReview) {
+            pkg.status = DraftStatus::Approved {
+                approved_by: "auto (apply)".to_string(),
+                approved_at: Utc::now(),
+            };
+            save_package(config, &pkg)?;
+            println!(
+                "Auto-approved draft {} (apply implies approval).",
+                package_id
+            );
+        } else if !matches!(pkg.status, DraftStatus::Approved { .. }) {
             anyhow::bail!(
-                "Cannot apply package in {:?} state (must be Approved)",
+                "Cannot apply package in {:?} state (must be PendingReview or Approved)",
                 pkg.status
             );
         }
@@ -1635,7 +1645,7 @@ fn apply_package(
                         })
                     {
                         println!(
-                            "\nℹ️  Source changed since goal start — rebasing against current source."
+                            "\n[info] Source changed since goal start — rebasing against current source."
                         );
                         overlay.set_snapshot(fresh_snapshot);
                     }
@@ -1644,7 +1654,7 @@ fn apply_package(
                     if let Ok(Some(conflicts)) = overlay.detect_conflicts() {
                         if !conflicts.is_empty() {
                             println!(
-                                "\nℹ️  {} source file(s) changed since goal start.",
+                                "\n[info] {} source file(s) changed since goal start.",
                                 conflicts.len()
                             );
                             println!(
@@ -1802,7 +1812,7 @@ fn apply_package(
 
         match adapter.commit(goal, &pkg, &commit_msg) {
             Ok(result) => {
-                println!("✓ {}", result.message);
+                println!("[ok] {}", result.message);
             }
             Err(e) => {
                 eprintln!("Commit failed: {}", e);
@@ -1818,7 +1828,7 @@ fn apply_package(
             println!("Pushing to remote...");
             match adapter.push(goal) {
                 Ok(result) => {
-                    println!("✓ {}", result.message);
+                    println!("[ok] {}", result.message);
                 }
                 Err(e) => {
                     if adapter.name() != "none" {
@@ -1833,7 +1843,7 @@ fn apply_package(
             println!("Creating pull request...");
             match adapter.open_review(goal, &pkg) {
                 Ok(result) => {
-                    println!("✓ {}", result.message);
+                    println!("[ok] {}", result.message);
                     if !result.review_url.starts_with("none://") {
                         println!("  PR URL: {}", result.review_url);
                     }
@@ -1890,10 +1900,10 @@ fn apply_package(
 
     // Post-apply validation summary: confirm state is consistent for the human.
     println!();
-    println!("── Post-Apply Status ──");
-    println!("  Draft:  {} → applied", id);
+    println!("-- Post-Apply Status --");
+    println!("  Draft:  {} -> applied", id);
     println!(
-        "  Goal:   {} → applied",
+        "  Goal:   {} -> applied",
         goal.goal_run_id.to_string().get(..8).unwrap_or("?")
     );
     if let Some(ref phase) = goal.plan_phase {
@@ -1908,15 +1918,15 @@ fn apply_package(
                     super::plan::PlanStatus::Pending => "pending",
                 };
                 if p.status == super::plan::PlanStatus::Done {
-                    println!("  Plan:   {} → {}", phase, status_str);
+                    println!("  Plan:   {} -> {}", phase, status_str);
                 } else {
                     eprintln!(
-                        "  ⚠ Plan:  {} is still '{}' — expected 'done'. Check PLAN.md.",
+                        "  [warn] Plan: {} is still '{}' -- expected 'done'. Check PLAN.md.",
                         phase, status_str
                     );
                 }
             } else {
-                eprintln!("  ⚠ Plan:  phase '{}' not found in PLAN.md", phase);
+                eprintln!("  [warn] Plan: phase '{}' not found in PLAN.md", phase);
             }
         }
     }
@@ -1948,7 +1958,7 @@ fn amend_package(
     reason: Option<&str>,
     amended_by: &str,
 ) -> anyhow::Result<()> {
-    let package_id = Uuid::parse_str(id)?;
+    let package_id = resolve_draft_id(id, config)?;
     let mut pkg = load_package(config, package_id)?;
 
     // Only allow amendment on drafts in review states.
@@ -2220,7 +2230,7 @@ fn fix_package(
     agent: &str,
     no_launch: bool,
 ) -> anyhow::Result<()> {
-    let package_id = Uuid::parse_str(id)?;
+    let package_id = resolve_draft_id(id, config)?;
     let pkg = load_package(config, package_id)?;
 
     // Only allow fix on drafts in review states.
@@ -2343,7 +2353,7 @@ fn close_package(
     reason: Option<&str>,
     closed_by: &str,
 ) -> anyhow::Result<()> {
-    let package_id = Uuid::parse_str(id)?;
+    let package_id = resolve_draft_id(id, config)?;
     let mut pkg = load_package(config, package_id)?;
 
     // Only allow closing drafts that are in non-terminal states.
@@ -2463,7 +2473,7 @@ fn gc_packages(config: &GatewayConfig, dry_run: bool, archive: bool) -> anyhow::
             } else {
                 std::fs::rename(&goal.workspace_path, &archive_dest)?;
                 println!(
-                    "Archived: {} → {}",
+                    "Archived: {} -> {}",
                     goal.workspace_path.display(),
                     archive_dest.display()
                 );
@@ -2552,11 +2562,76 @@ fn truncate(s: &str, max: usize) -> String {
     format!("{}...", &s[..end])
 }
 
+/// Resolve a draft ID from a full UUID or an 8+ character prefix.
+///
+/// Tries exact UUID parse first. On failure, scans all draft packages for
+/// a unique prefix match. Returns an error if the prefix is ambiguous or
+/// matches nothing.
+fn resolve_draft_id(id: &str, config: &GatewayConfig) -> anyhow::Result<Uuid> {
+    // Fast path: exact UUID.
+    if let Ok(uuid) = Uuid::parse_str(id) {
+        return Ok(uuid);
+    }
+
+    if id.len() < 8 {
+        anyhow::bail!(
+            "ID prefix '{}' is too short — use at least 8 characters (or a full UUID)",
+            id
+        );
+    }
+
+    let packages = load_all_packages(config)?;
+    let matches: Vec<_> = packages
+        .iter()
+        .filter(|p| p.package_id.to_string().starts_with(id))
+        .collect();
+
+    match matches.len() {
+        0 => anyhow::bail!("No draft found matching '{}'", id),
+        1 => Ok(matches[0].package_id),
+        n => anyhow::bail!(
+            "Ambiguous prefix '{}' matches {} drafts. Use a longer prefix.",
+            id,
+            n
+        ),
+    }
+}
+
+/// Resolve a goal ID from a full UUID or an 8+ character prefix.
+fn resolve_goal_id_from_store(id: &str, store: &GoalRunStore) -> anyhow::Result<Uuid> {
+    if let Ok(uuid) = Uuid::parse_str(id) {
+        return Ok(uuid);
+    }
+
+    if id.len() < 8 {
+        anyhow::bail!(
+            "ID prefix '{}' is too short — use at least 8 characters (or a full UUID)",
+            id
+        );
+    }
+
+    let goals = store.list()?;
+    let matches: Vec<_> = goals
+        .iter()
+        .filter(|g| g.goal_run_id.to_string().starts_with(id))
+        .collect();
+
+    match matches.len() {
+        0 => anyhow::bail!("No goal found matching '{}'", id),
+        1 => Ok(matches[0].goal_run_id),
+        n => anyhow::bail!(
+            "Ambiguous prefix '{}' matches {} goals. Use a longer prefix.",
+            id,
+            n
+        ),
+    }
+}
+
 // ── Review Session Commands ────────────────────────────────────
 
 /// Start or resume a review session for a draft package.
 fn review_start(config: &GatewayConfig, draft_id: &str, reviewer: &str) -> anyhow::Result<()> {
-    let package_id = Uuid::parse_str(draft_id)?;
+    let package_id = resolve_draft_id(draft_id, config)?;
     let pkg = load_package(config, package_id)?;
 
     // Create the review sessions directory in .ta/review_sessions/
@@ -2733,8 +2808,20 @@ fn review_finish(config: &GatewayConfig, session_id: Option<&str>) -> anyhow::Re
 
     // Load the session.
     let mut session = if let Some(id) = session_id {
-        let uuid = Uuid::parse_str(id)?;
-        store.load(uuid)?
+        if let Ok(uuid) = Uuid::parse_str(id) {
+            store.load(uuid)?
+        } else {
+            let all = store.list()?;
+            let matches: Vec<_> = all
+                .into_iter()
+                .filter(|s| s.session_id.to_string().starts_with(id))
+                .collect();
+            match matches.len() {
+                0 => anyhow::bail!("No review session found matching '{}'", id),
+                1 => matches.into_iter().next().unwrap(),
+                n => anyhow::bail!("Ambiguous prefix '{}' matches {} sessions", id, n),
+            }
+        }
     } else {
         // Use the most recent active session.
         let sessions = store.list()?;
@@ -2759,7 +2846,7 @@ fn review_finish(config: &GatewayConfig, session_id: Option<&str>) -> anyhow::Re
 
     if counts.pending > 0 {
         println!(
-            "⚠️  Warning: {} artifact(s) were not explicitly reviewed.",
+            "[warn] Warning: {} artifact(s) were not explicitly reviewed.",
             counts.pending
         );
         println!();
@@ -2767,7 +2854,7 @@ fn review_finish(config: &GatewayConfig, session_id: Option<&str>) -> anyhow::Re
 
     if session.has_unresolved_discuss() {
         println!(
-            "⚠️  Warning: {} artifact(s) marked for discussion remain unresolved.",
+            "[warn] Warning: {} artifact(s) marked for discussion remain unresolved.",
             counts.discuss
         );
         println!();
@@ -2801,7 +2888,7 @@ fn review_list(config: &GatewayConfig, draft_filter: Option<&str>) -> anyhow::Re
 
     // Apply draft filter if specified.
     let sessions: Vec<_> = if let Some(draft_id) = draft_filter {
-        let draft_uuid = Uuid::parse_str(draft_id)?;
+        let draft_uuid = resolve_draft_id(draft_id, config)?;
         all_sessions
             .into_iter()
             .filter(|s| s.draft_package_id == draft_uuid)
@@ -2842,8 +2929,20 @@ fn review_show(config: &GatewayConfig, session_id: Option<&str>) -> anyhow::Resu
 
     // Load the session.
     let session = if let Some(id) = session_id {
-        let uuid = Uuid::parse_str(id)?;
-        store.load(uuid)?
+        if let Ok(uuid) = Uuid::parse_str(id) {
+            store.load(uuid)?
+        } else {
+            let all = store.list()?;
+            let matches: Vec<_> = all
+                .into_iter()
+                .filter(|s| s.session_id.to_string().starts_with(id))
+                .collect();
+            match matches.len() {
+                0 => anyhow::bail!("No review session found matching '{}'", id),
+                1 => matches.into_iter().next().unwrap(),
+                n => anyhow::bail!("Ambiguous prefix '{}' matches {} sessions", id, n),
+            }
+        }
     } else {
         // Use the most recent active session.
         let sessions = store.list()?;
@@ -4411,5 +4510,67 @@ mod tests {
             "Expected PendingReview (not superseded), got {:?}",
             parent_pkg.status
         );
+    }
+
+    // ── v0.4.5 Partial ID matching tests ──────────────────────────────
+
+    #[test]
+    fn resolve_draft_id_exact_uuid() {
+        let project = TempDir::new().unwrap();
+        let config = GatewayConfig::for_project(project.path());
+
+        // Create a draft package to resolve.
+        std::fs::write(project.path().join("README.md"), "# Hello\n").unwrap();
+        let goal_store = GoalRunStore::new(&config.goals_dir).unwrap();
+        super::super::goal::execute(
+            &super::super::goal::GoalCommands::Start {
+                title: "Prefix test".to_string(),
+                source: Some(project.path().to_path_buf()),
+                objective: "Test prefix matching".to_string(),
+                agent: "test-agent".to_string(),
+                phase: None,
+                follow_up: None,
+                objective_file: None,
+            },
+            &config,
+        )
+        .unwrap();
+        let goals = goal_store.list().unwrap();
+        let goal_id = goals[0].goal_run_id.to_string();
+
+        std::fs::write(goals[0].workspace_path.join("README.md"), "# Changed\n").unwrap();
+        build_package(&config, &goal_id, "Test", false).unwrap();
+
+        let pkgs = load_all_packages(&config).unwrap();
+        let pkg_id = pkgs[0].package_id;
+
+        // Exact UUID should resolve.
+        let resolved = resolve_draft_id(&pkg_id.to_string(), &config).unwrap();
+        assert_eq!(resolved, pkg_id);
+
+        // 8-char prefix should resolve.
+        let prefix = &pkg_id.to_string()[..8];
+        let resolved = resolve_draft_id(prefix, &config).unwrap();
+        assert_eq!(resolved, pkg_id);
+    }
+
+    #[test]
+    fn resolve_draft_id_rejects_short_prefix() {
+        let project = TempDir::new().unwrap();
+        let config = GatewayConfig::for_project(project.path());
+
+        let result = resolve_draft_id("abc", &config);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("too short"));
+    }
+
+    #[test]
+    fn resolve_draft_id_no_match() {
+        let project = TempDir::new().unwrap();
+        let config = GatewayConfig::for_project(project.path());
+
+        let result = resolve_draft_id("00000000", &config);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("No draft found"));
     }
 }

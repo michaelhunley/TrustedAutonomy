@@ -1138,13 +1138,13 @@ access:
 > **Depends on**: v0.4.1.1 (ReviewChannel + TerminalChannel). Remaining scope after v0.4.1.1 is PTY wrapping for real-time output streaming — the interaction protocol is handled by ReviewChannel.
 
 ### v0.4.5 — CLI UX Polish
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Quality-of-life improvements across all CLI commands.
 
-- **Partial ID matching**: Accept 8+ character UUID prefixes in all `ta draft`, `ta goal`, and `ta session` commands (currently requires full UUID)
-- **Apply on PendingReview**: `ta draft apply` works directly on PendingReview drafts without requiring a separate `ta draft approve` first (auto-approves on apply)
-- **Terminal encoding safety**: Ensure disposition badges and status markers render cleanly in all terminal encodings (no garbled characters)
-- **Plan phase in `ta release run`**: Accept plan phase IDs (e.g., `0.4.1.2`) and auto-convert to semver release versions (`0.4.1-alpha.2`) per the versioning policy. Strip `v` prefix if provided.
+- ✅ **Partial ID matching**: Accept 8+ character UUID prefixes in all `ta draft`, `ta goal`, and `ta session` commands (currently requires full UUID)
+- ✅ **Apply on PendingReview**: `ta draft apply` works directly on PendingReview drafts without requiring a separate `ta draft approve` first (auto-approves on apply)
+- ✅ **Terminal encoding safety**: Ensure disposition badges and status markers render cleanly in all terminal encodings (no garbled characters)
+- ✅ **Plan phase in `ta release run`**: Accept plan phase IDs (e.g., `0.4.1.2`) and auto-convert to semver release versions (`0.4.1-alpha.2`) via configurable `version_policy` in `.ta/release.yaml`. Strip `v` prefix if provided.
 
 ---
 
