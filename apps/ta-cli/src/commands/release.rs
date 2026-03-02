@@ -21,7 +21,7 @@ use ta_mcp_gateway::GatewayConfig;
 pub enum ReleaseCommands {
     /// Run the release pipeline for a new version.
     Run {
-        /// Target version (e.g., "0.4.0-alpha").
+        /// Target version (semver or plan phase ID, e.g., "0.4.0-alpha" or "v0.4.1.2").
         version: String,
 
         /// Skip approval gates (non-interactive / CI mode).
@@ -80,8 +80,64 @@ pub struct ReleasePipeline {
     /// Human-readable pipeline name.
     #[serde(default = "default_pipeline_name")]
     pub name: String,
+    /// How plan phase IDs (e.g., "0.4.1.2") are converted to semver versions.
+    #[serde(default)]
+    pub version_policy: VersionPolicy,
     /// Ordered list of pipeline steps.
     pub steps: Vec<PipelineStep>,
+}
+
+/// Configurable policy for converting plan phase IDs to semver release versions.
+///
+/// Each template supports placeholders `{0}`, `{1}`, `{2}`, `{3}` for the
+/// numeric segments of the input, plus `{pre}` for the `prerelease_suffix`.
+///
+/// Example YAML:
+/// ```yaml
+/// version_policy:
+///   prerelease_suffix: "alpha"
+///   two_segment: "{0}.{1}.0-{pre}"
+///   three_segment: "{0}.{1}.{2}-{pre}"
+///   four_segment: "{0}.{1}.{2}-{pre}.{3}"
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VersionPolicy {
+    /// Prerelease label appended to bare versions (default: "alpha").
+    #[serde(default = "default_prerelease_suffix")]
+    pub prerelease_suffix: String,
+    /// Template for 2-segment inputs like "0.4". Default: "{0}.{1}.0-{pre}"
+    #[serde(default = "default_two_segment")]
+    pub two_segment: String,
+    /// Template for 3-segment inputs like "0.4.1". Default: "{0}.{1}.{2}-{pre}"
+    #[serde(default = "default_three_segment")]
+    pub three_segment: String,
+    /// Template for 4-segment inputs like "0.4.1.2". Default: "{0}.{1}.{2}-{pre}.{3}"
+    #[serde(default = "default_four_segment")]
+    pub four_segment: String,
+}
+
+fn default_prerelease_suffix() -> String {
+    "alpha".to_string()
+}
+fn default_two_segment() -> String {
+    "{0}.{1}.0-{pre}".to_string()
+}
+fn default_three_segment() -> String {
+    "{0}.{1}.{2}-{pre}".to_string()
+}
+fn default_four_segment() -> String {
+    "{0}.{1}.{2}-{pre}.{3}".to_string()
+}
+
+impl Default for VersionPolicy {
+    fn default() -> Self {
+        Self {
+            prerelease_suffix: default_prerelease_suffix(),
+            two_segment: default_two_segment(),
+            three_segment: default_three_segment(),
+            four_segment: default_four_segment(),
+        }
+    }
 }
 
 fn default_pipeline_name() -> String {
@@ -252,6 +308,40 @@ fn substitute_vars(template: &str, version: &str, commits: &str, last_tag: Optio
 
 // ── Pipeline execution ──────────────────────────────────────────
 
+/// Normalize a version string, accepting plan phase IDs and converting to semver.
+///
+/// Uses the `VersionPolicy` templates to control how segments map to semver.
+/// Strips leading `v` prefix. Passes through versions that already contain
+/// a hyphen (prerelease marker).
+fn normalize_version(input: &str, policy: &VersionPolicy) -> String {
+    // Strip leading `v` prefix.
+    let s = input.strip_prefix('v').unwrap_or(input);
+
+    // If it already contains a hyphen (prerelease), pass through as-is.
+    if s.contains('-') {
+        return s.to_string();
+    }
+
+    let parts: Vec<&str> = s.split('.').collect();
+    let template = match parts.len() {
+        2 => &policy.two_segment,
+        3 => &policy.three_segment,
+        4 => &policy.four_segment,
+        _ => return s.to_string(),
+    };
+
+    apply_version_template(template, &parts, &policy.prerelease_suffix)
+}
+
+/// Expand a version template with segment placeholders and prerelease suffix.
+fn apply_version_template(template: &str, parts: &[&str], prerelease: &str) -> String {
+    let mut result = template.replace("{pre}", prerelease);
+    for (i, part) in parts.iter().enumerate() {
+        result = result.replace(&format!("{{{}}}", i), part);
+    }
+    result
+}
+
 fn run_pipeline(
     config: &GatewayConfig,
     version: &str,
@@ -260,16 +350,20 @@ fn run_pipeline(
     from_step: Option<usize>,
     pipeline_path: Option<&Path>,
 ) -> anyhow::Result<()> {
+    let pipeline = load_pipeline(config, pipeline_path)?;
+
+    // Normalize plan phase IDs to semver using the pipeline's version policy.
+    let version = normalize_version(version, &pipeline.version_policy);
+    let version = version.as_str();
+
     // Validate version format.
     let version_re = regex::Regex::new(r"^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$")?;
     if !version_re.is_match(version) {
         anyhow::bail!(
-            "Invalid version '{}'. Expected semver (e.g., 0.4.0-alpha, 1.0.0)",
+            "Invalid version '{}'. Expected semver (e.g., 0.4.0-alpha, 1.0.0) or plan phase ID (e.g., v0.4.1.2)",
             version
         );
     }
-
-    let pipeline = load_pipeline(config, pipeline_path)?;
     let (commits, last_tag) = collect_commits_since_last_tag(&config.workspace_root)?;
 
     let total = pipeline.steps.len();
@@ -592,6 +686,15 @@ const DEFAULT_PIPELINE_YAML: &str = r#"# .ta/release.yaml — TA release pipelin
 
 name: ta-release
 
+# Version policy: controls how plan phase IDs are converted to semver.
+# Uncomment and edit to customize. Templates use {0}..{3} for segments, {pre} for the suffix.
+#
+# version_policy:
+#   prerelease_suffix: "alpha"
+#   two_segment: "{0}.{1}.0-{pre}"
+#   three_segment: "{0}.{1}.{2}-{pre}"
+#   four_segment: "{0}.{1}.{2}-{pre}.{3}"
+
 steps:
   - name: Preflight checks
     run: |
@@ -857,6 +960,7 @@ steps:
     fn validate_empty_pipeline_fails() {
         let pipeline = ReleasePipeline {
             name: "empty".to_string(),
+            version_policy: VersionPolicy::default(),
             steps: vec![],
         };
         assert!(validate_pipeline(&pipeline).is_err());
@@ -915,5 +1019,109 @@ steps:
 
         // Dry run should succeed even though the step would fail.
         run_pipeline(&config, "1.0.0", true, true, None, None).unwrap();
+    }
+
+    #[test]
+    fn normalize_version_strips_v_prefix() {
+        let p = VersionPolicy::default();
+        assert_eq!(normalize_version("v0.4.1", &p), "0.4.1-alpha");
+    }
+
+    #[test]
+    fn normalize_version_two_segments() {
+        let p = VersionPolicy::default();
+        assert_eq!(normalize_version("0.4", &p), "0.4.0-alpha");
+    }
+
+    #[test]
+    fn normalize_version_three_segments() {
+        let p = VersionPolicy::default();
+        assert_eq!(normalize_version("0.4.1", &p), "0.4.1-alpha");
+    }
+
+    #[test]
+    fn normalize_version_four_segments_to_prerelease() {
+        let p = VersionPolicy::default();
+        assert_eq!(normalize_version("0.4.1.2", &p), "0.4.1-alpha.2");
+        assert_eq!(normalize_version("v0.4.1.2", &p), "0.4.1-alpha.2");
+    }
+
+    #[test]
+    fn normalize_version_passthrough_semver() {
+        let p = VersionPolicy::default();
+        assert_eq!(normalize_version("0.4.0-alpha", &p), "0.4.0-alpha");
+        assert_eq!(normalize_version("1.0.0-beta.1", &p), "1.0.0-beta.1");
+    }
+
+    #[test]
+    fn normalize_version_custom_suffix() {
+        let p = VersionPolicy {
+            prerelease_suffix: "beta".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(normalize_version("0.4.1", &p), "0.4.1-beta");
+        assert_eq!(normalize_version("0.4.1.2", &p), "0.4.1-beta.2");
+    }
+
+    #[test]
+    fn normalize_version_custom_templates() {
+        let p = VersionPolicy {
+            prerelease_suffix: "rc".to_string(),
+            three_segment: "{0}.{1}.{2}".to_string(), // No prerelease for 3-segment
+            four_segment: "{0}.{1}.{2}-{pre}{3}".to_string(), // e.g., 0.4.1-rc2
+            ..Default::default()
+        };
+        assert_eq!(normalize_version("0.4.1", &p), "0.4.1");
+        assert_eq!(normalize_version("0.4.1.2", &p), "0.4.1-rc2");
+    }
+
+    #[test]
+    fn normalize_version_no_prerelease() {
+        let p = VersionPolicy {
+            prerelease_suffix: String::new(),
+            two_segment: "{0}.{1}.0".to_string(),
+            three_segment: "{0}.{1}.{2}".to_string(),
+            four_segment: "{0}.{1}.{2}.{3}".to_string(),
+        };
+        assert_eq!(normalize_version("0.4", &p), "0.4.0");
+        assert_eq!(normalize_version("1.2.3", &p), "1.2.3");
+        assert_eq!(normalize_version("1.2.3.4", &p), "1.2.3.4");
+    }
+
+    #[test]
+    fn version_policy_deserializes_from_yaml() {
+        let yaml = r#"
+prerelease_suffix: "beta"
+three_segment: "{0}.{1}.{2}"
+"#;
+        let policy: VersionPolicy = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(policy.prerelease_suffix, "beta");
+        assert_eq!(policy.three_segment, "{0}.{1}.{2}");
+        // Defaults for fields not specified.
+        assert_eq!(policy.two_segment, "{0}.{1}.0-{pre}");
+        assert_eq!(policy.four_segment, "{0}.{1}.{2}-{pre}.{3}");
+    }
+
+    #[test]
+    fn pipeline_with_version_policy() {
+        let yaml = r#"
+name: custom
+version_policy:
+  prerelease_suffix: "beta"
+  three_segment: "{0}.{1}.{2}"
+steps:
+  - name: test
+    run: echo hi
+"#;
+        let pipeline: ReleasePipeline = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(pipeline.version_policy.prerelease_suffix, "beta");
+        assert_eq!(
+            normalize_version("0.5.0", &pipeline.version_policy),
+            "0.5.0"
+        );
+        assert_eq!(
+            normalize_version("0.5.0.1", &pipeline.version_policy),
+            "0.5.0-beta.1"
+        );
     }
 }

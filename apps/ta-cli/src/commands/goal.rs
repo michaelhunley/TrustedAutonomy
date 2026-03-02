@@ -418,6 +418,36 @@ fn start_goal(
     Ok(())
 }
 
+/// Resolve a goal ID from a full UUID or an 8+ character prefix.
+fn resolve_goal_id(id: &str, store: &GoalRunStore) -> anyhow::Result<Uuid> {
+    if let Ok(uuid) = Uuid::parse_str(id) {
+        return Ok(uuid);
+    }
+
+    if id.len() < 8 {
+        anyhow::bail!(
+            "ID prefix '{}' is too short -- use at least 8 characters (or a full UUID)",
+            id
+        );
+    }
+
+    let goals = store.list()?;
+    let matches: Vec<_> = goals
+        .iter()
+        .filter(|g| g.goal_run_id.to_string().starts_with(id))
+        .collect();
+
+    match matches.len() {
+        0 => anyhow::bail!("No goal found matching '{}'", id),
+        1 => Ok(matches[0].goal_run_id),
+        n => anyhow::bail!(
+            "Ambiguous prefix '{}' matches {} goals. Use a longer prefix.",
+            id,
+            n
+        ),
+    }
+}
+
 fn list_goals(store: &GoalRunStore, state: Option<&str>) -> anyhow::Result<()> {
     let goals = if let Some(state_filter) = state {
         store.list_by_state(state_filter)?
@@ -441,13 +471,13 @@ fn list_goals(store: &GoalRunStore, state: Option<&str>) -> anyhow::Result<()> {
             format!("[M] {}", truncate(&g.title, 24))
         } else if let Some(ref macro_id) = g.parent_macro_id {
             format!(
-                "  └ {} (← {})",
+                "  +- {} (<- {})",
                 truncate(&g.title, 16),
                 &macro_id.to_string()[..8]
             )
         } else if let Some(parent_id) = g.parent_goal_id {
             format!(
-                "{} (→ {})",
+                "{} (-> {})",
                 truncate(&g.title, 20),
                 &parent_id.to_string()[..8]
             )
@@ -469,7 +499,7 @@ fn list_goals(store: &GoalRunStore, state: Option<&str>) -> anyhow::Result<()> {
 }
 
 fn show_status(store: &GoalRunStore, id: &str) -> anyhow::Result<()> {
-    let goal_run_id = Uuid::parse_str(id)?;
+    let goal_run_id = resolve_goal_id(id, store)?;
     match store.get(goal_run_id)? {
         Some(g) => {
             println!("Goal Run: {}", g.goal_run_id);
@@ -534,7 +564,7 @@ fn show_status(store: &GoalRunStore, id: &str) -> anyhow::Result<()> {
 }
 
 fn delete_goal(store: &GoalRunStore, id: &str) -> anyhow::Result<()> {
-    let goal_run_id = uuid::Uuid::parse_str(id)?;
+    let goal_run_id = resolve_goal_id(id, store)?;
     let goal = store.get(goal_run_id)?;
 
     match goal {
@@ -644,7 +674,7 @@ fn execute_constitution(
 
         ConstitutionCommands::Propose { goal_id, agent } => {
             // Resolve the agent ID from the goal if not specified.
-            let goal_uuid = Uuid::parse_str(goal_id)?;
+            let goal_uuid = resolve_goal_id(goal_id, goal_store)?;
             let goal = goal_store
                 .get(goal_uuid)?
                 .ok_or_else(|| anyhow::anyhow!("Goal not found: {}", goal_id))?;
@@ -875,5 +905,42 @@ mod tests {
 
         // Verify staging directory is removed.
         assert!(!staging_path.exists());
+    }
+
+    #[test]
+    fn resolve_goal_id_by_prefix() {
+        let temp = TempDir::new().unwrap();
+        let config = GatewayConfig::for_project(temp.path());
+        let store = GoalRunStore::new(&config.goals_dir).unwrap();
+
+        execute(
+            &GoalCommands::Start {
+                title: "Prefix goal".to_string(),
+                source: Some(temp.path().to_path_buf()),
+                objective: "Test goal prefix matching".to_string(),
+                agent: "test-agent".to_string(),
+                phase: None,
+                follow_up: None,
+                objective_file: None,
+            },
+            &config,
+        )
+        .unwrap();
+
+        let goals = store.list().unwrap();
+        let goal_id = goals[0].goal_run_id;
+
+        // Full UUID resolves.
+        let resolved = resolve_goal_id(&goal_id.to_string(), &store).unwrap();
+        assert_eq!(resolved, goal_id);
+
+        // 8-char prefix resolves.
+        let prefix = &goal_id.to_string()[..8];
+        let resolved = resolve_goal_id(prefix, &store).unwrap();
+        assert_eq!(resolved, goal_id);
+
+        // Short prefix rejected.
+        let result = resolve_goal_id("abc", &store);
+        assert!(result.is_err());
     }
 }

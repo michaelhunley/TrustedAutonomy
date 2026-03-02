@@ -1,6 +1,6 @@
 # Trusted Autonomy -- User Guide
 
-**Version**: v0.4.4-alpha
+**Version**: v0.4.5-alpha
 
 Trusted Autonomy (TA) is a governance wrapper for AI agents. It lets any agent work freely in an isolated workspace, then holds the proposed changes at a human review checkpoint before anything takes effect. You see what the agent wants to do, approve or reject each change, and maintain a complete audit trail.
 
@@ -123,6 +123,8 @@ ta draft approve <id>           # Mark as approved
 ta draft apply <id>             # Copy approved changes to your project
 ta draft close <id>             # Abandon without applying
 ```
+
+All `<id>` arguments accept either a full UUID or an 8+ character prefix (e.g., `ta draft view a1b2c3d4`). If a prefix is ambiguous, you'll be asked to use a longer one.
 
 For simple workflows, `ta draft apply` works directly on unapproved drafts (auto-approves on apply).
 
@@ -639,6 +641,10 @@ TA includes a YAML-driven release pipeline:
 # Run the built-in release pipeline
 ta release run 0.4.0-alpha
 
+# Use plan phase IDs -- auto-converted to semver
+ta release run v0.4.1.2           # becomes 0.4.1-alpha.2
+ta release run 0.4                # becomes 0.4.0-alpha
+
 # Preview without executing
 ta release run 0.4.0-alpha --dry-run
 
@@ -672,6 +678,22 @@ steps:
 ```
 
 Variables available: `${VERSION}`, `${TAG}`, `${COMMITS}`, `${LAST_TAG}`.
+
+The `version_policy` section controls how plan phase IDs are converted to semver. Templates use `{0}`..`{3}` for numeric segments and `{pre}` for the prerelease suffix:
+
+```yaml
+# .ta/release.yaml (customize version normalization)
+version_policy:
+  prerelease_suffix: "alpha"          # default suffix for bare versions
+  two_segment: "{0}.{1}.0-{pre}"     # 0.4 -> 0.4.0-alpha
+  three_segment: "{0}.{1}.{2}-{pre}" # 0.4.1 -> 0.4.1-alpha
+  four_segment: "{0}.{1}.{2}-{pre}.{3}"  # 0.4.1.2 -> 0.4.1-alpha.2
+```
+
+Examples for other projects:
+- **No prerelease**: set `three_segment: "{0}.{1}.{2}"` and `prerelease_suffix: ""`
+- **Beta channel**: set `prerelease_suffix: "beta"`
+- **RC numbering**: set `four_segment: "{0}.{1}.{2}-rc.{3}"`
 
 ### Versioning and Release Lifecycle
 
@@ -793,7 +815,7 @@ TA has a working end-to-end workflow: staging isolation, agent wrapping, draft r
 | v0.4.2 | Behavioral drift detection | Done |
 | v0.4.3 | Access constitutions | Done |
 | v0.4.4 | Interactive session completion (PTY) | Done |
-| v0.4.5 | CLI UX polish | Pending |
+| v0.4.5 | CLI UX polish | Done |
 
 ### What's Next (v0.5 -- v0.6)
 
