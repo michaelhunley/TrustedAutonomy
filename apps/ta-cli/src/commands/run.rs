@@ -1113,6 +1113,21 @@ fn inject_claude_md(
     macro_goal: bool,
 ) -> anyhow::Result<()> {
     let claude_md_path = staging_path.join("CLAUDE.md");
+    let backup_path = staging_path.join(CLAUDE_MD_BACKUP);
+
+    // If a backup already exists from a previous injection (e.g., follow-up reusing
+    // parent staging), restore the original CLAUDE.md first so we inject fresh
+    // content on top of the real project file, not a stale injected copy.
+    if backup_path.exists() {
+        let saved_original = std::fs::read_to_string(&backup_path)?;
+        if saved_original == NO_ORIGINAL_SENTINEL {
+            if claude_md_path.exists() {
+                std::fs::remove_file(&claude_md_path)?;
+            }
+        } else {
+            std::fs::write(&claude_md_path, &saved_original)?;
+        }
+    }
 
     // Read and save original content.
     let original_content = if claude_md_path.exists() {
@@ -1124,7 +1139,7 @@ fn inject_claude_md(
     // Save backup to .ta/ in staging (excluded from copy and diff).
     let backup_dir = staging_path.join(".ta");
     std::fs::create_dir_all(&backup_dir)?;
-    std::fs::write(staging_path.join(CLAUDE_MD_BACKUP), &original_content)?;
+    std::fs::write(&backup_path, &original_content)?;
 
     // Build injected content.
     let existing_section = if original_content == NO_ORIGINAL_SENTINEL {
@@ -1875,5 +1890,87 @@ pre_launch:
 
         // Should NOT crash or show "Review discussion:" when there are no comments.
         assert!(!context.contains("Review discussion:"));
+    }
+
+    #[test]
+    fn inject_claude_md_restores_original_on_reinjection() {
+        // Simulates the follow-up-reusing-parent-staging scenario:
+        // 1. First injection writes TA header on top of original content
+        // 2. Second injection (follow-up) should restore original, then inject fresh
+        let staging = TempDir::new().unwrap();
+        let config = GatewayConfig::for_project(staging.path());
+        let goal_store = GoalRunStore::new(&config.goals_dir).unwrap();
+
+        let original = "# Original CLAUDE.md\n\nCurrent version: 0.4.4-alpha\n";
+        std::fs::write(staging.path().join("CLAUDE.md"), original).unwrap();
+
+        // First injection (parent goal).
+        inject_claude_md(
+            staging.path(),
+            "Parent goal",
+            "goal-parent-111",
+            None,
+            None,
+            None,
+            &goal_store,
+            &config,
+            false,
+        )
+        .unwrap();
+
+        let first_injected = std::fs::read_to_string(staging.path().join("CLAUDE.md")).unwrap();
+        assert!(first_injected.contains("Trusted Autonomy"));
+        assert!(first_injected.contains("Parent goal"));
+        assert!(first_injected.contains("Original CLAUDE.md"));
+
+        // Second injection (follow-up reusing same staging — no restore between).
+        inject_claude_md(
+            staging.path(),
+            "Follow-up goal",
+            "goal-followup-222",
+            None,
+            None,
+            None,
+            &goal_store,
+            &config,
+            false,
+        )
+        .unwrap();
+
+        let second_injected = std::fs::read_to_string(staging.path().join("CLAUDE.md")).unwrap();
+
+        // Should contain the NEW goal info.
+        assert!(
+            second_injected.contains("Follow-up goal"),
+            "should have follow-up title"
+        );
+        assert!(
+            second_injected.contains("goal-followup-222"),
+            "should have follow-up goal ID"
+        );
+
+        // Should contain the ORIGINAL content (not the parent's injection).
+        assert!(
+            second_injected.contains("0.4.4-alpha"),
+            "should have original version, not stale parent version"
+        );
+
+        // Should NOT contain the parent's goal info (that was the old injection).
+        assert!(
+            !second_injected.contains("goal-parent-111"),
+            "should not contain parent's injected goal ID"
+        );
+
+        // The original content should appear exactly once (no nesting).
+        assert_eq!(
+            second_injected.matches("Original CLAUDE.md").count(),
+            1,
+            "original content should appear exactly once, not nested"
+        );
+
+        // Restore should get back the true original.
+        restore_claude_md(staging.path()).unwrap();
+        let restored = std::fs::read_to_string(staging.path().join("CLAUDE.md")).unwrap();
+        assert_eq!(restored, original);
     }
 }
