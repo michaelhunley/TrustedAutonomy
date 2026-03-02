@@ -1,6 +1,6 @@
 [package]
 name = "ta-cli"
-version = "0.4.3-alpha"
+version = "0.4.4-alpha"
 edition = "2021"
 description = "CLI for goals, PR review, and approvals in Trusted Autonomy"
 license = "Apache-2.0"
@@ -26,6 +26,7 @@ serde_yaml = { workspace = true }
 regex = { workspace = true }
 sha2 = { workspace = true }
 tokio = { workspace = true }
+libc = { workspace = true }
 
 # Internal crates
 ta-audit = { path = "../../crates/ta-audit" }

@@ -21,6 +21,14 @@ pub enum SessionCommands {
         /// Session ID (full or prefix).
         id: String,
     },
+    /// Resume a paused interactive session.
+    Resume {
+        /// Session ID (full or prefix).
+        id: String,
+        /// Agent to use for resume (defaults to session's original agent).
+        #[arg(long)]
+        agent: Option<String>,
+    },
 }
 
 pub fn execute(cmd: &SessionCommands, config: &GatewayConfig) -> anyhow::Result<()> {
@@ -29,6 +37,23 @@ pub fn execute(cmd: &SessionCommands, config: &GatewayConfig) -> anyhow::Result<
     match cmd {
         SessionCommands::List { all } => list_sessions(&store, *all),
         SessionCommands::Show { id } => show_session(&store, id),
+        SessionCommands::Resume { id, agent } => {
+            let agent = agent.as_deref().unwrap_or("claude-code");
+            super::run::execute(
+                config,
+                None,
+                agent,
+                None,
+                "",
+                None,
+                None,
+                None,
+                false,
+                true,
+                false,
+                Some(id.as_str()),
+            )
+        }
     }
 }
 

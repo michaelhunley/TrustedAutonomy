@@ -4,6 +4,7 @@ pub mod draft;
 pub mod goal;
 pub mod plan;
 pub mod pr;
+pub mod pty_capture;
 pub mod release;
 pub mod run;
 pub mod serve;
