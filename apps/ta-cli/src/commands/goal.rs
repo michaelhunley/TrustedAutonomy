@@ -11,6 +11,23 @@ use ta_policy::constitution::{
 use ta_workspace::{ExcludePatterns, OverlayWorkspace};
 use uuid::Uuid;
 
+/// Resolve a draft ID prefix to the goal that produced it.
+/// Scans all goals for matching `pr_package_id`.
+fn resolve_draft_to_goal(
+    prefix: &str,
+    goals: &[ta_goal::GoalRun],
+    _config: &GatewayConfig,
+) -> Option<Uuid> {
+    for goal in goals {
+        if let Some(pr_id) = goal.pr_package_id {
+            if pr_id.to_string().starts_with(prefix) {
+                return Some(goal.goal_run_id);
+            }
+        }
+    }
+    None
+}
+
 /// Check if the parent's staging directory can be reused (exists and config allows it).
 ///
 /// Returns `Some(parent_goal)` if eligible, `None` otherwise.
@@ -200,11 +217,15 @@ pub enum ConstitutionCommands {
     List,
 }
 
-/// Find a parent goal by ID prefix, or return the latest goal if no prefix given.
-fn find_parent_goal(store: &GoalRunStore, id_prefix: Option<&str>) -> anyhow::Result<Uuid> {
+/// Find a parent goal by ID prefix (goal ID or draft ID), or return the latest goal if no prefix given.
+fn find_parent_goal(
+    store: &GoalRunStore,
+    id_prefix: Option<&str>,
+    config: &GatewayConfig,
+) -> anyhow::Result<Uuid> {
     match id_prefix {
         Some(prefix) => {
-            // Match by ID prefix (first N characters).
+            // Match by goal ID prefix (first N characters).
             let all_goals = store.list()?;
             let matches: Vec<_> = all_goals
                 .iter()
@@ -212,7 +233,13 @@ fn find_parent_goal(store: &GoalRunStore, id_prefix: Option<&str>) -> anyhow::Re
                 .collect();
 
             match matches.len() {
-                0 => anyhow::bail!("No goal found matching prefix '{}'", prefix),
+                0 => {
+                    // No goal matched — try matching as a draft ID and resolve to its goal.
+                    if let Some(goal_id) = resolve_draft_to_goal(prefix, &all_goals, config) {
+                        return Ok(goal_id);
+                    }
+                    anyhow::bail!("No goal or draft found matching prefix '{}'", prefix);
+                }
                 1 => Ok(matches[0].goal_run_id),
                 _ => {
                     anyhow::bail!(
@@ -304,7 +331,7 @@ fn start_goal(
 
     // Find parent goal if --follow-up is specified.
     let parent_goal_id = if let Some(follow_up_arg) = follow_up {
-        Some(find_parent_goal(store, follow_up_arg.as_deref())?)
+        Some(find_parent_goal(store, follow_up_arg.as_deref(), config)?)
     } else {
         None
     };

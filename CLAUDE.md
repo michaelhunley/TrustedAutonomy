@@ -71,22 +71,23 @@ When completing a phase, you MUST update versions as part of the work:
 
 1. **`apps/ta-cli/Cargo.toml`**: Update `version` to the phase's target version (e.g., `"0.2.0-alpha"`)
 2. **This file (`CLAUDE.md`)**: Update "Current version" above to match
-3. **`PLAN.md`**: Mark the phase `<!-- status: done -->` (done automatically by `ta pr apply --phase`)
+3. **`PLAN.md`**: Mark the phase `<!-- status: done -->` (done automatically by `ta draft apply --phase`)
+4. **`docs/USAGE.md`**: Update with any new commands, flags, config options, or workflow changes
 
-Version format: `MAJOR.MINOR.PATCH-alpha` (semver). See `PLAN.md` "Versioning & Release Policy" for the full mapping of phases to versions.
+Version format: `MAJOR.MINOR.PATCH-alpha` (semver). See `PLAN.md` "Versioning & Release Policy" for the full mapping of phases to versions. Sub-phases use pre-release dot notation: `v0.4.1.2` → `0.4.1-alpha.2`.
 
-### How It Works (Phase 3 Overlay Flow)
+### How It Works (Overlay Flow)
 1. `ta goal start "title" --source . --phase 4b` → copies project to `.ta/staging/`
-2. `ta run "title" --source . --phase 4b` → creates goal + injects CLAUDE.md (with plan context) + launches agent + builds PR on exit
+2. `ta run "title" --source . --phase 4b` → creates goal + injects CLAUDE.md (with plan context) + launches agent + builds draft on exit
 3. Agent works normally in staging copy — TA is invisible to the agent
-4. `ta pr build --latest` → diffs staging vs source → creates PRPackage with artifacts
-5. `ta pr view/approve/deny <id>` → review workflow
-6. `ta pr apply <id> --git-commit` → copies changes back to source + updates PLAN.md + optional git commit
+4. `ta draft build --latest` → diffs staging vs source → creates draft package with artifacts
+5. `ta draft view/approve/deny <id>` → review workflow
+6. `ta draft apply <id> --git-commit` → copies changes back to source + updates PLAN.md + optional git commit
 
 ### Key Types
 - **Artifact.resource_uri**: `"fs://workspace/<path>"` — URI-based identity for all changes
 - **PatchSet.target_uri**: Same URI scheme for external resources (gmail://, drive://, etc.)
-- **PRStatus**: Draft → PendingReview → Approved/Denied → Applied (currently package-level only)
+- **DraftStatus**: Draft → PendingReview → Approved/Denied → Applied/Superseded/Closed
 - **GoalRunState**: Created → Configured → Running → PrReady → UnderReview → Approved → Applied → Completed
 - **GoalRun.plan_phase**: Optional link to a PLAN.md phase (e.g., "4b")
 - **CLAUDE.md injection**: `ta run` prepends TA context + plan progress, saves backup, restores before diff
