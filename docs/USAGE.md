@@ -1,6 +1,6 @@
 # Trusted Autonomy -- User Guide
 
-**Version**: v0.6.0-alpha
+**Version**: v0.6.3-alpha
 
 Trusted Autonomy (TA) is a governance wrapper for AI agents. It lets any agent work freely in an isolated workspace, then holds the proposed changes at a human review checkpoint before anything takes effect. You see what the agent wants to do, approve or reject each change, and maintain a complete audit trail.
 
@@ -1355,7 +1355,7 @@ TA has a working end-to-end workflow: staging isolation, agent wrapping, draft r
 | v0.6.0 | Session & human control plane | Done |
 | v0.6.1 | Unified policy config | Done |
 | v0.6.2 | Resource mediation trait | Done |
-| v0.6.3 | Active memory injection (project-aware keys, phase tagging, smart context) | Pending |
+| v0.6.3 | Active memory injection (project-aware keys, phase tagging, smart context) | Done |
 
 ### v0.6 -- Platform Substrate
 
@@ -1364,7 +1364,7 @@ TA has a working end-to-end workflow: staging isolation, agent wrapping, draft r
 | v0.6.0 | Session & human control plane (TaSession, SessionManager, CLI commands) | Done |
 | v0.6.1 | Unified policy config (PolicyDocument, PolicyCascade, PolicyContext) | Done |
 | v0.6.2 | Resource mediation trait (ResourceMediator, FsMediator, MediatorRegistry) | Done |
-| v0.6.3 | Active memory injection (project-aware keys, smart context injection) | Pending |
+| v0.6.3 | Active memory injection (project-aware keys, smart context injection) | Done |
 
 ### What's Next (v0.7+)
 

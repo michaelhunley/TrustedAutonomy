@@ -53,10 +53,11 @@ Plan progress:
 - [x] Phase v0.6.0 — Session & Human Control Plane
 - [x] Phase v0.6.1 — Unified Policy Config
 - [x] Phase v0.6.2 — Resource Mediation Trait
-- [ ] Phase v0.6.3 — Active Memory Injection & Project-Aware Key Schema
+- [x] Phase v0.6.3 — Active Memory Injection & Project-Aware Key Schema
 - [ ] Phase v0.7.0 — Channel Registry
 - [ ] Phase v0.7.1 — API Mediator
 - [ ] Phase v0.7.2 — Agent-Guided Setup
+- [ ] Phase v0.7.3 — Project Template Repository & `ta init`
 - [ ] Phase v0.8.0 — Event System & Subscription API
 - [ ] Phase v0.8.1 — Community Memory
 - [ ] Phase v0.9.0 — Distribution & Packaging
@@ -227,7 +228,7 @@ This applies to both manual work and TA-mediated goals. When `ta pr apply --git-
 
 ## Current State
 
-- **Current version**: `0.6.0-alpha`
+- **Current version**: `0.6.3-alpha`
 - See **PLAN.md** for the canonical development roadmap with per-phase status
 - `ta plan list` / `ta plan status` show current progress
 - Goals can link to plan phases: `ta run "title" --source . --phase 4b`
@@ -240,7 +241,7 @@ When completing a phase, you MUST update versions as part of the work:
 1. **`apps/ta-cli/Cargo.toml`**: Update `version` to the phase's target version (e.g., `"0.2.0-alpha"`)
 2. **This file (`CLAUDE.md`)**: Update "Current version" above to match
 3. **`PLAN.md`**: Mark the phase `<!-- status: done -->` (done automatically by `ta draft apply --phase`)
-4. **`docs/USAGE.md`**: Update with any new commands, flags, config options, or workflow changes
+4. **`docs/USAGE.md`**: Update with any new commands, flags, config options, or workflow changes. USAGE.md is the user onboarding guide — write feature documentation as "how to" sections, not version-annotated changelogs. Keep version references out of feature descriptions (use the Roadmap section for version tracking). When adding a new workflow or command, add it to the appropriate section with a clear code example.
 
 Version format: `MAJOR.MINOR.PATCH-alpha` (semver). See `PLAN.md` "Versioning & Release Policy" for the full mapping of phases to versions. Sub-phases use pre-release dot notation: `v0.4.1.2` → `0.4.1-alpha.2`.
 
