@@ -2321,7 +2321,7 @@ dependencies = [
 
 [[package]]
 name = "ta-cli"
-version = "0.5.7-alpha"
+version = "0.6.0-alpha"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2341,6 +2341,7 @@ dependencies = [
  "ta-mcp-gateway",
  "ta-memory",
  "ta-policy",
+ "ta-session",
  "ta-submit",
  "ta-workspace",
  "tempfile",
@@ -2467,6 +2468,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "ta-mediation"
+version = "0.6.0-alpha"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "ta-changeset",
+ "ta-workspace",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "ta-memory"
 version = "0.5.7-alpha"
 dependencies = [
@@ -2483,7 +2499,7 @@ dependencies = [
 
 [[package]]
 name = "ta-policy"
-version = "0.4.5-alpha"
+version = "0.6.0-alpha"
 dependencies = [
  "chrono",
  "glob",
@@ -2503,6 +2519,21 @@ dependencies = [
  "serde",
  "thiserror 2.0.18",
  "tracing",
+]
+
+[[package]]
+name = "ta-session"
+version = "0.6.0-alpha"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "ta-changeset",
+ "ta-goal",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

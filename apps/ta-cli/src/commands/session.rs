@@ -6,6 +6,7 @@
 use clap::Subcommand;
 use ta_changeset::InteractiveSessionStore;
 use ta_mcp_gateway::GatewayConfig;
+use ta_session::SessionManager;
 use uuid::Uuid;
 
 #[derive(Subcommand)]
@@ -29,6 +30,21 @@ pub enum SessionCommands {
         #[arg(long)]
         agent: Option<String>,
     },
+    /// Pause a running session (v0.6.0).
+    Pause {
+        /// Session ID (full or prefix).
+        id: String,
+    },
+    /// Abort a session (v0.6.0).
+    Abort {
+        /// Session ID (full or prefix).
+        id: String,
+        /// Reason for aborting.
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    /// Show session status summary (v0.6.0).
+    Status,
 }
 
 pub fn execute(cmd: &SessionCommands, config: &GatewayConfig) -> anyhow::Result<()> {
@@ -54,6 +70,9 @@ pub fn execute(cmd: &SessionCommands, config: &GatewayConfig) -> anyhow::Result<
                 Some(id.as_str()),
             )
         }
+        SessionCommands::Pause { id } => pause_session(config, id),
+        SessionCommands::Abort { id, reason } => abort_session(config, id, reason.as_deref()),
+        SessionCommands::Status => session_status(config),
     }
 }
 
@@ -138,6 +157,80 @@ fn show_session(store: &InteractiveSessionStore, id: &str) -> anyhow::Result<()>
     }
 
     Ok(())
+}
+
+fn pause_session(config: &GatewayConfig, id: &str) -> anyhow::Result<()> {
+    let sessions_dir = config.workspace_root.join(".ta/sessions");
+    let manager = SessionManager::new(sessions_dir)?;
+
+    let uuid = resolve_session_id(&manager, id)?;
+    manager.pause(uuid)?;
+    println!("Session {} paused.", &uuid.to_string()[..8]);
+    Ok(())
+}
+
+fn abort_session(config: &GatewayConfig, id: &str, reason: Option<&str>) -> anyhow::Result<()> {
+    let sessions_dir = config.workspace_root.join(".ta/sessions");
+    let manager = SessionManager::new(sessions_dir)?;
+
+    let uuid = resolve_session_id(&manager, id)?;
+    manager.abort(uuid)?;
+    println!(
+        "Session {} aborted.{}",
+        &uuid.to_string()[..8],
+        reason
+            .map(|r| format!(" Reason: {}", r))
+            .unwrap_or_default()
+    );
+    Ok(())
+}
+
+fn session_status(config: &GatewayConfig) -> anyhow::Result<()> {
+    let sessions_dir = config.workspace_root.join(".ta/sessions");
+    let manager = SessionManager::new(sessions_dir)?;
+
+    let active = manager.list_active()?;
+    if active.is_empty() {
+        println!("No active sessions.");
+        return Ok(());
+    }
+
+    println!(
+        "{:<38} {:<38} {:<12} {:<14} {:<6} {:<10}",
+        "SESSION ID", "GOAL ID", "AGENT", "STATE", "ITER", "ELAPSED"
+    );
+    println!("{}", "-".repeat(118));
+
+    for s in &active {
+        println!(
+            "{:<38} {:<38} {:<12} {:<14} {:<6} {:<10}",
+            s.session_id,
+            s.goal_id,
+            truncate(&s.agent_id, 10),
+            format!("{}", s.state),
+            s.iteration_count,
+            s.elapsed_display(),
+        );
+    }
+
+    println!("\n{} active session(s).", active.len());
+    Ok(())
+}
+
+fn resolve_session_id(manager: &SessionManager, id: &str) -> anyhow::Result<Uuid> {
+    if let Ok(uuid) = Uuid::parse_str(id) {
+        return Ok(uuid);
+    }
+    let all = manager.list()?;
+    let matches: Vec<_> = all
+        .into_iter()
+        .filter(|s| s.session_id.to_string().starts_with(id))
+        .collect();
+    match matches.len() {
+        0 => anyhow::bail!("No session found matching '{}'", id),
+        1 => Ok(matches[0].session_id),
+        n => anyhow::bail!("Ambiguous prefix '{}' matches {} sessions", id, n),
+    }
 }
 
 fn truncate(s: &str, max: usize) -> String {
