@@ -9,12 +9,14 @@
 // - `MediatorRegistry` — routes URIs to the correct mediator
 // - Core types: ProposedAction, StagedMutation, MutationPreview, ActionClassification
 
+pub mod api_mediator;
 pub mod error;
 pub mod fs_mediator;
 pub mod mediator;
 pub mod registry;
 
 // Re-export primary types for convenience.
+pub use api_mediator::ApiMediator;
 pub use error::MediationError;
 pub use fs_mediator::FsMediator;
 pub use mediator::{

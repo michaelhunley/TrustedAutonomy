@@ -1,6 +1,6 @@
 # Trusted Autonomy -- User Guide
 
-**Version**: v0.6.3-alpha
+**Version**: v0.7.0-alpha
 
 Trusted Autonomy (TA) is a governance wrapper for AI agents. It lets any agent work freely in an isolated workspace, then holds the proposed changes at a human review checkpoint before anything takes effect. You see what the agent wants to do, approve or reject each change, and maintain a complete audit trail.
 
@@ -50,6 +50,10 @@ Trusted Autonomy (TA) is a governance wrapper for AI agents. It lets any agent w
    - [Session Lifecycle](#session-lifecycle)
    - [Unified Policy Config](#unified-policy-config)
    - [Resource Mediation](#resource-mediation)
+   - [Channel Registry](#channel-registry)
+   - [API Mediation](#api-mediation)
+   - [Project Setup](#project-setup)
+   - [Project Initialization](#project-initialization)
 6. [Roadmap](#roadmap)
 7. [Troubleshooting](#troubleshooting)
 8. [Getting Help](#getting-help)
@@ -1296,7 +1300,96 @@ The `ResourceMediator` trait generalizes TA's staging pattern from files to any 
 Built-in mediators:
 - **FsMediator** (`fs://`): File system staging (wraps existing staging workspace)
 
-The `MediatorRegistry` routes actions to the correct mediator by URI scheme. Future mediators (API, database, email) implement the same trait.
+The `MediatorRegistry` routes actions to the correct mediator by URI scheme.
+
+Built-in mediators:
+- **ApiMediator** (`mcp://`): MCP tool call staging (see [API Mediation](#api-mediation))
+
+### Channel Registry
+
+TA's IO channels (terminal, webhook, Slack, etc.) register through a pluggable `ChannelFactory` trait. All channels are equal — the routing config determines which channel handles review, notifications, sessions, and escalation.
+
+Configure channels in `.ta/config.yaml`:
+
+```yaml
+channels:
+  review: { type: terminal }
+  notify:
+    - { type: terminal }
+    - { type: webhook, endpoint: "https://hooks.example.com/ta", level: warning }
+  session: { type: terminal }
+  escalation: { type: webhook, endpoint: "https://hooks.example.com/escalate" }
+  default_agent: claude-code
+```
+
+Built-in channel types: `terminal`, `auto-approve`, `webhook`. Third-party channels implement the `ChannelFactory` trait and register in the `ChannelRegistry`.
+
+Each channel declares capabilities (`supports_review`, `supports_session`, `supports_notify`, `supports_rich_media`, `supports_threads`) so TA can validate routing config at startup.
+
+### API Mediation
+
+The `ApiMediator` stages intercepted MCP tool calls for human review before execution. It implements the `ResourceMediator` trait for the `mcp://` URI scheme.
+
+When an agent calls an MCP tool (e.g., `gmail_send`, `slack_post_message`), TA:
+1. **Stages** the call as a JSON file with tool name, parameters, and classification
+2. **Previews** a human-readable summary with risk flags (IRREVERSIBLE, EXTERNAL)
+3. **Applies** the call after human approval (marks ready for MCP gateway replay)
+4. **Rolls back** by removing the staged file if denied
+
+Tool calls are auto-classified by name patterns:
+- **ReadOnly**: `_read`, `_get`, `_list`, `_search`, `_find`, `_query`, `_fetch`
+- **Irreversible**: `_send`, `_publish`, `_tweet`, `_delete`, `_drop`
+- **ExternalSideEffect**: `_post`, `_create`, `_update`, `_put`, `_patch`, `_upload`
+- **StateChanging**: everything else
+
+### Project Setup
+
+Use `ta setup` to configure TA for an existing project interactively.
+
+```bash
+# Full wizard — auto-detects project type, generates all config
+ta setup wizard
+
+# Refine a single section
+ta setup refine policy
+ta setup refine memory
+ta setup refine agents
+
+# Show resolved configuration
+ta setup show
+```
+
+The wizard detects your project type (Rust, TypeScript, Python, Go, or generic) and generates appropriate `.ta/` configuration files: `workflow.toml`, `memory.toml`, `policy.yaml`, agent YAML, and channel config.
+
+Use `ta setup refine <section>` to update one config file at a time. Available sections: `workflow`, `memory`, `policy`, `agents`, `channels`.
+
+### Project Initialization
+
+Use `ta init` to bootstrap a new TA-managed project from a template.
+
+```bash
+# Initialize with auto-detection
+ta init run --detect
+
+# Initialize with a specific template
+ta init run --template rust-workspace
+
+# List available templates
+ta init templates
+```
+
+Available templates: `rust-workspace`, `typescript-monorepo`, `python-ml`, `go-service`, `generic`.
+
+Each template generates:
+- `.ta/workflow.toml` — workflow defaults for the project type
+- `.ta/memory.toml` — key schema and backend config
+- `.ta/policy.yaml` — starter policy with appropriate security level
+- `.ta/agents/claude-code.yaml` — agent config with bounded actions
+- `.taignore` — exclude patterns for the language/framework
+- `.ta/constitutions/` — starter constitutions for common task types
+- Seeded memory entries from project structure (e.g., Cargo.toml workspace members → `arch:module-map`)
+
+`ta init` reads existing project files and tailors config to the actual structure — not just generic templates.
 
 ---
 
@@ -1304,7 +1397,7 @@ The `MediatorRegistry` routes actions to the correct mediator by URI scheme. Fut
 
 ### What's Done
 
-TA has a working end-to-end workflow: staging isolation, agent wrapping, draft review with per-artifact approval, follow-up iterations, macro goals with inner-loop review, interactive sessions, plan tracking, release pipelines, behavioral drift detection, access constitutions, alignment profiles, decision observability, credential management, MCP tool call interception, web review UI, webhook review channels, persistent context memory with semantic search, session lifecycle management, unified policy configuration (6-layer cascade), and resource mediation (extensible by URI scheme).
+TA has a working end-to-end workflow: staging isolation, agent wrapping, draft review with per-artifact approval, follow-up iterations, macro goals with inner-loop review, interactive sessions, plan tracking, release pipelines, behavioral drift detection, access constitutions, alignment profiles, decision observability, credential management, MCP tool call interception, web review UI, webhook review channels, persistent context memory with semantic search, session lifecycle management, unified policy configuration (6-layer cascade), resource mediation (extensible by URI scheme), pluggable channel registry, API mediation for MCP tool calls, agent-guided project setup, and project template initialization.
 
 ### Phase Status
 
@@ -1366,13 +1459,20 @@ TA has a working end-to-end workflow: staging isolation, agent wrapping, draft r
 | v0.6.2 | Resource mediation trait (ResourceMediator, FsMediator, MediatorRegistry) | Done |
 | v0.6.3 | Active memory injection (project-aware keys, smart context injection) | Done |
 
-### What's Next (v0.7+)
+### v0.7 -- Extensibility
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| v0.7.0 | Channel registry (pluggable IO channels) | Pending |
-| v0.7.1 | API mediator (MCP tool call staging) | Pending |
-| v0.7.2 | Agent-guided setup (`ta setup`) | Pending |
+| v0.7.0 | Channel registry (pluggable IO channels, ChannelFactory, ChannelRegistry) | Done |
+| v0.7.1 | API mediator (MCP tool call staging via ResourceMediator) | Done |
+| v0.7.2 | Agent-guided setup (`ta setup wizard/refine/show`) | Done |
+| v0.7.3 | Project templates and `ta init` (5 built-in templates) | Done |
+| v0.7.4 | Memory & config cleanup (backend toggle, guidance domain classification) | Done |
+
+### What's Next (v0.8+)
+
+| Phase | Description | Status |
+|-------|-------------|--------|
 | v0.8.0 | Event system and subscription API | Pending |
 | v0.8.1 | Community memory (shared knowledge across instances) | Pending |
 | v0.9.0 | Distribution and packaging (desktop, cloud, web UI) | Pending |

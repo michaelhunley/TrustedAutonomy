@@ -117,6 +117,16 @@ enum Commands {
         #[command(subcommand)]
         command: commands::credentials::CredentialsCommands,
     },
+    /// Interactive setup wizard for TA configuration.
+    Setup {
+        #[command(subcommand)]
+        command: commands::setup::SetupCommands,
+    },
+    /// Initialize a new TA-managed project from a template.
+    Init {
+        #[command(subcommand)]
+        command: commands::init::InitCommands,
+    },
     /// Manage agent adapter integrations.
     Adapter {
         #[command(subcommand)]
@@ -222,6 +232,8 @@ fn main() -> anyhow::Result<()> {
         Commands::Context { command } => commands::context::execute(command, &config),
         Commands::Credentials { command } => commands::credentials::execute(command, &config),
         Commands::Adapter { command } => commands::adapter::execute(command, &project_root),
+        Commands::Setup { command } => commands::setup::execute(command, &config),
+        Commands::Init { command } => commands::init::execute(command, &config),
         Commands::Release { command } => commands::release::execute(command, &config),
         Commands::Serve => commands::serve::execute(&project_root),
         // Already handled above.
