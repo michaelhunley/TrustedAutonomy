@@ -215,14 +215,31 @@ This is the most significant reframing. Layer 3 is not just "review drafts" — 
 
 #### The TA Session
 
-A TA session is the human's view of work in progress. It:
+A TA session is a **continuous conversation** between the human and TA about a goal. It:
 
 - **Starts** when the human begins work (`ta run` or equivalent from any IO channel)
-- **Spans** one or more agent framework invocations (goal stacking)
+- **Runs one agent framework, one goal** at a time (simple lifecycle)
 - **Provides** a command surface the agent cannot access (safety boundary)
 - **Streams** events in real-time across all IO channels
-- **Supports** fluid review — approve/reject/guide without blocking the agent
-- **Ends** when the human decides, not when the agent exits
+- **Continues across iterations** — when the human rejects a draft and gives feedback, TA relaunches the agent with full context (previous work + human feedback) so it feels like one conversation
+- **Ends** when the human decides
+
+The human does not track goal IDs, session IDs, or draft IDs. TA tracks the conversational thread. `ta draft view` shows the latest. `ta draft approve` approves it. If the human says "redo the auth module using JWT instead," TA starts a continuation with the original context + the feedback, and the agent picks up where it left off.
+
+#### TA is invisible to the agent
+
+The agent framework (Claude Code, Codex, Claude Flow, LangGraph, etc.) does not call TA MCP tools. TA is invisible:
+
+1. TA launches the agent as a subprocess in the staging workspace
+2. Agent works normally — reads files, writes files, runs commands
+3. Agent writes `change_summary.json` with rationale (what, why, alternatives considered)
+4. Agent exits (process terminates)
+5. TA diffs the staging workspace against the source
+6. TA builds the draft automatically and notifies the human
+
+The "I'm done" signal is process exit. Every framework does this reliably. TA watches the child process.
+
+For **orchestrators** (Claude Flow, LangGraph, CrewAI) that run multiple agents internally, TA treats the orchestrator as a single agent framework. TA doesn't know or care that there are multiple agents inside — it just sees the final workspace state when the orchestrator exits. The orchestrator handles its own internal coordination (coder→reviewer→supervisor loops, exit criteria, agent-to-agent communication). TA mediates all resource access through the MCP gateway.
 
 #### Human control plane commands
 
@@ -230,55 +247,102 @@ These go through TA's own endpoint. The agent framework connects to a *different
 
 ```
 ta session status          # what's the agent doing right now?
-ta session guide "..."     # inject guidance (agent sees it as context)
 ta session pause/resume    # pause agent execution
-ta session switch <agent>  # swap to different agent framework mid-session
-ta session stack <goal>    # stack a new goal onto the current session
-ta draft approve/reject    # review decisions
+ta draft view              # review the latest draft (no ID needed)
+ta draft approve           # approve latest draft
+ta draft reject "reason"   # reject with feedback → TA continues session
 ta audit trail             # what happened so far
+ta context list            # agent memory from this and previous sessions
 ```
 
-#### Fluid sessions as the default
+When the human rejects with feedback, TA:
+1. Stores the human's feedback in memory
+2. Relaunches the agent with: original goal + previous work context + human feedback
+3. The agent sees it as a continuation, not a fresh start
 
-- **Default mode**: ongoing interactive session. Agent works continuously, human reviews in real-time, injects guidance anytime. Draft submission is a summary checkpoint, not a blocking gate.
-- **Checkpoint mode**: opt-in for batch/CI workflows where the human isn't watching.
+#### Conversational continuity
 
-#### Goal stacking
+From the human's perspective, a sequence of goal→draft→reject→revise→approve is **one conversation**, not separate sessions. TA stitches this together via the memory module:
 
-The human can queue goals while the agent works. When the current goal completes (or is paused), the next starts. Goals can use different agent frameworks.
+- Previous agent work (what was tried, what was rejected, why)
+- Human feedback (comments, requested changes)
+- Applied changes (what was approved in earlier iterations)
+- Decision history (which approaches were accepted/rejected)
 
-#### Agent framework intermingling
+The next agent invocation receives this context through CLAUDE.md injection (or equivalent for other frameworks). The human never re-explains context — it carries forward.
 
-A single TA session can run simultaneously:
-1. Claude Code for implementation
-2. Codex for parallel test generation
-3. Claude Flow for multi-agent coordination
+#### Orchestrators are agent frameworks, not TA features
 
-All share the same memory, credentials, and policy. TA mediates them all equally.
+TA does NOT orchestrate multi-agent workflows. Orchestrators (Claude Flow, LangGraph, CrewAI) do that. From TA's perspective, an orchestrator is just another entry in `agents/`:
+
+```yaml
+# agents/claude-flow.yaml
+name: claude-flow
+command: claude-flow
+args: ["--workflow", "feature-dev", "--project", "{workspace_path}"]
+```
+
+TA launches it, mediates its resource access through the MCP gateway, and diffs the result when it exits. The orchestrator's internal agent coordination is opaque to TA.
+
+**Workflow policy files** (`.ta/workflows/*.yaml`) define policy overrides per workflow type, not agent coordination:
+
+```yaml
+# .ta/workflows/deploy.yaml
+# Policy overrides — the orchestrator defines the agent flow
+defaults:
+  enforcement: supervised
+escalation:
+  - any_external_call
+```
+
+#### Change summary with rationale
+
+The agent writes `change_summary.json` before exiting. v0.6 adds a `rationale` field:
+
+```json
+{
+  "summary": "Implemented JWT auth middleware",
+  "rationale": {
+    "approach": "JWT with RS256 via jsonwebtoken crate",
+    "alternatives_considered": [
+      "Session cookies — simpler but requires server-side state",
+      "OAuth2 only — too complex for first-party auth"
+    ],
+    "tradeoffs": "Stateless but requires token refresh logic"
+  },
+  "changes": [...]
+}
+```
+
+The human sees this in `ta draft view` — the agent's reasoning, not just the code.
 
 #### Key types
 
 ```rust
 struct TaSession {
     session_id: Uuid,
-    active_goals: Vec<GoalRun>,         // goal stack
-    active_agents: Vec<AgentConnection>, // multiple frameworks simultaneously
-    pending_reviews: Vec<PendingReviewItem>,
+    current_goal: Option<GoalRun>,
+    conversation_history: Vec<ConversationTurn>,  // human↔agent thread
+    pending_review: Option<PendingReviewItem>,
     event_stream: broadcast::Sender<SessionEvent>,
+}
+
+enum ConversationTurn {
+    AgentDraft { draft_id: Uuid, summary: String, rationale: Option<Rationale> },
+    HumanFeedback { disposition: Disposition, comments: String },
+    AgentRevision { draft_id: Uuid, changes_from_previous: String },
 }
 
 enum SessionEvent {
     FileChanged { path: String, diff_preview: String },
     ActionIntercepted { action: PendingAction },
     DraftReady { draft_id: Uuid, summary: String },
-    AgentOutput { agent_id: String, content: String },
-    AgentWaiting { agent_id: String, prompt: String },
     GoalCompleted { goal_id: Uuid, status: GoalRunState },
     ReviewDecision { target: String, disposition: ArtifactDisposition },
 }
 ```
 
-**Crate:** New `ta-session` (session lifecycle, event streaming, goal stacking). `ta-changeset` keeps `DraftPackage`, `ReviewChannel`, interaction types.
+**Crate:** New `ta-session` (session lifecycle, conversational continuity, event streaming). `ta-changeset` keeps `DraftPackage`, `ReviewChannel`, interaction types.
 
 ---
 
@@ -286,23 +350,26 @@ enum SessionEvent {
 
 **"TA connects to any framework without coupling to any."**
 
-TA provides MCP tools, credential brokering, memory, and context injection. It does NOT orchestrate agents — that's the framework's job.
+TA launches agent frameworks as subprocesses, mediates their resource access, and captures their output. TA is a Rust daemon — not an LLM. It does NOT orchestrate agents.
 
-**What TA provides (the Agent Contract):**
-- Tool manifest (available MCP tools)
+**TA is invisible to the agent.** The agent doesn't call TA MCP tools. It works normally in the staging workspace, writes files, runs commands, and exits. TA observes, diffs, and builds drafts.
+
+**What TA provides (the Agent Contract) — injected before launch:**
+- Goal description + context from previous iterations (conversational continuity)
 - Access scope (from policy + constitution)
-- Memory context (relevant entries for this goal)
-- Session protocol (how to submit drafts, handle review)
-- Credential tokens (scoped, time-bounded)
+- Memory context (relevant entries from this and previous sessions)
+- Instructions to write `change_summary.json` with rationale before exiting
+- Credential tokens (scoped, time-bounded, brokered through MCP gateway)
 
 **How the contract is delivered:**
-- Claude Code: CLAUDE.md injection (markdown)
+- Claude Code: CLAUDE.md injection (markdown prepended to project instructions)
 - Codex: system prompt or context file
-- Generic MCP clients: `ta_session_info` tool response
+- Orchestrators (Claude Flow, LangGraph): environment variables + config file in workspace
 
 **What is NOT TA's job:**
 - Agent selection ("which agent for this task?")
 - Goal decomposition ("break this into sub-tasks")
+- Multi-agent coordination (orchestrators handle this internally)
 - Agent-to-agent communication
 - Tool implementation (TA intercepts calls, doesn't implement `email_send`)
 
