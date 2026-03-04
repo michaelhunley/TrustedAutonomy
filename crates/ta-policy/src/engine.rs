@@ -357,6 +357,145 @@ impl Default for PolicyEngine {
     }
 }
 
+// ── v0.6.1 PolicyDocument-aware evaluation ──
+
+impl PolicyEngine {
+    /// Evaluate a request against both the manifest-based engine AND a PolicyDocument.
+    ///
+    /// This is the v0.6.1 entry point. It layers document-level policy checks
+    /// on top of the existing manifest-based evaluation:
+    ///
+    /// 1. Run the existing `evaluate()` (manifest + grants)
+    /// 2. Check document-level scheme policies (additional approval verbs)
+    /// 3. Check escalation triggers (drift, budget, action count)
+    /// 4. Check security level (Supervised = approve each state change)
+    ///
+    /// The result is the most restrictive decision from all checks.
+    pub fn evaluate_with_document(
+        &self,
+        request: &PolicyRequest,
+        document: &crate::document::PolicyDocument,
+        context: &crate::context::PolicyContext,
+    ) -> PolicyDecision {
+        // Step 1: Run the existing manifest-based evaluation.
+        let base_decision = self.evaluate(request);
+
+        // If the base decision is Deny, no further checks needed.
+        if matches!(base_decision, PolicyDecision::Deny { .. }) {
+            return base_decision;
+        }
+
+        // Step 2: Check scheme-level approval requirements from the document.
+        let scheme = extract_uri_scheme(&request.target_uri);
+        if let Some(scheme_policy) = scheme.and_then(|s| document.schemes.get(s)) {
+            if scheme_policy.approval_required.contains(&request.verb) {
+                return PolicyDecision::RequireApproval {
+                    reason: format!(
+                        "scheme '{}' requires approval for verb '{}'",
+                        scheme.unwrap_or("unknown"),
+                        request.verb
+                    ),
+                };
+            }
+
+            // Check action count limit.
+            if let Some(max) = scheme_policy.max_actions_per_session {
+                if context.action_count >= max {
+                    return PolicyDecision::Deny {
+                        reason: format!(
+                            "action count limit ({}) exceeded for scheme '{}'",
+                            max,
+                            scheme.unwrap_or("unknown")
+                        ),
+                    };
+                }
+            }
+        }
+
+        // Step 3: Check agent-specific overrides.
+        if let Some(agent_override) = document.agents.get(&request.agent_id) {
+            if agent_override
+                .additional_approval_required
+                .contains(&request.verb)
+            {
+                return PolicyDecision::RequireApproval {
+                    reason: format!(
+                        "agent '{}' requires approval for verb '{}'",
+                        request.agent_id, request.verb
+                    ),
+                };
+            }
+            // Check forbidden actions.
+            let action_key = format!("{}_{}", request.tool, request.verb);
+            if agent_override.forbidden_actions.contains(&action_key) {
+                return PolicyDecision::Deny {
+                    reason: format!(
+                        "action '{}' is forbidden for agent '{}'",
+                        action_key, request.agent_id
+                    ),
+                };
+            }
+        }
+
+        // Step 4: Check escalation triggers.
+        if context.is_drifting(document.escalation.drift_threshold) {
+            return PolicyDecision::RequireApproval {
+                reason: format!(
+                    "drift score ({:.2}) exceeds threshold ({:.2})",
+                    context.drift_score.unwrap_or(0.0),
+                    document.escalation.drift_threshold.unwrap_or(0.0)
+                ),
+            };
+        }
+
+        if let Some(limit) = document.escalation.action_count_limit {
+            if context.action_count >= limit {
+                return PolicyDecision::RequireApproval {
+                    reason: format!(
+                        "action count ({}) reached escalation limit ({})",
+                        context.action_count, limit
+                    ),
+                };
+            }
+        }
+
+        // Step 5: Check budget.
+        if let Some(ref budget) = document.budget {
+            if context.is_over_budget(budget.max_tokens_per_goal) {
+                return PolicyDecision::Deny {
+                    reason: format!(
+                        "budget exceeded: {} tokens spent (limit: {})",
+                        context.budget_spent,
+                        budget.max_tokens_per_goal.unwrap_or(0)
+                    ),
+                };
+            }
+        }
+
+        // Step 6: Security level = Supervised means every state-changing action
+        // requires approval (not just "apply"/"commit"/"send"/"post").
+        if document.security_level == crate::document::SecurityLevel::Supervised
+            && !matches!(base_decision, PolicyDecision::RequireApproval { .. })
+        {
+            // In supervised mode, non-read actions require approval.
+            let read_verbs = ["read", "list", "diff", "status", "search"];
+            if !read_verbs.contains(&request.verb.as_str()) {
+                return PolicyDecision::RequireApproval {
+                    reason: "supervised mode: all state-changing actions require approval"
+                        .to_string(),
+                };
+            }
+        }
+
+        base_decision
+    }
+}
+
+/// Extract the URI scheme from a target URI (e.g., "fs" from "fs://workspace/file").
+fn extract_uri_scheme(uri: &str) -> Option<&str> {
+    uri.find("://").map(|pos| &uri[..pos])
+}
+
 /// Check if any grant in the manifest matches the request.
 ///
 /// A grant matches if:
@@ -393,6 +532,7 @@ fn contains_path_traversal(uri: &str) -> bool {
 }
 
 #[cfg(test)]
+#[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
     use crate::capability::{CapabilityGrant, CapabilityManifest};
@@ -873,5 +1013,174 @@ mod tests {
         assert_eq!(restored.decision, trace.decision);
         assert_eq!(restored.steps.len(), trace.steps.len());
         assert_eq!(restored.grants_checked.len(), trace.grants_checked.len());
+    }
+
+    // ── v0.6.1 PolicyDocument-aware evaluation tests ──
+
+    #[test]
+    fn document_scheme_approval_overrides_allow() {
+        use crate::context::PolicyContext;
+        use crate::document::{PolicyDocument, SchemePolicy};
+
+        let mut engine = PolicyEngine::new();
+        engine.load_manifest(test_manifest(
+            "agent-1",
+            vec![grant("fs", "write_patch", "fs://workspace/**")],
+        ));
+
+        // Base evaluation would Allow write_patch.
+        let request = PolicyRequest {
+            agent_id: "agent-1".to_string(),
+            tool: "fs".to_string(),
+            verb: "write_patch".to_string(),
+            target_uri: "fs://workspace/src/main.rs".to_string(),
+        };
+        assert_eq!(engine.evaluate(&request), PolicyDecision::Allow);
+
+        // But the document says fs.write_patch requires approval.
+        let mut doc = PolicyDocument::default();
+        doc.schemes.insert(
+            "fs".to_string(),
+            SchemePolicy {
+                approval_required: vec!["write_patch".to_string()],
+                ..Default::default()
+            },
+        );
+        let ctx = PolicyContext::new("agent-1");
+
+        let decision = engine.evaluate_with_document(&request, &doc, &ctx);
+        match decision {
+            PolicyDecision::RequireApproval { reason } => {
+                assert!(reason.contains("write_patch"));
+            }
+            other => panic!("expected RequireApproval, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn document_supervised_mode_requires_approval_for_writes() {
+        use crate::context::PolicyContext;
+        use crate::document::{PolicyDocument, SecurityLevel};
+
+        let mut engine = PolicyEngine::new();
+        engine.load_manifest(test_manifest(
+            "agent-1",
+            vec![grant("fs", "write_patch", "fs://workspace/**")],
+        ));
+
+        let mut doc = PolicyDocument::default();
+        doc.security_level = SecurityLevel::Supervised;
+        let ctx = PolicyContext::new("agent-1");
+
+        let request = PolicyRequest {
+            agent_id: "agent-1".to_string(),
+            tool: "fs".to_string(),
+            verb: "write_patch".to_string(),
+            target_uri: "fs://workspace/src/main.rs".to_string(),
+        };
+
+        let decision = engine.evaluate_with_document(&request, &doc, &ctx);
+        match decision {
+            PolicyDecision::RequireApproval { reason } => {
+                assert!(reason.contains("supervised"));
+            }
+            other => panic!("expected RequireApproval, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn document_supervised_mode_allows_reads() {
+        use crate::context::PolicyContext;
+        use crate::document::{PolicyDocument, SecurityLevel};
+
+        let mut engine = PolicyEngine::new();
+        engine.load_manifest(test_manifest(
+            "agent-1",
+            vec![grant("fs", "read", "fs://workspace/**")],
+        ));
+
+        let mut doc = PolicyDocument::default();
+        doc.security_level = SecurityLevel::Supervised;
+        let ctx = PolicyContext::new("agent-1");
+
+        let request = PolicyRequest {
+            agent_id: "agent-1".to_string(),
+            tool: "fs".to_string(),
+            verb: "read".to_string(),
+            target_uri: "fs://workspace/src/main.rs".to_string(),
+        };
+
+        // Reads should still be allowed in supervised mode.
+        let decision = engine.evaluate_with_document(&request, &doc, &ctx);
+        assert_eq!(decision, PolicyDecision::Allow);
+    }
+
+    #[test]
+    fn document_budget_exceeded_denies() {
+        use crate::context::PolicyContext;
+        use crate::document::{BudgetConfig, PolicyDocument};
+
+        let mut engine = PolicyEngine::new();
+        engine.load_manifest(test_manifest(
+            "agent-1",
+            vec![grant("fs", "read", "fs://workspace/**")],
+        ));
+
+        let mut doc = PolicyDocument::default();
+        doc.budget = Some(BudgetConfig {
+            max_tokens_per_goal: Some(100_000),
+            warn_at_percent: 80,
+        });
+
+        let mut ctx = PolicyContext::new("agent-1");
+        ctx.budget_spent = 150_000; // over budget
+
+        let request = PolicyRequest {
+            agent_id: "agent-1".to_string(),
+            tool: "fs".to_string(),
+            verb: "read".to_string(),
+            target_uri: "fs://workspace/file.txt".to_string(),
+        };
+
+        let decision = engine.evaluate_with_document(&request, &doc, &ctx);
+        match decision {
+            PolicyDecision::Deny { reason } => {
+                assert!(reason.contains("budget"));
+            }
+            other => panic!("expected Deny, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn document_drift_escalation() {
+        use crate::context::PolicyContext;
+        use crate::document::PolicyDocument;
+
+        let mut engine = PolicyEngine::new();
+        engine.load_manifest(test_manifest(
+            "agent-1",
+            vec![grant("fs", "read", "fs://workspace/**")],
+        ));
+
+        let mut doc = PolicyDocument::default();
+        doc.escalation.drift_threshold = Some(0.5);
+
+        let mut ctx = PolicyContext::new("agent-1");
+        ctx.drift_score = Some(0.7); // above threshold
+
+        let request = PolicyRequest {
+            agent_id: "agent-1".to_string(),
+            tool: "fs".to_string(),
+            verb: "read".to_string(),
+            target_uri: "fs://workspace/file.txt".to_string(),
+        };
+
+        let decision = engine.evaluate_with_document(&request, &doc, &ctx);
+        match decision {
+            PolicyDecision::RequireApproval { reason } => {
+                assert!(reason.contains("drift"));
+            }
+            other => panic!("expected RequireApproval, got {:?}", other),
+        }
     }
 }

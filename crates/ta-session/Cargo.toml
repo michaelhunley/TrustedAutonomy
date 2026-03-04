@@ -1,0 +1,20 @@
+[package]
+name = "ta-session"
+version = "0.6.0-alpha"
+edition = "2021"
+description = "Session & Human Control Plane — continuous conversation lifecycle for TA goals"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+# Workspace crates
+ta-goal = { path = "../ta-goal" }
+ta-changeset = { path = "../ta-changeset" }
+
+[dev-dependencies]
+tempfile = { workspace = true }

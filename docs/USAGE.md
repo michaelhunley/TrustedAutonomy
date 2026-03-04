@@ -1,6 +1,6 @@
 # Trusted Autonomy -- User Guide
 
-**Version**: v0.5.0-alpha
+**Version**: v0.6.0-alpha
 
 Trusted Autonomy (TA) is a governance wrapper for AI agents. It lets any agent work freely in an isolated workspace, then holds the proposed changes at a human review checkpoint before anything takes effect. You see what the agent wants to do, approve or reject each change, and maintain a complete audit trail.
 
@@ -1065,13 +1065,103 @@ When using Claude Flow as your agent:
 
 See `examples/claude-settings.json` for a complete optimized configuration.
 
+### Session Lifecycle (v0.6.0)
+
+TA sessions track the full conversation lifecycle for a goal, including review iterations. Each session records what the agent was told, what it produced, and how the human responded.
+
+```bash
+# View active sessions with state, iteration count, and elapsed time
+ta session status
+
+# Pause a running session
+ta session pause <session-id>
+
+# Resume a paused session
+ta session resume <session-id>
+
+# Abort a session
+ta session abort <session-id> --reason "No longer needed"
+
+# List all sessions (including completed/aborted)
+ta session list --all
+
+# Show session details and conversation history
+ta session show <session-id>
+```
+
+Session states: `Starting` → `AgentRunning` → `DraftReady` → `WaitingForReview` → `Completed` (or `Iterating` → back to `AgentRunning` on rejection, or `Paused`/`Aborted`/`Failed`).
+
+Sessions are stored in `.ta/sessions/<session-id>.json` and emit events (`SessionPaused`, `SessionResumed`, `SessionAborted`, `DraftBuilt`, `ReviewDecision`, `SessionIteration`) to the event stream.
+
+### Unified Policy Config (v0.6.1)
+
+All supervision configuration resolves to a single `PolicyDocument` loaded from `.ta/policy.yaml`. Configuration is merged from 6 layers, where each layer can tighten but never loosen restrictions.
+
+```yaml
+# .ta/policy.yaml
+security_level: checkpoint   # open | checkpoint | supervised | strict
+
+defaults:
+  enforcement: warning        # warning | error | strict
+  auto_approve:
+    read_only: true
+    internal_tools: true
+
+schemes:
+  fs:
+    approval_required: [apply, delete]
+  email:
+    approval_required: [send]
+    credential_required: true
+    max_actions_per_session: 50
+
+escalation:
+  drift_threshold: 0.7
+  action_count_limit: 200
+  patterns:
+    - new_dependency
+    - security_sensitive
+
+agents:
+  claude-code:
+    additional_approval_required: [network_external]
+    forbidden_actions: [credential_access]
+
+budget:
+  max_tokens_per_goal: 1000000
+  warn_at_percent: 80
+```
+
+**Merge cascade** (each layer tightens, never loosens):
+1. Built-in defaults (Checkpoint level, auto-approve read-only)
+2. `.ta/policy.yaml` (project config)
+3. `.ta/workflows/<name>.yaml` (workflow overrides)
+4. `.ta/agents/<agent>.policy.yaml` (agent-specific)
+5. `.ta/constitutions/goal-<id>.yaml` (goal constitution)
+6. CLI overrides (`--strict`, `--auto-approve=false`)
+
+**Security levels**:
+- **Open**: Audit-only, no approvals required
+- **Checkpoint** (default): Review at draft submission
+- **Supervised**: Approve each state-changing action
+- **Strict**: Constitutions required for all goals
+
+### Resource Mediation (v0.6.2)
+
+The `ResourceMediator` trait generalizes TA's staging pattern from files to any resource type. Each mediator handles a URI scheme (`fs://`, `email://`, `db://`, etc.) and provides stage → preview → apply → rollback operations.
+
+Built-in mediators:
+- **FsMediator** (`fs://`): File system staging (wraps existing staging workspace)
+
+The `MediatorRegistry` routes actions to the correct mediator by URI scheme. Future mediators (API, database, email) implement the same trait.
+
 ---
 
 ## Roadmap
 
 ### What's Done
 
-TA has a working end-to-end workflow: staging isolation, agent wrapping, draft review with per-artifact approval, follow-up iterations, macro goals with inner-loop review, interactive sessions, plan tracking, release pipelines, behavioral drift detection, access constitutions, alignment profiles, decision observability, credential management, MCP tool call interception, web review UI, webhook review channels, and persistent context memory.
+TA has a working end-to-end workflow: staging isolation, agent wrapping, draft review with per-artifact approval, follow-up iterations, macro goals with inner-loop review, interactive sessions, plan tracking, release pipelines, behavioral drift detection, access constitutions, alignment profiles, decision observability, credential management, MCP tool call interception, web review UI, webhook review channels, persistent context memory, session lifecycle management, unified policy configuration, and resource mediation.
 
 ### Phase Status
 
@@ -1116,40 +1206,33 @@ TA has a working end-to-end workflow: staging isolation, agent wrapping, draft r
 | v0.5.2 | Minimal web review UI | Done |
 | v0.5.3 | ReviewChannel adapters (webhook) | Done |
 | v0.5.4 | Context memory store | Done |
-
-### v0.5 -- MCP Interception & External Actions
-
-| Phase | Description | Status |
-|-------|-------------|--------|
-| v0.5.0 | Credential broker and identity abstraction | Done |
-| v0.5.1 | MCP tool call interception | Done |
-| v0.5.2 | Minimal web review UI | Done |
-| v0.5.3 | ReviewChannel adapters (webhook, Slack/email stubs) | Done |
-| v0.5.4 | Context memory store (filesystem backend) | Done |
 | v0.5.5 | RuVector memory backend (semantic search, HNSW indexing) | Done |
 | v0.5.6 | Framework-agnostic agent state (auto-capture, context injection) | Done |
-| v0.5.6 | Framework-agnostic agent state (cross-framework context) | Pending |
-| v0.5.7 | Semantic memory queries and memory dashboard | Pending |
+| v0.5.7 | Semantic memory queries and memory dashboard | Done |
+| v0.6.0 | Session & human control plane | Done |
+| v0.6.1 | Unified policy config | Done |
+| v0.6.2 | Resource mediation trait | Done |
 
-### What's Next (v0.6+)
-
-| Phase | Description | Status |
-|-------|-------------|--------|
-| v0.6.0 | Supervisor agent and constitutional auto-approval | Pending |
-| v0.6.1 | Cost tracking and budget limits | Pending |
-
-### Vision (v0.7+)
+### v0.6 -- Platform Substrate
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| v0.7.0 | Agent-guided setup (`ta setup`) | Pending |
-| v0.7.1 | Domain workflow templates (finance, email, social) | Pending |
-| v0.8.0 | Event system and orchestration API | Pending |
+| v0.6.0 | Session & human control plane (TaSession, SessionManager, CLI commands) | Done |
+| v0.6.1 | Unified policy config (PolicyDocument, PolicyCascade, PolicyContext) | Done |
+| v0.6.2 | Resource mediation trait (ResourceMediator, FsMediator, MediatorRegistry) | Done |
+
+### What's Next (v0.7+)
+
+| Phase | Description | Status |
+|-------|-------------|--------|
+| v0.7.0 | Channel registry (pluggable IO channels) | Pending |
+| v0.7.1 | API mediator (MCP tool call staging) | Pending |
+| v0.7.2 | Agent-guided setup (`ta setup`) | Pending |
+| v0.8.0 | Event system and subscription API | Pending |
 | v0.8.1 | Community memory (shared knowledge across instances) | Pending |
 | v0.9.0 | Distribution and packaging (desktop, cloud, web UI) | Pending |
 | v0.9.1 | Native Windows support | Pending |
 | v0.9.2 | Sandbox runner (optional kernel-level isolation) | Pending |
-| v1.0.0 | Virtual office runtime (roles, triggers, orchestration) | Pending |
 
 See [PLAN.md](../PLAN.md) for full details on each phase.
 

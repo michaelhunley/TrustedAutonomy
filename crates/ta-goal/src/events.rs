@@ -122,6 +122,49 @@ pub enum TaEvent {
         status_note: String,
         timestamp: DateTime<Utc>,
     },
+
+    /// A session was paused by the human (v0.6.0).
+    SessionPaused {
+        session_id: Uuid,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// A paused session was resumed (v0.6.0).
+    SessionResumed {
+        session_id: Uuid,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// A session was aborted by the human (v0.6.0).
+    SessionAborted {
+        session_id: Uuid,
+        reason: String,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// A draft was built from workspace diff (v0.6.0).
+    DraftBuilt {
+        session_id: Uuid,
+        draft_id: Uuid,
+        artifact_count: usize,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// Human made a review decision on a draft (v0.6.0).
+    ReviewDecision {
+        session_id: Uuid,
+        draft_id: Uuid,
+        approved: bool,
+        feedback: Option<String>,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// Session entered a new iteration after rejection (v0.6.0).
+    SessionIteration {
+        session_id: Uuid,
+        iteration: u32,
+        timestamp: DateTime<Utc>,
+    },
 }
 
 impl TaEvent {
@@ -139,6 +182,12 @@ impl TaEvent {
             TaEvent::SessionStateChanged { .. } => "session_state_changed",
             TaEvent::SessionMessage { .. } => "session_message",
             TaEvent::PlanUpdateProposed { .. } => "plan_update_proposed",
+            TaEvent::SessionPaused { .. } => "session_paused",
+            TaEvent::SessionResumed { .. } => "session_resumed",
+            TaEvent::SessionAborted { .. } => "session_aborted",
+            TaEvent::DraftBuilt { .. } => "draft_built",
+            TaEvent::ReviewDecision { .. } => "review_decision",
+            TaEvent::SessionIteration { .. } => "session_iteration",
         }
     }
 
@@ -158,6 +207,66 @@ impl TaEvent {
             goal_run_id,
             from_state: from.to_string(),
             to_state: to.to_string(),
+            timestamp: Utc::now(),
+        }
+    }
+
+    /// Helper to create a SessionPaused event (v0.6.0).
+    pub fn session_paused(session_id: Uuid) -> Self {
+        TaEvent::SessionPaused {
+            session_id,
+            timestamp: Utc::now(),
+        }
+    }
+
+    /// Helper to create a SessionResumed event (v0.6.0).
+    pub fn session_resumed(session_id: Uuid) -> Self {
+        TaEvent::SessionResumed {
+            session_id,
+            timestamp: Utc::now(),
+        }
+    }
+
+    /// Helper to create a SessionAborted event (v0.6.0).
+    pub fn session_aborted(session_id: Uuid, reason: &str) -> Self {
+        TaEvent::SessionAborted {
+            session_id,
+            reason: reason.to_string(),
+            timestamp: Utc::now(),
+        }
+    }
+
+    /// Helper to create a DraftBuilt event (v0.6.0).
+    pub fn draft_built(session_id: Uuid, draft_id: Uuid, artifact_count: usize) -> Self {
+        TaEvent::DraftBuilt {
+            session_id,
+            draft_id,
+            artifact_count,
+            timestamp: Utc::now(),
+        }
+    }
+
+    /// Helper to create a ReviewDecision event (v0.6.0).
+    pub fn review_decision(
+        session_id: Uuid,
+        draft_id: Uuid,
+        approved: bool,
+        feedback: Option<&str>,
+    ) -> Self {
+        TaEvent::ReviewDecision {
+            session_id,
+            draft_id,
+            approved,
+            feedback: feedback.map(|s| s.to_string()),
+            timestamp: Utc::now(),
+        }
+    }
+
+    /// Helper to create a SessionIteration event (v0.6.0).
+    pub fn session_iteration(session_id: Uuid, iteration: u32) -> Self {
+        TaEvent::SessionIteration {
+            session_id,
+            iteration,
             timestamp: Utc::now(),
         }
     }
@@ -315,5 +424,64 @@ mod tests {
                 .event_type(),
             "goal_state_changed"
         );
+    }
+
+    #[test]
+    fn session_event_types_v060() {
+        let sid = Uuid::new_v4();
+        let did = Uuid::new_v4();
+
+        assert_eq!(TaEvent::session_paused(sid).event_type(), "session_paused");
+        assert_eq!(
+            TaEvent::session_resumed(sid).event_type(),
+            "session_resumed"
+        );
+        assert_eq!(
+            TaEvent::session_aborted(sid, "user cancelled").event_type(),
+            "session_aborted"
+        );
+        assert_eq!(
+            TaEvent::draft_built(sid, did, 5).event_type(),
+            "draft_built"
+        );
+        assert_eq!(
+            TaEvent::review_decision(sid, did, true, None).event_type(),
+            "review_decision"
+        );
+        assert_eq!(
+            TaEvent::session_iteration(sid, 2).event_type(),
+            "session_iteration"
+        );
+    }
+
+    #[test]
+    fn session_event_serialization_v060() {
+        let sid = Uuid::new_v4();
+        let did = Uuid::new_v4();
+
+        let events = vec![
+            TaEvent::session_paused(sid),
+            TaEvent::session_resumed(sid),
+            TaEvent::session_aborted(sid, "cancelled"),
+            TaEvent::draft_built(sid, did, 3),
+            TaEvent::review_decision(sid, did, false, Some("needs work")),
+            TaEvent::session_iteration(sid, 1),
+        ];
+
+        for event in &events {
+            let json = serde_json::to_string(event).unwrap();
+            let restored: TaEvent = serde_json::from_str(&json).unwrap();
+            assert_eq!(event.event_type(), restored.event_type());
+        }
+    }
+
+    #[test]
+    fn review_decision_with_feedback() {
+        let sid = Uuid::new_v4();
+        let did = Uuid::new_v4();
+        let event = TaEvent::review_decision(sid, did, false, Some("Fix the auth module"));
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("Fix the auth module"));
+        assert!(json.contains("\"approved\":false"));
     }
 }

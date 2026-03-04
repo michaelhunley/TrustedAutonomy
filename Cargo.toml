@@ -12,6 +12,8 @@ members = [
     "crates/ta-workspace",
     "crates/ta-credentials",
     "crates/ta-memory",
+    "crates/ta-mediation",
+    "crates/ta-session",
     "crates/ta-connectors/fs",
     "crates/ta-connectors/web",
     "crates/ta-connectors/mock-drive",

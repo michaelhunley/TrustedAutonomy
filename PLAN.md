@@ -1495,43 +1495,53 @@ Auto-capture on goal complete, auto-capture on rejection, context injection into
 
 > **Design principle**: TA is a Rust daemon, not an LLM. It launches agent frameworks as subprocesses, mediates resource access, and builds drafts from workspace diffs when the agent exits.
 
-- **`TaSession`**: Core session object tracking `current_goal`, `conversation_history` (human↔agent thread across iterations), `pending_review`, and `event_stream`.
-- **New crate: `ta-session`**: Session lifecycle, conversational continuity, event streaming. Depends on `ta-goal`, `ta-changeset`, `ta-memory`.
-- **TA is invisible to agents**: Agent works in staging workspace, writes `change_summary.json` (with rationale), and exits. TA diffs and builds draft. No TA MCP calls from agent.
-- **Conversational continuity**: When the human rejects a draft with feedback, TA relaunches the agent with: original goal + previous work context + human feedback + memory. Feels like one conversation to the human. No IDs to track.
-- **Human control plane commands** (via TA CLI, invisible to agents):
-  - `ta session status` — what the agent is doing right now
-  - `ta session pause/resume` — pause/resume agent execution
-  - `ta draft view` — review latest draft (no ID needed)
-  - `ta draft approve` / `ta draft reject "reason"` — review decisions
-  - `ta audit trail` — what happened so far
-- **SessionEvent** stream: `FileChanged`, `ActionIntercepted`, `DraftReady`, `GoalCompleted`, `ReviewDecision`. Published to all connected IO channels.
-- **Orchestrators as agent frameworks**: Claude Flow, LangGraph, CrewAI are launched as subprocesses like any other agent. TA doesn't know or care about internal multi-agent coordination — it mediates resource access through the MCP gateway and diffs the result.
-- **Change rationale**: `change_summary.json` gains a `rationale` field (approach chosen, alternatives considered, tradeoffs) shown in `ta draft view`.
-- **One session, one agent, one goal**: Simple lifecycle. Follow-up goals (including switching to a different framework) start new sessions that inherit memory and context.
-- **Checkpoint mode (opt-in)**: `--checkpoint` flag for batch/CI workflows where the human isn't watching.
+**Completed**:
+- ✅ **`TaSession`**: Core session object with `session_id`, `goal_id`, `agent_id`, `state` (SessionState enum), `conversation` (Vec<ConversationTurn>), `pending_draft`, `iteration_count`, `checkpoint_mode`
+- ✅ **New crate: `ta-session`**: Session lifecycle with `TaSession`, `SessionState` (Starting → AgentRunning → DraftReady → WaitingForReview → Iterating → Completed → Aborted → Paused → Failed), `ConversationTurn`, `SessionManager`, `SessionError`
+- ✅ **SessionManager**: CRUD persistence in `.ta/sessions/<id>.json` with `create()`, `load()`, `save()`, `find_for_goal()`, `list()`, `list_active()`, `pause()`, `resume()`, `abort()`, `delete()`
+- ✅ **Human control plane commands**: `ta session status`, `ta session pause <id>`, `ta session resume <id>`, `ta session abort <id>`
+- ✅ **SessionEvent variants**: `SessionPaused`, `SessionResumed`, `SessionAborted`, `DraftBuilt`, `ReviewDecision`, `SessionIteration` added to `TaEvent` enum with helper constructors
+- ✅ **Checkpoint mode**: `with_checkpoint_mode()` builder on TaSession
+- ✅ **Conversational continuity**: `ConversationTurn` tracks agent_context, human_feedback, draft_id per iteration
+- ✅ **20 ta-session tests**, 4 new ta-goal event tests
+
+**Remaining (deferred)**:
+- Change rationale field in `change_summary.json` (needs draft viewer integration)
+- Full agent subprocess lifecycle management (launch, signal, relaunch with feedback)
 
 ### v0.6.1 — Unified Policy Config (Layer 2)
 <!-- status: pending -->
 **Goal**: All supervision configuration resolves to a single `PolicyDocument` loaded from `.ta/policy.yaml`.
 
-- **PolicyDocument** merges: `built_in_defaults + .ta/policy.yaml + agents/<name>.yaml + constitutions/goal-<id>.yaml + CLI overrides`
-- **`.ta/policy.yaml`**: Central config surface with `defaults`, `schemes` (per-URI-scheme rules), `escalation` triggers, and `agents` overrides.
-- **PolicyContext** on every request: `goal_id`, `session_id`, `budget_spent`, `action_count`, `drift_score` for runtime-aware decisions.
-- **Security levels**: Open (audit-only) → Checkpoint (default, review at draft) → Supervised (approve each state change) → Strict (constitutions required).
-- **Supervisor agent**: Verifies agent work within constitutional bounds for auto-approval. Trust levels: None → Constitutional → Full.
-- **Cost tracking**: Token usage per goal/agent/session. Budget limits in policy. Agent warned at 80%; stopped at 100%.
-- **"TA supervises TA"**: Supervisor config is a draft the human approves. Supervisor can't expand its own authority.
+**Completed**:
+- ✅ **PolicyDocument**: Unified config struct with `version`, `defaults` (PolicyDefaults), `schemes` (HashMap<String, SchemePolicy>), `escalation` (EscalationConfig), `agents` (HashMap<String, AgentPolicyOverride>), `security_level`, `budget` (BudgetConfig)
+- ✅ **PolicyCascade**: 6-layer tighten-only merge: built-in defaults → `.ta/policy.yaml` → `.ta/workflows/<name>.yaml` → `.ta/agents/<agent>.policy.yaml` → `.ta/constitutions/goal-<id>.yaml` → CLI overrides
+- ✅ **`.ta/policy.yaml`**: YAML-serializable config surface with `defaults`, `schemes`, `escalation`, `agents` sections
+- ✅ **PolicyContext**: Runtime context with `goal_id`, `session_id`, `agent_id`, `budget_spent`, `action_count`, `drift_score`; methods for `is_over_budget()`, `is_budget_warning()`, `is_drifting()`
+- ✅ **Security levels**: `SecurityLevel` enum with Ord: Open < Checkpoint (default) < Supervised < Strict
+- ✅ **PolicyEnforcement**: Warning < Error < Strict enforcement modes
+- ✅ **`evaluate_with_document()`**: New method on PolicyEngine layering document-level checks (scheme approval, agent overrides, drift escalation, action limits, budget limits, supervised mode)
+- ✅ **Cost tracking**: BudgetConfig with `max_tokens_per_goal` and `warn_at_percent` (default 80%)
+- ✅ **24 new tests** across document.rs (8), context.rs (6), cascade.rs (10) + 5 engine integration tests
+
+**Remaining (deferred)**:
+- Supervisor agent verification (needs agent runtime integration)
+- "TA supervises TA" pattern (needs supervisor config draft flow)
 
 ### v0.6.2 — Resource Mediation Trait (Layer 1)
 <!-- status: pending -->
 **Goal**: Generalize the staging pattern from files to any resource.
 
-- **New crate: `ta-mediation`**: `ResourceMediator` trait + shared types (`ProposedAction`, `StagedMutation`, `MutationPreview`, `ActionClassification`).
-- **`FsMediator`**: Adapts existing `FsConnector` + `StagingWorkspace` to implement `ResourceMediator`.
-- **Mediator registry**: `MediatorRegistry` in `ta-mcp-gateway` routes tool calls to the correct mediator by URI scheme.
-- **Config**: `.ta/config.yaml` → `mediators:` section to enable/disable per-scheme, link credentials.
-- **Output alignment**: `StagedMutation` maps to existing `DraftPackage.changes` (Artifacts, PatchSets, PendingActions).
+**Completed**:
+- ✅ **New crate: `ta-mediation`**: `ResourceMediator` trait with `scheme()`, `stage()`, `preview()`, `apply()`, `rollback()`, `classify()` methods
+- ✅ **Core types**: `ProposedAction`, `StagedMutation`, `MutationPreview`, `ActionClassification` (ReadOnly < StateChanging < Irreversible < ExternalSideEffect), `ApplyResult`
+- ✅ **`FsMediator`**: Implements `ResourceMediator` for `fs://` URIs — stage writes to staging dir, preview generates diffs, apply copies to source, rollback removes staged
+- ✅ **`MediatorRegistry`**: Routes URIs to mediators by scheme with `register()`, `get()`, `route()`, `schemes()`, `has_scheme()`
+- ✅ **22 ta-mediation tests** (5 mediator, 9 fs_mediator, 8 registry)
+
+**Remaining (deferred)**:
+- `.ta/config.yaml` mediators section (needs config system)
+- Output alignment with DraftPackage.changes (needs draft builder integration)
 
 ---
 

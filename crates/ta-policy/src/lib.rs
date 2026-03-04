@@ -25,8 +25,11 @@
 
 pub mod alignment;
 pub mod capability;
+pub mod cascade;
 pub mod compiler;
 pub mod constitution;
+pub mod context;
+pub mod document;
 pub mod engine;
 pub mod error;
 pub mod exemption;
@@ -36,10 +39,16 @@ pub use alignment::{
     ProposedAgent,
 };
 pub use capability::{CapabilityGrant, CapabilityManifest};
+pub use cascade::{CliOverrides, PolicyCascade};
 pub use compiler::{CompilerError, CompilerOptions, PolicyCompiler};
 pub use constitution::{
     AccessConstitution, ConstitutionEntry, ConstitutionError, ConstitutionStore,
     ConstitutionValidation, EnforcementMode,
+};
+pub use context::PolicyContext;
+pub use document::{
+    AgentPolicyOverride, AutoApproveConfig, BudgetConfig, EscalationConfig, PolicyDefaults,
+    PolicyDocument, PolicyEnforcement, SchemePolicy, SecurityLevel,
 };
 pub use engine::{EvaluationStep, EvaluationTrace, PolicyDecision, PolicyEngine, PolicyRequest};
 pub use error::PolicyError;

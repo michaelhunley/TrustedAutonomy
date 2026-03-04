@@ -23,4 +23,15 @@ pub enum PolicyError {
     /// The target URI contains path traversal sequences (security violation).
     #[error("path traversal detected in target URI: '{uri}'")]
     PathTraversal { uri: String },
+
+    /// I/O error reading a policy file.
+    #[error("I/O error at {path}: {source}")]
+    IoError {
+        path: String,
+        source: std::io::Error,
+    },
+
+    /// Configuration error in a policy YAML file.
+    #[error("policy config error: {0}")]
+    ConfigError(String),
 }
