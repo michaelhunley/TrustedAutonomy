@@ -1454,7 +1454,7 @@ Auto-capture on goal complete, auto-capture on rejection, context injection into
 - ✅ Tests: auto_capture_goal_complete, auto_capture_draft_rejection, context_injection_builds_markdown_section, cross_framework_recall, repeated_correction_auto_promotes, config_parsing_from_toml, config_defaults_when_no_section, disabled_capture_is_noop, slug_generation (9 new tests, 18 total in ta-memory)
 
 ### v0.5.7 — Semantic Memory Queries & Memory Dashboard
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Rich querying and visualization of the memory store. Enables users to audit what TA has learned, curate memory entries, and understand how memory influences agent behavior.
 
 **Completed**:
@@ -1488,7 +1488,7 @@ Auto-capture on goal complete, auto-capture on rejection, context injection into
 > TA is a governance infrastructure platform. v0.6 completes the substrate that projects (Virtual Office, Infra Ops) build on.
 
 ### v0.6.0 — Session & Human Control Plane (Layer 3)
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: The TA Session — a continuous conversation between the human and TA about a goal. TA is invisible to the agent framework. The agent works, exits, and TA captures the result.
 
 > **Key insight**: The human control plane is TA's most distinctive feature. The agent does not call TA — TA observes, diffs, and mediates. Session commands that agents cannot see are the safety boundary.
@@ -1510,7 +1510,7 @@ Auto-capture on goal complete, auto-capture on rejection, context injection into
 - Full agent subprocess lifecycle management (launch, signal, relaunch with feedback)
 
 ### v0.6.1 — Unified Policy Config (Layer 2)
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: All supervision configuration resolves to a single `PolicyDocument` loaded from `.ta/policy.yaml`.
 
 **Completed**:
@@ -1529,7 +1529,7 @@ Auto-capture on goal complete, auto-capture on rejection, context injection into
 - "TA supervises TA" pattern (needs supervisor config draft flow)
 
 ### v0.6.2 — Resource Mediation Trait (Layer 1)
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Generalize the staging pattern from files to any resource.
 
 **Completed**:
@@ -1542,6 +1542,89 @@ Auto-capture on goal complete, auto-capture on rejection, context injection into
 **Remaining (deferred)**:
 - `.ta/config.yaml` mediators section (needs config system)
 - Output alignment with DraftPackage.changes (needs draft builder integration)
+
+### v0.6.3 — Active Memory Injection & Project-Aware Key Schema
+<!-- status: pending -->
+**Goal**: Agents start smart. Instead of spending hours exploring the codebase, `ta run` injects structured architectural knowledge, conventions, negative paths, and project state from the memory store into the agent's context. Keys are project-aware (auto-detected from project type) and phase-tagged.
+
+> **Problem today**: Memory captures lifecycle events (goal completions, rejections) but not active project state. Agents launched via `ta run` still spend extensive time re-discovering crate maps, trait signatures, coding patterns, and module relationships that previous sessions already established.
+
+> **Design**: See `docs/ADR-active-memory-injection.md` (to be written from the design in claude memory). Full design covers key schema, auto-detection, injection logic, and RuVector default-on.
+
+#### Project-Aware Key Schema
+
+Keys use `{domain}:{topic}` where the domain is derived from auto-detected project type:
+
+| Project Type | Detection Signal | `module_map` key | `type_system` key |
+|---|---|---|---|
+| `rust-workspace` | `Cargo.toml` with `[workspace]` | `arch:crate-map` | `arch:trait:*` |
+| `typescript` | `package.json` + `tsconfig.json` | `arch:package-map` | `arch:interface:*` |
+| `python` | `pyproject.toml` or `setup.py` | `arch:module-map` | `arch:protocol:*` |
+| `go` | `go.mod` | `arch:package-map` | `arch:interface:*` |
+| `generic` | fallback | `arch:component-map` | `arch:type:*` |
+
+Configurable via `.ta/memory.toml` (optional — auto-detected defaults when absent):
+
+```toml
+[project]
+type = "rust-workspace"
+
+[key_domains]
+module_map = "crate-map"
+module = "crate"
+type_system = "trait"
+build_tool = "cargo"
+```
+
+#### New MemoryCategory Variants
+
+- `NegativePath` — approaches tried and failed, with context on why (prevents agents from repeating mistakes)
+- `State` — mutable project state snapshots (plan progress, dependency graphs, file structure)
+
+#### Phase Tagging
+
+New `phase_id: Option<String>` field on `MemoryEntry` and `StoreParams`. Abstract string (not coupled to semver) — works with any versioning scheme. Auto-populated from `GoalRun.plan_phase` during auto-capture.
+
+#### Enhanced Injection (`build_memory_context_section`)
+
+1. Filter by phase: entries matching current phase or global (`phase_id: None`)
+2. Category priority: Architecture > NegativePath > Convention > State > History
+3. Semantic ranking via RuVector (enabled by default)
+4. Structured markdown output (sections per category, not flat list)
+
+#### Enhanced Auto-Capture
+
+- **On goal completion (enhanced)**: Extract architectural knowledge — key types, file layout, module boundaries — not just change summary blob
+- **On draft rejection (enhanced)**: Create `neg:{phase}:{slug}` entries as negative paths
+- **New: On human guidance (enhanced)**: Auto-classify into domains using key mapping
+
+#### RuVector Default-On
+
+- `ruvector` feature flag enabled by default in `ta-memory/Cargo.toml`
+- `build_memory_context_section()` semantic search as primary path, tag-based fallback
+- Config toggle: `.ta/memory.toml` → `backend = "ruvector"` (default) or `backend = "fs"`
+
+#### Implementation Scope
+
+New/modified files:
+- `crates/ta-memory/src/store.rs` — `NegativePath`, `State` categories; `phase_id` on MemoryEntry/StoreParams
+- `crates/ta-memory/src/auto_capture.rs` — enhanced event handlers, architectural knowledge extraction
+- `crates/ta-memory/src/key_schema.rs` — NEW: project type detection, domain mapping, key resolution
+- `crates/ta-memory/src/lib.rs` — re-exports, ruvector default feature
+- `crates/ta-memory/Cargo.toml` — ruvector feature default-on
+- `apps/ta-cli/src/commands/run.rs` — enhanced injection with phase-aware queries, structured output
+- `apps/ta-cli/src/commands/context.rs` — `ta context schema` to inspect key mapping
+- `.ta/memory.toml` — new config file format (optional, auto-detected defaults)
+
+#### Tests (minimum 8)
+- Project type auto-detection (Rust workspace, TypeScript, Python, fallback)
+- Key schema resolution with custom `.ta/memory.toml`
+- Phase-filtered injection (current phase + global entries)
+- Category-prioritized injection order
+- NegativePath entry creation from draft rejection
+- Architectural knowledge extraction from goal completion
+- RuVector semantic search as primary injection path
+- Backward compatibility (old entries without phase_id work)
 
 ---
 

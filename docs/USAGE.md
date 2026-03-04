@@ -81,6 +81,53 @@ ta draft apply <draft-id>
 
 The agent never touched your real files. If you reject the draft, nothing changes.
 
+### Typical session workflow
+
+Most TA usage follows this pattern. Whether you're implementing a feature, fixing a bug, or refactoring, the steps are the same:
+
+```bash
+# 1. Start a goal linked to a plan phase (if you have PLAN.md)
+ta run "Implement credential broker" --source . --phase v0.5.0
+
+# 2. Wait for the agent to finish (or use --macro for mid-session review)
+
+# 3. Review what it did
+ta draft list                    # find the draft
+ta draft view <id>               # see changes + rationale per file
+
+# 4. Three paths:
+#    a) Accept and apply
+ta draft approve <id>
+ta draft apply <id> --git-commit
+
+#    b) Reject and try again with feedback
+ta draft deny <id> --reason "Wrong approach -- use JWT not sessions"
+ta run "Fix: use JWT auth" --source . --follow-up
+
+#    c) Partially accept
+ta draft apply <id> --approve "src/**" --reject "config.toml"
+ta run "Fix config.toml per review" --source . --follow-up
+```
+
+**For complex work** (multiple logical units), use macro mode so the agent can submit drafts mid-session and you review inline:
+
+```bash
+ta run "Build the v0.7 features" --source . --macro --phase v0.7.0
+```
+
+**For iterative refinement** (CI failures, review feedback), follow up without losing context:
+
+```bash
+ta run "Fix clippy warnings" --source . --follow-up
+```
+
+**To check what's next** in your plan:
+
+```bash
+ta plan next                     # shows next pending phase + suggested command
+ta plan status                   # progress summary
+```
+
 ---
 
 ## Core Concepts
@@ -1161,7 +1208,7 @@ The `MediatorRegistry` routes actions to the correct mediator by URI scheme. Fut
 
 ### What's Done
 
-TA has a working end-to-end workflow: staging isolation, agent wrapping, draft review with per-artifact approval, follow-up iterations, macro goals with inner-loop review, interactive sessions, plan tracking, release pipelines, behavioral drift detection, access constitutions, alignment profiles, decision observability, credential management, MCP tool call interception, web review UI, webhook review channels, persistent context memory, session lifecycle management, unified policy configuration, and resource mediation.
+TA has a working end-to-end workflow: staging isolation, agent wrapping, draft review with per-artifact approval, follow-up iterations, macro goals with inner-loop review, interactive sessions, plan tracking, release pipelines, behavioral drift detection, access constitutions, alignment profiles, decision observability, credential management, MCP tool call interception, web review UI, webhook review channels, persistent context memory with semantic search, session lifecycle management, unified policy configuration (6-layer cascade), and resource mediation (extensible by URI scheme).
 
 ### Phase Status
 
@@ -1212,6 +1259,7 @@ TA has a working end-to-end workflow: staging isolation, agent wrapping, draft r
 | v0.6.0 | Session & human control plane | Done |
 | v0.6.1 | Unified policy config | Done |
 | v0.6.2 | Resource mediation trait | Done |
+| v0.6.3 | Active memory injection (project-aware keys, phase tagging, smart context) | Pending |
 
 ### v0.6 -- Platform Substrate
 
@@ -1220,6 +1268,7 @@ TA has a working end-to-end workflow: staging isolation, agent wrapping, draft r
 | v0.6.0 | Session & human control plane (TaSession, SessionManager, CLI commands) | Done |
 | v0.6.1 | Unified policy config (PolicyDocument, PolicyCascade, PolicyContext) | Done |
 | v0.6.2 | Resource mediation trait (ResourceMediator, FsMediator, MediatorRegistry) | Done |
+| v0.6.3 | Active memory injection (project-aware keys, smart context injection) | Pending |
 
 ### What's Next (v0.7+)
 

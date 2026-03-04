@@ -42,14 +42,18 @@ Plan progress:
 - [x] Phase v0.4.3 — Access Constitutions
 - [x] Phase v0.4.4 — Interactive Session Completion
 - [x] Phase v0.4.5 — CLI UX Polish
-- [ ] Phase v0.5.0 — Credential Broker & Identity Abstraction
-- [ ] Phase v0.5.1 — MCP Tool Call Interception
-- [ ] Phase v0.5.2 — Minimal Web Review UI
-- [ ] Phase v0.5.3 — Additional ReviewChannel Adapters
-- [ ] Phase v0.5.4 — Context Memory Store (ruvector integration
-- [ ] Phase v0.6.0 — Session & Human Control Plane
-- [ ] Phase v0.6.1 — Unified Policy Config
-- [ ] Phase v0.6.2 — Resource Mediation Trait
+- [x] Phase v0.5.0 — Credential Broker & Identity Abstraction
+- [x] Phase v0.5.1 — MCP Tool Call Interception
+- [x] Phase v0.5.2 — Minimal Web Review UI
+- [x] Phase v0.5.3 — Additional ReviewChannel Adapters
+- [x] Phase v0.5.4 — Context Memory Store (ruvector integration)
+- [x] Phase v0.5.5 — RuVector Memory Backend
+- [x] Phase v0.5.6 — Framework-Agnostic Agent State
+- [x] Phase v0.5.7 — Semantic Memory Queries & Memory Dashboard
+- [x] Phase v0.6.0 — Session & Human Control Plane
+- [x] Phase v0.6.1 — Unified Policy Config
+- [x] Phase v0.6.2 — Resource Mediation Trait
+- [ ] Phase v0.6.3 — Active Memory Injection & Project-Aware Key Schema
 - [ ] Phase v0.7.0 — Channel Registry
 - [ ] Phase v0.7.1 — API Mediator
 - [ ] Phase v0.7.2 — Agent-Guided Setup
@@ -223,7 +227,7 @@ This applies to both manual work and TA-mediated goals. When `ta pr apply --git-
 
 ## Current State
 
-- **Current version**: `0.5.7-alpha`
+- **Current version**: `0.6.0-alpha`
 - See **PLAN.md** for the canonical development roadmap with per-phase status
 - `ta plan list` / `ta plan status` show current progress
 - Goals can link to plan phases: `ta run "title" --source . --phase 4b`
