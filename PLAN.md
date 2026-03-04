@@ -1489,24 +1489,27 @@ Auto-capture on goal complete, auto-capture on rejection, context injection into
 
 ### v0.6.0 — Session & Human Control Plane (Layer 3)
 <!-- status: pending -->
-**Goal**: The TA Session — an ongoing interactive session between the human and TA that the agent framework does not see or control. Fluid sessions as the default; checkpoint mode opt-in.
+**Goal**: The TA Session — a continuous conversation between the human and TA about a goal. TA is invisible to the agent framework. The agent works, exits, and TA captures the result.
 
-> **Key insight**: The human control plane is TA's most distinctive feature. Session commands that agents cannot see are the safety boundary that distinguishes TA from running agents directly.
+> **Key insight**: The human control plane is TA's most distinctive feature. The agent does not call TA — TA observes, diffs, and mediates. Session commands that agents cannot see are the safety boundary.
 
-- **`TaSession`**: Core session object tracking `active_goals` (goal stack), `active_agents` (multiple frameworks simultaneously), `pending_reviews`, and `event_stream` (broadcast channel).
-- **New crate: `ta-session`**: Session lifecycle, event streaming, goal stacking. Depends on `ta-goal`, `ta-changeset`.
+> **Design principle**: TA is a Rust daemon, not an LLM. It launches agent frameworks as subprocesses, mediates resource access, and builds drafts from workspace diffs when the agent exits.
+
+- **`TaSession`**: Core session object tracking `current_goal`, `conversation_history` (human↔agent thread across iterations), `pending_review`, and `event_stream`.
+- **New crate: `ta-session`**: Session lifecycle, conversational continuity, event streaming. Depends on `ta-goal`, `ta-changeset`, `ta-memory`.
+- **TA is invisible to agents**: Agent works in staging workspace, writes `change_summary.json` (with rationale), and exits. TA diffs and builds draft. No TA MCP calls from agent.
+- **Conversational continuity**: When the human rejects a draft with feedback, TA relaunches the agent with: original goal + previous work context + human feedback + memory. Feels like one conversation to the human. No IDs to track.
 - **Human control plane commands** (via TA CLI, invisible to agents):
   - `ta session status` — what the agent is doing right now
-  - `ta session guide "..."` — inject guidance (agent sees it as context update)
   - `ta session pause/resume` — pause/resume agent execution
-  - `ta session switch <agent>` — swap agent framework mid-session
-  - `ta session stack <goal>` — queue a new goal onto the current session
-- **SessionEvent** stream: `FileChanged`, `ActionIntercepted`, `DraftReady`, `AgentOutput`, `AgentWaiting`, `GoalCompleted`, `ReviewDecision`. Published to all connected IO channels.
-- **Goal stacking**: Queue goals while the agent works. Goals can use different agent frameworks. When current goal completes/pauses, next starts.
-- **Agent framework intermingling**: A single session can run Claude Code + Codex + Claude Flow simultaneously, sharing memory, credentials, and policy.
-- **Dual MCP endpoints**: Human control plane endpoint (session commands) vs. agent gateway endpoint (tool calls). Agent never sees session commands.
-- **Fluid mode (default)**: Agent works continuously, human reviews in real-time, injects guidance anytime.
-- **Checkpoint mode (opt-in)**: `--checkpoint` flag for batch/CI workflows.
+  - `ta draft view` — review latest draft (no ID needed)
+  - `ta draft approve` / `ta draft reject "reason"` — review decisions
+  - `ta audit trail` — what happened so far
+- **SessionEvent** stream: `FileChanged`, `ActionIntercepted`, `DraftReady`, `GoalCompleted`, `ReviewDecision`. Published to all connected IO channels.
+- **Orchestrators as agent frameworks**: Claude Flow, LangGraph, CrewAI are launched as subprocesses like any other agent. TA doesn't know or care about internal multi-agent coordination — it mediates resource access through the MCP gateway and diffs the result.
+- **Change rationale**: `change_summary.json` gains a `rationale` field (approach chosen, alternatives considered, tradeoffs) shown in `ta draft view`.
+- **One session, one agent, one goal**: Simple lifecycle. Follow-up goals (including switching to a different framework) start new sessions that inherit memory and context.
+- **Checkpoint mode (opt-in)**: `--checkpoint` flag for batch/CI workflows where the human isn't watching.
 
 ### v0.6.1 — Unified Policy Config (Layer 2)
 <!-- status: pending -->
