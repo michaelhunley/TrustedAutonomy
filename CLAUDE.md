@@ -59,6 +59,7 @@ Plan progress:
 - [ ] Phase v0.7.2 — Agent-Guided Setup
 - [ ] Phase v0.7.3 — Project Template Repository & `ta init`
 - [ ] Phase v0.7.4 — Memory & Config Cleanup
+- [ ] Phase v0.7.5 — Interactive Session Fixes & Cross-Platform Release
 - [ ] Phase v0.8.0 — Event System & Subscription API (Layer 3 → projects
 - [ ] Phase v0.8.1 — Community Memory
 - [ ] Phase v0.9.0 — Distribution & Packaging
@@ -236,6 +237,8 @@ Plan progress:
 - [ ] Phase v0.7.1 — API Mediator
 - [ ] Phase v0.7.2 — Agent-Guided Setup
 - [ ] Phase v0.7.3 — Project Template Repository & `ta init`
+- [ ] Phase v0.7.4 — Memory & Config Cleanup
+- [ ] Phase v0.7.5 — Interactive Session Fixes & Cross-Platform Release
 - [ ] Phase v0.8.0 — Event System & Subscription API
 - [ ] Phase v0.8.1 — Community Memory
 - [ ] Phase v0.9.0 — Distribution & Packaging
