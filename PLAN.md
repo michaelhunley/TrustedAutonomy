@@ -1784,7 +1784,7 @@ New/modified files:
 - ✅ Version bumped to `0.7.5-alpha`
 
 ### v0.7.6 — Interactive Developer Loop (`ta dev`)
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Ship `ta dev` — a local interactive channel where an LLM agent orchestrates the development loop using TA's MCP tools. The agent reads the plan, suggests next goals, launches implementation agents, handles draft review, and cuts releases — all from one persistent session.
 
 **Architecture**: `ta dev` is the **local terminal channel** — the same pattern as Slack, Discord, or a web app. It uses a reusable `agents/dev-loop.yaml` config that any channel can consume. `ta dev` is the convenience CLI entry point that skips staging (orchestration, not implementation), auto-selects `--macro --interactive`, and uses the built-in dev-loop agent config.
@@ -1821,6 +1821,13 @@ New/modified files:
 - Remote channels (Slack, web) — those are projects on top
 - New MCP tools — uses existing ta_plan, ta_goal, ta_draft, ta_context
 - Changes to goal lifecycle or draft workflow — orchestration only
+
+#### Completed
+- ✅ `ta dev` CLI command with `--agent` flag, plan auto-read on startup, no staging overlay
+- ✅ `agents/dev-loop.yaml` orchestration agent config with tool permissions and alignment profile
+- ✅ Plan-aware prompt generation (plan summary, pending phase highlight, drafts summary)
+- ✅ Config loading from YAML (project → user → shipped → fallback)
+- ✅ 5 tests: prompt generation, plan summary, drafts summary, config fallback
 
 ### v0.7.7 — Agent Framework Registry & Setup Integration
 <!-- status: pending -->

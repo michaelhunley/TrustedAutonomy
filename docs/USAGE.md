@@ -371,6 +371,33 @@ ta run "Build the v0.7 features" --source . --macro --interactive --phase v0.7.0
 
 You see the agent working in real-time, can inject guidance, and review each logical unit of change as it's submitted. This is the recommended mode for implementing plan phases.
 
+### Interactive Developer Loop (`ta dev`)
+
+`ta dev` launches an orchestration agent that coordinates the entire development loop from a single persistent session. Unlike `ta run`, the dev agent does NOT write code — it reads the plan, suggests goals, launches implementation agents, reviews drafts, and manages releases.
+
+```bash
+# Start the dev loop (uses built-in dev-loop agent config)
+ta dev
+
+# Use a custom agent for orchestration
+ta dev --agent codex
+```
+
+The dev agent automatically:
+- Reads PLAN.md and shows progress on startup
+- Highlights the next pending phase
+- Lists any pending drafts awaiting review
+
+You interact with it using natural language:
+- "what's next" — show next pending phase
+- "run v0.7.6" — launch a sub-goal for that phase
+- "show drafts" — list drafts pending review
+- "approve abc123" — approve a draft
+- "release" — run the release pipeline
+- "context search X" — search project memory
+
+The dev-loop agent config lives at `agents/dev-loop.yaml` and can be overridden per-project (`.ta/agents/dev-loop.yaml`) or per-user (`~/.config/ta/agents/dev-loop.yaml`).
+
 ### Plan-Linked Goals
 
 Link goals to `PLAN.md` phases for automatic tracking:

@@ -117,6 +117,13 @@ enum Commands {
         #[command(subcommand)]
         command: commands::credentials::CredentialsCommands,
     },
+    /// Interactive developer loop — orchestrate plan execution, goal launches,
+    /// draft review, and releases from one persistent session.
+    Dev {
+        /// Agent system to use for orchestration (defaults to dev-loop config).
+        #[arg(long)]
+        agent: Option<String>,
+    },
     /// Interactive setup wizard for TA configuration.
     Setup {
         #[command(subcommand)]
@@ -227,6 +234,7 @@ fn main() -> anyhow::Result<()> {
             *macro_goal,
             resume.as_deref(),
         ),
+        Commands::Dev { agent } => commands::dev::execute(&config, &project_root, agent.as_deref()),
         Commands::Session { command } => commands::session::execute(command, &config),
         Commands::Plan { command } => commands::plan::execute(command, &config),
         Commands::Context { command } => commands::context::execute(command, &config),
