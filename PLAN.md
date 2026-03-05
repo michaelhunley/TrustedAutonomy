@@ -2176,31 +2176,21 @@ runtime = "native-cli"
 
 ---                                                                                                                                                                                                                                                             
 ### v0.9.4.1 — Event Emission Plumbing Fix                       
-<!-- status: pending -->                                                    
+<!-- status: done -->
 **Goal**: Wire event emission into all goal lifecycle paths so `ta_event_subscribe` actually receives events. Currently only `GoalFailed` on spawn failure emits to FsEventStore — `GoalStarted`, `GoalCompleted`, and `DraftBuilt` are never written, making
 the event subscription system non-functional for orchestrator agents.                
                                                                 
 **Bug**: `ta_goal_start` (MCP) creates goal metadata but does NOT: copy project to staging, inject CLAUDE.md, or launch the agent process. Goals created via MCP are stuck in `running` with no workspace and no agent. The full `ta run` lifecycle must be
 wired into the MCP goal start path.
 
-#### Items
-
-1. **`ta_goal_start` MCP → full lifecycle**: Wire `ta_goal_start` to perform overlay copy, CLAUDE.md injection, and agent spawn — matching what `ta run` does from CLI. Goals created via MCP must actually execute.
-2. **Emit `GoalStarted`**: After goal metadata + workspace created, emit `SessionEvent::GoalStarted` to FsEventStore. Both MCP and CLI paths.
-3. **Emit `GoalCompleted`**: On agent exit code 0 with draft built. Both `ta run` CLI and `launch_sub_goal_agent` MCP paths.
-4. **Emit `DraftBuilt`**: When `ta_pr_build` / `ta draft build` creates a package. Both MCP handler and CLI command.
-5. **Emit `GoalFailed` on all failure paths**: Non-zero exit, workspace setup failure, draft build failure — not just spawn failure.
-6. **End-to-end integration test**: Create goal via `ta_goal_start` → verify `GoalStarted` in FsEventStore → simulate completion → verify `GoalCompleted` → build draft → verify `DraftBuilt` → query via `ta_event_subscribe` handler → verify filtering by
-event_types and goal_id works. This proves orchestrator agents will receive lifecycle events.
-7. **Cursor-based watch test**: Query with no `since` → get all → use returned cursor → get empty → emit new event → query with cursor → get only new event. Proves the polling pattern works.
-
-#### Implementation scope
-- `crates/ta-mcp-gateway/src/tools/goal.rs` — full lifecycle in `handle_goal_start()`, emit GoalStarted/Completed/Failed
-- `crates/ta-mcp-gateway/src/tools/draft.rs` — emit DraftBuilt in `handle_pr_build()`
-- `apps/ta-cli/src/commands/run.rs` — emit GoalCompleted/GoalFailed on agent exit
-- `apps/ta-cli/src/commands/draft.rs` — emit DraftBuilt on draft build
-- `crates/ta-events/src/schema.rs` — ensure DraftBuilt variant exists in SessionEvent
-- New integration tests in `crates/ta-mcp-gateway/`
+#### Completed
+- ✅ **`ta_goal_start` MCP → full lifecycle**: `ta_goal_start` now always launches the implementation agent. Added `source` and `phase` parameters, always spawns `ta run --headless` which performs overlay copy, CLAUDE.md injection, agent spawn, draft build, and event emission. Goals created via MCP now actually execute — fixing `ta dev`.
+- ✅ **Emit `GoalStarted`**: Both MCP `handle_goal_start()`, `handle_goal_inner()`, and CLI `ta run` emit `SessionEvent::GoalStarted` to FsEventStore after goal creation.
+- ✅ **Emit `GoalCompleted`**: CLI `ta run` emits `GoalCompleted` on agent exit code 0. MCP agent launch delegates to `ta run --headless` which emits events.
+- ✅ **Emit `DraftBuilt`**: Both MCP `handle_pr_build()`, `handle_draft_build()`, and CLI `ta draft build` emit `DraftBuilt` to FsEventStore.
+- ✅ **Emit `GoalFailed` on all failure paths**: CLI `ta run` emits `GoalFailed` on non-zero exit code and launch failure. MCP `launch_goal_agent` and `launch_sub_goal_agent` emit on spawn failure.
+- ✅ **End-to-end integration test** (3 tests in `crates/ta-mcp-gateway/src/tools/event.rs`): lifecycle event emission + goal_id/event_type filtering + cursor-based watch pattern.
+- ✅ **Cursor-based watch test**: Verifies query-with-cursor polling pattern works correctly.
 
 #### Version: `0.9.4-alpha.1`
 

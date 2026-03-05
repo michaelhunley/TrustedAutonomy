@@ -445,6 +445,8 @@ You interact with it using natural language:
 - "release" — run the release pipeline
 - "context search X" — search project memory
 
+When the orchestrator launches a goal via the MCP `ta_goal_start` tool, TA spawns `ta run --headless` as a background process. This performs the full lifecycle: overlay workspace copy, CLAUDE.md injection, agent spawn, draft build on exit, and event emission. The orchestrator can then poll for completion using `ta_event_subscribe`.
+
 The dev-loop agent config lives at `agents/dev-loop.yaml` and can be overridden per-project (`.ta/agents/dev-loop.yaml`) or per-user (`~/.config/ta/agents/dev-loop.yaml`).
 
 ### Plan-Linked Goals
@@ -1216,7 +1218,7 @@ ta events listen --goal <goal-id>
 ta events listen --limit 50
 ```
 
-Events are persisted to `.ta/events/<YYYY-MM-DD>.jsonl` files, rotated daily.
+Events are persisted to `.ta/events/<YYYY-MM-DD>.jsonl` files, rotated daily. Both CLI commands (`ta run`, `ta draft build`) and MCP tool handlers emit events to the same store, so orchestrator agents see a unified event stream regardless of how goals were created.
 
 #### Event types
 

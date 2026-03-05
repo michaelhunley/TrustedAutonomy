@@ -51,6 +51,13 @@ pub struct GoalStartParams {
     /// Agent identifier. Defaults to "claude-code" if not provided.
     #[serde(default = "default_agent_id")]
     pub agent_id: String,
+    /// Source directory to use for the overlay workspace. Defaults to the
+    /// project root. Required for launch mode to create a proper staging copy.
+    #[serde(default)]
+    pub source: Option<String>,
+    /// Plan phase ID to link this goal to (e.g., "v0.9.4.1").
+    #[serde(default)]
+    pub phase: Option<String>,
 }
 
 fn default_agent_id() -> String {
@@ -464,7 +471,7 @@ impl TaGatewayServer {
     // ── Goal tools ───────────────────────────────────────────
 
     #[tool(
-        description = "Start a new goal run. Creates a workspace, issues a capability manifest, and transitions to Running state. Returns the goal_run_id to use with other tools."
+        description = "Start a new goal run and launch an implementation agent. Performs the full lifecycle: creates an overlay workspace copy, injects CLAUDE.md context, spawns the agent in the background, and emits lifecycle events. The agent runs headlessly and builds a draft on exit. Track progress via ta_event_subscribe. Returns the goal_run_id."
     )]
     fn ta_goal_start(
         &self,

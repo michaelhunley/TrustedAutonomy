@@ -995,6 +995,21 @@ pub(crate) fn build_package(
     goal_store.save(&goal)?;
     goal_store.transition(goal.goal_run_id, GoalRunState::PrReady)?;
 
+    // Emit DraftBuilt event to FsEventStore (v0.9.4.1).
+    {
+        use ta_events::{EventEnvelope, EventStore, FsEventStore, SessionEvent};
+        let events_dir = config.workspace_root.join(".ta").join("events");
+        let event_store = FsEventStore::new(&events_dir);
+        let event = SessionEvent::DraftBuilt {
+            goal_id: goal.goal_run_id,
+            draft_id: package_id,
+            artifact_count: pkg.changes.artifacts.len(),
+        };
+        if let Err(e) = event_store.append(&EventEnvelope::new(event)) {
+            tracing::warn!("Failed to persist DraftBuilt event: {}", e);
+        }
+    }
+
     println!("draft package built: {}", package_id);
     println!("  Goal:    {} ({})", goal.title, goal_id);
     println!("  Changes: {} file(s)", pkg.changes.artifacts.len());

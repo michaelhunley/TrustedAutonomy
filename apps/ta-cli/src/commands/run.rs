@@ -309,6 +309,22 @@ pub fn execute(
         inject_mcp_server_config(&staging_path)?;
     }
 
+    // Emit GoalStarted event to FsEventStore (v0.9.4.1).
+    {
+        use ta_events::{EventEnvelope, EventStore, FsEventStore, SessionEvent};
+        let events_dir = config.workspace_root.join(".ta").join("events");
+        let event_store = FsEventStore::new(&events_dir);
+        let event = SessionEvent::GoalStarted {
+            goal_id: goal.goal_run_id,
+            title: title.to_string(),
+            agent_id: agent.to_string(),
+            phase: goal.plan_phase.clone(),
+        };
+        if let Err(e) = event_store.append(&EventEnvelope::new(event)) {
+            tracing::warn!("Failed to persist GoalStarted event: {}", e);
+        }
+    }
+
     // Build the prompt string.
     let prompt = if objective.is_empty() {
         format!("Implement: {}", title)
@@ -433,6 +449,9 @@ pub fn execute(
         launch_agent(&agent_config, &staging_path, &prompt).map(|exit| (exit, Vec::new()))
     };
 
+    // Track the start time to compute duration for GoalCompleted.
+    let agent_start = std::time::Instant::now();
+
     match launch_result {
         Ok((exit, guidance_log)) => {
             if exit.success() {
@@ -442,6 +461,30 @@ pub fn execute(
                     "\nAgent exited with status {}. Building draft anyway...",
                     exit
                 );
+            }
+
+            // Emit GoalCompleted or GoalFailed based on exit code (v0.9.4.1).
+            {
+                use ta_events::{EventEnvelope, EventStore, FsEventStore, SessionEvent};
+                let events_dir = config.workspace_root.join(".ta").join("events");
+                let event_store = FsEventStore::new(&events_dir);
+                let duration = agent_start.elapsed().as_secs();
+                let event = if exit.success() {
+                    SessionEvent::GoalCompleted {
+                        goal_id: goal.goal_run_id,
+                        title: title.to_string(),
+                        duration_secs: Some(duration),
+                    }
+                } else {
+                    SessionEvent::GoalFailed {
+                        goal_id: goal.goal_run_id,
+                        error: format!("Agent exited with status {}", exit),
+                        exit_code: exit.code(),
+                    }
+                };
+                if let Err(e) = event_store.append(&EventEnvelope::new(event)) {
+                    tracing::warn!("Failed to persist goal exit event: {}", e);
+                }
             }
 
             // Log guidance interactions to session if any.
@@ -456,6 +499,21 @@ pub fn execute(
             }
         }
         Err(e) => {
+            // Emit GoalFailed event on launch failure (v0.9.4.1).
+            {
+                use ta_events::{EventEnvelope, EventStore, FsEventStore, SessionEvent};
+                let events_dir = config.workspace_root.join(".ta").join("events");
+                let event_store = FsEventStore::new(&events_dir);
+                let event = SessionEvent::GoalFailed {
+                    goal_id: goal.goal_run_id,
+                    error: format!("Failed to launch agent: {}", e),
+                    exit_code: None,
+                };
+                if let Err(err) = event_store.append(&EventEnvelope::new(event)) {
+                    tracing::warn!("Failed to persist GoalFailed event: {}", err);
+                }
+            }
+
             // Mark interactive session as aborted on launch failure.
             if let Some((ref store, ref mut session)) = session_store {
                 session.log_message("ta-system", &format!("Agent launch failed: {}", e));
@@ -1131,7 +1189,8 @@ pub(crate) fn inject_mcp_server_config(staging_path: &Path) -> anyhow::Result<()
         "command": ta_binary,
         "args": ["serve"],
         "env": {
-            "TA_PROJECT_ROOT": staging_path.display().to_string()
+            "TA_PROJECT_ROOT": staging_path.display().to_string(),
+            "TA_IS_STAGING": "1"
         }
     });
 

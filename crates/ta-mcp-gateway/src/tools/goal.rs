@@ -17,16 +17,86 @@ pub fn handle_goal_start(
     let mut state = state
         .lock()
         .map_err(|e| McpError::internal_error(format!("lock poisoned: {}", e), None))?;
+
+    // Re-entrancy guard: reject if MCP server is running inside a staging workspace.
+    // This prevents agents spawned by ta_goal_start from creating nested goals,
+    // which would fight over the same work or create infinite loops.
+    // Uses config.is_staging (set via TA_IS_STAGING env var) rather than path
+    // sniffing, so it works with VFS, remote workspaces, and non-standard layouts.
+    if state.config.is_staging {
+        return Err(McpError::invalid_params(
+            format!(
+                "ta_goal_start called from inside a staging workspace ({}). \
+                 This is a re-entrant call — the implementation agent should not \
+                 create new goals from within a goal's workspace. Use ta_goal_inner \
+                 for sub-goals within a macro session instead.",
+                state.config.workspace_root.display()
+            ),
+            None,
+        ));
+    }
+
     let goal_run = state
         .start_goal(&params.title, &params.objective, &params.agent_id)
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
+    let goal_id = goal_run.goal_run_id;
+
+    // Set source_dir (defaults to workspace root) and plan_phase on the goal.
+    if let Ok(Some(mut g)) = state.goal_store.get(goal_id) {
+        g.source_dir = Some(
+            params
+                .source
+                .as_ref()
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| state.config.workspace_root.clone()),
+        );
+        g.plan_phase = params.phase.clone();
+        let _ = state.goal_store.save(&g);
+    }
+
+    // Emit GoalStarted event to FsEventStore (v0.9.4.1).
+    {
+        use ta_events::{EventEnvelope, EventStore, FsEventStore};
+        let events_dir = state.config.workspace_root.join(".ta").join("events");
+        let event_store = FsEventStore::new(&events_dir);
+        let event = ta_events::SessionEvent::GoalStarted {
+            goal_id,
+            title: goal_run.title.clone(),
+            agent_id: goal_run.agent_id.clone(),
+            phase: params.phase.clone(),
+        };
+        if let Err(e) = event_store.append(&EventEnvelope::new(event)) {
+            tracing::warn!("Failed to persist GoalStarted event: {}", e);
+        }
+    }
+
+    // Launch the implementation agent as a background process.
+    // Spawns `ta run --headless` for the full lifecycle: overlay copy,
+    // CLAUDE.md injection, agent spawn, draft build on exit.
+    let source_dir = params
+        .source
+        .clone()
+        .unwrap_or_else(|| state.config.workspace_root.display().to_string());
+
+    let launched = launch_goal_agent(
+        &state,
+        goal_id,
+        &params.title,
+        &params.objective,
+        &params.agent_id,
+        &source_dir,
+        params.phase.as_deref(),
+    );
+
     let response = serde_json::json!({
-        "goal_run_id": goal_run.goal_run_id.to_string(),
+        "goal_run_id": goal_id.to_string(),
         "state": goal_run.state.to_string(),
         "title": goal_run.title,
         "agent_id": goal_run.agent_id,
         "manifest_id": goal_run.manifest_id.to_string(),
+        "launched": launched,
+        "phase": params.phase,
     });
     Ok(CallToolResult::success(vec![Content::json(response)
         .map_err(|e| {
@@ -270,6 +340,76 @@ pub fn handle_goal_inner(
             ),
             None,
         )),
+    }
+}
+
+/// Launch a goal's implementation agent as a background process (v0.9.4.1).
+///
+/// Used by `ta_goal_start` with `launch:true`. Spawns `ta run --headless`
+/// which performs the full lifecycle: overlay copy, CLAUDE.md injection,
+/// agent spawn, draft build on exit, and event emission.
+///
+/// Emits GoalFailed to FsEventStore if the spawn itself fails.
+fn launch_goal_agent(
+    state: &GatewayState,
+    goal_id: uuid::Uuid,
+    title: &str,
+    objective: &str,
+    agent_id: &str,
+    source_dir: &str,
+    phase: Option<&str>,
+) -> bool {
+    let mut cmd = std::process::Command::new("ta");
+    cmd.arg("run")
+        .arg(title)
+        .arg("--source")
+        .arg(source_dir)
+        .arg("--agent")
+        .arg(agent_id)
+        .arg("--objective")
+        .arg(objective)
+        .arg("--headless");
+
+    if let Some(phase) = phase {
+        cmd.arg("--phase").arg(phase);
+    }
+
+    cmd.stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+
+    match cmd.spawn() {
+        Ok(_child) => {
+            tracing::info!("Launched headless agent for goal {} ({})", goal_id, title);
+            true
+        }
+        Err(e) => {
+            tracing::warn!("Failed to launch agent for goal {}: {}", goal_id, e);
+            state
+                .event_dispatcher
+                .dispatch(&TaEvent::goal_failed(goal_id, &e.to_string(), None));
+
+            if let Ok(Some(mut g)) = state.goal_store.get(goal_id) {
+                let _ = g.transition(GoalRunState::Failed {
+                    reason: format!("agent launch failed: {}", e),
+                });
+                let _ = state.goal_store.save(&g);
+            }
+
+            // Persist GoalFailed to file-based event store.
+            {
+                use ta_events::{EventEnvelope, EventStore, FsEventStore};
+                let events_dir = state.config.workspace_root.join(".ta").join("events");
+                let event_store = FsEventStore::new(&events_dir);
+                let event = ta_events::SessionEvent::GoalFailed {
+                    goal_id,
+                    error: e.to_string(),
+                    exit_code: None,
+                };
+                let _ = event_store.append(&EventEnvelope::new(event));
+            }
+            false
+        }
     }
 }
 
