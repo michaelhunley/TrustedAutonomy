@@ -1,0 +1,53 @@
+# Dev Loop — Orchestration agent config for `ta dev`.
+#
+# This agent coordinates the development loop: reads the plan, suggests next
+# goals, launches implementation agents, handles draft review, and manages
+# releases. It does NOT write code directly.
+#
+# Reusable by any channel (Slack, web app, etc.) via the ChannelRegistry.
+# `ta dev` is the convenience CLI entry point.
+
+name: dev-loop
+description: "Interactive development loop orchestrator — coordinates plan execution, goal launches, draft review, and releases"
+command: claude
+args_template:
+  - "--allowedTools"
+  - "mcp__ta__ta_plan,mcp__ta__ta_goal,mcp__ta__ta_draft,mcp__ta__ta_context,mcp__ta__ta_release,Read,Grep,Glob,WebFetch,WebSearch"
+  - "-p"
+  - "{prompt}"
+injects_context_file: false
+injects_settings: false
+pre_launch: null
+env: {}
+
+# The dev-loop agent is an orchestrator — it reads the project but does not
+# write files directly. Implementation happens in sub-goals with their own
+# staging workspaces.
+alignment:
+  principal: "project-owner"
+  autonomy_envelope:
+    bounded_actions:
+      - "fs_read"
+      - "plan_read"
+      - "plan_update"
+      - "goal_start"
+      - "draft_review"
+      - "release_run"
+      - "context_read"
+    escalation_triggers:
+      - "goal_start"
+      - "release_run"
+    forbidden_actions:
+      - "fs_write_patch"
+      - "fs_apply"
+      - "network_external"
+      - "credential_access"
+  constitution: "default-v1"
+  coordination:
+    allowed_collaborators:
+      - "claude-code"
+      - "codex"
+      - "claude-flow"
+    shared_resources:
+      - "PLAN.md"
+      - ".ta/**"
