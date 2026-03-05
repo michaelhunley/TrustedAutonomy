@@ -13,7 +13,9 @@ use std::path::Path;
 use ta_mcp_gateway::GatewayConfig;
 
 use super::plan;
-use super::run::build_memory_context_section_for_inject;
+use super::run::{
+    build_memory_context_section_for_inject, inject_mcp_server_config, restore_mcp_server_config,
+};
 
 /// Minimal agent config for the dev-loop orchestrator.
 #[derive(serde::Deserialize, Clone, Debug)]
@@ -56,6 +58,20 @@ fn build_dev_prompt(project_root: &Path, config: &GatewayConfig) -> String {
     prompt.push_str("3. When an implementation agent finishes, review its draft\n");
     prompt.push_str("4. Approve good work, deny and re-launch if needed\n");
     prompt.push_str("5. Cut releases when milestones are reached\n\n");
+
+    prompt.push_str("## Security Boundaries\n\n");
+    prompt.push_str(
+        "You are a **read-only orchestrator**. You MUST NOT write files, execute shell commands, \
+         or make outbound change operations. Specifically:\n\n",
+    );
+    prompt.push_str("- **No file writes**: Do not use Write, Edit, NotebookEdit, or any tool that modifies files\n");
+    prompt.push_str("- **No shell access**: Do not use Bash or any shell execution tool\n");
+    prompt.push_str("- **No outbound mutations**: Do not make HTTP POST/PUT/DELETE requests or modify external resources\n");
+    prompt.push_str(
+        "- **Read-only project access**: You may use Read, Grep, Glob to inspect the project\n",
+    );
+    prompt.push_str("- **TA MCP tools only**: All actions (goals, drafts, releases) go through `ta_plan`, `ta_goal`, `ta_draft`, `ta_context`, `ta_release`\n\n");
+    prompt.push_str("Implementation happens in **sub-goals** — you launch them, review their drafts, and approve or deny.\n\n");
 
     prompt.push_str("## Natural Language Commands\n\n");
     prompt.push_str("Respond to conversational requests like:\n");
@@ -295,6 +311,13 @@ pub fn execute(
     println!("  Mode: orchestration (no staging overlay)");
     println!();
 
+    // Inject TA MCP server into .mcp.json so the agent can call ta_plan,
+    // ta_goal, ta_draft, ta_context, ta_release via MCP.
+    // Without this, the agent has no MCP server to handle those tool calls.
+    inject_mcp_server_config(&project_root)?;
+    println!("  MCP: registered TA server (ta serve) in .mcp.json");
+    println!();
+
     // Launch the agent in the project directory (not a staging workspace).
     let args: Vec<String> = agent_config
         .args_template
@@ -310,7 +333,14 @@ pub fn execute(
         cmd.env(key, value);
     }
 
-    match cmd.status() {
+    let result = cmd.status();
+
+    // Always restore .mcp.json, even if the agent failed.
+    if let Err(e) = restore_mcp_server_config(&project_root) {
+        eprintln!("Warning: failed to restore .mcp.json: {}", e);
+    }
+
+    match result {
         Ok(exit) => {
             if exit.success() {
                 println!("\nDev session ended.");

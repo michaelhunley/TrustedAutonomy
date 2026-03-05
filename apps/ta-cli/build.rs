@@ -44,12 +44,27 @@ fn main() {
 
 /// Get current date as YYYY-MM-DD without pulling in chrono.
 fn chrono_free_date() -> String {
-    // Use the `date` command (available on macOS/Linux).
-    Command::new("date")
+    // Try Unix `date` first (macOS/Linux), then Windows `powershell`.
+    if let Some(date) = Command::new("date")
         .args(["+%Y-%m-%d"])
         .output()
         .ok()
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_else(|| "unknown".to_string())
+    {
+        return date;
+    }
+
+    // Windows fallback: use PowerShell.
+    if let Some(date) = Command::new("powershell")
+        .args(["-NoProfile", "-Command", "Get-Date -Format yyyy-MM-dd"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+    {
+        return date;
+    }
+
+    "unknown".to_string()
 }

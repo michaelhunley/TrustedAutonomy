@@ -1,6 +1,6 @@
 # Trusted Autonomy -- User Guide
 
-**Version**: v0.8.2-alpha
+**Version**: v0.9.0-alpha
 
 Trusted Autonomy (TA) is a governance wrapper for AI agents. It lets any agent work freely in an isolated workspace, then holds the proposed changes at a human review checkpoint before anything takes effect. You see what the agent wants to do, approve or reject each change, and maintain a complete audit trail.
 
@@ -67,7 +67,15 @@ Trusted Autonomy (TA) is a governance wrapper for AI agents. It lets any agent w
 
 ### Install
 
-**Option A -- Binary download (macOS / Linux)**
+**Option A -- One-line installer (macOS / Linux)**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/trustedautonomy/ta/main/install.sh | bash
+```
+
+Set a specific version: `TA_VERSION=v0.9.0-alpha curl -fsSL ... | bash`
+
+**Option B -- Binary download**
 
 ```bash
 # macOS (Apple Silicon)
@@ -84,15 +92,32 @@ sudo mv ta /usr/local/bin/
 curl -LO https://github.com/trustedautonomy/ta/releases/latest/download/ta-x86_64-unknown-linux-musl.tar.gz
 tar xzf ta-x86_64-unknown-linux-musl.tar.gz
 sudo mv ta /usr/local/bin/
+
+# Windows (x86_64)
+# Download ta-x86_64-pc-windows-msvc.zip from the latest release
+# Extract and add ta.exe to your PATH
 ```
 
-**Option B -- Cargo install**
+**Option C -- Docker**
+
+```bash
+docker pull ghcr.io/trustedautonomy/ta:latest
+docker run -it -v $(pwd):/workspace ta --help
+```
+
+**Option D -- Cargo install**
 
 ```bash
 cargo install ta-cli
 ```
 
-**Option C -- Build from source**
+**Option E -- Nix**
+
+```bash
+nix run github:trustedautonomy/ta
+```
+
+**Option F -- Build from source**
 
 ```bash
 git clone https://github.com/trustedautonomy/ta.git

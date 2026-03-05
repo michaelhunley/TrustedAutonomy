@@ -39,6 +39,10 @@ jobs:
           - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
             cross: true
+          # Windows (v0.9.1)
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            cross: false
 
     steps:
       - name: Checkout repository
@@ -70,7 +74,8 @@ jobs:
         if: matrix.cross == true
         run: cross build --release --target ${{ matrix.target }} -p ta-cli
 
-      - name: Package binary with docs
+      - name: Package binary with docs (Unix)
+        if: runner.os != 'Windows'
         run: |
           mkdir -p staging
           cp target/${{ matrix.target }}/release/${{ env.BINARY_NAME }} staging/
@@ -82,7 +87,19 @@ jobs:
           cd staging
           tar czf ../artifacts/${{ env.BINARY_NAME }}-${{ steps.get_version.outputs.version }}-${{ matrix.target }}.tar.gz *
 
-      - name: Generate SHA256 checksums
+      - name: Package binary with docs (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path staging, artifacts | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/${{ env.BINARY_NAME }}.exe" staging/
+          foreach ($f in @("docs/USAGE.md", "DISCLAIMER.md", "LICENSE", ".release-draft.md")) {
+            if (Test-Path $f) { Copy-Item $f staging/ }
+          }
+          Compress-Archive -Path staging/* -DestinationPath "artifacts/${{ env.BINARY_NAME }}-${{ steps.get_version.outputs.version }}-${{ matrix.target }}.zip"
+
+      - name: Generate SHA256 checksums (Unix)
+        if: runner.os != 'Windows'
         run: |
           cd artifacts
           if command -v sha256sum >/dev/null 2>&1; then
@@ -90,6 +107,15 @@ jobs:
           else
             shasum -a 256 *.tar.gz > SHA256SUMS-${{ matrix.target }}.txt
           fi
+
+      - name: Generate SHA256 checksums (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cd artifacts
+          Get-FileHash *.zip -Algorithm SHA256 | ForEach-Object {
+            "$($_.Hash.ToLower())  $($_.Path | Split-Path -Leaf)"
+          } | Out-File -Encoding ascii "SHA256SUMS-${{ matrix.target }}.txt"
 
       - name: Generate HTML docs (macOS Intel only)
         if: matrix.target == 'x86_64-apple-darwin'

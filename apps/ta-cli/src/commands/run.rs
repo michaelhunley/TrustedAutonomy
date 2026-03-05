@@ -10,14 +10,14 @@
 
 use std::path::Path;
 
-use ta_changeset::{
-    InteractionKind, InteractionRequest, InteractionResponse, InteractiveSession,
-    InteractiveSessionState, InteractiveSessionStore, Urgency,
-};
+#[cfg(unix)]
+use ta_changeset::{InteractionKind, InteractionRequest, InteractionResponse, Urgency};
+use ta_changeset::{InteractiveSession, InteractiveSessionState, InteractiveSessionStore};
 use ta_goal::GoalRunStore;
 use ta_mcp_gateway::GatewayConfig;
 
 use super::plan;
+#[cfg(unix)]
 use super::pty_capture;
 
 // ── Per-agent launch configuration ──────────────────────────────
@@ -48,6 +48,11 @@ struct AgentLaunchConfig {
     /// Environment variables to set for the agent process.
     #[serde(default)]
     env: std::collections::HashMap<String, String>,
+    /// Shell to use for command execution: "bash", "powershell", "cmd".
+    /// Auto-detected based on platform if not specified (v0.9.1).
+    #[serde(default)]
+    #[allow(dead_code)]
+    shell: Option<String>,
     /// Human-readable name (informational only, used by `ta agent list` in future).
     #[serde(default)]
     #[allow(dead_code)]
@@ -145,6 +150,7 @@ fn builtin_agent_config(agent_id: &str) -> AgentLaunchConfig {
             injects_settings: true,
             pre_launch: None,
             env: Default::default(),
+            shell: None,
             name: Some("claude-code".to_string()),
             description: Some("Anthropic's Claude Code CLI".to_string()),
             interactive: None,
@@ -161,6 +167,7 @@ fn builtin_agent_config(agent_id: &str) -> AgentLaunchConfig {
             injects_settings: false,
             pre_launch: None,
             env: Default::default(),
+            shell: None,
             name: Some("codex".to_string()),
             description: Some("OpenAI's Codex CLI".to_string()),
             interactive: None,
@@ -186,6 +193,7 @@ fn builtin_agent_config(agent_id: &str) -> AgentLaunchConfig {
                 ],
             }),
             env: Default::default(),
+            shell: None,
             name: Some("claude-flow".to_string()),
             description: Some("Claude Flow multi-agent orchestration".to_string()),
             interactive: None,
@@ -198,6 +206,7 @@ fn builtin_agent_config(agent_id: &str) -> AgentLaunchConfig {
             injects_settings: false,
             pre_launch: None,
             env: Default::default(),
+            shell: None,
             name: None,
             description: None,
             interactive: None,
@@ -226,7 +235,15 @@ pub fn execute(
 ) -> anyhow::Result<()> {
     // ── Resume an existing session ──────────────────────────────
     if let Some(session_id_prefix) = resume {
-        return execute_resume(config, session_id_prefix, agent);
+        #[cfg(unix)]
+        {
+            return execute_resume(config, session_id_prefix, agent);
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (session_id_prefix, agent);
+            anyhow::bail!("Session resume requires PTY support (not available on Windows)");
+        }
     }
 
     let title = title.ok_or_else(|| {
@@ -388,10 +405,30 @@ pub fn execute(
     println!();
 
     // Choose launch mode: headless (piped), PTY-interactive, or simple.
-    let launch_result = if headless {
+    // Type alias for the guidance log — on Unix this contains captured human inputs
+    // from PTY sessions; on Windows the Vec is always empty.
+    type GuidanceLog = Vec<(String, String)>;
+    let launch_result: std::io::Result<(std::process::ExitStatus, GuidanceLog)> = if headless {
         launch_agent_headless(&agent_config, &staging_path, &prompt).map(|exit| (exit, Vec::new()))
     } else if interactive {
-        launch_agent_interactive(&agent_config, &staging_path, &prompt, &mut session_store)
+        #[cfg(unix)]
+        {
+            launch_agent_interactive(&agent_config, &staging_path, &prompt, &mut session_store).map(
+                |(exit, log)| {
+                    (
+                        exit,
+                        log.iter()
+                            .map(|(req, resp)| (format!("{}", req), format!("{}", resp)))
+                            .collect(),
+                    )
+                },
+            )
+        }
+        #[cfg(not(unix))]
+        {
+            eprintln!("Warning: interactive PTY mode is not available on Windows. Falling back to simple mode.");
+            launch_agent(&agent_config, &staging_path, &prompt).map(|exit| (exit, Vec::new()))
+        }
     } else {
         launch_agent(&agent_config, &staging_path, &prompt).map(|exit| (exit, Vec::new()))
     };
@@ -409,8 +446,11 @@ pub fn execute(
 
             // Log guidance interactions to session if any.
             if let Some((ref store, ref mut session)) = session_store {
-                for (req, resp) in &guidance_log {
-                    session.log_message("ta-system", &format!("Guidance: {} → {}", req, resp));
+                for (req_str, resp_str) in &guidance_log {
+                    session.log_message(
+                        "ta-system",
+                        &format!("Guidance: {} → {}", req_str, resp_str),
+                    );
                 }
                 store.save(session)?;
             }
@@ -547,6 +587,7 @@ pub fn execute(
     Ok(())
 }
 
+#[cfg(unix)]
 /// Resume an existing interactive session by re-launching the agent in its workspace.
 fn execute_resume(
     config: &GatewayConfig,
@@ -668,6 +709,7 @@ fn execute_resume(
             injects_settings: false,
             pre_launch: None,
             env: agent_config.env.clone(),
+            shell: None,
             name: None,
             description: None,
             interactive: None,
@@ -711,6 +753,7 @@ fn execute_resume(
     Ok(())
 }
 
+#[cfg(unix)]
 /// Find a session by full UUID or prefix match.
 fn find_session_by_prefix(
     store: &InteractiveSessionStore,
@@ -805,6 +848,7 @@ fn launch_agent_headless(
     child.wait()
 }
 
+#[cfg(unix)]
 /// Launch an agent in interactive PTY mode with stdin interleaving and guidance logging.
 ///
 /// Returns the exit status and a log of (InteractionRequest, InteractionResponse) pairs
@@ -1054,12 +1098,14 @@ fn restore_claude_settings(staging_path: &Path) -> anyhow::Result<()> {
 const MCP_JSON_PATH: &str = ".mcp.json";
 const MCP_JSON_BACKUP: &str = ".ta/mcp_json_original";
 
-/// Inject TA MCP server config into the staging workspace's `.mcp.json`.
+/// Inject TA MCP server config into a directory's `.mcp.json`.
 ///
-/// This allows macro goal agents to call TA's MCP tools (ta_plan, ta_goal,
+/// This allows agents to call TA's MCP tools (ta_plan, ta_goal,
 /// ta_draft, ta_context). Without this, the agent sees tool documentation
 /// in CLAUDE.md but has no MCP server configured to handle the calls.
-fn inject_mcp_server_config(staging_path: &Path) -> anyhow::Result<()> {
+///
+/// Used by both `ta run --macro` (staging workspace) and `ta dev` (project root).
+pub(crate) fn inject_mcp_server_config(staging_path: &Path) -> anyhow::Result<()> {
     let mcp_json_path = staging_path.join(MCP_JSON_PATH);
     let backup_path = staging_path.join(MCP_JSON_BACKUP);
 
@@ -1102,10 +1148,10 @@ fn inject_mcp_server_config(staging_path: &Path) -> anyhow::Result<()> {
         .get_mut("mcpServers")
         .and_then(|s| s.as_object_mut())
     {
-        servers.insert("trusted-autonomy".to_string(), ta_server_entry);
+        servers.insert("ta".to_string(), ta_server_entry);
     } else {
         mcp_config["mcpServers"] = serde_json::json!({
-            "trusted-autonomy": ta_server_entry
+            "ta": ta_server_entry
         });
     }
 
@@ -1113,8 +1159,10 @@ fn inject_mcp_server_config(staging_path: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Restore the original `.mcp.json` before computing diffs.
-fn restore_mcp_server_config(staging_path: &Path) -> anyhow::Result<()> {
+/// Restore the original `.mcp.json` after agent exits.
+///
+/// Used by both `ta run --macro` (before diff) and `ta dev` (cleanup).
+pub(crate) fn restore_mcp_server_config(staging_path: &Path) -> anyhow::Result<()> {
     let mcp_json_path = staging_path.join(MCP_JSON_PATH);
     let backup_path = staging_path.join(MCP_JSON_BACKUP);
 

@@ -4,14 +4,30 @@
 # goals, launches implementation agents, handles draft review, and manages
 # releases. It does NOT write code directly.
 #
+# SECURITY: The orchestrator is restricted to read-only project access + TA MCP
+# tools. No filesystem writes, no shell access, no outbound HTTP POST/PUT/DELETE.
+# Implementation happens in sub-goals with their own staging workspaces.
+#
 # Reusable by any channel (Slack, web app, etc.) via the ChannelRegistry.
 # `ta dev` is the convenience CLI entry point.
 
 name: dev-loop
-description: "Interactive development loop orchestrator — coordinates plan execution, goal launches, draft review, and releases"
+description: "Interactive development loop orchestrator — read-only project access + TA MCP tools only"
 command: claude
 args_template:
   - "--allowedTools"
+  # TA MCP tools (via ta serve MCP server):
+  #   ta_plan   — read/update plan status
+  #   ta_goal   — start sub-goals, check status
+  #   ta_draft  — list/view/approve/deny drafts
+  #   ta_context — search project memory
+  #   ta_release — run release pipeline
+  # Read-only builtins (no Write, Edit, Bash, NotebookEdit):
+  #   Read      — read file contents
+  #   Grep      — search file contents
+  #   Glob      — find files by pattern
+  #   WebFetch  — fetch web pages (GET only, read documentation)
+  #   WebSearch — search the web
   - "mcp__ta__ta_plan,mcp__ta__ta_goal,mcp__ta__ta_draft,mcp__ta__ta_context,mcp__ta__ta_release,Read,Grep,Glob,WebFetch,WebSearch"
   - "--system-prompt"
   - "{prompt}"
@@ -38,10 +54,12 @@ alignment:
       - "goal_start"
       - "release_run"
     forbidden_actions:
-      - "fs_write_patch"
-      - "fs_apply"
-      - "network_external"
-      - "credential_access"
+      - "fs_write_patch"       # No writing files
+      - "fs_apply"             # No applying changes
+      - "shell_execute"        # No shell/Bash access
+      - "network_external"     # No outbound network (POST, PUT, DELETE)
+      - "credential_access"    # No reading secrets
+      - "notebook_edit"        # No notebook modification
   constitution: "default-v1"
   coordination:
     allowed_collaborators:
