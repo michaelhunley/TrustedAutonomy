@@ -2174,6 +2174,60 @@ runtime = "native-cli"
 - [x] `ta dev` prompt and allowed-tools list updated to include `ta_event_subscribe`
 - [x] 14 MCP tools (was 13), 30 gateway tests pass, 2 new GoalFailed event tests
 
+---                                                                                                                                                                                                                                                             
+### v0.9.4.1 — Event Emission Plumbing Fix                       
+<!-- status: pending -->                                                    
+**Goal**: Wire event emission into all goal lifecycle paths so `ta_event_subscribe` actually receives events. Currently only `GoalFailed` on spawn failure emits to FsEventStore — `GoalStarted`, `GoalCompleted`, and `DraftBuilt` are never written, making
+the event subscription system non-functional for orchestrator agents.                
+                                                                
+**Bug**: `ta_goal_start` (MCP) creates goal metadata but does NOT: copy project to staging, inject CLAUDE.md, or launch the agent process. Goals created via MCP are stuck in `running` with no workspace and no agent. The full `ta run` lifecycle must be
+wired into the MCP goal start path.
+
+#### Items
+
+1. **`ta_goal_start` MCP → full lifecycle**: Wire `ta_goal_start` to perform overlay copy, CLAUDE.md injection, and agent spawn — matching what `ta run` does from CLI. Goals created via MCP must actually execute.
+2. **Emit `GoalStarted`**: After goal metadata + workspace created, emit `SessionEvent::GoalStarted` to FsEventStore. Both MCP and CLI paths.
+3. **Emit `GoalCompleted`**: On agent exit code 0 with draft built. Both `ta run` CLI and `launch_sub_goal_agent` MCP paths.
+4. **Emit `DraftBuilt`**: When `ta_pr_build` / `ta draft build` creates a package. Both MCP handler and CLI command.
+5. **Emit `GoalFailed` on all failure paths**: Non-zero exit, workspace setup failure, draft build failure — not just spawn failure.
+6. **End-to-end integration test**: Create goal via `ta_goal_start` → verify `GoalStarted` in FsEventStore → simulate completion → verify `GoalCompleted` → build draft → verify `DraftBuilt` → query via `ta_event_subscribe` handler → verify filtering by
+event_types and goal_id works. This proves orchestrator agents will receive lifecycle events.
+7. **Cursor-based watch test**: Query with no `since` → get all → use returned cursor → get empty → emit new event → query with cursor → get only new event. Proves the polling pattern works.
+
+#### Implementation scope
+- `crates/ta-mcp-gateway/src/tools/goal.rs` — full lifecycle in `handle_goal_start()`, emit GoalStarted/Completed/Failed
+- `crates/ta-mcp-gateway/src/tools/draft.rs` — emit DraftBuilt in `handle_pr_build()`
+- `apps/ta-cli/src/commands/run.rs` — emit GoalCompleted/GoalFailed on agent exit
+- `apps/ta-cli/src/commands/draft.rs` — emit DraftBuilt on draft build
+- `crates/ta-events/src/schema.rs` — ensure DraftBuilt variant exists in SessionEvent
+- New integration tests in `crates/ta-mcp-gateway/`
+
+#### Version: `0.9.4-alpha.1`
+
+### v0.9.5 — Enhanced Draft View Output
+<!-- status: pending -->
+**Goal**: Make `ta draft view` output clear and actionable for reviewers — structured "what changed" summaries, design alternatives considered, and grouped visual sections.
+
+#### Items
+
+1. **Grouped change summary**: `ta draft view` shows a module-grouped file list with per-file classification (created/modified/deleted), one-line "what" and "why", and dependency annotations (which changes depend on each other vs. independent).
+2. **Alternatives considered**: New `alternatives_considered: Vec<AlternativeConsidered>` field on `DraftSummary`. Each entry has `option`, `rationale`, `chosen: bool`. Populated by agents via new optional `alternatives` parameter on `ta_pr_build` MCP
+tool. Displayed under "Design Decisions" heading in `ta draft view`.
+3. **Structured view sections**: `ta draft view` output organized as:
+    - **Summary** — high-level what and why (existing)
+    - **What Changed** — grouped file list with classifications (new)
+    - **Design Decisions** — alternatives considered with rationale (new)
+    - **Artifacts** — per-artifact diffs (existing)
+4. **`--json` on `ta draft view`**: Full structured JSON output for programmatic consumption.
+
+#### Implementation scope
+- `crates/ta-changeset/src/lib.rs` — `AlternativeConsidered` struct, add `alternatives_considered` to `DraftSummary`
+- `apps/ta-cli/src/commands/draft.rs` — structured view formatting, `--json` flag
+- `crates/ta-mcp-gateway/src/tools/draft.rs` — `alternatives` parameter on `ta_pr_build`
+- `docs/USAGE.md` — document improved draft view output
+
+#### Version: `0.9.5-alpha`
+
 ---
 
 ## Projects On Top (separate repos, built on TA)
