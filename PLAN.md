@@ -2150,6 +2150,22 @@ runtime = "native-cli"
 - Sandbox runtime integration: wire `ta-sandbox` as command validator for orchestrator process. Currently relies on `--allowedTools` client-side + gateway-side `CallerMode` enforcement.
 - Full tool-call audit logging in gateway: currently logs session start/end; per-tool-call logging deferred to event system integration.
 
+### v0.9.4 — Orchestrator Event Wiring & Gateway Refactor
+<!-- status: pending -->
+**Goal**: Wire the `ta dev` orchestrator to actually launch implementation agents, handle failures, and receive events — plus refactor the growing MCP gateway.
+
+1. **Fix `ta_goal_start` MCP → full agent launch**: Currently `ta_goal_start` via MCP only creates goal metadata — it doesn't copy the project to staging, inject CLAUDE.md, or launch the agent process. The orchestrator (`ta dev`) cannot actually launch implementation agents. Wire `ta_goal_start` (and `ta_goal_inner` with `launch:true`) to perform the full `ta run` lifecycle: overlay workspace copy → context injection → agent spawn. This is the critical blocker for `ta dev` orchestration.
+2. **`GoalFailed` / `GoalError` event**: Add a `GoalFailed { goal_run_id, error, exit_code, timestamp }` variant to `TaEvent` in `crates/ta-goal/src/events.rs`. Emit it when an agent process exits with a non-zero code, crashes, or when the workspace setup fails. Currently agent failures are silent — the goal stays in "running" forever.
+3. **MCP event subscription tool**: Add `ta_event_subscribe` (or similar) to the MCP gateway that lets orchestrator agents receive events without polling. Options: SSE-style streaming, long-poll, or callback registration. The orchestrator should be notified when a goal completes, fails, or produces a draft — not burn context window on repeated identical polls.
+4. **MCP gateway `server.rs` refactor**: Split the 2,200+ line `server.rs` into modules by domain:
+   - `server.rs` → State, config, CallerMode, ServerHandler dispatch (~200 lines)
+   - `tools/goal.rs` → `ta_goal_start`, `ta_goal_status`, `ta_goal_list`, `ta_goal_inner`
+   - `tools/fs.rs` → `ta_fs_read`, `ta_fs_write`, `ta_fs_list`, `ta_fs_diff`
+   - `tools/draft.rs` → `ta_draft`, `ta_pr_build`, `ta_pr_status`
+   - `tools/plan.rs` → `ta_plan`
+   - `tools/context.rs` → `ta_context`
+   - `validation.rs` → `parse_uuid`, `enforce_policy`, `validate_goal_exists` (shared helpers)
+
 ---
 
 ## Projects On Top (separate repos, built on TA)

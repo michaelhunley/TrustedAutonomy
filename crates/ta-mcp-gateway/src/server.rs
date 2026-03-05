@@ -1475,6 +1475,8 @@ impl TaGatewayServer {
                 let goal_run_id = parse_uuid(params.goal_run_id.as_deref().ok_or_else(|| {
                     McpError::invalid_params("goal_run_id required for update", None)
                 })?)?;
+                // Validate goal exists before processing mutation.
+                validate_goal_exists(&state.goal_store, goal_run_id)?;
                 let phase = params.phase.as_deref().unwrap_or("unknown");
                 let status_note = params
                     .status_note
@@ -1848,6 +1850,23 @@ fn parse_uuid(s: &str) -> Result<Uuid, McpError> {
         .map_err(|e| McpError::invalid_params(format!("invalid UUID '{}': {}", s, e), None))
 }
 
+/// Validate that a goal_run_id corresponds to an existing goal in the store.
+/// Returns the goal on success, or an MCP invalid_params error if not found.
+fn validate_goal_exists(
+    goal_store: &GoalRunStore,
+    goal_run_id: Uuid,
+) -> Result<GoalRun, McpError> {
+    goal_store
+        .get(goal_run_id)
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?
+        .ok_or_else(|| {
+            McpError::invalid_params(
+                format!("goal_run_id not found: {}", goal_run_id),
+                None,
+            )
+        })
+}
+
 /// Enforce a policy decision, returning an MCP error if denied.
 fn enforce_policy(decision: &PolicyDecision) -> Result<(), McpError> {
     match decision {
@@ -2193,5 +2212,29 @@ mod tests {
         // When TA_CALLER_MODE is not set, defaults to Normal.
         std::env::remove_var("TA_CALLER_MODE");
         assert_eq!(CallerMode::from_env(), CallerMode::Normal);
+    }
+
+    #[test]
+    fn validate_goal_exists_rejects_fake_id() {
+        let (server, _dir) = test_server();
+        let state = server.state.lock().unwrap();
+        let fake_id = Uuid::parse_str("00000000-0000-0000-0000-000000000000").unwrap();
+        let result = validate_goal_exists(&state.goal_store, fake_id);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.message.contains("goal_run_id not found"),
+            "expected 'goal_run_id not found' error, got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn validate_goal_exists_accepts_real_id() {
+        let (server, _dir) = test_server();
+        let goal_id = start_goal(&server);
+        let state = server.state.lock().unwrap();
+        let result = validate_goal_exists(&state.goal_store, goal_id);
+        assert!(result.is_ok());
     }
 }
