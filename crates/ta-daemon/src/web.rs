@@ -134,6 +134,20 @@ async fn index() -> Html<&'static str> {
     Html(include_str!("../assets/index.html"))
 }
 
+/// Serve the PWA manifest for mobile-responsive web UI (v0.9.0).
+async fn manifest() -> (
+    [(axum::http::header::HeaderName, &'static str); 1],
+    &'static str,
+) {
+    (
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "application/manifest+json",
+        )],
+        include_str!("../assets/manifest.json"),
+    )
+}
+
 async fn list_drafts(State(state): State<Arc<WebState>>) -> impl IntoResponse {
     match load_all_drafts(&state.pr_packages_dir) {
         Ok(drafts) => {
@@ -373,6 +387,7 @@ pub fn build_router(pr_packages_dir: PathBuf) -> Router {
 
     Router::new()
         .route("/", get(index))
+        .route("/manifest.json", get(manifest))
         // Draft routes
         .route("/api/drafts", get(list_drafts))
         .route("/api/drafts/{id}", get(get_draft))

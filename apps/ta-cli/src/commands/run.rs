@@ -18,6 +18,7 @@ use ta_goal::GoalRunStore;
 use ta_mcp_gateway::GatewayConfig;
 
 use super::plan;
+#[cfg(unix)]
 use super::pty_capture;
 
 // ── Per-agent launch configuration ──────────────────────────────
@@ -48,6 +49,11 @@ struct AgentLaunchConfig {
     /// Environment variables to set for the agent process.
     #[serde(default)]
     env: std::collections::HashMap<String, String>,
+    /// Shell to use for command execution: "bash", "powershell", "cmd".
+    /// Auto-detected based on platform if not specified (v0.9.1).
+    #[serde(default)]
+    #[allow(dead_code)]
+    shell: Option<String>,
     /// Human-readable name (informational only, used by `ta agent list` in future).
     #[serde(default)]
     #[allow(dead_code)]
@@ -145,6 +151,7 @@ fn builtin_agent_config(agent_id: &str) -> AgentLaunchConfig {
             injects_settings: true,
             pre_launch: None,
             env: Default::default(),
+            shell: None,
             name: Some("claude-code".to_string()),
             description: Some("Anthropic's Claude Code CLI".to_string()),
             interactive: None,
@@ -161,6 +168,7 @@ fn builtin_agent_config(agent_id: &str) -> AgentLaunchConfig {
             injects_settings: false,
             pre_launch: None,
             env: Default::default(),
+            shell: None,
             name: Some("codex".to_string()),
             description: Some("OpenAI's Codex CLI".to_string()),
             interactive: None,
@@ -186,6 +194,7 @@ fn builtin_agent_config(agent_id: &str) -> AgentLaunchConfig {
                 ],
             }),
             env: Default::default(),
+            shell: None,
             name: Some("claude-flow".to_string()),
             description: Some("Claude Flow multi-agent orchestration".to_string()),
             interactive: None,
@@ -198,6 +207,7 @@ fn builtin_agent_config(agent_id: &str) -> AgentLaunchConfig {
             injects_settings: false,
             pre_launch: None,
             env: Default::default(),
+            shell: None,
             name: None,
             description: None,
             interactive: None,
@@ -226,7 +236,15 @@ pub fn execute(
 ) -> anyhow::Result<()> {
     // ── Resume an existing session ──────────────────────────────
     if let Some(session_id_prefix) = resume {
-        return execute_resume(config, session_id_prefix, agent);
+        #[cfg(unix)]
+        {
+            return execute_resume(config, session_id_prefix, agent);
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (session_id_prefix, agent);
+            anyhow::bail!("Session resume requires PTY support (not available on Windows)");
+        }
     }
 
     let title = title.ok_or_else(|| {
@@ -391,7 +409,15 @@ pub fn execute(
     let launch_result = if headless {
         launch_agent_headless(&agent_config, &staging_path, &prompt).map(|exit| (exit, Vec::new()))
     } else if interactive {
-        launch_agent_interactive(&agent_config, &staging_path, &prompt, &mut session_store)
+        #[cfg(unix)]
+        {
+            launch_agent_interactive(&agent_config, &staging_path, &prompt, &mut session_store)
+        }
+        #[cfg(not(unix))]
+        {
+            eprintln!("Warning: interactive PTY mode is not available on Windows. Falling back to simple mode.");
+            launch_agent(&agent_config, &staging_path, &prompt).map(|exit| (exit, Vec::new()))
+        }
     } else {
         launch_agent(&agent_config, &staging_path, &prompt).map(|exit| (exit, Vec::new()))
     };
@@ -547,6 +573,7 @@ pub fn execute(
     Ok(())
 }
 
+#[cfg(unix)]
 /// Resume an existing interactive session by re-launching the agent in its workspace.
 fn execute_resume(
     config: &GatewayConfig,
@@ -668,6 +695,7 @@ fn execute_resume(
             injects_settings: false,
             pre_launch: None,
             env: agent_config.env.clone(),
+            shell: None,
             name: None,
             description: None,
             interactive: None,
@@ -805,6 +833,7 @@ fn launch_agent_headless(
     child.wait()
 }
 
+#[cfg(unix)]
 /// Launch an agent in interactive PTY mode with stdin interleaving and guidance logging.
 ///
 /// Returns the exit status and a log of (InteractionRequest, InteractionResponse) pairs

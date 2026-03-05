@@ -9,6 +9,7 @@ pub mod goal;
 pub mod init;
 pub mod plan;
 pub mod pr;
+#[cfg(unix)]
 pub mod pty_capture;
 pub mod release;
 pub mod run;

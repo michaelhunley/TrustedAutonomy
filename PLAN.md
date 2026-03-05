@@ -2067,15 +2067,22 @@ runtime = "native-cli"
 ## v0.9 — Distribution & Packaging *(release: tag v0.9.0-beta)*
 
 ### v0.9.0 — Distribution & Packaging
-<!-- status: pending -->
+<!-- status: done -->
 - Developer: `cargo run` + local config + Nix
 - Desktop: installer with bundled daemon, git, rg/jq, common MCP servers
 - Cloud: OCI image for daemon + MCP servers, ephemeral virtual workspaces
 - Full web UI for review/approval (extends v0.5.2 minimal UI)
 - Mobile-responsive web UI (PWA)
 
+#### Completed
+- [x] `Dockerfile` — multi-stage OCI image (build from source, slim runtime with git/jq)
+- [x] `install.sh` — updated installer with `ta init`/`ta dev` instructions, Windows detection, draft terminology
+- [x] PWA manifest (`manifest.json`) + mobile-responsive web UI meta tags
+- [x] Web UI route for `/manifest.json` (v0.9.0)
+- [x] Version bump to 0.9.0-alpha
+
 ### v0.9.1 — Native Windows Support
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: First-class Windows experience without requiring WSL.
 
 - **Windows MSVC build target**: `x86_64-pc-windows-msvc` in CI release matrix.
@@ -2085,8 +2092,22 @@ runtime = "native-cli"
 - **Installer**: MSI installer, `winget` and `scoop` packages.
 - **Testing**: Windows CI job, gate releases on Windows tests passing.
 
+#### Completed
+- [x] `x86_64-pc-windows-msvc` added to CI release matrix with Windows-specific packaging (.zip)
+- [x] Windows CI job in `ci.yml` — build, test, clippy on `windows-latest`
+- [x] PTY module gated with `#[cfg(unix)]` — Windows falls back to simple mode
+- [x] Session resume gated with `#[cfg(unix)]` — Windows gets clear error message
+- [x] `build.rs` cross-platform date: Unix `date` → PowerShell fallback
+- [x] `shell` field added to `AgentLaunchConfig` for cross-platform shell selection
+- [x] SHA256 checksum generation for Windows (.zip) in release workflow
+- [x] `install.sh` updated with Windows detection and winget/scoop guidance
+
+#### Remaining (deferred)
+- MSI installer and `winget`/`scoop` package definitions (needs release testing)
+- `ctrlc` crate integration (current signal handling works via std)
+
 ### v0.9.2 — Sandbox Runner (optional hardening, Layer 2)
-<!-- status: pending -->
+<!-- status: done -->
 > Optional for users who need kernel-level isolation. Not a prerequisite for v1.0.
 
 - OCI/gVisor sandbox for agent execution
@@ -2095,6 +2116,32 @@ runtime = "native-cli"
 - Command transcripts hashed into audit log
 - Network access policy: allow/deny per-domain
 - **Enterprise state intercept**: See `docs/enterprise-state-intercept.md`.
+
+#### Completed
+- [x] `ta-sandbox` crate fully implemented (was stub since Phase 0)
+- [x] `SandboxConfig` with command allowlist, network policy, timeout, audit settings
+- [x] `SandboxRunner` with `execute()` — allowlist check, forbidden args, CWD enforcement, transcript capture
+- [x] Command transcript SHA-256 hashing for audit log integration
+- [x] `NetworkPolicy` with per-domain allow/deny and wildcard support (`*.github.com`)
+- [x] Default config with common dev tools: rg, grep, find, cat, cargo, npm, git, jq
+- [x] `CommandPolicy` with `max_invocations`, `can_write`, `allowed_args`, `forbidden_args`
+- [x] Path escape detection — resolves `..` and symlinks, rejects paths outside workspace
+- [x] 12 tests: allowlist enforcement, forbidden args, path escape, invocation limits, transcript hashing, network policy
+
+#### Remaining (deferred)
+- OCI/gVisor container isolation (enterprise feature)
+- Enterprise state intercept (see `docs/enterprise-state-intercept.md`)
+
+### v0.9.3 — Dev Loop Access Hardening
+<!-- status: pending -->
+**Goal**: Severely limit what the `ta dev` orchestrator agent can do — read-only project access, only TA MCP tools, no filesystem writes.
+
+- **`--allowedTools` enforcement**: `ta dev` agent config restricts to `mcp__ta__*` tools + read-only builtins (`Read`, `Grep`, `Glob`, `WebFetch`, `WebSearch`). No `Write`, `Edit`, `Bash`, `NotebookEdit`.
+- **Sandbox integration**: Wire `ta-sandbox` to validate any command the orchestrator tries to run. Orchestrator can only call TA MCP tools and read project files.
+- **`.mcp.json` scoping**: When `ta dev` injects the TA MCP server, add `allowedTools` to the Claude config to prevent the agent from discovering/using other MCP servers' write tools.
+- **Policy enforcement**: `ta dev` applies a `Supervised` security level with `alignment.forbidden_actions: [fs_write_patch, fs_apply, network_external, credential_access]` enforced at the MCP gateway layer.
+- **Audit trail**: All `ta dev` tool calls logged with the orchestrator session ID for post-session review.
+- **Escape hatch**: `ta dev --unrestricted` flag for power users who want full access (logs a warning).
 
 ---
 

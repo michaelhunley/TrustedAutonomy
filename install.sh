@@ -26,6 +26,14 @@ detect_platform() {
         Darwin*)
             OS_TYPE="darwin"
             ;;
+        MINGW*|MSYS*|CYGWIN*)
+            echo -e "${YELLOW}Windows detected. For native Windows, use:${NC}"
+            echo "  winget install trustedautonomy.ta"
+            echo "  scoop install ta"
+            echo ""
+            echo "Or use WSL2 and re-run this script inside Linux."
+            exit 1
+            ;;
         *)
             echo -e "${RED}Error: Unsupported operating system: $OS${NC}"
             exit 1
@@ -178,16 +186,17 @@ print_instructions() {
     echo -e "${GREEN}Getting Started with Trusted Autonomy${NC}"
     echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
-    echo "1. Configure an agent adapter (e.g., Claude Code):"
-    echo "   ${BINARY_NAME} adapter install claude-code"
+    echo "1. Initialize TA in your project:"
+    echo "   cd your-project && ${BINARY_NAME} init from-existing"
     echo ""
-    echo "2. Start your first mediated goal:"
-    echo "   ${BINARY_NAME} run \"Add a README\" --source ."
+    echo "2. Start the interactive developer loop:"
+    echo "   ${BINARY_NAME} dev"
     echo ""
-    echo "3. Review and apply changes:"
-    echo "   ${BINARY_NAME} pr view <id>"
-    echo "   ${BINARY_NAME} pr approve <id>"
-    echo "   ${BINARY_NAME} pr apply <id> --git-commit"
+    echo "3. Or run a single mediated goal:"
+    echo "   ${BINARY_NAME} run \"Fix the auth bug\" --source ."
+    echo "   ${BINARY_NAME} draft view <id>"
+    echo "   ${BINARY_NAME} draft approve <id>"
+    echo "   ${BINARY_NAME} draft apply <id> --git-commit"
     echo ""
     echo "For help: ${BINARY_NAME} --help"
     echo "Documentation: https://github.com/$REPO"
