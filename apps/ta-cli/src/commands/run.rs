@@ -1336,8 +1336,9 @@ fn auto_capture_goal_completion(
 
 /// Build a memory context section from prior sessions for CLAUDE.md injection (v0.6.3).
 ///
-/// Phase-aware: filters entries by the current plan phase. Uses RuVector
-/// for semantic search when available, falling back to FsMemoryStore.
+/// Phase-aware: filters entries by the current plan phase. Respects the
+/// `backend` field in `.ta/memory.toml` (v0.7.4): "ruvector" uses semantic
+/// search when available, "fs" forces filesystem-only mode.
 fn build_memory_context_section_for_inject(
     config: &GatewayConfig,
     goal_title: &str,
@@ -1347,9 +1348,13 @@ fn build_memory_context_section_for_inject(
     let capture_config = ta_memory::auto_capture::load_config(&workflow_toml);
     let max_entries = capture_config.max_context_entries;
 
-    // v0.6.3: Try RuVector backend first for semantic search.
+    // v0.7.4: Respect backend toggle from .ta/memory.toml.
+    let memory_config = ta_memory::key_schema::load_memory_config(&config.workspace_root);
+    let _backend = memory_config.backend.as_deref().unwrap_or("ruvector");
+
+    // Try RuVector backend when configured (or default).
     #[cfg(feature = "ruvector")]
-    {
+    if _backend != "fs" {
         let rvf_path = config.workspace_root.join(".ta").join("memory.rvf");
         if rvf_path.exists() {
             if let Ok(store) = ta_memory::RuVectorStore::open(&rvf_path) {
@@ -1364,7 +1369,7 @@ fn build_memory_context_section_for_inject(
         }
     }
 
-    // Fallback: FsMemoryStore.
+    // Filesystem backend (explicit "fs" or fallback).
     let memory_dir = config.workspace_root.join(".ta").join("memory");
     let store = ta_memory::FsMemoryStore::new(&memory_dir);
     ta_memory::auto_capture::build_memory_context_section_with_phase(

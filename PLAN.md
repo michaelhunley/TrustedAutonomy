@@ -1666,6 +1666,23 @@ New/modified files:
 - **First plugin: `ta-channel-slack`** — Slack integration for review notifications, approval buttons, and session streaming.
 - **Webhook improvements**: Signature verification, retry logic, structured payloads.
 
+#### Completed
+
+- ✅ `ChannelFactory` trait with `channel_type()`, `build_review()`, `build_session()`, `capabilities()`
+- ✅ `ChannelRegistry` with `register()`, `get()`, `build_review_from_config()`, `build_session_from_config()`
+- ✅ `ChannelCapabilitySet` (supports_review, supports_session, supports_notify, supports_rich_media, supports_threads)
+- ✅ Channel routing config types: `ChannelRoutingConfig`, `ChannelRouteConfig`, `NotifyRouteConfig`, `TaConfig`
+- ✅ `.ta/config.yaml` loader with `load_config()` and sensible defaults
+- ✅ Built-in factories: `TerminalChannelFactory`, `AutoApproveChannelFactory`, `WebhookChannelFactory`
+- ✅ `default_registry()` creates pre-loaded registry with all built-in factories
+- ✅ `TerminalSessionChannel` implementing `SessionChannel` trait
+- ✅ 10 tests covering registration, build, config deserialization, missing file handling
+
+#### Remaining
+
+- Slack channel plugin (`ta-channel-slack`) — deferred to separate project
+- Webhook signature verification, retry logic — deferred to v0.8+
+
 ### v0.7.1 — API Mediator (Layer 1)
 <!-- status: pending -->
 **Goal**: Stage, preview, and apply intercepted MCP tool calls (builds on existing `PendingAction` from v0.5.1).
@@ -1677,6 +1694,19 @@ New/modified files:
 - **Rollback**: Best-effort (some API calls are not reversible). Record outcome for audit.
 - **Integration with ToolCallInterceptor**: Existing `ActionKind` classification drives the mediator's behavior.
 
+#### Completed
+
+- ✅ `ApiMediator` implementing `ResourceMediator` for `mcp://` scheme
+- ✅ `StagedApiCall` struct for serializable staged API call data
+- ✅ Stage: serialize MCP tool call as JSON to staging dir + in-memory cache
+- ✅ Preview: human-readable summary with risk flags (IRREVERSIBLE, EXTERNAL)
+- ✅ Apply: marks call as approved, cleans up staging file
+- ✅ Rollback: removes staged file and cache entry
+- ✅ Pattern-based classification: ReadOnly, Irreversible, ExternalSideEffect, StateChanging
+- ✅ URI parsing: `mcp://gmail_send` → `gmail_send`, `mcp://slack/post/message` → `slack_post_message`
+- ✅ Human-readable description from tool params (to, subject, channel, etc.)
+- ✅ 12 tests covering stage/preview/apply/rollback/classify/extract/describe
+
 ### v0.7.2 — Agent-Guided Setup
 <!-- status: pending -->
 **Goal**: Conversational setup flow where a TA agent helps configure workflows — and the resulting config is a TA draft the user reviews.
@@ -1685,6 +1715,15 @@ New/modified files:
 - **Output is a draft**: Proposed workflow config, agent configs, credential connections appear as artifacts for review.
 - **Progressive disclosure**: Minimal config first, `ta setup refine` for more.
 - **Extension point**: Projects on top (Virtual Office, Infra Ops) can provide setup templates that `ta setup --template <name>` consumes.
+
+#### Completed
+
+- ✅ `ta setup wizard` — auto-detects project type, generates full .ta/ config suite
+- ✅ `ta setup refine <section>` — updates single config section (workflow, memory, policy, agents, channels)
+- ✅ `ta setup show` — displays resolved config from .ta/ files
+- ✅ Template generators for workflow.toml, memory.toml, policy.yaml, agent YAML, channel config
+- ✅ Project type detection (Cargo.toml → Rust, package.json → TypeScript, etc.)
+- ✅ 5 tests covering wizard, refine, show, and project detection
 
 ### v0.7.3 — Project Template Repository & `ta init`
 <!-- status: pending -->
@@ -1706,12 +1745,32 @@ New/modified files:
 - **Output is a draft**: Everything generated is a TA draft. User reviews before anything lands in the project.
 - **Integration with v0.7.2**: `ta setup` is interactive refinement of existing config; `ta init` is bootstrapping a new project. Both produce drafts.
 
+#### Completed
+
+- ✅ `ta init run` with `--template <name>` and `--detect` flags
+- ✅ `ta init templates` — lists all available templates with descriptions
+- ✅ 5 built-in templates: rust-workspace, typescript-monorepo, python-ml, go-service, generic
+- ✅ Full config generation: workflow.toml, memory.toml, policy.yaml, agent YAML, .taignore, constitutions
+- ✅ Memory seeding: parses Cargo.toml/package.json for workspace members → seeds arch:module-map
+- ✅ Language-specific .taignore patterns
+- ✅ Project type auto-detection with `--detect`
+- ✅ 10 tests covering init, templates, detection, memory seeding, workspace extraction
+
 ### v0.7.4 — Memory & Config Cleanup
 <!-- status: pending -->
 **Goal**: Wire up deferred memory integration points from v0.6.3.
 
 - **`.ta/memory.toml` backend toggle**: `run.rs` store construction currently always uses RuVector-first fallback logic. Wire the parsed `backend = "fs"` / `backend = "ruvector"` toggle so users can explicitly choose filesystem-only mode.
 - **Human guidance domain auto-classification**: Guidance events currently pass `phase_id` but don't use `KeyDomainMap` to classify domains. Route human guidance through the key schema so entries get project-appropriate keys (e.g., "always use bun" → `conv:build-tool` instead of a generic slug).
+
+#### Completed
+
+- ✅ `run.rs` respects `.ta/memory.toml` `backend` toggle — skips RuVector when backend = "fs"
+- ✅ `classify_guidance_domain()` in auto_capture.rs — keyword-based domain classification for 7 domains
+- ✅ Guidance stored with domain-aware keys (e.g., `conv:build-tool:slug` instead of `guidance:slug`)
+- ✅ Explicit tag override: `domain:X` tag takes priority over auto-classification
+- ✅ 7 new tests for domain classification and storage behavior
+- ✅ Version bumped to `0.7.0-alpha`
 
 ---
 

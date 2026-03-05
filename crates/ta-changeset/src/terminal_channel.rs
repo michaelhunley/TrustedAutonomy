@@ -12,6 +12,7 @@ use crate::interaction::{
     Notification, NotificationLevel,
 };
 use crate::review_channel::{ReviewChannel, ReviewChannelError};
+use crate::session_channel::{HumanInput, SessionChannel, SessionChannelError, SessionEvent};
 
 /// A ReviewChannel that uses stdin/stdout for human interaction.
 ///
@@ -244,6 +245,65 @@ impl AutoApproveChannel {
 impl Default for AutoApproveChannel {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// A SessionChannel implementation for terminal-based interaction (v0.7.0).
+///
+/// Emits session events to stdout and reads human input from stdin.
+pub struct TerminalSessionChannel {
+    channel_id: String,
+}
+
+impl TerminalSessionChannel {
+    pub fn new() -> Self {
+        Self {
+            channel_id: "terminal:session".to_string(),
+        }
+    }
+}
+
+impl Default for TerminalSessionChannel {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SessionChannel for TerminalSessionChannel {
+    fn emit(&self, event: &SessionEvent) -> Result<(), SessionChannelError> {
+        println!("{}", event);
+        Ok(())
+    }
+
+    fn receive(
+        &self,
+        timeout: std::time::Duration,
+    ) -> Result<Option<HumanInput>, SessionChannelError> {
+        // Simple blocking stdin read with no real timeout (terminal limitation).
+        // In practice, the agent process drives the session and the human types
+        // when prompted. A full PTY-based implementation would use non-blocking I/O.
+        let _ = timeout;
+        let mut line = String::new();
+        match std::io::stdin().read_line(&mut line) {
+            Ok(0) => Ok(None), // EOF
+            Ok(_) => {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    Ok(None)
+                } else if trimmed.eq_ignore_ascii_case("abort") {
+                    Ok(Some(HumanInput::Abort))
+                } else {
+                    Ok(Some(HumanInput::Message {
+                        text: trimmed.to_string(),
+                    }))
+                }
+            }
+            Err(e) => Err(SessionChannelError::Io(e)),
+        }
+    }
+
+    fn channel_id(&self) -> &str {
+        &self.channel_id
     }
 }
 

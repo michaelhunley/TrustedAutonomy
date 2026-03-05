@@ -2321,7 +2321,7 @@ dependencies = [
 
 [[package]]
 name = "ta-cli"
-version = "0.6.3-alpha"
+version = "0.7.0-alpha"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2339,6 +2339,7 @@ dependencies = [
  "ta-credentials",
  "ta-goal",
  "ta-mcp-gateway",
+ "ta-mediation",
  "ta-memory",
  "ta-policy",
  "ta-session",

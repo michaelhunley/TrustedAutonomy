@@ -9,6 +9,7 @@
 //! The data model aligns with `schema/draft_package.schema.json`.
 
 pub mod changeset;
+pub mod channel_registry;
 pub mod diff;
 pub mod diff_handlers;
 pub mod draft_package;
@@ -28,6 +29,10 @@ pub mod uri_pattern;
 pub mod webhook_channel;
 
 pub use changeset::{ChangeKind, ChangeSet, CommitIntent};
+pub use channel_registry::{
+    ChannelCapabilitySet, ChannelFactory, ChannelRegistry, ChannelRouteConfig,
+    ChannelRoutingConfig, NotifyRouteConfig, TaConfig,
+};
 pub use diff::DiffContent;
 pub use diff_handlers::{DiffHandlerError, DiffHandlersConfig, HandlerRule};
 pub use draft_package::{ActionKind, DraftPackage, DraftStatus, ExplanationTiers, PendingAction};
@@ -52,7 +57,7 @@ pub use session_channel::{
 pub use supervisor::{
     DependencyGraph, SupervisorAgent, ValidationError, ValidationResult, ValidationWarning,
 };
-pub use terminal_channel::{AutoApproveChannel, TerminalChannel};
+pub use terminal_channel::{AutoApproveChannel, TerminalChannel, TerminalSessionChannel};
 pub use uri_pattern::{filter_uris, matches_uri};
 pub use webhook_channel::WebhookChannel;
 

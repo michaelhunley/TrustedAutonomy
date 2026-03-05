@@ -279,7 +279,11 @@ impl AutoCapture {
         Ok(())
     }
 
-    /// Capture human guidance into persistent memory.
+    /// Capture human guidance into persistent memory (v0.7.4: domain auto-classification).
+    ///
+    /// Routes guidance through the key schema so entries get project-appropriate
+    /// keys. For example, "always use bun" → `conv:npm:package-manager` instead
+    /// of a generic slug.
     pub fn on_human_guidance(
         &self,
         store: &mut dyn MemoryStore,
@@ -289,14 +293,23 @@ impl AutoCapture {
             return Ok(());
         }
 
-        // Use a content-based key so duplicate guidance is deduplicated.
-        let key = format!("guidance:{}", slug_from_text(&event.guidance, 80));
+        // v0.7.4: Auto-classify guidance domain from content and tags.
+        let domain = classify_guidance_domain(&event.guidance, &event.tags);
+        let key = match &domain {
+            Some(d) => format!("conv:{}:{}", d, slug_from_text(&event.guidance, 60)),
+            None => format!("guidance:{}", slug_from_text(&event.guidance, 80)),
+        };
+
         let value = serde_json::json!({
             "guidance": event.guidance,
+            "domain": domain,
         });
         let mut tags = event.tags.clone();
         tags.push("human-guidance".to_string());
         tags.push(format!("framework:{}", event.agent_framework));
+        if let Some(ref d) = domain {
+            tags.push(format!("domain:{}", d));
+        }
 
         let params = StoreParams {
             goal_id: event.goal_id,
@@ -307,7 +320,7 @@ impl AutoCapture {
         };
 
         store.store_with_params(&key, value, tags, "ta-system", params)?;
-        debug!("auto-captured human guidance");
+        debug!(domain = ?domain, "auto-captured human guidance");
         Ok(())
     }
 
@@ -513,6 +526,111 @@ fn extract_module_name(path: &str) -> Option<String> {
     if parts.first() == Some(&"src") && parts.len() >= 2 {
         return Some(parts[1].to_string());
     }
+    None
+}
+
+/// Classify human guidance into a domain based on content keywords (v0.7.4).
+///
+/// Returns a domain string like "build-tool", "testing", "style", "dependency"
+/// that can be used as a key component, or None for generic guidance.
+fn classify_guidance_domain(guidance: &str, tags: &[String]) -> Option<String> {
+    let lower = guidance.to_lowercase();
+
+    // Check tags first — explicit classification.
+    for tag in tags {
+        let t = tag.to_lowercase();
+        if t.starts_with("domain:") {
+            return Some(t.strip_prefix("domain:").unwrap().to_string());
+        }
+    }
+
+    // Keyword-based classification.
+    let rules: &[(&[&str], &str)] = &[
+        // Build tools.
+        (
+            &[
+                "npm", "yarn", "pnpm", "bun", "cargo", "pip", "poetry", "go build", "make", "just",
+                "nix",
+            ],
+            "build-tool",
+        ),
+        // Testing.
+        (
+            &[
+                "test", "spec", "assert", "mock", "fixture", "tempdir", "tempfile",
+            ],
+            "testing",
+        ),
+        // Code style.
+        (
+            &[
+                "format", "lint", "clippy", "eslint", "prettier", "black", "style", "indent",
+                "tab", "space",
+            ],
+            "style",
+        ),
+        // Dependencies.
+        (
+            &[
+                "dependency",
+                "crate",
+                "package",
+                "library",
+                "import",
+                "require",
+            ],
+            "dependency",
+        ),
+        // Git workflow.
+        (
+            &[
+                "commit",
+                "branch",
+                "merge",
+                "rebase",
+                "push",
+                "pull request",
+                "pr ",
+            ],
+            "git",
+        ),
+        // Architecture.
+        (
+            &[
+                "module",
+                "crate",
+                "pattern",
+                "architecture",
+                "structure",
+                "layer",
+                "trait",
+                "interface",
+            ],
+            "architecture",
+        ),
+        // Security.
+        (
+            &[
+                "secret",
+                "credential",
+                "auth",
+                "token",
+                "password",
+                "encrypt",
+                "security",
+            ],
+            "security",
+        ),
+    ];
+
+    for (keywords, domain) in rules {
+        for keyword in *keywords {
+            if lower.contains(keyword) {
+                return Some(domain.to_string());
+            }
+        }
+    }
+
     None
 }
 
@@ -1009,5 +1127,83 @@ max_context_entries = 20
             "use-tempfile-tempdir"
         );
         assert_eq!(slug_from_text("a".repeat(100).as_str(), 50), "a".repeat(50));
+    }
+
+    #[test]
+    fn guidance_domain_classification_build_tool() {
+        let domain = classify_guidance_domain("always use bun instead of npm", &[]);
+        assert_eq!(domain.as_deref(), Some("build-tool"));
+    }
+
+    #[test]
+    fn guidance_domain_classification_testing() {
+        let domain = classify_guidance_domain("use tempdir for all test fixtures", &[]);
+        assert_eq!(domain.as_deref(), Some("testing"));
+    }
+
+    #[test]
+    fn guidance_domain_classification_style() {
+        let domain = classify_guidance_domain("run clippy before committing", &[]);
+        assert_eq!(domain.as_deref(), Some("style"));
+    }
+
+    #[test]
+    fn guidance_domain_classification_from_tag() {
+        let domain =
+            classify_guidance_domain("some general advice", &["domain:custom-domain".to_string()]);
+        assert_eq!(domain.as_deref(), Some("custom-domain"));
+    }
+
+    #[test]
+    fn guidance_domain_classification_none() {
+        let domain = classify_guidance_domain("take your time with this", &[]);
+        assert!(domain.is_none());
+    }
+
+    #[test]
+    fn guidance_stored_with_domain_key() {
+        let dir = TempDir::new().unwrap();
+        let mut store = test_store(&dir);
+        let capture = AutoCapture::new(AutoCaptureConfig::default());
+
+        let event = HumanGuidanceEvent {
+            goal_id: None,
+            agent_framework: "claude-code".into(),
+            guidance: "Always use bun for package management".into(),
+            tags: vec![],
+            phase_id: None,
+        };
+
+        capture.on_human_guidance(&mut store, &event).unwrap();
+
+        let all = store.list(None).unwrap();
+        assert_eq!(all.len(), 1);
+        let entry = &all[0];
+        // Should use domain-classified key.
+        assert!(entry.key.starts_with("conv:build-tool:"));
+        assert!(entry.tags.contains(&"domain:build-tool".to_string()));
+        // Value should include domain.
+        assert_eq!(entry.value["domain"].as_str(), Some("build-tool"));
+    }
+
+    #[test]
+    fn guidance_without_domain_uses_generic_key() {
+        let dir = TempDir::new().unwrap();
+        let mut store = test_store(&dir);
+        let capture = AutoCapture::new(AutoCaptureConfig::default());
+
+        let event = HumanGuidanceEvent {
+            goal_id: None,
+            agent_framework: "claude-code".into(),
+            guidance: "Take a careful approach".into(),
+            tags: vec![],
+            phase_id: None,
+        };
+
+        capture.on_human_guidance(&mut store, &event).unwrap();
+
+        let all = store.list(None).unwrap();
+        assert_eq!(all.len(), 1);
+        assert!(all[0].key.starts_with("guidance:"));
     }
 }
