@@ -764,7 +764,9 @@ fn walk_dir_relative(
         if path.is_dir() {
             walk_dir_relative(&path, root, files)?;
         } else if let Ok(rel) = path.strip_prefix(root) {
-            files.push(rel.to_string_lossy().to_string());
+            // Normalize to forward slashes so URIs are consistent across platforms.
+            let rel_str = rel.to_string_lossy().replace('\\', "/");
+            files.push(rel_str);
         }
     }
 
