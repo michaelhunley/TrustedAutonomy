@@ -10,10 +10,9 @@
 
 use std::path::Path;
 
-use ta_changeset::{
-    InteractionKind, InteractionRequest, InteractionResponse, InteractiveSession,
-    InteractiveSessionState, InteractiveSessionStore, Urgency,
-};
+#[cfg(unix)]
+use ta_changeset::{InteractionKind, InteractionRequest, InteractionResponse, Urgency};
+use ta_changeset::{InteractiveSession, InteractiveSessionState, InteractiveSessionStore};
 use ta_goal::GoalRunStore;
 use ta_mcp_gateway::GatewayConfig;
 
@@ -406,12 +405,24 @@ pub fn execute(
     println!();
 
     // Choose launch mode: headless (piped), PTY-interactive, or simple.
-    let launch_result = if headless {
+    // Type alias for the guidance log — on Unix this contains captured human inputs
+    // from PTY sessions; on Windows the Vec is always empty.
+    type GuidanceLog = Vec<(String, String)>;
+    let launch_result: std::io::Result<(std::process::ExitStatus, GuidanceLog)> = if headless {
         launch_agent_headless(&agent_config, &staging_path, &prompt).map(|exit| (exit, Vec::new()))
     } else if interactive {
         #[cfg(unix)]
         {
-            launch_agent_interactive(&agent_config, &staging_path, &prompt, &mut session_store)
+            launch_agent_interactive(&agent_config, &staging_path, &prompt, &mut session_store).map(
+                |(exit, log)| {
+                    (
+                        exit,
+                        log.iter()
+                            .map(|(req, resp)| (format!("{}", req), format!("{}", resp)))
+                            .collect(),
+                    )
+                },
+            )
         }
         #[cfg(not(unix))]
         {
@@ -435,8 +446,11 @@ pub fn execute(
 
             // Log guidance interactions to session if any.
             if let Some((ref store, ref mut session)) = session_store {
-                for (req, resp) in &guidance_log {
-                    session.log_message("ta-system", &format!("Guidance: {} → {}", req, resp));
+                for (req_str, resp_str) in &guidance_log {
+                    session.log_message(
+                        "ta-system",
+                        &format!("Guidance: {} → {}", req_str, resp_str),
+                    );
                 }
                 store.save(session)?;
             }

@@ -250,10 +250,22 @@ impl SandboxRunner {
 
     /// Validate that a path argument doesn't escape the workspace.
     fn validate_path(&self, path_str: &str) -> Result<(), SandboxError> {
+        // Fast reject: any path containing ".." is suspicious. Normalize and check.
+        // This catches ../../etc/passwd even when the intermediate dirs don't exist.
+        let normalized = normalize_path_components(path_str);
+        if normalized.starts_with("..")
+            || normalized.contains("/../")
+            || normalized.contains("\\..\\")
+        {
+            return Err(SandboxError::PathEscape {
+                path: path_str.to_string(),
+                workspace: self.workspace_root.display().to_string(),
+            });
+        }
+
         let path = self.workspace_root.join(path_str);
 
-        // Canonicalize to resolve .. and symlinks.
-        // If the path doesn't exist yet, check the parent.
+        // If the path or its parent exists, canonicalize for symlink resolution.
         let resolved = if path.exists() {
             path.canonicalize().unwrap_or(path)
         } else if let Some(parent) = path.parent() {
@@ -261,7 +273,8 @@ impl SandboxRunner {
                 let canonical_parent = parent.canonicalize().unwrap_or(parent.to_path_buf());
                 canonical_parent.join(path.file_name().unwrap_or_default())
             } else {
-                path
+                // Parent doesn't exist — use the workspace root + normalized path.
+                self.workspace_root.join(&normalized)
             }
         } else {
             path
@@ -457,6 +470,30 @@ impl Default for NetworkPolicy {
             allow_domains: vec![],
             deny_domains: vec![],
         }
+    }
+}
+
+/// Normalize path components by resolving `.` and `..` lexically (without filesystem access).
+/// Returns the normalized relative path as a string.
+fn normalize_path_components(path: &str) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    for component in path.split(['/', '\\']) {
+        match component {
+            "" | "." => {}
+            ".." => {
+                if parts.is_empty() || parts.last() == Some(&"..") {
+                    parts.push("..");
+                } else {
+                    parts.pop();
+                }
+            }
+            other => parts.push(other),
+        }
+    }
+    if parts.is_empty() {
+        ".".to_string()
+    } else {
+        parts.join("/")
     }
 }
 
