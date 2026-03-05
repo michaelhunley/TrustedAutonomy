@@ -13,7 +13,7 @@ use std::path::Path;
 use ta_mcp_gateway::GatewayConfig;
 
 use super::plan;
-use super::run::build_memory_context_section_for_inject;
+use super::run::{build_memory_context_section_for_inject, inject_mcp_server_config, restore_mcp_server_config};
 
 /// Minimal agent config for the dev-loop orchestrator.
 #[derive(serde::Deserialize, Clone, Debug)]
@@ -295,6 +295,13 @@ pub fn execute(
     println!("  Mode: orchestration (no staging overlay)");
     println!();
 
+    // Inject TA MCP server into .mcp.json so the agent can call ta_plan,
+    // ta_goal, ta_draft, ta_context, ta_release via MCP.
+    // Without this, the agent has no MCP server to handle those tool calls.
+    inject_mcp_server_config(&project_root)?;
+    println!("  MCP: registered TA server (ta serve) in .mcp.json");
+    println!();
+
     // Launch the agent in the project directory (not a staging workspace).
     let args: Vec<String> = agent_config
         .args_template
@@ -310,7 +317,14 @@ pub fn execute(
         cmd.env(key, value);
     }
 
-    match cmd.status() {
+    let result = cmd.status();
+
+    // Always restore .mcp.json, even if the agent failed.
+    if let Err(e) = restore_mcp_server_config(&project_root) {
+        eprintln!("Warning: failed to restore .mcp.json: {}", e);
+    }
+
+    match result {
         Ok(exit) => {
             if exit.success() {
                 println!("\nDev session ended.");

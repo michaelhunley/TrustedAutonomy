@@ -1054,12 +1054,14 @@ fn restore_claude_settings(staging_path: &Path) -> anyhow::Result<()> {
 const MCP_JSON_PATH: &str = ".mcp.json";
 const MCP_JSON_BACKUP: &str = ".ta/mcp_json_original";
 
-/// Inject TA MCP server config into the staging workspace's `.mcp.json`.
+/// Inject TA MCP server config into a directory's `.mcp.json`.
 ///
-/// This allows macro goal agents to call TA's MCP tools (ta_plan, ta_goal,
+/// This allows agents to call TA's MCP tools (ta_plan, ta_goal,
 /// ta_draft, ta_context). Without this, the agent sees tool documentation
 /// in CLAUDE.md but has no MCP server configured to handle the calls.
-fn inject_mcp_server_config(staging_path: &Path) -> anyhow::Result<()> {
+///
+/// Used by both `ta run --macro` (staging workspace) and `ta dev` (project root).
+pub(crate) fn inject_mcp_server_config(staging_path: &Path) -> anyhow::Result<()> {
     let mcp_json_path = staging_path.join(MCP_JSON_PATH);
     let backup_path = staging_path.join(MCP_JSON_BACKUP);
 
@@ -1102,10 +1104,10 @@ fn inject_mcp_server_config(staging_path: &Path) -> anyhow::Result<()> {
         .get_mut("mcpServers")
         .and_then(|s| s.as_object_mut())
     {
-        servers.insert("trusted-autonomy".to_string(), ta_server_entry);
+        servers.insert("ta".to_string(), ta_server_entry);
     } else {
         mcp_config["mcpServers"] = serde_json::json!({
-            "trusted-autonomy": ta_server_entry
+            "ta": ta_server_entry
         });
     }
 
@@ -1113,8 +1115,10 @@ fn inject_mcp_server_config(staging_path: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Restore the original `.mcp.json` before computing diffs.
-fn restore_mcp_server_config(staging_path: &Path) -> anyhow::Result<()> {
+/// Restore the original `.mcp.json` after agent exits.
+///
+/// Used by both `ta run --macro` (before diff) and `ta dev` (cleanup).
+pub(crate) fn restore_mcp_server_config(staging_path: &Path) -> anyhow::Result<()> {
     let mcp_json_path = staging_path.join(MCP_JSON_PATH);
     let backup_path = staging_path.join(MCP_JSON_BACKUP);
 

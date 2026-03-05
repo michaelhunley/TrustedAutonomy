@@ -9,7 +9,13 @@ use rmcp::ServiceExt;
 use ta_mcp_gateway::{GatewayConfig, TaGatewayServer};
 
 pub fn execute(project_root: &Path) -> anyhow::Result<()> {
-    let config = GatewayConfig::for_project(project_root);
+    // Honor TA_PROJECT_ROOT env var if set (used when launched as MCP server
+    // subprocess via .mcp.json). Falls back to --project-root CLI arg.
+    let effective_root = std::env::var("TA_PROJECT_ROOT")
+        .ok()
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| project_root.to_path_buf());
+    let config = GatewayConfig::for_project(&effective_root);
     let server = TaGatewayServer::new(config)?;
 
     let rt = tokio::runtime::Runtime::new()?;

@@ -58,7 +58,7 @@ fn install_claude_code(project_root: &Path) -> anyhow::Result<()> {
     } else {
         let mcp_json = serde_json::json!({
             "mcpServers": {
-                "trusted-autonomy": {
+                "ta": {
                     "type": "stdio",
                     "command": "cargo",
                     "args": ["run", "-p", "ta-daemon", "--"],
@@ -160,8 +160,8 @@ mod tests {
         let json: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(dir.path().join(".mcp.json")).unwrap())
                 .unwrap();
-        assert!(json["mcpServers"]["trusted-autonomy"].is_object());
-        assert_eq!(json["mcpServers"]["trusted-autonomy"]["type"], "stdio");
+        assert!(json["mcpServers"]["ta"].is_object());
+        assert_eq!(json["mcpServers"]["ta"]["type"], "stdio");
     }
 
     #[test]
