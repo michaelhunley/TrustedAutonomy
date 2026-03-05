@@ -2045,8 +2045,10 @@ runtime = "native-cli"
 - [x] `format_plan_checklist` shows `[-]` for deferred phases
 - [x] `ta plan status --json` includes `deferred` count
 
-#### Remaining (deferred to future)
-- Orchestrator→agent event-driven wiring via v0.8.0 subscription API (event subscriptions for goal.draft_ready, goal.completed, goal.failed) — deferred until event system is proven in use
+- [x] `ta_goal action:"start" launch:true` spawns `ta run --headless` in background
+- [x] `ta_goal` publishes `GoalStarted` event to `.ta/events/` store on sub-goal creation
+- [x] `ta_goal` supports `agent`, `phase`, and `launch` parameters for orchestrator control
+- [x] `ta-mcp-gateway` depends on `ta-events` for event publishing
 
 #### Implementation scope
 
@@ -2056,6 +2058,8 @@ runtime = "native-cli"
 - `apps/ta-cli/src/commands/run.rs` — add `--headless` flag, `launch_agent_headless()`, `find_latest_draft_id()`
 - `apps/ta-cli/src/commands/draft.rs` — `--phase` override on apply, comma-separated batch marking
 - `apps/ta-cli/src/main.rs` — wire `--headless` flag to run command
+- `crates/ta-mcp-gateway/src/server.rs` — `ta_goal` launch, agent, phase params + event publishing
+- `crates/ta-mcp-gateway/Cargo.toml` — add `ta-events` dependency
 - `PLAN.md` — mark v0.1 and v0.1.1 as `<!-- status: deferred -->`
 
 ---
