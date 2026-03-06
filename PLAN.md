@@ -2570,7 +2570,7 @@ passing the cursor from the previous response returns only *new* events. Add a t
 ---
 
 ### v0.9.8 — Interactive TA Shell (`ta shell`)
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: A thin terminal REPL client for the TA daemon — providing a single-terminal interactive experience for commands, agent conversation, and event notifications. The shell is a daemon client, not a standalone tool.
 
 #### Architecture
@@ -2670,10 +2670,32 @@ This means:
 
 6. **`ta shell --attach <session_id>`**: Attach to an existing daemon agent session (useful for reconnecting after a disconnect or switching between sessions).
 
+#### Completed
+
+- [x] Shell REPL core: `ta shell` command with rustyline, persistent history at `~/.ta/shell_history`, `ta> ` prompt
+- [x] Input routing through `POST /api/input` — daemon handles command vs agent dispatch
+- [x] Tab completion from `GET /api/routes` (shortcuts + built-in shell commands)
+- [x] Status header on startup from `GET /api/status` — project, version, next phase, drafts, agents
+- [x] Background SSE event listener (`GET /api/events`) rendering inline notifications
+- [x] `ta shell --init` generates default `.ta/shell.toml` routing config
+- [x] `ta shell --attach <session_id>` attaches to existing daemon agent session
+- [x] `ta shell --url <url>` for custom daemon URL override
+- [x] Built-in shell commands: help, :status, exit/quit/:q
+- [x] Default routing config template (`apps/ta-cli/templates/shell.toml`)
+- [x] 8 tests (SSE rendering, completions, config init, daemon URL resolution)
+
+#### Remaining (deferred)
+- Unix domain socket connection (`.ta/daemon.sock`) — deferred until UDS listener is added to daemon
+- Auto-start daemon if not running (`ta daemon start` in background)
+- Streaming agent response rendering (partial lines, markdown via termimad)
+- Ctrl+C interrupt of current agent response
+- Non-disruptive event notifications (redraw prompt without breaking input line)
+- Periodic status header refresh from events
+
 #### Implementation scope
 - `apps/ta-cli/src/commands/shell.rs` — REPL core (~200 lines), daemon client, SSE rendering
-- `apps/ta-cli/Cargo.toml` — add `rustyline`, `reqwest` (HTTP client), `eventsource-client` (SSE)
-- `templates/shell.toml` — default routing config
+- `apps/ta-cli/Cargo.toml` — add `rustyline`, `reqwest` (HTTP client), `tokio-stream` (SSE)
+- `apps/ta-cli/templates/shell.toml` — default routing config
 - `docs/USAGE.md` — `ta shell` documentation
 
 #### Why so simple?

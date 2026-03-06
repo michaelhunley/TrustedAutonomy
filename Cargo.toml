@@ -86,5 +86,11 @@ rand = "0.8"
 tokio-stream = { version = "0.1", features = ["sync"] }
 async-stream = "0.3"
 
+# HTTP client — used by `ta shell` to talk to the daemon API (v0.9.8).
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+
+# Line editing — readline-style REPL for `ta shell` (v0.9.8).
+rustyline = "15"
+
 # Testing utilities
 tempfile = "3"

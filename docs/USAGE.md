@@ -1,6 +1,6 @@
 # Trusted Autonomy -- User Guide
 
-**Version**: v0.9.7-alpha
+**Version**: v0.9.8-alpha
 
 Trusted Autonomy (TA) is a governance wrapper for AI agents. It lets any agent work freely in an isolated workspace, then holds the proposed changes at a human review checkpoint before anything takes effect. You see what the agent wants to do, approve or reject each change, and maintain a complete audit trail.
 
@@ -13,6 +13,7 @@ Trusted Autonomy (TA) is a governance wrapper for AI agents. It lets any agent w
    - [Set up your project](#set-up-your-project)
    - [Start a development session](#start-a-development-session)
    - [Your first goal](#your-first-goal)
+   - [Quick Start with ta shell](#quick-start-with-ta-shell)
 2. [Core Concepts](#core-concepts)
    - [The Staging Model](#the-staging-model)
    - [Goals](#goals)
@@ -47,6 +48,7 @@ Trusted Autonomy (TA) is a governance wrapper for AI agents. It lets any agent w
    - [Context Memory](#context-memory)
    - [Web Review UI](#web-review-ui)
    - [Daemon API](#daemon-api)
+   - [Interactive Shell](#interactive-shell)
    - [Webhook Review Channel](#webhook-review-channel)
    - [MCP Tool Call Interception](#mcp-tool-call-interception)
    - [Session Lifecycle](#session-lifecycle)
@@ -164,11 +166,42 @@ ta init templates                # list all built-in templates
 
 ### Start a development session
 
-The fastest way to work with TA is `ta dev` -- an interactive session where TA reads your plan, suggests what to do next, and handles the goal → draft → review → apply loop:
+There are three ways to work with TA, depending on how much control you want:
+
+**Option A -- Interactive shell** (recommended for getting started):
+
+Use the convenience script (starts the daemon automatically):
+
+```bash
+./scripts/ta-shell.sh           # macOS / Linux
+.\scripts\ta-shell.ps1          # Windows PowerShell
+```
+
+Or start manually:
+
+```bash
+ta-daemon --project-root . &    # Start the daemon in the background
+ta shell                        # Open the interactive shell
+```
+
+The shell gives you a single terminal with commands, agent conversation, and live event notifications. Type `ta` commands directly, use shortcuts like `approve` and `status`, or ask the agent natural-language questions:
+
+```
+ta> status                            # Project overview
+ta> drafts                            # List pending drafts
+ta> What should we work on next?      # Ask the agent (if attached)
+ta> approve abc123                    # Approve a draft
+```
+
+See [Interactive Shell](#interactive-shell) for the full guide.
+
+**Option B -- Developer loop** (autonomous agent-driven):
 
 ```bash
 ta dev
 ```
+
+`ta dev` gives the agent the terminal -- it reads your plan, suggests what to do next, and handles the goal/draft/review/apply loop. You review elsewhere. Best for autonomous work on planned phases.
 
 From inside the session you can say things like:
 - "what's next" -- shows the next pending plan phase
@@ -176,7 +209,17 @@ From inside the session you can say things like:
 - "status" -- plan progress summary
 - "release" -- cut a release
 
+**Option C -- Manual commands** (full control):
+
 If you prefer manual control, use individual commands instead (see [Common Workflows](#common-workflows)).
+
+**When to use which:**
+
+| Mode | Who drives? | Best for |
+|------|------------|----------|
+| `ta shell` | Human drives, agent assists | Exploring, managing drafts, ad-hoc questions, multi-agent oversight |
+| `ta dev` | Agent drives, human reviews | Planned phase execution, autonomous development sessions |
+| Manual CLI | Human drives everything | Scripting, CI, one-off commands |
 
 ### Your first goal
 
@@ -203,6 +246,39 @@ ta draft apply <draft-id>
 4. **Apply**: Approved changes were copied back into your project.
 
 The agent never touched your real files. Reject the draft and nothing changes.
+
+### Quick Start with ta shell
+
+If you prefer a persistent interactive session over one-off commands, use the shell. This walkthrough takes you from zero to a working project:
+
+```bash
+# 1. Set up the project (new or existing)
+cd my-project
+ta init --detect                        # Auto-detect toolchain, generate config
+
+# 2. Start daemon + open shell (one command)
+./scripts/ta-shell.sh                   # Starts daemon if needed, opens shell
+
+# Or do it manually:
+# ta-daemon --project-root . &          # Background daemon on port 7700
+# ta shell                              # Open the shell
+```
+
+Now you're in the interactive shell. Everything happens from here:
+
+```
+ta> status                              # See project overview
+ta> plan                                # Check plan phases
+ta> ta run "Add CI workflow" --source . # Start a goal
+ta> drafts                              # Wait, then list drafts
+ta> view abc123                         # Review the draft
+ta> approve abc123                      # Approve it
+ta> ta draft apply abc123               # Apply to your project
+ta> :status                             # Refresh status header
+ta> exit                                # Done for now
+```
+
+The shell remembers your command history across sessions. Reconnect any time with `ta shell` -- the daemon keeps running.
 
 ---
 
@@ -1507,6 +1583,240 @@ match = "approve"
 expand = "ta draft approve"
 ```
 
+### Interactive Shell
+
+The interactive shell (`ta shell`) is a thin REPL client for the TA daemon. It gives you a single terminal with commands, agent conversation, and real-time event notifications.
+
+#### Prerequisites
+
+The shell connects to a running TA daemon. The easiest way is the convenience script that handles everything:
+
+```bash
+# macOS / Linux -- starts daemon if needed, then opens the shell
+./scripts/ta-shell.sh
+
+# Windows PowerShell
+.\scripts\ta-shell.ps1
+
+# With options
+./scripts/ta-shell.sh --port 8080 --project-root /path/to/project
+```
+
+Or manage the daemon manually:
+
+```bash
+# Start the daemon (runs on http://127.0.0.1:7700 by default)
+ta-daemon --project-root .
+
+# Or run it in the background
+ta-daemon --project-root . &
+
+# Verify it's running
+curl -s http://127.0.0.1:7700/api/status | head
+```
+
+If the daemon is not running, `ta shell` will show connection errors when you type commands.
+
+#### Starting the shell
+
+```bash
+# Start the shell (connects to daemon at 127.0.0.1:7700)
+ta shell
+
+# Connect to a custom daemon URL
+ta shell --url http://my-server:7700
+
+# Attach to an existing agent session
+ta shell --attach sess-abc123
+```
+
+On startup, the shell displays a status header:
+
+```
+TrustedAutonomy v0.9.8 | Next: v0.9.9 -- Conversational Bootstrapping | 2 drafts | 1 agents | http://127.0.0.1:7700
+Type 'help' for commands, 'exit' to quit.
+```
+
+#### Using the shell
+
+Input is routed through the daemon's routing table. Recognized prefixes run as commands; everything else goes to the agent (if a session is attached):
+
+```
+ta> ta draft list                     # Runs: ta draft list
+ta> git status                        # Runs: git status
+ta> !ls -la                           # Shell escape: sh -c ls -la
+ta> approve abc123                    # Shortcut: ta draft approve abc123
+ta> status                            # Shortcut: ta status
+ta> What should we work on next?      # Sent to agent session
+```
+
+Built-in shell commands:
+
+| Command | Description |
+|---------|-------------|
+| `help` / `?` | Show help |
+| `:status` | Refresh the status header |
+| `exit` / `quit` / `:q` | Exit the shell |
+
+Tab completion is available for shortcuts and shell commands. Command history persists across sessions in `~/.ta/shell_history`.
+
+#### Typical workflow
+
+A common session using the shell looks like:
+
+```
+ta> status                            # Check project state
+ta> plan                              # See plan phases
+ta> ta run "Fix auth bug" --source .  # Start a goal
+ta> drafts                            # Check for completed drafts
+ta> view abc123                       # Review a draft
+ta> approve abc123                    # Approve it
+ta> ta draft apply abc123             # Apply changes
+```
+
+Background events appear inline as goals complete and drafts become ready:
+
+```
+ta> status
+
+-- Event: Draft abc123 is ready for review --
+
+ta> view abc123
+```
+
+#### Customizing routing
+
+Generate the default routing config:
+
+```bash
+ta shell --init
+```
+
+This creates `.ta/shell.toml` with the default route prefixes (`ta`, `git`, `!`) and shortcuts (`approve`, `deny`, `view`, etc.).
+
+#### Adding project-specific shortcuts
+
+Edit `.ta/shell.toml` to add shortcuts for commands you use often:
+
+```toml
+# Quick access to your test suite
+[[shortcuts]]
+match = "test"
+expand = "!cargo test --workspace"
+
+# Deploy shortcut
+[[shortcuts]]
+match = "deploy"
+expand = "!./scripts/deploy.sh"
+
+# Quick context lookup
+[[shortcuts]]
+match = "ctx"
+expand = "ta context list"
+```
+
+#### Adding custom route prefixes
+
+Routes map input prefixes to command executors. Add routes for tools your project uses:
+
+```toml
+# Route "npm ..." commands
+[[routes]]
+prefix = "npm "
+command = "npm"
+strip_prefix = true
+
+# Route "make ..." commands
+[[routes]]
+prefix = "make "
+command = "make"
+strip_prefix = true
+
+# Route "docker ..." commands
+[[routes]]
+prefix = "docker "
+command = "docker"
+strip_prefix = true
+```
+
+#### Remote shell access
+
+To use `ta shell` from a different machine, configure authentication on the daemon:
+
+```toml
+# .ta/daemon.toml
+[server]
+bind = "0.0.0.0"          # Listen on all interfaces (not just localhost)
+port = 7700
+
+[auth]
+require_token = true       # Require Bearer token for all requests
+local_bypass = false       # No bypass, even for localhost
+```
+
+Generate a token and connect:
+
+```bash
+# On the server: create a write-scoped token
+ta token create --scope write --label "remote-shell"
+# Output: ta_abc123...
+
+# On the client: connect with --url
+ta shell --url http://my-server:7700
+```
+
+The shell does not currently pass tokens (remote auth requires using the daemon API directly or extending the shell config). For now, remote access is best served via the [Web Review UI](#web-review-ui) or the [Daemon API](#daemon-api) directly.
+
+#### Daemon configuration reference
+
+The daemon reads `.ta/daemon.toml` for server, auth, command, and agent settings:
+
+```toml
+[server]
+bind = "127.0.0.1"         # Bind address
+port = 7700                 # Listen port
+cors_origins = ["*"]        # CORS origins for web clients
+
+[auth]
+require_token = false       # Require Bearer tokens
+local_bypass = true         # Skip auth for 127.0.0.1
+
+[commands]
+allowed = [                 # Command allowlist (glob patterns)
+  "ta draft *",
+  "ta goal *",
+  "ta plan *",
+  "ta status",
+  "ta context *",
+]
+write_commands = [           # Commands requiring write scope
+  "ta draft approve *",
+  "ta draft deny *",
+  "ta draft apply *",
+  "ta goal start *",
+]
+timeout_secs = 30           # Command execution timeout
+
+[agent]
+max_sessions = 3            # Maximum concurrent agent sessions
+idle_timeout_secs = 3600    # Idle session cleanup
+default_agent = "claude-code"
+
+[routing]
+use_shell_config = true     # Load routes from .ta/shell.toml
+```
+
+#### How it works
+
+The shell does no business logic -- all command execution, agent management, and event streaming live in the daemon. The shell is a rendering layer that:
+
+1. Fetches status from `GET /api/status`
+2. Reads input with line editing and history
+3. Sends input to `POST /api/input` (daemon routes to command or agent)
+4. Listens for events on `GET /api/events` (SSE) in the background
+
+This means `ta shell`, the web UI, Discord, and Slack all use the same daemon APIs.
+
 ### Webhook Review Channel
 
 Route draft review interactions to external systems via a file-based webhook exchange. This enables CI bots, Slack integrations, or any external process to participate in the review workflow.
@@ -1900,7 +2210,7 @@ After adding a custom framework, run `ta setup refine agents` to generate its ag
 
 ### What's Done
 
-TA has a working end-to-end workflow: staging isolation, agent wrapping, draft review with per-artifact approval, follow-up iterations, macro goals with inner-loop review, interactive sessions, plan tracking, release pipelines, behavioral drift detection, access constitutions, alignment profiles, decision observability, credential management, MCP tool call interception, web review UI, webhook review channels, persistent context memory with semantic search, session lifecycle management, unified policy configuration (6-layer cascade), resource mediation (extensible by URI scheme), pluggable channel registry, API mediation for MCP tool calls, agent-guided project setup, project template initialization, interactive developer loop (`ta dev`), and extensible agent framework registry with auto-detection.
+TA has a working end-to-end workflow: staging isolation, agent wrapping, draft review with per-artifact approval, follow-up iterations, macro goals with inner-loop review, interactive sessions, plan tracking, release pipelines, behavioral drift detection, access constitutions, alignment profiles, decision observability, credential management, MCP tool call interception, web review UI, webhook review channels, persistent context memory with semantic search, session lifecycle management, unified policy configuration (6-layer cascade), resource mediation (extensible by URI scheme), pluggable channel registry, API mediation for MCP tool calls, agent-guided project setup, project template initialization, interactive developer loop (`ta dev`), extensible agent framework registry with auto-detection, daemon HTTP API with SSE events and agent session management, and an interactive terminal shell (`ta shell`).
 
 ### Phase Status
 
@@ -1991,6 +2301,8 @@ TA has a working end-to-end workflow: staging isolation, agent wrapping, draft r
 | v0.9.5 | Enhanced draft view output | Done |
 | v0.9.5.1 | Goal lifecycle hygiene and orchestrator fixes | Done |
 | v0.9.6 | Orchestrator API and goal-scoped agent tracking | Done |
+| v0.9.7 | Daemon API expansion (HTTP API, SSE events, agent sessions) | Done |
+| v0.9.8 | Interactive TA shell (`ta shell` REPL, daemon client) | Done |
 
 See [PLAN.md](../PLAN.md) for full details on each phase.
 
