@@ -2483,6 +2483,325 @@ $ ta shell
 
 ---
 
+### v0.9.8 — Daemon API Expansion
+<!-- status: pending -->
+**Goal**: Promote the TA daemon from a draft-review web UI to a full API server that any interface (terminal, web, Discord, Slack, email) can connect to for commands, agent conversations, and event streams.
+
+#### Architecture
+
+```
+         Any Interface
+              │
+              ▼
+    TA Daemon (HTTP API)
+    ┌─────────────────────────────┐
+    │  /api/cmd      — run ta CLI │
+    │  /api/agent    — talk to AI │
+    │  /api/events   — SSE stream │
+    │  /api/status   — project    │
+    │  /api/drafts   — review     │  (existing)
+    │  /api/memory   — context    │  (existing)
+    ├─────────────────────────────┤
+    │  Auth: Bearer token or mTLS │
+    │  CORS: configurable origins │
+    │  Rate limit: per-token      │
+    └─────────────────────────────┘
+```
+
+#### Items
+
+1. **Command execution API** (`POST /api/cmd`): Execute any `ta` CLI command and return the output. The daemon forks the `ta` binary with the provided arguments, captures stdout/stderr, and returns them as JSON.
+   ```json
+   // Request
+   { "command": "ta draft list" }
+   // Response
+   { "exit_code": 0, "stdout": "ID  Status  Title\nabc  pending  Fix auth\n", "stderr": "" }
+   ```
+   - Command allowlist in `.ta/daemon.toml` — by default, all read commands allowed; write commands (approve, deny, apply, goal start) require explicit opt-in or elevated token scope.
+   - Execution timeout: configurable, default 30 seconds.
+
+2. **Agent session API** (`/api/agent/*`): Manage a headless agent subprocess that persists across requests. The daemon owns the agent's lifecycle.
+   - `POST /api/agent/start` — Start a new agent session. Launches the configured agent in headless mode with MCP sidecar. Returns a `session_id`.
+     ```json
+     { "agent": "claude-code", "context": "optional initial prompt" }
+     → { "session_id": "sess-abc123", "status": "running" }
+     ```
+   - `POST /api/agent/ask` — Send a prompt to the active agent session and stream the response.
+     ```json
+     { "session_id": "sess-abc123", "prompt": "What should we work on next?" }
+     → SSE stream of agent response chunks
+     ```
+   - `GET /api/agent/sessions` — List active agent sessions.
+   - `DELETE /api/agent/:session_id` — Stop an agent session.
+   - Agent sessions respect the same routing config (`.ta/shell.toml`) — if the "prompt" looks like a command, the daemon can auto-route it to `/api/cmd` instead. This makes every interface behave like `ta shell`.
+
+3. **Event stream API** (`GET /api/events`): Server-Sent Events (SSE) endpoint that streams TA events in real-time.
+   - Subscribes to the `FsEventStore` (same as `ta shell` would).
+   - Supports `?since=<cursor>` for replay from a point.
+   - Event types: `draft_built`, `draft_approved`, `draft_denied`, `goal_started`, `goal_completed`, `goal_failed`, `drift_detected`, `agent_session_started`, `agent_session_ended`.
+   - Each event includes `id` (cursor), `type`, `timestamp`, and `data` (JSON payload).
+   ```
+   event: draft_built
+   id: evt-001
+   data: {"draft_id":"abc123","title":"Fix auth","artifact_count":3}
+
+   event: goal_completed
+   id: evt-002
+   data: {"goal_run_id":"def456","title":"Phase 1","duration_secs":720}
+   ```
+
+4. **Project status API** (`GET /api/status`): Single endpoint returning the full project dashboard — same data as `ta status` (v0.9.6) but as JSON.
+   ```json
+   {
+     "project": "TrustedAutonomy",
+     "version": "0.9.8-alpha",
+     "current_phase": { "id": "v0.9.5.1", "title": "Goal Lifecycle Hygiene", "status": "pending" },
+     "active_agents": [
+       { "agent_id": "agent-1", "type": "claude-code", "goal": "abc123", "running_secs": 720 }
+     ],
+     "pending_drafts": 2,
+     "active_goals": 1,
+     "recent_events": [ ... ]
+   }
+   ```
+
+5. **Authentication & authorization**: Bearer token authentication for remote access.
+   - Token management: `ta daemon token create --scope read,write` → generates a random token stored in `.ta/daemon-tokens.json`.
+   - Scopes: `read` (status, list, view, events), `write` (approve, deny, apply, goal start, agent ask), `admin` (daemon config, token management).
+   - Local connections (127.0.0.1) can optionally bypass auth for solo use.
+   - Token is passed via `Authorization: Bearer <token>` header.
+   - All API calls logged to audit trail with the token identity.
+
+6. **Daemon configuration** (`.ta/daemon.toml`):
+   ```toml
+   [server]
+   bind = "127.0.0.1"       # "0.0.0.0" for remote access
+   port = 7700
+   cors_origins = ["*"]      # restrict in production
+
+   [auth]
+   require_token = true       # false for local-only use
+   local_bypass = true        # skip auth for 127.0.0.1
+
+   [commands]
+   # Allowlist for /api/cmd (glob patterns)
+   allowed = ["ta draft *", "ta goal *", "ta plan *", "ta status", "ta context *"]
+   # Commands that require write scope
+   write_commands = ["ta draft approve *", "ta draft deny *", "ta draft apply *", "ta goal start *"]
+
+   [agent]
+   max_sessions = 3           # concurrent agent sessions
+   idle_timeout_secs = 3600   # kill idle sessions after 1 hour
+   default_agent = "claude-code"
+
+   [routing]
+   use_shell_config = true    # use .ta/shell.toml for command vs agent routing
+   ```
+
+7. **Bridge protocol update**: Update the Discord/Slack/Gmail bridge templates to use the daemon API instead of file-based exchange. The bridges become thin HTTP clients:
+   - Message received → `POST /api/cmd` or `/api/agent/ask`
+   - Subscribe to `GET /api/events` for notifications
+   - No more file watching or exchange directory
+
+#### Implementation scope
+- `crates/ta-daemon/src/api/mod.rs` — API module organization
+- `crates/ta-daemon/src/api/cmd.rs` — command execution endpoint
+- `crates/ta-daemon/src/api/agent.rs` — agent session management, headless subprocess, SSE streaming
+- `crates/ta-daemon/src/api/events.rs` — SSE event stream from FsEventStore
+- `crates/ta-daemon/src/api/status.rs` — project status endpoint
+- `crates/ta-daemon/src/api/auth.rs` — token authentication, scope enforcement
+- `crates/ta-daemon/src/web.rs` — integrate new API routes alongside existing draft/memory routes
+- `crates/ta-daemon/Cargo.toml` — add `tokio-stream` (SSE), `rand` (token gen)
+- `templates/daemon.toml` — default daemon configuration
+- `templates/channels/discord-bridge-api.js` — updated bridge using daemon API
+- `templates/channels/slack-bridge-api.js` — updated bridge using daemon API
+- `docs/USAGE.md` — daemon API documentation, remote access setup
+- Tests: command execution with auth, agent session lifecycle, SSE event stream, token scope enforcement
+
+#### Version: `0.9.8-alpha`
+
+---
+
+### v0.9.9 — Conversational Project Bootstrapping (`ta new`)
+<!-- status: pending -->
+**Goal**: Start a new project from any interface by describing what you want in natural language. A planner agent generates the project structure and PLAN.md through conversation, then initializes the TA workspace.
+
+#### User Flow (from any interface)
+
+```
+You:  I want to build a Rust CLI that manages Cloudflare DNS
+      records with policy controls, audit logging, and a web
+      dashboard for reviewing changes.
+
+Agent: I'll help you plan this. A few questions:
+
+      1. Multi-account support? (manage DNS for several
+         Cloudflare accounts)
+      2. Should it also support Route53 or other providers,
+         or Cloudflare-only?
+      3. How strict should policy be — allowlist of editable
+         records, or more granular (per-type, per-zone)?
+
+You:  Multi-account yes. Cloudflare-only for now but design
+      for multiple providers later. Policy should be per-zone
+      and per-record-type.
+
+Agent: Here's a proposed plan:
+
+      **dns-guardian** — Cloudflare DNS governance CLI
+
+      Phase 1: Project Scaffold
+        Cargo workspace, CI, README, license, .ta/ init
+
+      Phase 2: Provider Abstraction & Cloudflare Client
+        DnsProvider trait, Cloudflare implementation,
+        account selection, auth (API token per account)
+
+      Phase 3: DNS Record Operations
+        List/create/update/delete, import existing records,
+        dry-run mode, diff preview before apply
+
+      Phase 4: Policy Engine
+        Per-zone record-type allowlist, approval required
+        for wildcard/MX changes, policy config in YAML
+
+      Phase 5: Audit Logging
+        Change log (who/what/when/why), export JSON/CSV,
+        tamper-evident chain (reuse ta-audit)
+
+      Phase 6: Web Dashboard
+        Record browser, change history, pending approvals,
+        served by embedded HTTP server
+
+      Phase 7: Tests & Documentation
+        Integration tests with API mock, user guide
+
+      Want to adjust anything before I generate the project?
+
+You:  Add a health check phase — periodic DNS resolution
+      validation with alerting.
+
+Agent: Added Phase 6.5: DNS Health Monitor (periodic
+      resolution checks, configurable alerts, health
+      dashboard widget). Dashboard moved to Phase 7.
+
+      Generating project now...
+
+      ✅ Created /projects/dns-guardian
+      ✅ Initialized .ta/ workspace
+      ✅ Generated PLAN.md (8 phases, 34 items)
+      ✅ Created Cargo.toml workspace scaffold
+      ✅ Created .ta/policy.yaml (default: checkpoint)
+
+      Ready to start Phase 1?
+
+You:  Yes
+
+Agent: [starts goal for Phase 1]
+      🚀 Goal started: "Phase 1: Project Scaffold"
+```
+
+#### Architecture
+
+```
+  "ta new" or daemon API
+          │
+          ▼
+   Planner Agent Session
+   (no project yet — runs in temp dir)
+          │
+          ├── Conversation to refine requirements
+          │   (iterative Q&A, user describes what they want)
+          │
+          ├── Plan generation
+          │   (agent produces PLAN.md from conversation)
+          │
+          ├── Project initialization
+          │   ├── mkdir + cargo init / npm init / etc.
+          │   ├── ta init (creates .ta/ structure)
+          │   ├── Write PLAN.md
+          │   ├── Write initial config (.ta/policy.yaml, agents/*.yaml)
+          │   └── git init + initial commit
+          │
+          └── Hand off to normal TA workflow
+              (project exists, can run goals)
+```
+
+#### Items
+
+1. **`ta new` CLI command**: Starts a conversational project bootstrapping session.
+   - `ta new` — interactive mode, asks questions
+   - `ta new --from <brief.md>` — seed from a written description file
+   - `ta new --template <name>` — start from a project template (v0.7.3 templates)
+   - Creates a temporary working directory for the planner agent
+   - On completion, moves the generated project to the target directory
+
+2. **Planner agent mode**: A specialized agent configuration (`agents/planner.yaml`) that:
+   - Has access to `ta init`, filesystem write, and plan generation tools
+   - Does NOT have access to `ta goal start`, `ta draft build`, or other runtime tools (it's creating the project, not executing goals)
+   - System prompt includes: plan format specification (PLAN.md with `<!-- status: pending -->` markers), versioning policy, phase sizing guidelines
+   - Conversation is multi-turn: agent asks clarifying questions, proposes a plan, user refines, agent generates
+   - Agent tools available:
+     - `ta_scaffold` — create directory structure, Cargo.toml/package.json/etc.
+     - `ta_plan_generate` — write PLAN.md from structured plan data
+     - `ta_init` — initialize .ta/ workspace in the new project
+     - `ta_config_write` — write initial .ta/policy.yaml, .ta/config.yaml, agents/*.yaml
+
+3. **Plan generation from conversation**: The planner agent converts the conversation into a structured PLAN.md:
+   - Each phase has: title, goal description, numbered items, implementation scope, version
+   - Phase sizing: guide the agent to create phases that are 1-4 hours of work each
+   - Dependencies: note which phases depend on others
+   - Phase markers: all start as `<!-- status: pending -->`
+   - Versioning: auto-assign version numbers (v0.1.0 for phase 1, v0.2.0 for phase 2, etc.)
+
+4. **Project template integration**: Leverage v0.7.3 templates as starting points:
+   - `ta new --template rust-cli` → Cargo workspace, clap, CI, README
+   - `ta new --template rust-lib` → Library crate, docs, benchmarks
+   - `ta new --template ts-api` → Node.js, Express/Fastify, TypeScript
+   - Templates provide the scaffold; the planner agent customizes and adds the PLAN.md
+   - Custom templates: `ta new --template ./my-template` or `ta new --template gh:org/repo`
+
+5. **Daemon API endpoint** (`POST /api/project/new`): Start a bootstrapping session via the daemon API, so Discord/Slack/email interfaces can create projects too.
+   - First request starts the planner agent session
+   - Subsequent requests in the same session continue the conversation
+   - Final response includes the project path and PLAN.md summary
+   ```json
+   // Start
+   { "description": "Rust CLI for Cloudflare DNS management with policy controls" }
+   → { "session_id": "plan-abc", "response": "I'll help you plan this. A few questions..." }
+
+   // Continue
+   { "session_id": "plan-abc", "prompt": "Multi-account, Cloudflare only for now" }
+   → { "session_id": "plan-abc", "response": "Here's a proposed plan..." }
+
+   // Generate
+   { "session_id": "plan-abc", "prompt": "Looks good, generate it" }
+   → { "session_id": "plan-abc", "project_path": "/projects/dns-guardian", "phases": 8 }
+   ```
+
+6. **Post-creation handoff**: After the project is generated:
+   - Print summary: phase count, item count, estimated version range
+   - Offer to start the first goal: "Ready to start Phase 1? (y/n)"
+   - If using `ta shell`, switch the shell's working directory to the new project
+   - If using a remote interface, return the project path and next steps
+
+#### Implementation scope
+- `apps/ta-cli/src/commands/new.rs` — `ta new` command, planner agent session, template integration
+- `apps/ta-cli/src/commands/new/planner.rs` — planner agent system prompt, plan generation tools
+- `apps/ta-cli/src/commands/new/scaffold.rs` — project directory creation, language-specific scaffolding
+- `agents/planner.yaml` — planner agent configuration (restricted tool set)
+- `crates/ta-daemon/src/api/project.rs` — `/api/project/new` endpoint for remote bootstrapping
+- `crates/ta-mcp-gateway/src/tools/scaffold.rs` — `ta_scaffold`, `ta_plan_generate`, `ta_config_write` MCP tools
+- `templates/projects/rust-cli/` — Rust CLI project template
+- `templates/projects/rust-lib/` — Rust library template
+- `templates/projects/ts-api/` — TypeScript API template
+- `docs/USAGE.md` — `ta new` documentation, template authoring guide
+- Tests: plan generation from description, template application, scaffold creation, daemon API session lifecycle
+
+#### Version: `0.9.9-alpha`
+
+---
+
 ### v0.10.0 — Gateway Channel Wiring & Multi-Channel Routing
 <!-- status: pending -->
 **Goal**: Wire `ChannelRegistry` into the MCP gateway so `.ta/config.yaml` actually controls which channels handle reviews, notifications, and escalations — and support routing a single event to multiple channels simultaneously.
