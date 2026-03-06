@@ -2881,6 +2881,204 @@ agents:
 
 ---
 
+### v0.9.8.2 — Pluggable Workflow Engine & Framework Integration
+<!-- status: pending -->
+**Goal**: Add a `WorkflowEngine` trait to TA core so multi-stage, multi-role, multi-framework workflows can be orchestrated with pluggable engines — built-in YAML for simple cases, framework adapters (LangGraph, CrewAI) for power users, or custom implementations.
+
+#### Design Principle: TA Mediates, Doesn't Mandate
+
+TA defines *what* decisions need to be made (next stage? route back? what context?). The engine decides *how*. Users who already have LangGraph or CrewAI use TA for governance only. Users with simple agent setups (Claude Code, Codex) use TA's built-in YAML engine.
+
+```
+TA Core (always present):
+  ┌───────────────────────────────────────────────┐
+  │  WorkflowEngine trait                          │
+  │    start(definition) → WorkflowId              │
+  │    stage_completed(id, stage, verdicts)         │
+  │      → StageAction (Proceed/RouteBack/Complete)│
+  │    status(id) → WorkflowStatus                 │
+  │    inject_feedback(id, stage, feedback)         │
+  │                                                │
+  │  GoalRun extensions:                           │
+  │    workflow_id, stage, role, context_from       │
+  │                                                │
+  │  Verdict schema + Feedback scoring agent       │
+  └──────────────────┬─────────────────────────────┘
+                     │
+        ┌────────────┼────────────┐
+        │            │            │
+  ┌──────────┐ ┌──────────┐ ┌──────────────┐
+  │ Built-in │ │ Framework│ │ User-supplied│
+  │ YAML     │ │ Adapters │ │ Custom impl  │
+  │ Engine   │ │(LangGraph│ │              │
+  │          │ │ CrewAI)  │ │ Implements   │
+  │ Ships    │ │ Ship as  │ │ WorkflowEngine│
+  │ with TA  │ │ templates│ │ trait or     │
+  │ (default)│ │          │ │ process plugin│
+  └──────────┘ └──────────┘ └──────────────┘
+```
+
+Configuration:
+```yaml
+# .ta/config.yaml
+workflow:
+  engine: yaml                    # built-in (default)
+  # engine: langraph             # delegate to LangGraph adapter
+  # engine: crewai               # delegate to CrewAI adapter
+  # engine: process              # user-supplied binary (JSON-over-stdio)
+  #   command: "./my-workflow-engine"
+  # engine: none                 # no workflow — manage goals manually
+```
+
+#### Items
+
+1. **`WorkflowEngine` trait** (`crates/ta-workflow/src/lib.rs`): Core abstraction that all engines implement.
+   ```rust
+   pub trait WorkflowEngine: Send + Sync {
+       fn start(&self, def: &WorkflowDefinition) -> Result<WorkflowId>;
+       fn stage_completed(&self, id: WorkflowId, stage: &str,
+                          verdicts: &[Verdict]) -> Result<StageAction>;
+       fn status(&self, id: WorkflowId) -> Result<WorkflowStatus>;
+       fn inject_feedback(&self, id: WorkflowId, stage: &str,
+                          feedback: FeedbackContext) -> Result<()>;
+   }
+
+   pub enum StageAction {
+       Proceed { next_stage: String, context: GoalContext },
+       RouteBack { target_stage: String, feedback: FeedbackContext,
+                   severity: Severity },
+       Complete,
+       AwaitHuman { request: InteractionRequest },
+   }
+   ```
+
+2. **`WorkflowDefinition` schema** (`crates/ta-workflow/src/definition.rs`): Declarative workflow structure used by all engines.
+   ```rust
+   pub struct WorkflowDefinition {
+       pub name: String,
+       pub stages: Vec<StageDefinition>,
+       pub roles: HashMap<String, RoleDefinition>,
+   }
+
+   pub struct StageDefinition {
+       pub name: String,
+       pub depends_on: Vec<String>,
+       pub roles: Vec<String>,           // parallel roles within stage
+       pub then: Vec<String>,            // sequential roles after parallel
+       pub review: Option<StageReview>,
+       pub on_fail: Option<FailureRouting>,
+   }
+
+   pub struct RoleDefinition {
+       pub agent: String,                // agent config name
+       pub constitution: Option<String>, // constitution YAML path
+       pub prompt: String,               // system prompt for this role
+       pub framework: Option<String>,    // override framework for this role
+   }
+   ```
+
+3. **`Verdict` schema and feedback scoring** (`crates/ta-workflow/src/verdict.rs`):
+   - `Verdict { role, decision: Pass|Fail|Conditional, severity, findings: Vec<Finding> }`
+   - `Finding { title, description, severity: Critical|Major|Minor, category }`
+   - **Feedback scoring agent**: When verdicts arrive, optionally pass them to a scoring agent (metacritic pattern). The scoring agent's system prompt is a template — users customize the rubric. The scorer produces:
+     - Aggregate score (0.0–1.0)
+     - Severity classification (critical/major/minor)
+     - Routing recommendation (which stage to route back to, if any)
+     - Synthesized feedback for the next iteration
+   - Scoring agent config in workflow YAML:
+     ```yaml
+     verdict:
+       scorer:
+         agent: claude-code
+         prompt: |
+           You are a metacritic reviewer. Given multiple review verdicts,
+           synthesize them into an aggregate assessment. Weight security
+           findings 2x. Classify overall severity and recommend routing.
+       pass_threshold: 0.7
+       required_pass: [security-reviewer]
+     ```
+
+4. **GoalRun extensions**: Add workflow context fields to `GoalRun`:
+   - `workflow_id: Option<String>` — links goal to a workflow instance
+   - `stage: Option<String>` — which stage this goal belongs to
+   - `role: Option<String>` — which role this goal fulfills
+   - `context_from: Vec<Uuid>` — goals whose output feeds into this one's context
+   - These are metadata only — no behavioral change if unset. All existing goals continue to work as-is.
+
+5. **Goal chaining** (context propagation): When a stage completes and the next stage starts, automatically inject the previous stage's output as context:
+   - Previous stage's draft summary → next stage's system prompt
+   - Previous stage's verdict findings → next stage's feedback section (on route-back)
+   - Uses the existing CLAUDE.md injection mechanism (same as `ta run` context injection)
+   - `context_from` field on GoalRun tracks the provenance chain
+
+6. **Built-in YAML workflow engine** (`crates/ta-workflow/src/yaml_engine.rs`):
+   - Parses `.ta/workflows/*.yaml` files
+   - Evaluates stage dependencies (topological sort)
+   - Starts goals for each role in a stage (parallel or sequential per config)
+   - Collects verdicts, runs scorer, decides routing
+   - Handles retry limits and loop detection (`max_retries` per routing rule)
+   - ~400 lines — deliberately simple. Power users use LangGraph.
+
+7. **Process-based workflow plugin** (`crates/ta-workflow/src/process_engine.rs`):
+   - Same JSON-over-stdio pattern as channel plugins (v0.10.4)
+   - TA spawns the engine process, sends `WorkflowDefinition` + events via stdin
+   - Engine responds with `StageAction` decisions via stdout
+   - This is how LangGraph/CrewAI adapters connect
+   - ~150 lines in TA core
+
+8. **`ta_workflow` MCP tool**: For orchestrator agents to interact with workflows:
+   - `action: "start"` — start a workflow from a definition file
+   - `action: "status"` — get workflow status (current stage, verdicts, retry count)
+   - `action: "list"` — list active and completed workflows
+   - No goal_run_id required (orchestrator-level tool, uses v0.9.6 optional ID pattern)
+
+9. **`ta workflow` CLI commands**:
+   - `ta workflow start <definition.yaml>` — start a workflow
+   - `ta workflow status [workflow_id]` — show status
+   - `ta workflow list` — list workflows
+   - `ta workflow cancel <workflow_id>` — cancel an active workflow
+   - `ta workflow history <workflow_id>` — show stage transitions, verdicts, routing decisions
+
+10. **Framework integration templates** (shipped with TA):
+    - `templates/workflows/milestone-review.yaml` — the full plan/build/review workflow using built-in YAML engine
+    - `templates/workflows/roles/` — role definition library (planner, designer, PM, engineer, security-reviewer, customer personas)
+    - `templates/workflows/adapters/langraph_adapter.py` — Python bridge: LangGraph ↔ TA's WorkflowEngine protocol
+    - `templates/workflows/adapters/crewai_adapter.py` — Python bridge: CrewAI ↔ TA's protocol
+    - `templates/workflows/simple-review.yaml` — minimal 2-stage workflow (build → review) for getting started
+    - `templates/workflows/security-audit.yaml` — security-focused workflow with OWASP reviewer + dependency scanner
+
+#### Workflow Events
+```rust
+// New TaEvent variants
+WorkflowStarted { workflow_id, name, stage_count, timestamp }
+StageStarted { workflow_id, stage, roles: Vec<String>, timestamp }
+StageCompleted { workflow_id, stage, verdicts: Vec<Verdict>, timestamp }
+WorkflowRouted { workflow_id, from_stage, to_stage, severity, reason, timestamp }
+VerdictScored { workflow_id, stage, aggregate_score, routing_recommendation, timestamp }
+WorkflowCompleted { workflow_id, name, total_duration_secs, stages_executed, timestamp }
+WorkflowFailed { workflow_id, name, reason, timestamp }
+```
+
+#### Implementation scope
+- `crates/ta-workflow/` — new crate:
+  - `src/lib.rs` — `WorkflowEngine` trait, `StageAction`, re-exports (~100 lines)
+  - `src/definition.rs` — `WorkflowDefinition`, `StageDefinition`, `RoleDefinition` (~150 lines)
+  - `src/verdict.rs` — `Verdict`, `Finding`, `Severity`, `FeedbackContext` (~100 lines)
+  - `src/yaml_engine.rs` — built-in YAML engine with DAG execution (~400 lines)
+  - `src/process_engine.rs` — JSON-over-stdio plugin bridge (~150 lines)
+  - `src/scorer.rs` — feedback scoring agent integration (~100 lines)
+- `crates/ta-goal/src/goal_run.rs` — add workflow_id, stage, role, context_from fields
+- `crates/ta-goal/src/events.rs` — workflow event variants
+- `crates/ta-mcp-gateway/src/tools/workflow.rs` — `ta_workflow` MCP tool
+- `apps/ta-cli/src/commands/workflow.rs` — `ta workflow` CLI commands
+- `templates/workflows/` — workflow definitions, role library, framework adapters
+- `docs/USAGE.md` — workflow engine docs, framework integration guide
+- Tests: YAML engine stage execution, verdict scoring, routing decisions, goal chaining context propagation, process plugin protocol, loop detection
+
+#### Version: `0.9.8-alpha.2`
+
+---
+
 ### v0.9.9 — Conversational Project Bootstrapping (`ta new`)
 <!-- status: pending -->
 **Goal**: Start a new project from any interface by describing what you want in natural language. A planner agent generates the project structure and PLAN.md through conversation, then initializes the TA workspace.
