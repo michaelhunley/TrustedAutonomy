@@ -2359,18 +2359,76 @@ $ ta shell
 
 #### Design Principles
 
-1. **Command router, not protocol**: Input starting with `ta ` executes as a TA CLI command directly (fork `ta` binary). Everything else goes to the agent. Minimal magic.
+1. **Configurable command router**: Input is matched against a routing table to decide whether to execute locally or send to the agent. Default routes handle `ta` commands and common shortcuts, but users can add custom routes for any CLI tool (e.g., `git`, `cargo`, `kubectl`). The routing table lives in `.ta/shell.toml`.
 2. **Agent is a subprocess**: Headless agent (claude `--print` mode or equivalent) with stdin/stdout piped. Agent has MCP tools for read-only project queries. The shell handles all mutations (approve/deny/apply).
 3. **Events are inline notifications**: The shell subscribes to the TA event store. When a draft is ready or a goal completes, a notification appears inline (like chat notifications). No polling by the agent — the shell itself surfaces events.
 4. **Human holds the pen for approvals**: The agent can VIEW drafts via MCP tools, but approve/deny/apply are shell commands executed by the human. This preserves TA's security model — the human always makes the final decision, but doesn't need a second terminal.
 
 #### Items
 
-1. **Shell REPL core**: `ta shell` command that starts an interactive REPL with:
-   - Prompt: `ta> ` (or project-name-based)
-   - Input routing: `ta <cmd>` → fork `ta` CLI, else → send to agent
+1. **Shell REPL core with configurable routing**: `ta shell` command that starts an interactive REPL with:
+   - Prompt: `ta> ` (or project-name-based, configurable)
+   - **Configurable input routing** via `.ta/shell.toml`:
+     ```toml
+     # Routes: prefix → local command execution
+     # Anything not matching a route goes to the agent
+     [[routes]]
+     prefix = "ta "           # "ta draft list" → runs `ta draft list`
+     command = "ta"            # binary to fork
+     strip_prefix = true       # remove "ta " before passing args
+
+     [[routes]]
+     prefix = "git "
+     command = "git"
+     strip_prefix = true
+
+     [[routes]]
+     prefix = "cargo "
+     command = "./dev cargo"   # use project's nix wrapper
+     strip_prefix = true
+
+     [[routes]]
+     prefix = "!"             # shell escape: "!ls -la" → runs "ls -la"
+     command = "sh"
+     args = ["-c"]
+     strip_prefix = true
+
+     # Shortcuts: keyword → expanded command
+     [[shortcuts]]
+     match = "approve"         # "approve abc123" → "ta draft approve abc123"
+     expand = "ta draft approve"
+
+     [[shortcuts]]
+     match = "deny"
+     expand = "ta draft deny"
+
+     [[shortcuts]]
+     match = "view"
+     expand = "ta draft view"
+
+     [[shortcuts]]
+     match = "apply"
+     expand = "ta draft apply"
+
+     [[shortcuts]]
+     match = "status"
+     expand = "ta status"
+
+     [[shortcuts]]
+     match = "plan"
+     expand = "ta plan list"
+
+     [[shortcuts]]
+     match = "goals"
+     expand = "ta goal list"
+
+     [[shortcuts]]
+     match = "drafts"
+     expand = "ta draft list"
+     ```
+   - **Default routing**: If no `.ta/shell.toml` exists, built-in defaults route `ta ` commands and shortcuts listed above. `ta shell --init` generates the default config for customization.
    - History: readline/rustyline with persistent history at `.ta/shell_history`
-   - Tab completion for `ta` subcommands
+   - Tab completion for routed command prefixes and shortcuts
 
 2. **Agent subprocess management**: Launch the configured agent in headless/pipe mode:
    - Claude Code: `claude --print` with stdin/stdout piped
@@ -2386,17 +2444,7 @@ $ ta shell
    - `DriftDetected` → `── Drift alert: <details> ──`
    - Notifications interleave with agent output without corrupting the display
 
-4. **Quick-action shortcuts**: Common review actions without typing full commands:
-   - `approve <id>` → `ta draft approve <id>`
-   - `deny <id>: reason` → `ta draft deny <id> --reason "reason"`
-   - `view <id>` → `ta draft view <id>`
-   - `apply <id>` → `ta draft apply <id>`
-   - `status` → `ta status` (from v0.9.6)
-   - `plan` → `ta plan list`
-   - `goals` → `ta goal list`
-   - `drafts` → `ta draft list`
-
-5. **Session state display**: Status bar or header showing:
+4. **Session state display**: Status bar or header showing:
    - Active agents and their goals
    - Pending draft count
    - Current plan phase
@@ -2410,12 +2458,14 @@ $ ta shell
    This is the "project briefing" that `ta dev` was missing.
 
 #### Implementation scope
-- `apps/ta-cli/src/commands/shell.rs` — REPL core, input router, event subscription
+- `apps/ta-cli/src/commands/shell.rs` — REPL core, configurable input router, event subscription
+- `apps/ta-cli/src/commands/shell/router.rs` — route table parsing from `.ta/shell.toml`, prefix matching, shortcut expansion, built-in defaults
 - `apps/ta-cli/src/commands/shell/agent.rs` — agent subprocess management, I/O piping
 - `apps/ta-cli/src/commands/shell/display.rs` — output formatting, inline notifications, status bar
 - `apps/ta-cli/Cargo.toml` — add `rustyline` dependency
-- `docs/USAGE.md` — `ta shell` documentation
-- Tests: command routing (ta prefix vs agent), shortcut expansion, event notification formatting
+- `templates/shell.toml` — default routing config with `ta`, `git`, `!` shell escape, and review shortcuts
+- `docs/USAGE.md` — `ta shell` documentation, routing customization
+- Tests: configurable routing (custom prefixes, shortcuts), default fallback, event notification formatting
 
 #### Why not enhance `ta dev`?
 `ta dev` launches an *interactive* agent session where the agent owns the terminal. The shell inverts this: the *human* owns the terminal, and the agent is a subprocess. This is a fundamental UX difference — `ta dev` is "agent drives, human reviews"; `ta shell` is "human drives, agent assists". Both are valuable for different workflows.
