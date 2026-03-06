@@ -84,8 +84,21 @@ pub async fn execute_command(
         let working_dir = state.project_root.clone();
         let cmd_str = command_str.to_string();
 
+        // Try to extract the goal ID from args for output streaming.
+        // Goal IDs appear in `ta run` output events; we use the command string
+        // as a key until the real goal ID is known.
+        let goal_output = state.goal_output.clone_ref();
+        let output_key = extract_goal_key(&args_owned);
+        let tx = goal_output.create_channel(&output_key).await;
+        let output_key_display = output_key.clone();
+        let output_key_response = output_key.clone();
+
         tokio::spawn(async move {
-            tracing::info!("Background command started: {}", cmd_str);
+            tracing::info!(
+                "Background command started: {} (output key: {})",
+                cmd_str,
+                output_key_display
+            );
             let result = tokio::process::Command::new(&binary)
                 .arg("--project-root")
                 .arg(&working_dir)
@@ -94,34 +107,77 @@ pub async fn execute_command(
                 .current_dir(&working_dir)
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped())
-                .output()
-                .await;
+                .spawn();
+
             match result {
-                Ok(output) => {
-                    let code = output.status.code().unwrap_or(-1);
-                    if code == 0 {
-                        tracing::info!("Background command completed: {}", cmd_str);
-                    } else {
-                        let stderr = String::from_utf8_lossy(&output.stderr);
-                        tracing::warn!(
-                            "Background command failed (exit {}): {} — {}",
-                            code,
-                            cmd_str,
-                            stderr.chars().take(500).collect::<String>()
-                        );
+                Ok(mut child) => {
+                    // Stream stdout and stderr line-by-line.
+                    use crate::api::goal_output::OutputLine;
+                    use tokio::io::{AsyncBufReadExt, BufReader};
+
+                    let stdout = child.stdout.take();
+                    let stderr = child.stderr.take();
+                    let tx2 = tx.clone();
+
+                    let stdout_task = tokio::spawn(async move {
+                        if let Some(out) = stdout {
+                            let mut reader = BufReader::new(out).lines();
+                            while let Ok(Some(line)) = reader.next_line().await {
+                                let _ = tx.send(OutputLine {
+                                    stream: "stdout",
+                                    line,
+                                });
+                            }
+                        }
+                    });
+
+                    let stderr_task = tokio::spawn(async move {
+                        if let Some(err) = stderr {
+                            let mut reader = BufReader::new(err).lines();
+                            while let Ok(Some(line)) = reader.next_line().await {
+                                let _ = tx2.send(OutputLine {
+                                    stream: "stderr",
+                                    line,
+                                });
+                            }
+                        }
+                    });
+
+                    let status = child.wait().await;
+                    let _ = stdout_task.await;
+                    let _ = stderr_task.await;
+
+                    match status {
+                        Ok(s) if s.success() => {
+                            tracing::info!("Background command completed: {}", cmd_str);
+                        }
+                        Ok(s) => {
+                            let code = s.code().unwrap_or(-1);
+                            tracing::warn!(
+                                "Background command failed (exit {}): {}",
+                                code,
+                                cmd_str
+                            );
+                        }
+                        Err(e) => {
+                            tracing::error!("Background command wait error: {} — {}", cmd_str, e);
+                        }
                     }
                 }
                 Err(e) => {
-                    tracing::error!("Background command error: {} — {}", cmd_str, e);
+                    tracing::error!("Background command spawn error: {} — {}", cmd_str, e);
                 }
             }
+
+            // Clean up the output channel.
+            goal_output.remove_channel(&output_key).await;
         });
 
         return Json(CmdResponse {
             exit_code: 0,
             stdout: format!(
-                "Started in background: {}\nTrack progress with: ta goal list\n",
-                command_str
+                "Started in background: {}\nOutput key: {}\nTrack progress with: ta goal list\nStream output with: :tail {}\n",
+                command_str, output_key_response, &output_key_response[..8.min(output_key_response.len())]
             ),
             stderr: String::new(),
         })
@@ -220,6 +276,25 @@ fn is_write_command(command: &str, write_patterns: &[String]) -> bool {
     write_patterns
         .iter()
         .any(|pattern| glob_match(pattern, command))
+}
+
+/// Extract a key for output streaming from command args.
+/// Uses the phase arg (e.g., "v0.9.8.1") or the goal title, falling back to a UUID.
+fn extract_goal_key(args: &[String]) -> String {
+    // Look for a phase-like argument (vN.N.N pattern) or use the first non-flag arg.
+    for arg in args {
+        if arg.starts_with("v0.") || arg.starts_with("v1.") {
+            return arg.clone();
+        }
+    }
+    // Look for a quoted title or first positional arg after subcommand.
+    for (i, arg) in args.iter().enumerate() {
+        if i > 0 && !arg.starts_with('-') && !arg.starts_with("--") {
+            return arg.clone();
+        }
+    }
+    // Fallback to UUID.
+    uuid::Uuid::new_v4().to_string()
 }
 
 /// Simple glob matching: `*` matches any sequence of characters.

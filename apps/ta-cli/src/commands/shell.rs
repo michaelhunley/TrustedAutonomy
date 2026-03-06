@@ -179,6 +179,16 @@ async fn run_shell(base_url: String, attach_session: Option<String>) -> anyhow::
                         print_header(&s, &base_url);
                         continue;
                     }
+                    s if s.starts_with(":tail") => {
+                        let arg = s.strip_prefix(":tail").unwrap().trim();
+                        tail_goal_output(
+                            &client,
+                            &base_url,
+                            if arg.is_empty() { None } else { Some(arg) },
+                        )
+                        .await;
+                        continue;
+                    }
                     _ => {}
                 }
 
@@ -408,6 +418,146 @@ async fn sse_listener(client: reqwest::Client, url: &str, running: Arc<AtomicBoo
     }
 }
 
+/// Tail live output from a running goal. Ctrl-C to detach.
+async fn tail_goal_output(client: &reqwest::Client, base_url: &str, goal_id: Option<&str>) {
+    // If no goal ID given, check active output streams.
+    let target = match goal_id {
+        Some(id) => id.to_string(),
+        None => {
+            // Fetch active output streams.
+            let url = format!("{}/api/goals/active-output", base_url);
+            let resp = match client.get(&url).send().await {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("Error: Cannot reach daemon: {}", e);
+                    return;
+                }
+            };
+            let json: serde_json::Value = match resp.json().await {
+                Ok(v) => v,
+                Err(_) => {
+                    eprintln!("Error: Invalid response from daemon");
+                    return;
+                }
+            };
+            let goals: Vec<String> = json["goals"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            match goals.len() {
+                0 => {
+                    eprintln!("No goals with active output. Start one with: ta run <phase>");
+                    return;
+                }
+                1 => {
+                    let id = &goals[0];
+                    eprintln!("Auto-attaching to: {}", id);
+                    id.clone()
+                }
+                _ => {
+                    eprintln!("Multiple goals running. Pick one:");
+                    for (i, g) in goals.iter().enumerate() {
+                        eprintln!("  [{}] {}", i + 1, g);
+                    }
+                    eprintln!("Usage: :tail <id>");
+                    return;
+                }
+            }
+        }
+    };
+
+    eprintln!("Tailing output for {} (Ctrl-C to detach)...", target);
+    eprintln!("---");
+
+    let url = format!("{}/api/goals/{}/output", base_url, target);
+    let resp = match client.get(&url).send().await {
+        Ok(r) if r.status().is_success() => r,
+        Ok(r) => {
+            let json: serde_json::Value = r.json().await.unwrap_or_default();
+            let err = json["error"].as_str().unwrap_or("unknown error");
+            let hint = json["hint"].as_str().unwrap_or("");
+            eprintln!("Error: {}", err);
+            if !hint.is_empty() {
+                eprintln!("  {}", hint);
+            }
+            return;
+        }
+        Err(e) => {
+            eprintln!("Error: Cannot reach daemon: {}", e);
+            return;
+        }
+    };
+
+    let mut stream = resp.bytes_stream();
+    use tokio_stream::StreamExt;
+    let mut buffer = String::new();
+
+    // Handle Ctrl-C to detach (not exit the shell).
+    let detach = Arc::new(AtomicBool::new(false));
+    let detach2 = detach.clone();
+    let _guard = tokio::spawn(async move {
+        tokio::signal::ctrl_c().await.ok();
+        detach2.store(true, Ordering::Relaxed);
+    });
+
+    while let Some(chunk) = stream.next().await {
+        if detach.load(Ordering::Relaxed) {
+            break;
+        }
+        let bytes = match chunk {
+            Ok(b) => b,
+            Err(_) => break,
+        };
+        buffer.push_str(&String::from_utf8_lossy(&bytes));
+
+        while let Some(pos) = buffer.find("\n\n") {
+            let frame = buffer[..pos].to_string();
+            buffer = buffer[pos + 2..].to_string();
+
+            // Parse SSE frame.
+            let mut event_type = None;
+            let mut data = None;
+            for line in frame.lines() {
+                if let Some(rest) = line.strip_prefix("event: ") {
+                    event_type = Some(rest.trim().to_string());
+                } else if let Some(rest) = line.strip_prefix("data: ") {
+                    data = Some(rest.trim().to_string());
+                }
+            }
+
+            match event_type.as_deref() {
+                Some("output") => {
+                    if let Some(d) = &data {
+                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(d) {
+                            let stream_name = json["stream"].as_str().unwrap_or("?");
+                            let line = json["line"].as_str().unwrap_or("");
+                            if stream_name == "stderr" {
+                                eprintln!("{}", line);
+                            } else {
+                                println!("{}", line);
+                            }
+                        }
+                    }
+                }
+                Some("done") => {
+                    eprintln!("--- Goal process exited ---");
+                    return;
+                }
+                Some("lagged") => {
+                    eprintln!("[skipped some output lines]");
+                }
+                _ => {}
+            }
+        }
+    }
+    eprintln!("--- Detached ---");
+}
+
 /// Periodic health check — pings `/api/status` every 10s.
 /// Prints a notice when the daemon goes down or comes back up.
 async fn health_monitor(
@@ -587,6 +737,7 @@ Commands:
   <anything else>    Sent to agent session (if attached)
 
 Shell commands:
+  :tail [id]         Tail live agent output (auto-picks if one goal running)
   :status            Refresh the status header
   help / ?           Show this help
   exit / quit / :q   Exit the shell
