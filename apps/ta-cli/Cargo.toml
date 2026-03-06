@@ -35,6 +35,7 @@ reqwest = { workspace = true }
 rustyline = { workspace = true }
 tokio-stream = { workspace = true }
 toml = { workspace = true }
+glob = { workspace = true }
 
 # Internal crates
 ta-audit = { path = "../../crates/ta-audit" }

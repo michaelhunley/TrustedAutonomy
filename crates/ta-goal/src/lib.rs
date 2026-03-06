@@ -19,9 +19,11 @@
 pub mod error;
 pub mod events;
 pub mod goal_run;
+pub mod history;
 pub mod store;
 
 pub use error::GoalError;
 pub use events::{EventDispatcher, LogSink, NotificationSink, TaEvent};
 pub use goal_run::{GoalRun, GoalRunState};
+pub use history::{GoalHistoryEntry, GoalHistoryLedger, HistoryFilter};
 pub use store::GoalRunStore;

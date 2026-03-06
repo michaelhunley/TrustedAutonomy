@@ -189,6 +189,17 @@ pub enum TaEvent {
         goal_run_id: Option<Uuid>,
         timestamp: DateTime<Utc>,
     },
+
+    /// A draft was auto-approved by policy (v0.9.8.1).
+    DraftAutoApproved {
+        draft_id: String,
+        goal_run_id: Uuid,
+        /// Audit trail of which conditions were satisfied.
+        reasons: Vec<String>,
+        /// Whether the draft was also auto-applied after approval.
+        auto_applied: bool,
+        timestamp: DateTime<Utc>,
+    },
 }
 
 impl TaEvent {
@@ -215,6 +226,7 @@ impl TaEvent {
             TaEvent::GoalFailed { .. } => "goal_failed",
             TaEvent::AgentSessionStarted { .. } => "agent_session_started",
             TaEvent::AgentSessionEnded { .. } => "agent_session_ended",
+            TaEvent::DraftAutoApproved { .. } => "draft_auto_approved",
         }
     }
 
@@ -329,6 +341,22 @@ impl TaEvent {
         TaEvent::AgentSessionEnded {
             agent_id: agent_id.to_string(),
             goal_run_id,
+            timestamp: Utc::now(),
+        }
+    }
+
+    /// Helper to create a DraftAutoApproved event (v0.9.8.1).
+    pub fn draft_auto_approved(
+        draft_id: &str,
+        goal_run_id: Uuid,
+        reasons: Vec<String>,
+        auto_applied: bool,
+    ) -> Self {
+        TaEvent::DraftAutoApproved {
+            draft_id: draft_id.to_string(),
+            goal_run_id,
+            reasons,
+            auto_applied,
             timestamp: Utc::now(),
         }
     }
@@ -593,5 +621,23 @@ mod tests {
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("Fix the auth module"));
         assert!(json.contains("\"approved\":false"));
+    }
+
+    #[test]
+    fn draft_auto_approved_event_v0981() {
+        let gid = Uuid::new_v4();
+        let event = TaEvent::draft_auto_approved(
+            "abc123",
+            gid,
+            vec!["enabled: true".to_string(), "max_files: 3 <= 5".to_string()],
+            false,
+        );
+        assert_eq!(event.event_type(), "draft_auto_approved");
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("draft_auto_approved"));
+        assert!(json.contains("abc123"));
+        assert!(json.contains("max_files"));
+        let restored: TaEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.event_type(), "draft_auto_approved");
     }
 }

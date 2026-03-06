@@ -9,6 +9,7 @@ use rmcp::ErrorData as McpError;
 use ta_changeset::interaction::InteractionRequest;
 use ta_goal::{GoalRunState, TaEvent};
 use ta_memory::{AutoCapture, DraftRejectEvent};
+use ta_policy::auto_approve::{self, DraftInfo};
 
 use crate::server::{DraftToolParams, GatewayState, GoalIdParams, PrBuildParams};
 use crate::validation::parse_uuid;
@@ -308,9 +309,105 @@ fn handle_draft_submit(
                 .get(&pkg_id)
                 .map(|p| p.changes.artifacts.len())
                 .unwrap_or(0);
+
+            // v0.9.8.1: Check auto-approval before routing to ReviewChannel.
+            let auto_approve_decision = {
+                let policy_path = state.config.workspace_root.join(".ta/policy.yaml");
+                if policy_path.exists() {
+                    if let Ok(content) = std::fs::read_to_string(&policy_path) {
+                        if let Ok(doc) = serde_yaml::from_str::<ta_policy::PolicyDocument>(&content)
+                        {
+                            let changed_paths: Vec<String> = state
+                                .pr_packages
+                                .get(&pkg_id)
+                                .map(|p| {
+                                    p.changes
+                                        .artifacts
+                                        .iter()
+                                        .map(|a| a.resource_uri.clone())
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+                            let draft_info = DraftInfo {
+                                changed_paths,
+                                lines_changed: 0, // approximate — not available from artifacts
+                                plan_phase: goal.plan_phase.clone(),
+                                agent_id: goal.agent_id.clone(),
+                            };
+                            Some(auto_approve::should_auto_approve_draft(&draft_info, &doc))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            };
+
+            if let Some(auto_approve::AutoApproveDecision::Approved { reasons }) =
+                auto_approve_decision
+            {
+                // Auto-approved by policy — skip ReviewChannel.
+                state.event_dispatcher.dispatch(&TaEvent::PrApproved {
+                    goal_run_id,
+                    pr_package_id: pkg_id,
+                    approved_by: "policy:auto".to_string(),
+                    timestamp: Utc::now(),
+                });
+                state
+                    .event_dispatcher
+                    .dispatch(&TaEvent::draft_auto_approved(
+                        &pkg_id.to_string(),
+                        goal_run_id,
+                        reasons.clone(),
+                        false,
+                    ));
+                tracing::info!(
+                    draft_id = %pkg_id,
+                    goal_id = %goal_run_id,
+                    "Draft auto-approved by policy: {:?}",
+                    reasons,
+                );
+
+                if goal.is_macro {
+                    if let Ok(Some(mut g)) = state.goal_store.get(goal_run_id) {
+                        if g.state == GoalRunState::PrReady {
+                            let _ = g.transition(GoalRunState::Running);
+                            let _ = state.goal_store.save(&g);
+                        }
+                    }
+                }
+
+                let response = serde_json::json!({
+                    "draft_id": pkg_id.to_string(),
+                    "goal_run_id": goal_run_id.to_string(),
+                    "status": "auto_approved",
+                    "decision": "approved",
+                    "approved_by": "policy:auto",
+                    "reasons": reasons,
+                    "message": "Draft auto-approved by policy. All conditions met.",
+                });
+                return Ok(CallToolResult::success(vec![Content::json(response)
+                    .map_err(|e| McpError::internal_error(e.to_string(), None))?]));
+            }
+
+            // Route to ReviewChannel for human review.
             let interaction_req =
                 InteractionRequest::draft_review(pkg_id, &goal.title, artifact_count)
                     .with_goal_id(goal_run_id);
+
+            // If auto-approve was evaluated but denied, include blockers.
+            if let Some(auto_approve::AutoApproveDecision::Denied { ref blockers }) =
+                auto_approve_decision
+            {
+                tracing::debug!(
+                    draft_id = %pkg_id,
+                    "Draft auto-approval denied, routing to human review: {:?}",
+                    blockers,
+                );
+            }
 
             let review_result = state.request_review(&interaction_req);
 

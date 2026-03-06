@@ -106,6 +106,10 @@ pub struct AutoApproveConfig {
     /// Auto-approve internal TA tool calls (ta_* MCP tools).
     #[serde(default = "default_true")]
     pub internal_tools: bool,
+
+    /// Draft-level auto-approval configuration (v0.9.8.1).
+    #[serde(default)]
+    pub drafts: AutoApproveDraftConfig,
 }
 
 fn default_true() -> bool {
@@ -117,6 +121,107 @@ impl Default for AutoApproveConfig {
         Self {
             read_only: true,
             internal_tools: true,
+            drafts: AutoApproveDraftConfig::default(),
+        }
+    }
+}
+
+/// Draft-level auto-approval configuration (v0.9.8.1).
+///
+/// When enabled, drafts matching all configured conditions are auto-approved
+/// without human review. The audit trail is preserved — auto-approved drafts
+/// are attributed to `"policy:auto"`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AutoApproveDraftConfig {
+    /// Master switch — auto-approval must be explicitly enabled.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// If true, also run `ta draft apply` after auto-approving.
+    #[serde(default)]
+    pub auto_apply: bool,
+
+    /// If auto_apply, also create a git commit.
+    #[serde(default)]
+    pub git_commit: bool,
+
+    /// Conditions that must ALL be met for auto-approval.
+    #[serde(default)]
+    pub conditions: AutoApproveConditions,
+}
+
+// Default derive: enabled=false, auto_apply=false, git_commit=false, conditions=default.
+
+/// Conditions for draft auto-approval. ALL must be satisfied.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutoApproveConditions {
+    /// Maximum number of files changed (None = no limit).
+    #[serde(default)]
+    pub max_files: Option<usize>,
+
+    /// Maximum total lines changed (None = no limit).
+    #[serde(default)]
+    pub max_lines_changed: Option<usize>,
+
+    /// Glob patterns — ALL changed files must match at least one.
+    /// Empty = allow all paths.
+    #[serde(default)]
+    pub allowed_paths: Vec<String>,
+
+    /// Glob patterns — ANY match forces human review (overrides allowed_paths).
+    #[serde(default)]
+    pub blocked_paths: Vec<String>,
+
+    /// Run test command before auto-approving.
+    #[serde(default)]
+    pub require_tests_pass: bool,
+
+    /// Run lint command before auto-approving.
+    #[serde(default)]
+    pub require_clean_clippy: bool,
+
+    /// Test command to run when require_tests_pass is true.
+    #[serde(default = "default_test_command")]
+    pub test_command: String,
+
+    /// Lint command to run when require_clean_clippy is true.
+    #[serde(default = "default_lint_command")]
+    pub lint_command: String,
+
+    /// Only auto-approve for these plan phases (empty = any phase).
+    #[serde(default)]
+    pub allowed_phases: Vec<String>,
+
+    /// Verification timeout in seconds (default: 300 = 5 minutes).
+    #[serde(default = "default_verification_timeout")]
+    pub verification_timeout_secs: u64,
+}
+
+fn default_test_command() -> String {
+    "cargo test --workspace".to_string()
+}
+
+fn default_lint_command() -> String {
+    "cargo clippy --workspace --all-targets -- -D warnings".to_string()
+}
+
+fn default_verification_timeout() -> u64 {
+    300
+}
+
+impl Default for AutoApproveConditions {
+    fn default() -> Self {
+        Self {
+            max_files: None,
+            max_lines_changed: None,
+            allowed_paths: Vec::new(),
+            blocked_paths: Vec::new(),
+            require_tests_pass: false,
+            require_clean_clippy: false,
+            test_command: default_test_command(),
+            lint_command: default_lint_command(),
+            allowed_phases: Vec::new(),
+            verification_timeout_secs: default_verification_timeout(),
         }
     }
 }
@@ -167,6 +272,11 @@ pub struct AgentPolicyOverride {
     /// Override the security level for this agent.
     #[serde(default)]
     pub security_level: Option<SecurityLevel>,
+
+    /// Per-agent auto-approve overrides (v0.9.8.1).
+    /// Can only tighten the project-level config, never loosen.
+    #[serde(default)]
+    pub auto_approve: Option<AutoApproveDraftConfig>,
 }
 
 /// Security level — controls how strictly TA mediates actions.
@@ -336,5 +446,125 @@ security_level: strict
         assert_eq!(doc.version, "1");
         assert_eq!(doc.security_level, SecurityLevel::Checkpoint);
         assert!(doc.schemes.is_empty());
+    }
+
+    #[test]
+    fn auto_approve_drafts_default_off() {
+        let doc = PolicyDocument::default();
+        assert!(!doc.defaults.auto_approve.drafts.enabled);
+        assert!(!doc.defaults.auto_approve.drafts.auto_apply);
+        assert!(!doc.defaults.auto_approve.drafts.git_commit);
+        assert!(doc
+            .defaults
+            .auto_approve
+            .drafts
+            .conditions
+            .allowed_paths
+            .is_empty());
+        assert!(doc
+            .defaults
+            .auto_approve
+            .drafts
+            .conditions
+            .blocked_paths
+            .is_empty());
+        assert!(
+            !doc.defaults
+                .auto_approve
+                .drafts
+                .conditions
+                .require_tests_pass
+        );
+    }
+
+    #[test]
+    fn auto_approve_drafts_yaml_round_trip() {
+        let yaml = r#"
+defaults:
+  auto_approve:
+    read_only: true
+    internal_tools: true
+    drafts:
+      enabled: true
+      auto_apply: true
+      git_commit: false
+      conditions:
+        max_files: 5
+        max_lines_changed: 200
+        allowed_paths:
+          - "tests/**"
+          - "docs/**"
+        blocked_paths:
+          - ".ta/**"
+          - "**/main.rs"
+        require_tests_pass: true
+        allowed_phases:
+          - "tests"
+          - "docs"
+"#;
+        let doc: PolicyDocument = serde_yaml::from_str(yaml).unwrap();
+        assert!(doc.defaults.auto_approve.drafts.enabled);
+        assert!(doc.defaults.auto_approve.drafts.auto_apply);
+        assert!(!doc.defaults.auto_approve.drafts.git_commit);
+        assert_eq!(
+            doc.defaults.auto_approve.drafts.conditions.max_files,
+            Some(5)
+        );
+        assert_eq!(
+            doc.defaults
+                .auto_approve
+                .drafts
+                .conditions
+                .max_lines_changed,
+            Some(200)
+        );
+        assert_eq!(
+            doc.defaults.auto_approve.drafts.conditions.allowed_paths,
+            vec!["tests/**", "docs/**"]
+        );
+        assert_eq!(
+            doc.defaults.auto_approve.drafts.conditions.blocked_paths,
+            vec![".ta/**", "**/main.rs"]
+        );
+        assert!(
+            doc.defaults
+                .auto_approve
+                .drafts
+                .conditions
+                .require_tests_pass
+        );
+        assert_eq!(
+            doc.defaults.auto_approve.drafts.conditions.allowed_phases,
+            vec!["tests", "docs"]
+        );
+
+        // Round-trip.
+        let yaml_out = serde_yaml::to_string(&doc).unwrap();
+        let doc2: PolicyDocument = serde_yaml::from_str(&yaml_out).unwrap();
+        assert!(doc2.defaults.auto_approve.drafts.enabled);
+        assert_eq!(
+            doc2.defaults.auto_approve.drafts.conditions.max_files,
+            Some(5)
+        );
+    }
+
+    #[test]
+    fn agent_override_with_auto_approve() {
+        let yaml = r#"
+agents:
+  codex:
+    security_level: open
+    auto_approve:
+      enabled: true
+      conditions:
+        max_files: 3
+        allowed_paths: ["tests/**"]
+"#;
+        let doc: PolicyDocument = serde_yaml::from_str(yaml).unwrap();
+        let codex = &doc.agents["codex"];
+        assert_eq!(codex.security_level, Some(SecurityLevel::Open));
+        let drafts = codex.auto_approve.as_ref().unwrap();
+        assert!(drafts.enabled);
+        assert_eq!(drafts.conditions.max_files, Some(3));
     }
 }

@@ -2709,7 +2709,7 @@ All complexity lives in the daemon (v0.9.7). The shell is deliberately thin — 
 ---
 
 ### v0.9.8.1 — Auto-Approval, Lifecycle Hygiene & Operational Polish
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Three themes that make TA reliable for sustained multi-phase use:
 - **(A) Policy-driven auto-approval**: Wire the policy engine into draft review so drafts matching configurable conditions are auto-approved — preserving full audit trail and the ability to tighten rules at any time.
 - **(B) Goal lifecycle & GC**: Unified `ta gc`, goal history ledger, `ta goal list --active` filtering, and event store pruning (items 9–10).
@@ -2932,6 +2932,27 @@ agents:
 - `crates/ta-goal/src/history.rs` — `GoalHistoryEntry` struct, append/read/filter for `.ta/goal-history.jsonl`
 - `docs/USAGE.md` — auto-approval configuration guide, security model explanation, goal GC & history docs
 - Tests: condition evaluation (each condition individually), path glob matching, tighten-only cascade, verification command execution, auto-apply flow, audit trail correctness, history ledger write/read round-trip, GC threshold filtering
+
+#### Completed
+
+- [x] `AutoApproveDraftConfig` and `AutoApproveConditions` structs in `ta-policy/src/document.rs`
+- [x] `should_auto_approve_draft()` function with `DraftInfo` / `AutoApproveDecision` types in `ta-policy/src/auto_approve.rs` (14 tests)
+- [x] Cascade tighten-only merge for draft auto-approve conditions in `cascade.rs` (2 tests)
+- [x] `DraftAutoApproved` event variant in `ta-goal/src/events.rs` (1 test)
+- [x] Gateway wiring: auto-approve check in `ta-mcp-gateway/src/tools/draft.rs` before ReviewChannel
+- [x] `GoalHistoryEntry` and `GoalHistoryLedger` in `ta-goal/src/history.rs` (6 tests)
+- [x] Unified `ta gc` command in `apps/ta-cli/src/commands/gc.rs` with history writes, staging cleanup, orphan draft cleanup
+- [x] `ta policy check <draft_id>` and `ta policy show` in `apps/ta-cli/src/commands/policy.rs`
+- [x] `ta goal list --active` (default: non-terminal only) and `ta goal list --all`
+- [x] `ta goal history` subcommand with `--phase`, `--agent`, `--since`, `--json`, `--limit` filters
+- [x] Status endpoint: `active` flag on `AgentInfo` distinguishing active (updated within 10m) vs tracked agents
+
+#### Remaining (deferred)
+- Verification integration (`require_tests_pass`, `require_clean_clippy`) — runs commands but evaluation result not wired into gateway auto-approve flow yet
+- `auto_apply` flow (auto-apply after auto-approve)
+- Event store pruning of events linked to archived goals
+- `ta draft submit --require-review` CLI flag to force human review
+- Audit trail entry for auto-approved drafts via `ta-audit`
 
 #### Version: `0.9.8-alpha.1`
 

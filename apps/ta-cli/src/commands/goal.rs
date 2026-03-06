@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use clap::Subcommand;
-use ta_goal::{GoalRunState, GoalRunStore};
+use ta_goal::{GoalHistoryLedger, GoalRunState, GoalRunStore, HistoryFilter};
 use ta_mcp_gateway::GatewayConfig;
 use ta_policy::constitution::{
     AccessConstitution, ConstitutionEntry, ConstitutionStore, EnforcementMode,
@@ -163,11 +163,17 @@ pub enum GoalCommands {
         #[arg(long)]
         objective_file: Option<PathBuf>,
     },
-    /// List all goal runs.
+    /// List goal runs (default: active only; use --all for everything).
     List {
         /// Filter by state (e.g., "running", "pr_ready", "completed").
         #[arg(long)]
         state: Option<String>,
+        /// Show only non-terminal goals (default behavior).
+        #[arg(long)]
+        active: bool,
+        /// Show all goals including terminal states.
+        #[arg(long)]
+        all: bool,
     },
     /// Show details for a specific goal run.
     Status {
@@ -198,6 +204,24 @@ pub enum GoalCommands {
         /// Stale threshold in days (default: 7).
         #[arg(long, default_value = "7")]
         threshold_days: u32,
+    },
+    /// Browse the goal history ledger (archived/completed goals, v0.9.8.1).
+    History {
+        /// Filter by plan phase.
+        #[arg(long)]
+        phase: Option<String>,
+        /// Filter by agent ID.
+        #[arg(long)]
+        agent: Option<String>,
+        /// Filter by date (YYYY-MM-DD).
+        #[arg(long)]
+        since: Option<String>,
+        /// Output as raw JSONL.
+        #[arg(long)]
+        json: bool,
+        /// Maximum entries to show (default: 20).
+        #[arg(long, default_value = "20")]
+        limit: usize,
     },
 }
 
@@ -316,7 +340,23 @@ pub fn execute(cmd: &GoalCommands, config: &GatewayConfig) -> anyhow::Result<()>
             follow_up.as_ref(),
             objective_file.as_deref(),
         ),
-        GoalCommands::List { state } => list_goals(&store, state.as_deref()),
+        GoalCommands::List { state, active, all } => {
+            list_goals(&store, state.as_deref(), *active, *all)
+        }
+        GoalCommands::History {
+            phase,
+            agent,
+            since,
+            json,
+            limit,
+        } => goal_history(
+            config,
+            phase.as_deref(),
+            agent.as_deref(),
+            since.as_deref(),
+            *json,
+            *limit,
+        ),
         GoalCommands::Status { id, json } => show_status(&store, id, *json),
         GoalCommands::Delete { id } => delete_goal(&store, id),
         GoalCommands::Constitution { command } => execute_constitution(command, config, &store),
@@ -468,12 +508,27 @@ fn resolve_goal_id(id: &str, store: &GoalRunStore) -> anyhow::Result<Uuid> {
     }
 }
 
-fn list_goals(store: &GoalRunStore, state: Option<&str>) -> anyhow::Result<()> {
-    let goals = if let Some(state_filter) = state {
+fn list_goals(
+    store: &GoalRunStore,
+    state: Option<&str>,
+    active: bool,
+    all: bool,
+) -> anyhow::Result<()> {
+    let mut goals = if let Some(state_filter) = state {
         store.list_by_state(state_filter)?
     } else {
         store.list()?
     };
+
+    // Default: show active (non-terminal) goals unless --all is passed or a state filter is explicit.
+    if !all && state.is_none() || active {
+        goals.retain(|g| {
+            !matches!(
+                g.state,
+                GoalRunState::Applied | GoalRunState::Completed | GoalRunState::Failed { .. }
+            )
+        });
+    }
 
     if goals.is_empty() {
         println!("No goal runs found.");
@@ -514,6 +569,76 @@ fn list_goals(store: &GoalRunStore, state: Option<&str>) -> anyhow::Result<()> {
         );
     }
     println!("\n{} goal(s) total.", goals.len());
+
+    Ok(())
+}
+
+fn goal_history(
+    config: &GatewayConfig,
+    phase: Option<&str>,
+    agent: Option<&str>,
+    since: Option<&str>,
+    json: bool,
+    limit: usize,
+) -> anyhow::Result<()> {
+    let ledger = GoalHistoryLedger::for_project(&config.workspace_root);
+    let since_dt = if let Some(s) = since {
+        Some(
+            chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
+                .map_err(|e| anyhow::anyhow!("Invalid date '{}': {} (expected YYYY-MM-DD)", s, e))?
+                .and_hms_opt(0, 0, 0)
+                .unwrap()
+                .and_utc(),
+        )
+    } else {
+        None
+    };
+
+    let filter = HistoryFilter {
+        phase: phase.map(|s| s.to_string()),
+        agent: agent.map(|s| s.to_string()),
+        since: since_dt,
+        limit: Some(limit),
+    };
+
+    let entries = ledger.read(&filter)?;
+
+    if entries.is_empty() {
+        println!("No history entries found.");
+        return Ok(());
+    }
+
+    if json {
+        for entry in &entries {
+            println!("{}", serde_json::to_string(entry)?);
+        }
+        return Ok(());
+    }
+
+    println!(
+        "{:<10} {:<30} {:<12} {:<8} {:<12} {:<8}",
+        "ID", "TITLE", "STATE", "PHASE", "COMPLETED", "MINS"
+    );
+    println!("{}", "-".repeat(80));
+
+    for entry in &entries {
+        let completed = entry
+            .completed
+            .map(|dt| dt.format("%Y-%m-%d").to_string())
+            .unwrap_or_else(|| "-".to_string());
+        let duration = format!("{}", entry.duration_mins);
+
+        println!(
+            "{:<10} {:<30} {:<12} {:<8} {:<12} {:<8}",
+            &entry.id.to_string()[..8],
+            truncate(&entry.title, 28),
+            entry.state,
+            entry.phase.as_deref().unwrap_or("-"),
+            completed,
+            duration,
+        );
+    }
+    println!("\n{} history entry(ies).", entries.len());
 
     Ok(())
 }

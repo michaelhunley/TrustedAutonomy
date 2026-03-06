@@ -46,9 +46,13 @@ pub use constitution::{
     ConstitutionValidation, EnforcementMode,
 };
 pub use context::PolicyContext;
+pub mod auto_approve;
+
+pub use auto_approve::{AutoApproveDecision, DraftInfo};
 pub use document::{
-    AgentPolicyOverride, AutoApproveConfig, BudgetConfig, EscalationConfig, PolicyDefaults,
-    PolicyDocument, PolicyEnforcement, SchemePolicy, SecurityLevel,
+    AgentPolicyOverride, AutoApproveConditions, AutoApproveConfig, AutoApproveDraftConfig,
+    BudgetConfig, EscalationConfig, PolicyDefaults, PolicyDocument, PolicyEnforcement,
+    SchemePolicy, SecurityLevel,
 };
 pub use engine::{EvaluationStep, EvaluationTrace, PolicyDecision, PolicyEngine, PolicyRequest};
 pub use error::PolicyError;

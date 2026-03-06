@@ -41,6 +41,8 @@ pub struct AgentInfo {
     pub title: String,
     pub state: String,
     pub running_secs: i64,
+    /// Whether the agent is considered actively running (updated within the idle threshold).
+    pub active: bool,
 }
 
 /// `GET /api/status` — Project dashboard as JSON.
@@ -71,6 +73,10 @@ pub async fn project_status(State(state): State<Arc<AppState>>) -> impl IntoResp
         match goal_store {
             Ok(store) => {
                 let all = store.list().unwrap_or_default();
+                // Idle threshold: an agent is "active" if updated within the last 10 minutes.
+                let idle_threshold = chrono::Duration::minutes(10);
+                let now = chrono::Utc::now();
+
                 let active: Vec<AgentInfo> = all
                     .iter()
                     .filter(|g| {
@@ -82,19 +88,19 @@ pub async fn project_status(State(state): State<Arc<AppState>>) -> impl IntoResp
                         )
                     })
                     .map(|g| {
-                        let elapsed = chrono::Utc::now()
-                            .signed_duration_since(g.created_at)
-                            .num_seconds();
+                        let elapsed = now.signed_duration_since(g.created_at).num_seconds();
+                        let is_active = (now - g.updated_at) < idle_threshold;
                         AgentInfo {
                             agent_id: g.agent_id.clone(),
                             goal_id: g.goal_run_id.to_string(),
                             title: g.title.clone(),
                             state: g.state.to_string(),
                             running_secs: elapsed,
+                            active: is_active,
                         }
                     })
                     .collect();
-                let active_count = active.len();
+                let active_count = active.iter().filter(|a| a.active).count();
                 let total = all.len();
                 (active, active_count, total)
             }

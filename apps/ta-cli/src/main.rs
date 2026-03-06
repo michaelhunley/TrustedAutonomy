@@ -184,6 +184,26 @@ enum Commands {
         #[arg(long)]
         url: Option<String>,
     },
+    /// Manage policy configuration and auto-approval.
+    Policy {
+        #[command(subcommand)]
+        command: commands::policy::PolicyCommands,
+    },
+    /// Unified garbage collection: goals, drafts, staging directories, and event store.
+    Gc {
+        /// Show what would be cleaned without making changes.
+        #[arg(long)]
+        dry_run: bool,
+        /// Stale threshold in days (default: 7).
+        #[arg(long, default_value = "7")]
+        threshold_days: u32,
+        /// Ignore threshold — GC everything in terminal state.
+        #[arg(long)]
+        all: bool,
+        /// Move to .ta/goals/archive/ instead of deleting.
+        #[arg(long)]
+        archive: bool,
+    },
     /// Project-wide status dashboard: active agents, pending drafts, next phase.
     Status,
     /// Start the MCP server on stdio.
@@ -365,6 +385,13 @@ fn main() -> anyhow::Result<()> {
         Commands::Shell { init, attach, url } => {
             commands::shell::execute(&project_root, attach.as_deref(), url.as_deref(), *init)
         }
+        Commands::Policy { command } => commands::policy::execute(command, &config),
+        Commands::Gc {
+            dry_run,
+            threshold_days,
+            all,
+            archive,
+        } => commands::gc::execute(&config, *dry_run, *threshold_days, *all, *archive),
         Commands::Status => commands::status::execute(&config),
         Commands::Serve => commands::serve::execute(&project_root),
         // Already handled above.

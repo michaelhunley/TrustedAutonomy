@@ -685,6 +685,117 @@ stale_threshold_days = 7
 health_check = true          # One-line warning on startup if stale drafts exist
 ```
 
+### Unified Garbage Collection (`ta gc`)
+
+Run all cleanup tasks in a single pass — zombie goals, stale staging directories, and orphaned draft packages:
+
+```bash
+# Preview what would be cleaned
+ta gc --dry-run
+
+# Clean everything older than 7 days (default threshold)
+ta gc
+
+# Clean everything older than 3 days
+ta gc --threshold-days 3
+
+# Clean all terminal goals regardless of age
+ta gc --all
+
+# Archive staging dirs instead of deleting
+ta gc --archive
+```
+
+`ta gc` performs:
+- **Zombie detection**: running/pr_ready goals past the stale threshold → transitioned to failed
+- **Missing staging detection**: non-terminal goals whose staging directory no longer exists → marked failed
+- **Staging cleanup**: terminal goals past threshold → staging directories removed (or archived with `--archive`)
+- **Orphaned draft cleanup**: draft package JSON files whose goal no longer exists → removed
+- **History ledger writes**: every GC'd goal gets a compact summary appended to `.ta/goal-history.jsonl`
+
+### Goal History
+
+Browse archived and completed goals, even after their JSON files have been GC'd:
+
+```bash
+# Show recent history (last 20 entries)
+ta goal history
+
+# Filter by plan phase
+ta goal history --phase v0.9.8.1
+
+# Filter by agent
+ta goal history --agent claude-code
+
+# Filter by date
+ta goal history --since 2026-03-01
+
+# Raw JSONL output for scripting
+ta goal history --json
+
+# Limit results
+ta goal history --limit 50
+```
+
+### Goal List Filtering
+
+By default, `ta goal list` shows only active (non-terminal) goals:
+
+```bash
+# Active goals only (default)
+ta goal list
+
+# All goals including completed/failed/applied
+ta goal list --all
+
+# Filter by specific state
+ta goal list --state running
+```
+
+### Auto-Approval Policy
+
+Configure policy-driven draft auto-approval in `.ta/policy.yaml`:
+
+```yaml
+defaults:
+  auto_approve:
+    drafts:
+      enabled: true          # master switch (default: off)
+      auto_apply: false      # also apply changes after approval
+      git_commit: false       # create git commit if auto-applying
+      conditions:
+        max_files: 5          # only small changes
+        max_lines_changed: 200
+        allowed_paths:        # only safe paths
+          - "tests/**"
+          - "docs/**"
+        blocked_paths:        # never auto-approve these
+          - ".ta/**"
+          - "**/main.rs"
+        require_tests_pass: false
+        require_clean_clippy: false
+```
+
+Dry-run auto-approval evaluation:
+
+```bash
+ta policy check <draft-id>    # Shows condition-by-condition evaluation
+ta policy show                # Show resolved policy document
+```
+
+Per-agent overrides can tighten (never loosen) conditions:
+
+```yaml
+agents:
+  codex:
+    security_level: open
+    auto_approve:
+      drafts:
+        enabled: true
+        conditions:
+          max_files: 3        # tighter than project default
+```
+
 ---
 
 ## Configuration

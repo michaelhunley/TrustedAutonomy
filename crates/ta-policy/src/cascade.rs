@@ -137,6 +137,43 @@ impl PolicyCascade {
             base.defaults.auto_approve.internal_tools = false;
         }
 
+        // Draft auto-approve: tighten-only merge (v0.9.8.1).
+        {
+            let base_drafts = &mut base.defaults.auto_approve.drafts;
+            let overlay_drafts = &overlay.defaults.auto_approve.drafts;
+
+            // Note: we do NOT tighten `enabled` via cascade merge because
+            // a default `false` is indistinguishable from an explicit `false`.
+            // The `enabled` flag is set at the project level in policy.yaml.
+            // Overlays can tighten conditions but cannot toggle the master switch.
+
+            // Tighten conditions.
+            let bc = &mut base_drafts.conditions;
+            let oc = &overlay_drafts.conditions;
+
+            match (bc.max_files, oc.max_files) {
+                (None, Some(v)) => bc.max_files = Some(v),
+                (Some(b), Some(o)) if o < b => bc.max_files = Some(o),
+                _ => {}
+            }
+            match (bc.max_lines_changed, oc.max_lines_changed) {
+                (None, Some(v)) => bc.max_lines_changed = Some(v),
+                (Some(b), Some(o)) if o < b => bc.max_lines_changed = Some(o),
+                _ => {}
+            }
+            for p in &oc.blocked_paths {
+                if !bc.blocked_paths.contains(p) {
+                    bc.blocked_paths.push(p.clone());
+                }
+            }
+            if oc.require_tests_pass {
+                bc.require_tests_pass = true;
+            }
+            if oc.require_clean_clippy {
+                bc.require_clean_clippy = true;
+            }
+        }
+
         // Scheme policies: merge additively.
         for (scheme, overlay_policy) in &overlay.schemes {
             let base_policy = base.schemes.entry(scheme.clone()).or_default();
@@ -439,6 +476,71 @@ schemes:
         assert_eq!(
             base.budget.as_ref().unwrap().max_tokens_per_goal,
             Some(500_000)
+        );
+    }
+
+    #[test]
+    fn merge_draft_auto_approve_tightens() {
+        let mut base = PolicyDocument::default();
+        base.defaults.auto_approve.drafts.enabled = true;
+        base.defaults.auto_approve.drafts.conditions.max_files = Some(10);
+
+        let mut overlay = PolicyDocument::default();
+        overlay.defaults.auto_approve.drafts.conditions.max_files = Some(5);
+        overlay
+            .defaults
+            .auto_approve
+            .drafts
+            .conditions
+            .blocked_paths
+            .push(".github/**".to_string());
+        overlay
+            .defaults
+            .auto_approve
+            .drafts
+            .conditions
+            .require_tests_pass = true;
+
+        PolicyCascade::merge(&mut base, &overlay);
+        assert!(base.defaults.auto_approve.drafts.enabled);
+        assert_eq!(
+            base.defaults.auto_approve.drafts.conditions.max_files,
+            Some(5)
+        );
+        assert!(base
+            .defaults
+            .auto_approve
+            .drafts
+            .conditions
+            .blocked_paths
+            .contains(&".github/**".to_string()));
+        assert!(
+            base.defaults
+                .auto_approve
+                .drafts
+                .conditions
+                .require_tests_pass
+        );
+    }
+
+    #[test]
+    fn merge_draft_auto_approve_overlay_does_not_toggle_enabled() {
+        // Overlays cannot toggle the `enabled` master switch because a default
+        // `false` is indistinguishable from an explicit `false`. The enabled
+        // flag is project-level only.
+        let mut base = PolicyDocument::default();
+        base.defaults.auto_approve.drafts.enabled = true;
+
+        let mut overlay = PolicyDocument::default();
+        overlay.defaults.auto_approve.drafts.conditions.max_files = Some(0);
+
+        PolicyCascade::merge(&mut base, &overlay);
+        // `enabled` stays true — overlays tighten conditions, not the switch.
+        assert!(base.defaults.auto_approve.drafts.enabled);
+        // But conditions are tightened.
+        assert_eq!(
+            base.defaults.auto_approve.drafts.conditions.max_files,
+            Some(0)
         );
     }
 }

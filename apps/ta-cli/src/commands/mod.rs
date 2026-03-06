@@ -5,9 +5,11 @@ pub mod credentials;
 pub mod dev;
 pub mod draft;
 pub mod events;
+pub mod gc;
 pub mod goal;
 pub mod init;
 pub mod plan;
+pub mod policy;
 pub mod pr;
 #[cfg(unix)]
 pub mod pty_capture;
