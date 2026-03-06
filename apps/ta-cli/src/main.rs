@@ -167,6 +167,18 @@ enum Commands {
         #[command(subcommand)]
         command: commands::release::ReleaseCommands,
     },
+    /// Interactive TA Shell -- thin REPL client for the daemon.
+    Shell {
+        /// Generate default .ta/shell.toml config and exit.
+        #[arg(long)]
+        init: bool,
+        /// Attach to an existing agent session (ID or prefix).
+        #[arg(long)]
+        attach: Option<String>,
+        /// Daemon URL override (default: from .ta/daemon.toml or http://127.0.0.1:7700).
+        #[arg(long)]
+        url: Option<String>,
+    },
     /// Project-wide status dashboard: active agents, pending drafts, next phase.
     Status,
     /// Start the MCP server on stdio.
@@ -277,6 +289,9 @@ fn main() -> anyhow::Result<()> {
         Commands::Setup { command } => commands::setup::execute(command, &config),
         Commands::Init { command } => commands::init::execute(command, &config),
         Commands::Release { command } => commands::release::execute(command, &config),
+        Commands::Shell { init, attach, url } => {
+            commands::shell::execute(&project_root, attach.as_deref(), url.as_deref(), *init)
+        }
         Commands::Status => commands::status::execute(&config),
         Commands::Serve => commands::serve::execute(&project_root),
         // Already handled above.
