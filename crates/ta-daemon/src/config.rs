@@ -75,6 +75,11 @@ pub struct CommandConfig {
     pub allowed: Vec<String>,
     pub write_commands: Vec<String>,
     pub timeout_secs: u64,
+    /// Commands that launch long-running processes (agents, dev loops).
+    /// These get `long_timeout_secs` instead of `timeout_secs`.
+    pub long_running: Vec<String>,
+    /// Timeout for long-running commands like `ta run` and `ta dev` (default: 1 hour).
+    pub long_timeout_secs: u64,
 }
 
 impl Default for CommandConfig {
@@ -93,6 +98,13 @@ impl Default for CommandConfig {
                 "ta init *".to_string(),
             ],
             timeout_secs: 30,
+            long_running: vec![
+                "ta run *".to_string(),
+                "run *".to_string(),
+                "ta dev *".to_string(),
+                "dev *".to_string(),
+            ],
+            long_timeout_secs: 3600,
         }
     }
 }

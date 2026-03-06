@@ -73,15 +73,32 @@ pub async fn execute_command(
     // Find the `ta` binary. Prefer the one adjacent to the current binary.
     let ta_binary = find_ta_binary();
 
-    let timeout = std::time::Duration::from_secs(state.daemon_config.commands.timeout_secs);
+    // Long-running commands (ta run, ta dev) get a longer timeout.
+    let is_long = is_long_running(command_str, &state.daemon_config.commands.long_running);
+    let timeout_secs = if is_long {
+        state.daemon_config.commands.long_timeout_secs
+    } else {
+        state.daemon_config.commands.timeout_secs
+    };
+    let timeout = std::time::Duration::from_secs(timeout_secs);
 
     match run_command(&ta_binary, &args, &state.project_root, timeout).await {
         Ok(response) => Json(response).into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e})),
-        )
-            .into_response(),
+        Err(e) => {
+            let detail = format!(
+                "{} (command: \"{}\", timeout: {}s{})",
+                e,
+                command_str,
+                timeout_secs,
+                if is_long { " [long-running]" } else { "" },
+            );
+            tracing::warn!("Command failed: {}", detail);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": detail})),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -112,8 +129,15 @@ async fn run_command(
             stdout: String::from_utf8_lossy(&output.stdout).to_string(),
             stderr: String::from_utf8_lossy(&output.stderr).to_string(),
         }),
-        Ok(Err(e)) => Err(format!("Failed to execute command: {}", e)),
-        Err(_) => Err("Command timed out".to_string()),
+        Ok(Err(e)) => Err(format!(
+            "Failed to execute '{}': {}. Is the ta binary at the expected path?",
+            binary, e
+        )),
+        Err(_) => Err(format!(
+            "Command timed out after {}s. For long-running commands like 'ta run' or 'ta dev', \
+             configure [commands].long_timeout_secs in .ta/daemon.toml or run directly outside the shell.",
+            timeout.as_secs()
+        )),
     }
 }
 
@@ -137,6 +161,13 @@ fn is_command_allowed(command: &str, allowlist: &[String]) -> bool {
         return true; // No allowlist = allow everything.
     }
     allowlist.iter().any(|pattern| glob_match(pattern, command))
+}
+
+/// Check if a command is long-running (gets extended timeout).
+fn is_long_running(command: &str, long_patterns: &[String]) -> bool {
+    long_patterns
+        .iter()
+        .any(|pattern| glob_match(pattern, command))
 }
 
 /// Check if a command is classified as a write command.

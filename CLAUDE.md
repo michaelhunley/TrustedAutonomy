@@ -57,6 +57,17 @@ This applies to both manual work and TA-mediated goals. When `ta pr apply --git-
 - All work stays within ~/development/TrustedAutonomy/
 - Use `tempfile::tempdir()` for all test fixtures that need filesystem access
 
+## Observability Mandate
+
+All outcomes must be **observable** (with details and logging) and **actionable** (user knows what to do next). This applies to every error path, timeout, status message, and user-facing output.
+
+- **Error messages**: Always include what happened, what was being attempted, and what the user can do about it. Never return bare "Error" or "failed" without context.
+- **Timeouts**: State which operation timed out, what the timeout duration was, and how to configure it.
+- **CLI output**: Commands should confirm what they did, not just succeed silently. Include counts, paths, and IDs where relevant.
+- **Daemon/API errors**: Include the command or endpoint, relevant IDs, and suggest next steps.
+- **Logging**: Use `tracing::warn`/`tracing::error` for operational issues. Include structured fields (command, duration, path) not just messages.
+- **Scripts**: Print what step is running, what binary is being used, and on failure, print the exact command that can be re-run manually.
+
 ## Current State
 
 - **Current version**: `0.9.4-alpha`
