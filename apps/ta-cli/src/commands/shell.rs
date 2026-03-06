@@ -627,13 +627,21 @@ fn render_sse_event(frame: &str) -> Option<String> {
         }
         "goal_completed" => {
             let title = payload["title"].as_str().unwrap_or("untitled");
+            let goal_id = payload["goal_id"]
+                .as_str()
+                .map(|s| &s[..8.min(s.len())])
+                .unwrap_or("?");
             let secs = payload["duration_secs"].as_u64().unwrap_or(0);
             let mins = secs / 60;
-            if mins > 0 {
-                format!("goal completed: \"{}\" ({}m)", title, mins)
+            let duration = if mins > 0 {
+                format!("{}m", mins)
             } else {
-                format!("goal completed: \"{}\"", title)
-            }
+                format!("{}s", secs)
+            };
+            format!(
+                "goal completed: \"{}\" ({}) [{}]\n  Next: ta draft list | ta draft view <id>",
+                title, duration, goal_id
+            )
         }
         "draft_built" => {
             let count = payload["artifact_count"].as_u64().unwrap_or(0);
@@ -641,7 +649,11 @@ fn render_sse_event(frame: &str) -> Option<String> {
                 .as_str()
                 .map(|s| &s[..8.min(s.len())])
                 .unwrap_or("?");
-            format!("draft built: {} files ({})", count, draft_id)
+            let full_id = payload["draft_id"].as_str().unwrap_or("?");
+            format!(
+                "draft ready: {} files ({})\n  View:    ta draft view {}\n  Approve: ta draft approve {}\n  Deny:    ta draft deny {}",
+                count, draft_id, full_id, full_id, full_id
+            )
         }
         "draft_approved" | "draft_denied" => {
             let decision = if event_type == "draft_approved" {
