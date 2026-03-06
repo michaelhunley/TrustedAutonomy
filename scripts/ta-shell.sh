@@ -80,13 +80,18 @@ built_version() {
 
 if daemon_healthy; then
   RUNNING_VER="$(daemon_version)"
-  echo "Daemon already running at ${DAEMON_URL} (v${RUNNING_VER})"
+  BUILT_VER="$(built_version)"
+  RUNNING_PID="$(pgrep -f 'ta-daemon.*--api' 2>/dev/null | head -1 || echo '?')"
+  RUNNING_BIN="$(ps -p "${RUNNING_PID}" -o command= 2>/dev/null | awk '{print $1}' || echo '?')"
+
+  echo "Daemon status:"
+  echo "  Running:  v${RUNNING_VER} (pid ${RUNNING_PID}, binary: ${RUNNING_BIN})"
+  echo "  Built:    v${BUILT_VER} (binary: ${DAEMON_BIN})"
 
   # Kill and restart if the running daemon is stale compared to the built binary.
-  BUILT_VER="$(built_version)"
   if [[ -n "$RUNNING_VER" && -n "$BUILT_VER" && "$RUNNING_VER" != "$BUILT_VER" && "$BUILT_VER" != "unknown" ]]; then
-    echo "Stale daemon (v${RUNNING_VER}) — restarting with v${BUILT_VER}..."
-    pkill -f 'ta-daemon --api' 2>/dev/null || true
+    echo "  Mismatch detected — killing pid ${RUNNING_PID} and restarting..."
+    pkill -f 'ta-daemon.*--api' 2>/dev/null || true
     sleep 1
 
     echo "Starting daemon at ${DAEMON_URL} ..."
@@ -107,9 +112,12 @@ if daemon_healthy; then
 
     if ! daemon_healthy; then
       echo "Error: restarted daemon did not become healthy within 10 seconds" >&2
+      echo "  Try running manually: ${DAEMON_BIN} --api --project-root ${PROJECT_ROOT}" >&2
       kill "$DAEMON_PID" 2>/dev/null || true
       exit 1
     fi
+  else
+    echo "  Versions match — using existing daemon."
   fi
 else
   echo "Starting daemon at ${DAEMON_URL} ..."

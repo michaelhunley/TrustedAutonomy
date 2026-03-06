@@ -82,11 +82,15 @@ function Get-BuiltVersion {
 if (Test-DaemonHealthy) {
     $runningVer = Get-DaemonVersion
     $builtVer = Get-BuiltVersion
-    Write-Host "Daemon already running at $DaemonUrl (v$runningVer)"
+    $runningProc = Get-Process -Name "ta-daemon" -ErrorAction SilentlyContinue | Select-Object -First 1
+
+    Write-Host "Daemon status:"
+    Write-Host "  Running:  v$runningVer (pid $($runningProc.Id))"
+    Write-Host "  Built:    v$builtVer (binary: $DaemonBin)"
 
     # Kill and restart if the running daemon is stale.
     if ($runningVer -and $builtVer -and ($runningVer -ne $builtVer)) {
-        Write-Host "Stale daemon (v$runningVer) — restarting with v$builtVer..."
+        Write-Host "  Mismatch detected — killing and restarting..."
         Get-Process -Name "ta-daemon" -ErrorAction SilentlyContinue | Stop-Process -Force
         Start-Sleep -Seconds 1
 
@@ -108,10 +112,12 @@ if (Test-DaemonHealthy) {
             Start-Sleep -Milliseconds 500
         }
         if (-not $healthy) {
-            Write-Error "Restarted daemon did not become healthy within 10 seconds"
+            Write-Error "Restarted daemon did not become healthy within 10 seconds. Try: $DaemonBin --api --project-root $ProjectRoot"
             Stop-Process -Id $daemonProcess.Id -Force -ErrorAction SilentlyContinue
             exit 1
         }
+    } else {
+        Write-Host "  Versions match — using existing daemon."
     }
 } else {
     Write-Host "Starting daemon at $DaemonUrl ..."

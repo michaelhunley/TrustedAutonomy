@@ -1,6 +1,6 @@
 [package]
 name = "ta-events"
-version = "0.8.0-alpha"
+version.workspace = true
 edition = "2021"
 description = "Event system and subscription API for Trusted Autonomy"
 license = "Apache-2.0"

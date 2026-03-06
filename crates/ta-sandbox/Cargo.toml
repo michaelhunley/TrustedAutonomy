@@ -1,6 +1,6 @@
 [package]
 name = "ta-sandbox"
-version = "0.9.0-alpha"
+version.workspace = true
 edition = "2021"
 description = "Allowlisted command execution sandbox for Trusted Autonomy"
 license = "Apache-2.0"
