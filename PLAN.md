@@ -2326,164 +2326,7 @@ passing the cursor from the previous response returns only *new* events. Add a t
 
 ---
 
-### v0.9.7 — Interactive TA Shell (`ta shell`)
-<!-- status: pending -->
-**Goal**: A single-terminal interactive experience that multiplexes TA commands and agent conversation — no second terminal window needed for draft review, approval, or goal management.
-
-#### Architecture
-
-```
-$ ta shell
-┌──────────────────────────────────────────┐
-│  TA Shell v0.9.7                         │
-│  Project: TrustedAutonomy                │
-│  Next: v0.9.5.1 — Goal Lifecycle Hygiene │
-│  Agent: claude-code (ready)              │
-├──────────────────────────────────────────┤
-│                                          │
-│  ta> What should we work on next?        │
-│  [Agent]: Based on PLAN.md, the next     │
-│  pending phase is v0.9.5.1...            │
-│                                          │
-│  ta> ta draft list                       │
-│  ID       Status   Title                 │
-│  abc123   pending  Fix login flow        │
-│                                          │
-│  ta> ta draft view abc123                │
-│  [structured diff output]               │
-│                                          │
-│  ta> ta draft approve abc123             │
-│  ✅ Approved abc123                       │
-│                                          │
-│  ── Event: draft ready (goal def456) ──  │
-│                                          │
-│  ta> ta draft view def456-draft          │
-│  [diff output]                           │
-│                                          │
-│  ta> deny: needs error handling          │
-│  ❌ Denied def456-draft                   │
-│                                          │
-└──────────────────────────────────────────┘
-```
-
-#### Design Principles
-
-1. **Configurable command router**: Input is matched against a routing table to decide whether to execute locally or send to the agent. Default routes handle `ta` commands and common shortcuts, but users can add custom routes for any CLI tool (e.g., `git`, `cargo`, `kubectl`). The routing table lives in `.ta/shell.toml`.
-2. **Agent is a subprocess**: Headless agent (claude `--print` mode or equivalent) with stdin/stdout piped. Agent has MCP tools for read-only project queries. The shell handles all mutations (approve/deny/apply).
-3. **Events are inline notifications**: The shell subscribes to the TA event store. When a draft is ready or a goal completes, a notification appears inline (like chat notifications). No polling by the agent — the shell itself surfaces events.
-4. **Human holds the pen for approvals**: The agent can VIEW drafts via MCP tools, but approve/deny/apply are shell commands executed by the human. This preserves TA's security model — the human always makes the final decision, but doesn't need a second terminal.
-
-#### Items
-
-1. **Shell REPL core with configurable routing**: `ta shell` command that starts an interactive REPL with:
-   - Prompt: `ta> ` (or project-name-based, configurable)
-   - **Configurable input routing** via `.ta/shell.toml`:
-     ```toml
-     # Routes: prefix → local command execution
-     # Anything not matching a route goes to the agent
-     [[routes]]
-     prefix = "ta "           # "ta draft list" → runs `ta draft list`
-     command = "ta"            # binary to fork
-     strip_prefix = true       # remove "ta " before passing args
-
-     [[routes]]
-     prefix = "git "
-     command = "git"
-     strip_prefix = true
-
-     [[routes]]
-     prefix = "cargo "
-     command = "./dev cargo"   # use project's nix wrapper
-     strip_prefix = true
-
-     [[routes]]
-     prefix = "!"             # shell escape: "!ls -la" → runs "ls -la"
-     command = "sh"
-     args = ["-c"]
-     strip_prefix = true
-
-     # Shortcuts: keyword → expanded command
-     [[shortcuts]]
-     match = "approve"         # "approve abc123" → "ta draft approve abc123"
-     expand = "ta draft approve"
-
-     [[shortcuts]]
-     match = "deny"
-     expand = "ta draft deny"
-
-     [[shortcuts]]
-     match = "view"
-     expand = "ta draft view"
-
-     [[shortcuts]]
-     match = "apply"
-     expand = "ta draft apply"
-
-     [[shortcuts]]
-     match = "status"
-     expand = "ta status"
-
-     [[shortcuts]]
-     match = "plan"
-     expand = "ta plan list"
-
-     [[shortcuts]]
-     match = "goals"
-     expand = "ta goal list"
-
-     [[shortcuts]]
-     match = "drafts"
-     expand = "ta draft list"
-     ```
-   - **Default routing**: If no `.ta/shell.toml` exists, built-in defaults route `ta ` commands and shortcuts listed above. `ta shell --init` generates the default config for customization.
-   - History: readline/rustyline with persistent history at `.ta/shell_history`
-   - Tab completion for routed command prefixes and shortcuts
-
-2. **Agent subprocess management**: Launch the configured agent in headless/pipe mode:
-   - Claude Code: `claude --print` with stdin/stdout piped
-   - Other agents: use `agents/*.yaml` config with `pipe_mode: true` or `--print` equivalent
-   - MCP server started as sidecar, agent connects via stdio
-   - Agent has read-only MCP tools (ta_plan read, ta_goal list, ta_draft list/view, ta_context)
-   - Agent output streamed to shell display in real-time
-
-3. **Event subscription and inline notifications**: Shell subscribes to `.ta/events/` (FsEventStore):
-   - `DraftBuilt` → `── Draft ready: <title> (ta draft view <id>) ──`
-   - `GoalCompleted` → `── Goal completed: <title> ──`
-   - `GoalFailed` → `── Goal failed: <title> — <error> ──`
-   - `DriftDetected` → `── Drift alert: <details> ──`
-   - Notifications interleave with agent output without corrupting the display
-
-4. **Session state display**: Status bar or header showing:
-   - Active agents and their goals
-   - Pending draft count
-   - Current plan phase
-   - Updated on events (no polling)
-
-6. **Agent context injection**: On shell start, inject project status into agent's initial prompt:
-   - Current plan phase and what's next
-   - Pending drafts summary
-   - Active goals summary
-   - Recent events digest
-   This is the "project briefing" that `ta dev` was missing.
-
-#### Implementation scope
-- `apps/ta-cli/src/commands/shell.rs` — REPL core, configurable input router, event subscription
-- `apps/ta-cli/src/commands/shell/router.rs` — route table parsing from `.ta/shell.toml`, prefix matching, shortcut expansion, built-in defaults
-- `apps/ta-cli/src/commands/shell/agent.rs` — agent subprocess management, I/O piping
-- `apps/ta-cli/src/commands/shell/display.rs` — output formatting, inline notifications, status bar
-- `apps/ta-cli/Cargo.toml` — add `rustyline` dependency
-- `templates/shell.toml` — default routing config with `ta`, `git`, `!` shell escape, and review shortcuts
-- `docs/USAGE.md` — `ta shell` documentation, routing customization
-- Tests: configurable routing (custom prefixes, shortcuts), default fallback, event notification formatting
-
-#### Why not enhance `ta dev`?
-`ta dev` launches an *interactive* agent session where the agent owns the terminal. The shell inverts this: the *human* owns the terminal, and the agent is a subprocess. This is a fundamental UX difference — `ta dev` is "agent drives, human reviews"; `ta shell` is "human drives, agent assists". Both are valuable for different workflows.
-
-#### Version: `0.9.7-alpha`
-
----
-
-### v0.9.8 — Daemon API Expansion
+### v0.9.7 — Daemon API Expansion
 <!-- status: pending -->
 **Goal**: Promote the TA daemon from a draft-review web UI to a full API server that any interface (terminal, web, Discord, Slack, email) can connect to for commands, agent conversations, and event streams.
 
@@ -2611,12 +2454,196 @@ $ ta shell
 - `crates/ta-daemon/src/api/status.rs` — project status endpoint
 - `crates/ta-daemon/src/api/auth.rs` — token authentication, scope enforcement
 - `crates/ta-daemon/src/web.rs` — integrate new API routes alongside existing draft/memory routes
-- `crates/ta-daemon/Cargo.toml` — add `tokio-stream` (SSE), `rand` (token gen)
+- `crates/ta-daemon/src/api/input.rs` — unified `/api/input` endpoint with routing table dispatch
+- `crates/ta-daemon/src/api/router.rs` — `.ta/shell.toml` parsing, prefix matching, shortcut expansion
+- `crates/ta-daemon/src/socket.rs` — Unix domain socket listener (`.ta/daemon.sock`)
+- `crates/ta-daemon/Cargo.toml` — add `tokio-stream` (SSE), `rand` (token gen), `hyperlocal` (Unix socket)
 - `templates/daemon.toml` — default daemon configuration
+- `templates/shell.toml` — default routing config (routes + shortcuts)
 - `templates/channels/discord-bridge-api.js` — updated bridge using daemon API
 - `templates/channels/slack-bridge-api.js` — updated bridge using daemon API
-- `docs/USAGE.md` — daemon API documentation, remote access setup
-- Tests: command execution with auth, agent session lifecycle, SSE event stream, token scope enforcement
+- `docs/USAGE.md` — daemon API documentation, remote access setup, routing customization
+- Tests: command execution with auth, agent session lifecycle, SSE event stream, token scope enforcement, input routing dispatch, Unix socket connectivity
+
+8. **Configurable input routing** (`.ta/shell.toml`): The daemon uses this config to decide whether input is a command or an agent prompt. Shared by all interfaces — `ta shell`, web UI, Discord/Slack bridges all route through the same logic.
+   ```toml
+   # Routes: prefix → local command execution
+   # Anything not matching a route goes to the agent
+   [[routes]]
+   prefix = "ta "           # "ta draft list" → runs `ta draft list`
+   command = "ta"
+   strip_prefix = true
+
+   [[routes]]
+   prefix = "git "
+   command = "git"
+   strip_prefix = true
+
+   [[routes]]
+   prefix = "cargo "
+   command = "./dev cargo"   # project's nix wrapper
+   strip_prefix = true
+
+   [[routes]]
+   prefix = "!"             # shell escape: "!ls -la" → runs "ls -la"
+   command = "sh"
+   args = ["-c"]
+   strip_prefix = true
+
+   # Shortcuts: keyword → expanded command
+   [[shortcuts]]
+   match = "approve"         # "approve abc123" → "ta draft approve abc123"
+   expand = "ta draft approve"
+
+   [[shortcuts]]
+   match = "deny"
+   expand = "ta draft deny"
+
+   [[shortcuts]]
+   match = "view"
+   expand = "ta draft view"
+
+   [[shortcuts]]
+   match = "apply"
+   expand = "ta draft apply"
+
+   [[shortcuts]]
+   match = "status"
+   expand = "ta status"
+
+   [[shortcuts]]
+   match = "plan"
+   expand = "ta plan list"
+
+   [[shortcuts]]
+   match = "goals"
+   expand = "ta goal list"
+
+   [[shortcuts]]
+   match = "drafts"
+   expand = "ta draft list"
+   ```
+   - Default routing built in if no `.ta/shell.toml` exists
+   - `POST /api/input` — unified endpoint: daemon checks routing table, dispatches to `/api/cmd` or `/api/agent/ask` accordingly. Clients don't need to know the routing rules — they just send the raw input.
+
+9. **Unix socket for local clients**: In addition to HTTP, the daemon listens on `.ta/daemon.sock` (Unix domain socket). Local clients (`ta shell`, web UI) connect here for zero-config, zero-auth, low-latency access. Remote clients use HTTP with bearer token auth.
+
+#### Version: `0.9.7-alpha`
+
+---
+
+### v0.9.8 — Interactive TA Shell (`ta shell`)
+<!-- status: pending -->
+**Goal**: A thin terminal REPL client for the TA daemon — providing a single-terminal interactive experience for commands, agent conversation, and event notifications. The shell is a daemon client, not a standalone tool.
+
+#### Architecture
+
+```
+$ ta shell
+┌──────────────────────────────────────────┐
+│  TA Shell v0.9.8                         │
+│  Project: TrustedAutonomy                │
+│  Next: v0.9.5.1 — Goal Lifecycle Hygiene │
+│  Agent: claude-code (ready)              │
+├──────────────────────────────────────────┤
+│                                          │
+│  ta> What should we work on next?        │
+│  [Agent]: Based on PLAN.md, the next     │
+│  pending phase is v0.9.5.1...            │
+│                                          │
+│  ta> ta draft list                       │
+│  ID       Status   Title                 │
+│  abc123   pending  Fix login flow        │
+│                                          │
+│  ta> ta draft view abc123                │
+│  [structured diff output]               │
+│                                          │
+│  ta> approve abc123                      │
+│  ✅ Approved abc123                       │
+│                                          │
+│  ── Event: draft ready (goal def456) ──  │
+│                                          │
+│  ta> view def456-draft                   │
+│  [diff output]                           │
+│                                          │
+│  ta> deny def456-draft: needs error      │
+│     handling for the retry case          │
+│  ❌ Denied def456-draft                   │
+│                                          │
+└──────────────────────────────────────────┘
+```
+
+#### Design: Shell as Daemon Client
+
+The shell does **no business logic** — all command execution, agent management, and event streaming live in the daemon (v0.9.7). The shell is ~200 lines of REPL + rendering:
+
+```
+ta shell
+   │
+   ├── Connect to daemon (.ta/daemon.sock or localhost:7700)
+   │
+   ├── GET /api/status → render header (project, phase, agents)
+   │
+   ├── GET /api/events (SSE) → background thread renders notifications
+   │
+   └── REPL loop:
+       │
+       ├── Read input (rustyline)
+       │
+       ├── POST /api/input { "text": "<user input>" }
+       │   (daemon routes: command → /api/cmd, else → /api/agent/ask)
+       │
+       └── Render response (stream agent SSE, or show command output)
+```
+
+This means:
+- **One code path**: command routing, agent sessions, events — all in the daemon. Shell, web UI, Discord, Slack all use the same APIs.
+- **Shell is trivially simple**: readline + HTTP client + SSE renderer.
+- **No subprocess management in the shell**: daemon owns agent lifecycle.
+- **Shell can reconnect**: if the shell crashes, `ta shell` reconnects to the existing daemon session (agent keeps running).
+
+#### Items
+
+1. **Shell REPL core**: `ta shell` command:
+   - Auto-starts the daemon if not running (`ta daemon start` in background)
+   - Connects via Unix socket (`.ta/daemon.sock`) — falls back to HTTP if socket not found
+   - Prompt: `ta> ` (configurable in `.ta/shell.toml`)
+   - All input sent to `POST /api/input` — daemon handles routing
+   - History: rustyline with persistent history at `.ta/shell_history`
+   - Tab completion: fetches routed prefixes and shortcuts from `GET /api/routes`
+
+2. **Streaming agent responses**: When `/api/input` routes to the agent, the daemon returns an SSE stream. The shell renders chunks as they arrive (like a chat interface). Supports:
+   - Partial line rendering (agent "typing" effect)
+   - Markdown rendering (code blocks, headers, bold — via `termimad` or similar)
+   - Interrupt: Ctrl+C cancels the current agent response
+
+3. **Inline event notifications**: Background SSE connection to `GET /api/events`. Notifications rendered between the prompt and agent output:
+   - `── 📋 Draft ready: "Fix auth" (view abc123) ──`
+   - `── ✅ Goal completed: "Phase 1" (12m) ──`
+   - `── ❌ Goal failed: "Phase 2" — timeout ──`
+   - Non-disruptive: notifications don't break the current input line
+
+4. **Session state header**: On startup and periodically, display:
+   ```
+   TrustedAutonomy v0.9.8 │ Next: v0.9.5.1 │ 2 drafts │ 1 agent running
+   ```
+   Updated when events arrive. Compact one-liner at top.
+
+5. **`ta shell --init`**: Generate the default `.ta/shell.toml` routing config for customization.
+
+6. **`ta shell --attach <session_id>`**: Attach to an existing daemon agent session (useful for reconnecting after a disconnect or switching between sessions).
+
+#### Implementation scope
+- `apps/ta-cli/src/commands/shell.rs` — REPL core (~200 lines), daemon client, SSE rendering
+- `apps/ta-cli/Cargo.toml` — add `rustyline`, `reqwest` (HTTP client), `eventsource-client` (SSE)
+- `templates/shell.toml` — default routing config
+- `docs/USAGE.md` — `ta shell` documentation
+
+#### Why so simple?
+All complexity lives in the daemon (v0.9.7). The shell is deliberately thin — just a rendering layer. This means any bug fix or feature in the daemon benefits all interfaces (shell, web, Discord, Slack, email) simultaneously.
+
+#### Why not enhance `ta dev`?
+`ta dev` gives the agent the terminal (agent drives, human reviews elsewhere). `ta shell` gives the human the terminal (human drives, agent assists). Both connect to the same daemon. `ta dev` is for autonomous work; `ta shell` is for interactive exploration and management.
 
 #### Version: `0.9.8-alpha`
 
