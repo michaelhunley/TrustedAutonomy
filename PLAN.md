@@ -2664,6 +2664,201 @@ All complexity lives in the daemon (v0.9.7). The shell is deliberately thin — 
 
 ---
 
+### v0.9.8.1 — Policy-Driven Auto-Approval
+<!-- status: pending -->
+**Goal**: Wire the policy engine into the draft review flow so that drafts matching configurable conditions are auto-approved without human intervention — while preserving full audit trail and the ability to tighten rules at any time.
+
+#### How It Works
+
+```
+Agent calls ta_draft submit
+        │
+        ▼
+  PolicyEngine.should_auto_approve_draft(draft, policy)?
+        │
+        ├── Evaluate conditions:
+        │   ├── max files changed?
+        │   ├── max lines changed?
+        │   ├── all paths in allowed_paths?
+        │   ├── no paths in blocked_paths?
+        │   ├── tests pass? (if require_tests_pass)
+        │   ├── clippy clean? (if require_clean_clippy)
+        │   ├── agent trusted? (per-agent security_level)
+        │   └── phase in allowed_phases?
+        │
+        ├── ALL conditions met ──► Auto-approve
+        │     ├── DraftStatus::Approved { approved_by: "policy:auto" }
+        │     ├── Audit entry: auto_approved, conditions matched
+        │     ├── Event: DraftAutoApproved { draft_id, reason }
+        │     └── If auto_apply enabled: immediately apply changes
+        │
+        └── ANY condition fails ──► Route to ReviewChannel (human review)
+              └── Review request includes: "Why review needed:
+                  draft touches src/main.rs (blocked path)"
+```
+
+#### Policy Configuration (`.ta/policy.yaml`)
+
+```yaml
+version: "1"
+security_level: checkpoint
+
+auto_approve:
+  read_only: true               # existing: auto-approve read-only actions
+  internal_tools: true           # existing: auto-approve ta_* MCP calls
+
+  # NEW: draft-level auto-approval
+  drafts:
+    enabled: false               # master switch (default: off — opt-in only)
+    auto_apply: false            # if true, also run `ta draft apply` after auto-approve
+    git_commit: false            # if auto_apply, also create a git commit
+
+    conditions:
+      # Size limits — only auto-approve small, low-risk changes
+      max_files: 5
+      max_lines_changed: 200
+
+      # Path allowlist — only auto-approve changes to safe paths
+      # Uses glob patterns, matched against artifact resource_uri
+      allowed_paths:
+        - "tests/**"
+        - "docs/**"
+        - "*.md"
+        - "**/*_test.rs"
+
+      # Path blocklist — never auto-approve changes to these (overrides allowlist)
+      blocked_paths:
+        - ".ta/**"
+        - "Cargo.toml"
+        - "Cargo.lock"
+        - "**/main.rs"
+        - "**/lib.rs"
+        - ".github/**"
+
+      # Verification — run checks before auto-approving
+      require_tests_pass: false   # run `cargo test` (or configured test command)
+      require_clean_clippy: false  # run `cargo clippy` (or configured lint command)
+      test_command: "cargo test --workspace"
+      lint_command: "cargo clippy --workspace --all-targets -- -D warnings"
+
+      # Scope limits
+      allowed_phases:              # only auto-approve for these plan phases
+        - "tests"
+        - "docs"
+        - "chore"
+
+# Per-agent security overrides
+agents:
+  claude-code:
+    security_level: checkpoint    # always human review for this agent
+  codex:
+    security_level: open          # trusted for batch work
+    auto_approve:
+      drafts:
+        enabled: true
+        conditions:
+          max_files: 3
+          max_lines_changed: 100
+          allowed_paths: ["tests/**"]
+
+# Per-goal constitutional approval (v0.4.3 — already exists)
+# Constitutions define per-goal allowed actions. Auto-approval
+# respects constitutions: if a constitution is stricter than
+# the project policy, the constitution wins.
+```
+
+#### Items
+
+1. **`AutoApproveDraftConfig` struct**: Add to `PolicyDocument` under `auto_approve.drafts`:
+   - `enabled: bool` (master switch, default false)
+   - `auto_apply: bool` (also apply after approve)
+   - `git_commit: bool` (create commit if auto-applying)
+   - `conditions: AutoApproveConditions` (size limits, path rules, verification, phase limits)
+
+2. **`should_auto_approve_draft()` function**: Core evaluation logic in `ta-policy`:
+   - Takes `&DraftPackage` + `&PolicyDocument` + optional `&AgentProfile`
+   - Returns `AutoApproveDecision`:
+     - `Approved { reasons: Vec<String> }` — all conditions met, with audit trail of why
+     - `Denied { blockers: Vec<String> }` — which conditions failed, included in review request
+   - Condition evaluation order: enabled check → size limits → path rules → phase limits → agent trust level. Short-circuits on first failure.
+
+3. **Path matching**: Glob-based matching against `Artifact.resource_uri`:
+   - `allowed_paths`: if set, ALL changed files must match at least one pattern
+   - `blocked_paths`: if ANY changed file matches, auto-approval is denied (overrides allowed_paths)
+   - Uses the existing `glob` crate pattern matching
+
+4. **Verification integration**: Optionally run test/lint commands before auto-approving:
+   - `require_tests_pass: true` → runs configured `test_command` in the staging workspace
+   - `require_clean_clippy: true` → runs configured `lint_command`
+   - Both default to false (verification adds latency; opt-in only)
+   - Verification runs in the staging directory, not the source — safe even if tests have side effects
+   - Timeout: configurable, default 5 minutes
+
+5. **Gateway/daemon wiring**: In the draft submit handler:
+   - Before routing to ReviewChannel, call `should_auto_approve_draft()`
+   - If approved: set `DraftStatus::Approved { approved_by: "policy:auto", approved_at }`, dispatch `DraftAutoApproved` event
+   - If denied: include blockers in the `InteractionRequest` so the human knows why they're being asked
+   - If `auto_apply` enabled: immediately call the apply logic (copy staging → source, optional git commit)
+
+6. **`DraftAutoApproved` event**: New `TaEvent` variant:
+   ```rust
+   DraftAutoApproved {
+       draft_id: String,
+       goal_run_id: Uuid,
+       reasons: Vec<String>,       // "all files in tests/**, 3 files, 45 lines"
+       auto_applied: bool,
+       timestamp: DateTime<Utc>,
+   }
+   ```
+
+7. **Audit trail**: Auto-approved drafts are fully audited:
+   - Audit entry includes: which conditions were evaluated, which matched, policy document version
+   - `approved_by: "policy:auto"` distinguishes from human approvals
+   - `ta audit verify` includes auto-approved drafts in the tamper-evident chain
+
+8. **`ta policy check <draft_id>`**: CLI command to dry-run the auto-approval evaluation:
+   ```
+   $ ta policy check abc123
+   Draft: abc123 — "Add unit tests for auth module"
+
+   Auto-approval evaluation:
+     ✅ enabled: true
+     ✅ max_files: 3 ≤ 5
+     ✅ max_lines_changed: 87 ≤ 200
+     ✅ all paths match allowed_paths:
+        tests/auth_test.rs → tests/**
+        tests/fixtures/auth.json → tests/**
+        tests/README.md → *.md
+     ✅ no blocked paths matched
+     ⏭️  require_tests_pass: skipped (not enabled)
+     ✅ phase "tests" in allowed_phases
+
+   Result: WOULD AUTO-APPROVE
+   ```
+
+#### Security Model
+
+- **Default: off** — auto-approval must be explicitly enabled. Fresh `ta init` projects start with `drafts.enabled: false`.
+- **Tighten only**: `PolicyCascade` merges layers with "most restrictive wins". A constitution or agent profile can tighten but never loosen project-level rules.
+- **Blocked paths override allowed paths**: A file matching `blocked_paths` forces human review even if it also matches `allowed_paths`.
+- **Audit everything**: Auto-approved drafts have the same audit trail as human-approved ones. `ta audit log` shows them with `policy:auto` attribution.
+- **Escape hatch**: `ta draft submit --require-review` forces human review regardless of auto-approval config. The agent cannot bypass this flag (it's a CLI flag, not an MCP parameter).
+
+#### Implementation scope
+- `crates/ta-policy/src/document.rs` — `AutoApproveDraftConfig`, `AutoApproveConditions` structs
+- `crates/ta-policy/src/auto_approve.rs` — `should_auto_approve_draft()`, `AutoApproveDecision`, condition evaluation, path matching
+- `crates/ta-policy/src/engine.rs` — wire auto-approve check into policy evaluation
+- `crates/ta-mcp-gateway/src/tools/draft.rs` — check auto-approve before routing to ReviewChannel
+- `crates/ta-daemon/src/api/cmd.rs` — same check in daemon's draft submit handler
+- `crates/ta-goal/src/events.rs` — `DraftAutoApproved` event variant
+- `apps/ta-cli/src/commands/policy.rs` — `ta policy check` dry-run command
+- `docs/USAGE.md` — auto-approval configuration guide, security model explanation
+- Tests: condition evaluation (each condition individually), path glob matching, tighten-only cascade, verification command execution, auto-apply flow, audit trail correctness
+
+#### Version: `0.9.8-alpha.1`
+
+---
+
 ### v0.9.9 — Conversational Project Bootstrapping (`ta new`)
 <!-- status: pending -->
 **Goal**: Start a new project from any interface by describing what you want in natural language. A planner agent generates the project structure and PLAN.md through conversation, then initializes the TA workspace.
