@@ -45,6 +45,14 @@ pub struct GatewayConfig {
     /// When set, the daemon serves a web UI at `http://127.0.0.1:{port}`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub web_ui_port: Option<u16>,
+
+    /// Whether this gateway is serving a staging workspace (v0.9.4.1).
+    ///
+    /// When true, `ta_goal_start` is blocked to prevent re-entrant goal
+    /// creation from inside an implementation agent's workspace.
+    /// Set via the `TA_IS_STAGING` environment variable.
+    #[serde(default)]
+    pub is_staging: bool,
 }
 
 impl GatewayConfig {
@@ -63,6 +71,7 @@ impl GatewayConfig {
             interactive_sessions_dir: ta_dir.join("interactive_sessions"),
             review_channel: ReviewChannelConfig::default(),
             web_ui_port: None,
+            is_staging: std::env::var("TA_IS_STAGING").is_ok(),
         }
     }
 }

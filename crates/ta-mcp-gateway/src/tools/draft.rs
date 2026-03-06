@@ -64,6 +64,26 @@ pub fn handle_pr_build(
         timestamp: Utc::now(),
     });
 
+    // Emit DraftBuilt event to FsEventStore (v0.9.4.1).
+    {
+        use ta_events::{EventEnvelope, EventStore, FsEventStore};
+        let events_dir = state.config.workspace_root.join(".ta").join("events");
+        let event_store = FsEventStore::new(&events_dir);
+        let artifact_count = state
+            .pr_packages
+            .get(&package_id)
+            .map(|p| p.changes.artifacts.len())
+            .unwrap_or(0);
+        let event = ta_events::SessionEvent::DraftBuilt {
+            goal_id: goal_run_id,
+            draft_id: package_id,
+            artifact_count,
+        };
+        if let Err(e) = event_store.append(&EventEnvelope::new(event)) {
+            tracing::warn!("Failed to persist DraftBuilt event: {}", e);
+        }
+    }
+
     let response = serde_json::json!({
         "pr_package_id": package_id.to_string(),
         "goal_run_id": goal_run_id.to_string(),
@@ -190,6 +210,26 @@ fn handle_draft_build(
     state
         .save_pr_package(pr_package)
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+    // Emit DraftBuilt event to FsEventStore (v0.9.4.1).
+    {
+        use ta_events::{EventEnvelope, EventStore, FsEventStore};
+        let events_dir = state.config.workspace_root.join(".ta").join("events");
+        let event_store = FsEventStore::new(&events_dir);
+        let artifact_count = state
+            .pr_packages
+            .get(&package_id)
+            .map(|p| p.changes.artifacts.len())
+            .unwrap_or(0);
+        let event = ta_events::SessionEvent::DraftBuilt {
+            goal_id: goal_run_id,
+            draft_id: package_id,
+            artifact_count,
+        };
+        if let Err(e) = event_store.append(&EventEnvelope::new(event)) {
+            tracing::warn!("Failed to persist DraftBuilt event: {}", e);
+        }
+    }
 
     let response = serde_json::json!({
         "draft_id": package_id.to_string(),

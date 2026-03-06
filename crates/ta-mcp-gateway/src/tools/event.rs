@@ -159,3 +159,168 @@ pub fn handle_event_subscribe(
         )),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use ta_events::{EventEnvelope, EventStore, FsEventStore, SessionEvent};
+    use tempfile::tempdir;
+
+    /// Helper: create an FsEventStore in a temp dir and emit lifecycle events.
+    fn setup_events_dir() -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempdir().unwrap();
+        let events_dir = dir.path().join(".ta").join("events");
+        (dir, events_dir)
+    }
+
+    #[test]
+    fn end_to_end_lifecycle_events() {
+        let (_dir, events_dir) = setup_events_dir();
+        let store = FsEventStore::new(&events_dir);
+
+        let goal_id = uuid::Uuid::new_v4();
+        let draft_id = uuid::Uuid::new_v4();
+
+        // 1. Emit GoalStarted.
+        let started = SessionEvent::GoalStarted {
+            goal_id,
+            title: "Fix auth bug".into(),
+            agent_id: "claude-code".into(),
+            phase: Some("v0.9.4.1".into()),
+        };
+        store.append(&EventEnvelope::new(started)).unwrap();
+
+        // 2. Emit GoalCompleted.
+        let completed = SessionEvent::GoalCompleted {
+            goal_id,
+            title: "Fix auth bug".into(),
+            duration_secs: Some(120),
+        };
+        store.append(&EventEnvelope::new(completed)).unwrap();
+
+        // 3. Emit DraftBuilt.
+        let built = SessionEvent::DraftBuilt {
+            goal_id,
+            draft_id,
+            artifact_count: 5,
+        };
+        store.append(&EventEnvelope::new(built)).unwrap();
+
+        // Query all events for this goal.
+        let filter = ta_events::store::EventQueryFilter {
+            goal_id: Some(goal_id),
+            ..Default::default()
+        };
+        let results = store.query(&filter).unwrap();
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].event_type, "goal_started");
+        assert_eq!(results[1].event_type, "goal_completed");
+        assert_eq!(results[2].event_type, "draft_built");
+
+        // Query by event type.
+        let filter = ta_events::store::EventQueryFilter {
+            event_types: vec!["goal_completed".into(), "goal_failed".into()],
+            goal_id: Some(goal_id),
+            ..Default::default()
+        };
+        let results = store.query(&filter).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].event_type, "goal_completed");
+
+        // Query by event types + draft_built.
+        let filter = ta_events::store::EventQueryFilter {
+            event_types: vec!["draft_built".into()],
+            goal_id: Some(goal_id),
+            ..Default::default()
+        };
+        let results = store.query(&filter).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].event_type, "draft_built");
+    }
+
+    #[test]
+    fn cursor_based_watch_pattern() {
+        let (_dir, events_dir) = setup_events_dir();
+        let store = FsEventStore::new(&events_dir);
+
+        let goal_id = uuid::Uuid::new_v4();
+
+        // Emit initial event.
+        let started = SessionEvent::GoalStarted {
+            goal_id,
+            title: "Task A".into(),
+            agent_id: "claude-code".into(),
+            phase: None,
+        };
+        store.append(&EventEnvelope::new(started)).unwrap();
+
+        // First query with no `since` — gets all events.
+        let filter = ta_events::store::EventQueryFilter::default();
+        let results = store.query(&filter).unwrap();
+        assert_eq!(results.len(), 1);
+
+        // Capture the cursor (timestamp of last event).
+        let cursor = results.last().unwrap().timestamp;
+
+        // Query with cursor — should get 0 events (nothing newer).
+        let filter = ta_events::store::EventQueryFilter {
+            since: Some(cursor + chrono::Duration::milliseconds(1)),
+            ..Default::default()
+        };
+        let results = store.query(&filter).unwrap();
+        assert!(results.is_empty());
+
+        // Emit a new event.
+        // Small delay to ensure timestamp is after cursor.
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let completed = SessionEvent::GoalCompleted {
+            goal_id,
+            title: "Task A".into(),
+            duration_secs: Some(60),
+        };
+        store.append(&EventEnvelope::new(completed)).unwrap();
+
+        // Query with cursor — should get only the new event.
+        let filter = ta_events::store::EventQueryFilter {
+            since: Some(cursor + chrono::Duration::milliseconds(1)),
+            ..Default::default()
+        };
+        let results = store.query(&filter).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].event_type, "goal_completed");
+    }
+
+    #[test]
+    fn goal_failed_events_persisted() {
+        let (_dir, events_dir) = setup_events_dir();
+        let store = FsEventStore::new(&events_dir);
+
+        let goal_id = uuid::Uuid::new_v4();
+
+        // Emit GoalStarted then GoalFailed.
+        store
+            .append(&EventEnvelope::new(SessionEvent::GoalStarted {
+                goal_id,
+                title: "Failing task".into(),
+                agent_id: "test".into(),
+                phase: None,
+            }))
+            .unwrap();
+
+        store
+            .append(&EventEnvelope::new(SessionEvent::GoalFailed {
+                goal_id,
+                error: "Agent exited with status 1".into(),
+                exit_code: Some(1),
+            }))
+            .unwrap();
+
+        // Query failure events.
+        let filter = ta_events::store::EventQueryFilter {
+            event_types: vec!["goal_failed".into()],
+            ..Default::default()
+        };
+        let results = store.query(&filter).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].payload.goal_id(), Some(goal_id));
+    }
+}
