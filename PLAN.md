@@ -2252,6 +2252,178 @@ passing the cursor from the previous response returns only *new* events. Add a t
 
 ---
 
+### v0.9.6 — Orchestrator API & Goal-Scoped Agent Tracking
+<!-- status: pending -->
+**Goal**: Make MCP tools work without a `goal_run_id` for read-only project-wide operations, and track which agents are working on which goals for observability.
+
+#### Items
+
+1. **Optional `goal_run_id` on read-only MCP calls**: Make `goal_run_id` optional on tools that make sense at the project scope. If provided, scope to that goal's workspace. If omitted, use the project root. Affected tools:
+   - `ta_plan read` — reads PLAN.md from project root when no goal_run_id
+   - `ta_goal list` — drop goal_run_id requirement entirely (listing is always project-wide)
+   - `ta_draft list` — list all drafts project-wide when no goal_run_id
+   - `ta_context search/stats/list` — memory is already project-scoped
+   - Keep `goal_run_id` **required** on mutation calls: `ta_plan update`, `ta_draft build/submit`, `ta_goal start` (inner), `ta_goal update`
+
+2. **Goal-scoped agent tracking**: Track which agent sessions are actively working on each goal. New `AgentSession` struct:
+   ```rust
+   pub struct AgentSession {
+       pub agent_id: String,        // unique per session (e.g., PID or UUID)
+       pub agent_type: String,      // "claude-code", "codex", "custom"
+       pub goal_run_id: Option<Uuid>, // None for orchestrator
+       pub caller_mode: CallerMode,
+       pub started_at: DateTime<Utc>,
+       pub last_heartbeat: DateTime<Utc>,
+   }
+   ```
+   Stored in `GatewayState.active_agents: HashMap<String, AgentSession>`. Populated when a tool call arrives (extract from `TA_AGENT_ID` env var or generate on first call). Emits `AgentSessionStarted` / `AgentSessionEnded` events.
+
+3. **`ta_agent_status` MCP tool**: New tool for the orchestrator to query active agents:
+   - `action: "list"` — returns all active agent sessions with their goal associations
+   - `action: "status"` — returns a specific agent's current state
+   - Useful for diagnostics: "which agents are running? are any stuck?"
+
+4. **`CallerMode` policy enforcement**: When `CallerMode::Orchestrator`, enforce:
+   - Read-only access to plan, drafts, context (no mutations without a goal)
+   - Can call `ta_goal start` to create new goals
+   - Cannot call `ta_draft build/submit` directly (must be inside a goal)
+   - Policy engine logs the caller mode in audit entries for observability
+
+5. **`ta status` CLI command**: Project-wide status dashboard:
+   ```
+   $ ta status
+   Project: TrustedAutonomy (v0.9.6-alpha)
+   Next phase: v0.9.5.1 — Goal Lifecycle Hygiene
+
+   Active agents:
+     agent-1 (claude-code) → goal abc123 "Implement v0.9.5.1" [running 12m]
+     agent-2 (claude-code) → orchestrator [idle]
+
+   Pending drafts: 2
+   Active goals: 1
+   ```
+
+#### Implementation scope
+- `crates/ta-mcp-gateway/src/tools/plan.rs` — optional goal_run_id, project-root fallback
+- `crates/ta-mcp-gateway/src/tools/goal.rs` — drop goal_run_id from list, add agent tracking
+- `crates/ta-mcp-gateway/src/tools/draft.rs` — optional goal_run_id on list
+- `crates/ta-mcp-gateway/src/tools/context.rs` — optional goal_run_id
+- `crates/ta-mcp-gateway/src/server.rs` — `AgentSession` tracking, `CallerMode` enforcement
+- `crates/ta-goal/src/events.rs` — `AgentSessionStarted`/`AgentSessionEnded` event variants
+- `apps/ta-cli/src/commands/status.rs` — new `ta status` command
+- Tests: orchestrator read without goal_run_id, agent session lifecycle, CallerMode policy enforcement
+
+#### Version: `0.9.6-alpha`
+
+---
+
+### v0.9.7 — Interactive TA Shell (`ta shell`)
+<!-- status: pending -->
+**Goal**: A single-terminal interactive experience that multiplexes TA commands and agent conversation — no second terminal window needed for draft review, approval, or goal management.
+
+#### Architecture
+
+```
+$ ta shell
+┌──────────────────────────────────────────┐
+│  TA Shell v0.9.7                         │
+│  Project: TrustedAutonomy                │
+│  Next: v0.9.5.1 — Goal Lifecycle Hygiene │
+│  Agent: claude-code (ready)              │
+├──────────────────────────────────────────┤
+│                                          │
+│  ta> What should we work on next?        │
+│  [Agent]: Based on PLAN.md, the next     │
+│  pending phase is v0.9.5.1...            │
+│                                          │
+│  ta> ta draft list                       │
+│  ID       Status   Title                 │
+│  abc123   pending  Fix login flow        │
+│                                          │
+│  ta> ta draft view abc123                │
+│  [structured diff output]               │
+│                                          │
+│  ta> ta draft approve abc123             │
+│  ✅ Approved abc123                       │
+│                                          │
+│  ── Event: draft ready (goal def456) ──  │
+│                                          │
+│  ta> ta draft view def456-draft          │
+│  [diff output]                           │
+│                                          │
+│  ta> deny: needs error handling          │
+│  ❌ Denied def456-draft                   │
+│                                          │
+└──────────────────────────────────────────┘
+```
+
+#### Design Principles
+
+1. **Command router, not protocol**: Input starting with `ta ` executes as a TA CLI command directly (fork `ta` binary). Everything else goes to the agent. Minimal magic.
+2. **Agent is a subprocess**: Headless agent (claude `--print` mode or equivalent) with stdin/stdout piped. Agent has MCP tools for read-only project queries. The shell handles all mutations (approve/deny/apply).
+3. **Events are inline notifications**: The shell subscribes to the TA event store. When a draft is ready or a goal completes, a notification appears inline (like chat notifications). No polling by the agent — the shell itself surfaces events.
+4. **Human holds the pen for approvals**: The agent can VIEW drafts via MCP tools, but approve/deny/apply are shell commands executed by the human. This preserves TA's security model — the human always makes the final decision, but doesn't need a second terminal.
+
+#### Items
+
+1. **Shell REPL core**: `ta shell` command that starts an interactive REPL with:
+   - Prompt: `ta> ` (or project-name-based)
+   - Input routing: `ta <cmd>` → fork `ta` CLI, else → send to agent
+   - History: readline/rustyline with persistent history at `.ta/shell_history`
+   - Tab completion for `ta` subcommands
+
+2. **Agent subprocess management**: Launch the configured agent in headless/pipe mode:
+   - Claude Code: `claude --print` with stdin/stdout piped
+   - Other agents: use `agents/*.yaml` config with `pipe_mode: true` or `--print` equivalent
+   - MCP server started as sidecar, agent connects via stdio
+   - Agent has read-only MCP tools (ta_plan read, ta_goal list, ta_draft list/view, ta_context)
+   - Agent output streamed to shell display in real-time
+
+3. **Event subscription and inline notifications**: Shell subscribes to `.ta/events/` (FsEventStore):
+   - `DraftBuilt` → `── Draft ready: <title> (ta draft view <id>) ──`
+   - `GoalCompleted` → `── Goal completed: <title> ──`
+   - `GoalFailed` → `── Goal failed: <title> — <error> ──`
+   - `DriftDetected` → `── Drift alert: <details> ──`
+   - Notifications interleave with agent output without corrupting the display
+
+4. **Quick-action shortcuts**: Common review actions without typing full commands:
+   - `approve <id>` → `ta draft approve <id>`
+   - `deny <id>: reason` → `ta draft deny <id> --reason "reason"`
+   - `view <id>` → `ta draft view <id>`
+   - `apply <id>` → `ta draft apply <id>`
+   - `status` → `ta status` (from v0.9.6)
+   - `plan` → `ta plan list`
+   - `goals` → `ta goal list`
+   - `drafts` → `ta draft list`
+
+5. **Session state display**: Status bar or header showing:
+   - Active agents and their goals
+   - Pending draft count
+   - Current plan phase
+   - Updated on events (no polling)
+
+6. **Agent context injection**: On shell start, inject project status into agent's initial prompt:
+   - Current plan phase and what's next
+   - Pending drafts summary
+   - Active goals summary
+   - Recent events digest
+   This is the "project briefing" that `ta dev` was missing.
+
+#### Implementation scope
+- `apps/ta-cli/src/commands/shell.rs` — REPL core, input router, event subscription
+- `apps/ta-cli/src/commands/shell/agent.rs` — agent subprocess management, I/O piping
+- `apps/ta-cli/src/commands/shell/display.rs` — output formatting, inline notifications, status bar
+- `apps/ta-cli/Cargo.toml` — add `rustyline` dependency
+- `docs/USAGE.md` — `ta shell` documentation
+- Tests: command routing (ta prefix vs agent), shortcut expansion, event notification formatting
+
+#### Why not enhance `ta dev`?
+`ta dev` launches an *interactive* agent session where the agent owns the terminal. The shell inverts this: the *human* owns the terminal, and the agent is a subprocess. This is a fundamental UX difference — `ta dev` is "agent drives, human reviews"; `ta shell` is "human drives, agent assists". Both are valuable for different workflows.
+
+#### Version: `0.9.7-alpha`
+
+---
+
 ### v0.10.0 — Gateway Channel Wiring & Multi-Channel Routing
 <!-- status: pending -->
 **Goal**: Wire `ChannelRegistry` into the MCP gateway so `.ta/config.yaml` actually controls which channels handle reviews, notifications, and escalations — and support routing a single event to multiple channels simultaneously.
