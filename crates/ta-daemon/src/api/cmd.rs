@@ -73,24 +73,69 @@ pub async fn execute_command(
     // Find the `ta` binary. Prefer the one adjacent to the current binary.
     let ta_binary = find_ta_binary();
 
-    // Long-running commands (ta run, ta dev) get a longer timeout.
+    // Long-running commands (ta run, ta dev) are spawned in the background.
+    // They return immediately with a status message — progress is tracked via
+    // events (SSE) and goal status, not by blocking the HTTP response.
     let is_long = is_long_running(command_str, &state.daemon_config.commands.long_running);
-    let timeout_secs = if is_long {
-        state.daemon_config.commands.long_timeout_secs
-    } else {
-        state.daemon_config.commands.timeout_secs
-    };
-    let timeout = std::time::Duration::from_secs(timeout_secs);
+
+    if is_long {
+        let binary = ta_binary.clone();
+        let args_owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+        let working_dir = state.project_root.clone();
+        let cmd_str = command_str.to_string();
+
+        tokio::spawn(async move {
+            tracing::info!("Background command started: {}", cmd_str);
+            let result = tokio::process::Command::new(&binary)
+                .arg("--project-root")
+                .arg(&working_dir)
+                .arg("--accept-terms")
+                .args(&args_owned)
+                .current_dir(&working_dir)
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .output()
+                .await;
+            match result {
+                Ok(output) => {
+                    let code = output.status.code().unwrap_or(-1);
+                    if code == 0 {
+                        tracing::info!("Background command completed: {}", cmd_str);
+                    } else {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        tracing::warn!(
+                            "Background command failed (exit {}): {} — {}",
+                            code,
+                            cmd_str,
+                            stderr.chars().take(500).collect::<String>()
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Background command error: {} — {}", cmd_str, e);
+                }
+            }
+        });
+
+        return Json(CmdResponse {
+            exit_code: 0,
+            stdout: format!(
+                "Started in background: {}\nTrack progress with: ta goal list\n",
+                command_str
+            ),
+            stderr: String::new(),
+        })
+        .into_response();
+    }
+
+    let timeout = std::time::Duration::from_secs(state.daemon_config.commands.timeout_secs);
 
     match run_command(&ta_binary, &args, &state.project_root, timeout).await {
         Ok(response) => Json(response).into_response(),
         Err(e) => {
             let detail = format!(
-                "{} (command: \"{}\", timeout: {}s{})",
-                e,
-                command_str,
-                timeout_secs,
-                if is_long { " [long-running]" } else { "" },
+                "{} (command: \"{}\", timeout: {}s)",
+                e, command_str, state.daemon_config.commands.timeout_secs,
             );
             tracing::warn!("Command failed: {}", detail);
             (

@@ -91,8 +91,21 @@ if daemon_healthy; then
   # Kill and restart if the running daemon is stale compared to the built binary.
   if [[ -n "$RUNNING_VER" && -n "$BUILT_VER" && "$RUNNING_VER" != "$BUILT_VER" && "$BUILT_VER" != "unknown" ]]; then
     echo "  Mismatch detected — killing pid ${RUNNING_PID} and restarting..."
-    pkill -f 'ta-daemon.*--api' 2>/dev/null || true
+    # Kill by PID (reliable) and by pattern (catch any others on the same port).
+    if [[ "$RUNNING_PID" != "?" ]]; then
+      kill "$RUNNING_PID" 2>/dev/null || true
+    fi
+    pkill -f "ta-daemon.*--api.*${PORT}" 2>/dev/null || true
     sleep 1
+    # Verify the port is free.
+    if curl -sf "${DAEMON_URL}/api/status" >/dev/null 2>&1; then
+      echo "  Error: old daemon still running after kill. Force killing..." >&2
+      if [[ "$RUNNING_PID" != "?" ]]; then
+        kill -9 "$RUNNING_PID" 2>/dev/null || true
+      fi
+      pkill -9 -f "ta-daemon.*--api" 2>/dev/null || true
+      sleep 1
+    fi
 
     echo "Starting daemon at ${DAEMON_URL} ..."
     "$DAEMON_BIN" --api --project-root "$PROJECT_ROOT" &
