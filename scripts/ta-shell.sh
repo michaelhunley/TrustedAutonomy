@@ -45,12 +45,23 @@ if [[ "$SKIP_BUILD" == false ]]; then
 fi
 
 # ── Locate binaries ──────────────────────────────────────────
+# Prefer the most recently built binary (debug or release).
 find_bin() {
   local name="$1"
-  if [[ -x "${REPO_ROOT}/target/release/${name}" ]]; then
-    echo "${REPO_ROOT}/target/release/${name}"
-  elif [[ -x "${REPO_ROOT}/target/debug/${name}" ]]; then
-    echo "${REPO_ROOT}/target/debug/${name}"
+  local release="${REPO_ROOT}/target/release/${name}"
+  local debug="${REPO_ROOT}/target/debug/${name}"
+
+  if [[ -x "$release" && -x "$debug" ]]; then
+    # Both exist — use whichever was modified more recently.
+    if [[ "$debug" -nt "$release" ]]; then
+      echo "$debug"
+    else
+      echo "$release"
+    fi
+  elif [[ -x "$debug" ]]; then
+    echo "$debug"
+  elif [[ -x "$release" ]]; then
+    echo "$release"
   elif command -v "$name" &>/dev/null; then
     command -v "$name"
   else
