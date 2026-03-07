@@ -172,11 +172,14 @@ enum Commands {
         #[command(subcommand)]
         command: commands::release::ReleaseCommands,
     },
-    /// Interactive TA Shell -- thin REPL client for the daemon.
+    /// Interactive TA Shell -- full TUI client for the daemon.
     Shell {
         /// Generate default .ta/shell.toml config and exit.
         #[arg(long)]
         init: bool,
+        /// Use classic line-mode shell (rustyline) instead of TUI.
+        #[arg(long)]
+        classic: bool,
         /// Attach to an existing agent session (ID or prefix).
         #[arg(long)]
         attach: Option<String>,
@@ -387,9 +390,18 @@ fn main() -> anyhow::Result<()> {
         Commands::Setup { command } => commands::setup::execute(command, &config),
         Commands::Init { command } => commands::init::execute(command, &config),
         Commands::Release { command } => commands::release::execute(command, &config),
-        Commands::Shell { init, attach, url } => {
-            commands::shell::execute(&project_root, attach.as_deref(), url.as_deref(), *init)
-        }
+        Commands::Shell {
+            init,
+            classic,
+            attach,
+            url,
+        } => commands::shell::execute(
+            &project_root,
+            attach.as_deref(),
+            url.as_deref(),
+            *init,
+            *classic,
+        ),
         Commands::Workflow { command } => commands::workflow::execute(command, &config),
         Commands::Policy { command } => commands::policy::execute(command, &config),
         Commands::Gc {

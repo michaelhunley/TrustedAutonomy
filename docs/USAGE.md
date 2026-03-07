@@ -1698,7 +1698,7 @@ expand = "ta draft approve"
 
 ### Interactive Shell
 
-The interactive shell (`ta shell`) is a thin REPL client for the TA daemon. It gives you a single terminal with commands, agent conversation, and real-time event notifications.
+The interactive shell (`ta shell`) is a full-screen TUI client for the TA daemon. It gives you a persistent terminal with three zones: scrolling output, input line, and a live status bar.
 
 #### Prerequisites
 
@@ -1728,12 +1728,12 @@ ta-daemon --project-root . &
 curl -s http://127.0.0.1:7700/api/status | head
 ```
 
-If the daemon is not running, `ta shell` will show connection errors when you type commands.
+If the daemon is not running, `ta shell` will show connection errors on startup.
 
 #### Starting the shell
 
 ```bash
-# Start the shell (connects to daemon at 127.0.0.1:7700)
+# Start the full TUI shell (default)
 ta shell
 
 # Connect to a custom daemon URL
@@ -1741,14 +1741,31 @@ ta shell --url http://my-server:7700
 
 # Attach to an existing agent session
 ta shell --attach sess-abc123
+
+# Use the classic line-mode shell (rustyline REPL, pre-v0.9.8.3 behavior)
+ta shell --classic
 ```
 
-On startup, the shell displays a status header:
+The TUI shell provides a three-zone layout:
 
 ```
-TrustedAutonomy v0.9.8 | Next: v0.9.9 -- Conversational Bootstrapping | 2 drafts | 1 agents | http://127.0.0.1:7700
-Type 'help' for commands, 'exit' to quit.
+┌─────────────────────────────────────────────────────────┐
+│  [scrolling output]                                     │
+│  goal started: "Implement v0.9.8.1" (claude-code)       │
+│  draft built: 15 files (abc123)                         │
+│  $ ta goal list                                         │
+│  ID       Title                    State    Agent       │
+│  ca306e4d Implement v0.9.8.1       running  claude-code │
+├─────────────────────────────────────────────────────────┤
+│ ta> ta draft list                                       │
+├─────────────────────────────────────────────────────────┤
+│ TrustedAutonomy v0.9.8 │ 1 agent │ 0 drafts │ ◉ daemon│
+└─────────────────────────────────────────────────────────┘
 ```
+
+- **Output pane** (top): Command responses and SSE event notifications. Events are rendered in dimmed styling. Auto-scrolls to bottom; use PgUp/PgDn to scroll back. Unread events are tracked when scrolled up.
+- **Input area** (middle): Text input with cursor movement, command history (up/down), and tab-completion.
+- **Status bar** (bottom): Project name, version, agent count, draft count, daemon connection indicator (green/red dot), unread event badge, and workflow stage indicator.
 
 #### Using the shell
 
@@ -1768,8 +1785,17 @@ Built-in shell commands:
 | Command | Description |
 |---------|-------------|
 | `help` / `?` | Show help |
-| `:status` | Refresh the status header |
-| `exit` / `quit` / `:q` | Exit the shell |
+| `:status` | Refresh the status bar |
+| `clear` / `Ctrl-L` | Clear the output pane |
+| `PgUp` / `PgDn` | Scroll output |
+| `Tab` | Auto-complete commands |
+| `Ctrl-A` / `Ctrl-E` | Jump to start/end of input |
+| `Ctrl-U` / `Ctrl-K` | Clear input before/after cursor |
+| `Ctrl-C` / `exit` / `quit` / `:q` | Exit the shell |
+
+#### Workflow interaction mode
+
+When a workflow stage pauses for human input, the shell switches to `workflow>` prompt mode. The output pane shows the workflow prompt and available options. Normal commands still work during workflow prompts.
 
 Tab completion is available for shortcuts and shell commands. Command history persists across sessions in `~/.ta/shell_history`.
 
@@ -2595,6 +2621,7 @@ TA has a working end-to-end workflow: staging isolation, agent wrapping, draft r
 | v0.9.8.1 | Auto-approval, lifecycle hygiene & operational polish | Done |
 | v0.9.8.1.1 | Unified allow/deny list pattern | Done |
 | v0.9.8.2 | Pluggable workflow engine & framework integration | Done |
+| v0.9.8.3 | Full TUI shell (ratatui) | Done |
 
 See [PLAN.md](../PLAN.md) for full details on each phase.
 

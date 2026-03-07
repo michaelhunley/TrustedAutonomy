@@ -3284,7 +3284,7 @@ WorkflowFailed { workflow_id, name, reason, timestamp }
 ---
 
 ### v0.9.8.3 — Full TUI Shell (`ratatui`)
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Replace the line-mode rustyline shell with a full terminal UI modeled on Claude Code / claude-flow — persistent status bar, scrolling output, and input area, all in one screen.
 
 #### Layout
@@ -3321,11 +3321,24 @@ WorkflowFailed { workflow_id, name, reason, timestamp }
 
 7. **Notification badges**: Unread event count shown in status bar. Cleared when user scrolls to bottom. Draft-ready events flash briefly.
 
+#### Completed
+- ✅ `ratatui` + `crossterm` terminal backend — full-screen TUI with three zones (output scroll, input line, status bar)
+- ✅ Status bar — project name, version, agent count, draft count, daemon connection indicator, workflow stage, unread badge
+- ✅ Input area — text input with cursor movement, history (up/down), tab-completion, Ctrl-A/E/U/K editing shortcuts
+- ✅ Scrolling output pane — command responses and SSE events with styled lines, PgUp/PgDn scroll, auto-scroll with unread counter
+- ✅ Workflow interaction mode — `workflow>` prompt when `workflow_awaiting_human` events arrive
+- ✅ Notification badges — unread event count in status bar, cleared on scroll-to-bottom
+- ✅ `--classic` flag preserves rustyline shell as fallback
+- ✅ 13 unit tests — input handling, cursor movement, history navigation, tab completion, scroll, daemon state, workflow mode
+
+#### Remaining (deferred)
+- Split pane support (stretch goal) — Ctrl-W toggle for agent/shell side-by-side
+
 #### Implementation scope
-- `apps/ta-cli/src/commands/shell.rs` — rewrite with ratatui (existing rustyline code preserved as `--classic` fallback)
-- `apps/ta-cli/Cargo.toml` — add `ratatui`, `crossterm`, `tui-textarea` dependencies
+- `apps/ta-cli/src/commands/shell_tui.rs` — new TUI module with ratatui (~500 lines + tests)
+- `apps/ta-cli/src/commands/shell.rs` — updated to dispatch TUI vs classic, shared functions made pub(crate)
+- `apps/ta-cli/Cargo.toml` — added `ratatui`, `crossterm` dependencies
 - Daemon API layer unchanged — same HTTP/SSE endpoints
-- Tests: status bar rendering, input handling, event notification, workflow prompt mode
 
 #### Version: `0.9.8-alpha.3`
 
