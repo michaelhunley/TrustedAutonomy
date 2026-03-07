@@ -3676,6 +3676,100 @@ Agent: [starts goal for Phase 1]
 
 ---
 
+### v0.9.9.1 — Plan from Product Document (`ta plan from`)
+<!-- status: pending -->
+**Goal**: Generate a phased development plan from a product document (PRD, design brief, spec) for an existing project. The generated plan goes through the standard draft review flow — no plan is applied without human approval.
+
+#### Problem
+Today `ta plan create` produces generic templates and `ta plan init` only detects schema from an existing PLAN.md. There's no way to hand TA a product document and get back a phased development plan tailored to the project. Users must write PLAN.md by hand or use `ta run` with a manual prompt, which has no first-class support for plan-specific constraints (phase sizing, version numbering, format compliance).
+
+#### User Flow
+
+**Command approach (ta shell):**
+```
+ta> plan from docs/product-spec.md
+[event] goal started: Generate development plan from product-spec.md
+[event] agent analyzing product-spec.md + project structure...
+[event] draft built: 1 file changed (PLAN.md)
+
+Proposed plan: 6 phases
+  v0.1 — Data model & API scaffold    [pending]
+  v0.2 — Auth & access control        [pending]
+  v0.3 — Search & filtering           [pending]
+  v0.4 — Notifications pipeline       [pending]
+  v0.5 — Admin dashboard              [pending]
+  v0.6 — Performance & observability   [pending]
+
+  → view a1b2c3d4
+  → approve a1b2c3d4
+  → deny a1b2c3d4
+
+ta> deny a1b2c3d4
+Reason? Phase 3 should come before Phase 2
+
+ta> plan from docs/product-spec.md --follow-up
+[event] agent revising plan with feedback...
+```
+
+**Workflow YAML approach (offline-first):**
+```yaml
+# .ta/workflows/plan-from-doc.yaml
+name: plan-from-doc
+stages:
+  - name: analyze
+    action: ta run "Read {{input_doc}} and the existing codebase structure. Produce a PLAN.md following TA plan format." --source .
+    await_human: never
+  - name: review
+    action: ta draft view --latest
+    await_human: always
+  - name: apply
+    action: ta draft approve --latest
+    requires: [analyze, review]
+```
+
+Usage: `ta> workflow run plan-from-doc --var input_doc=docs/spec.md`
+
+Note: the workflow approach requires variable substitution (`{{var}}`) in the workflow engine, which is not yet implemented. This is tracked separately.
+
+#### When to use `--detect` vs `plan from`
+- **`ta init --detect`** — detects project *type* (Rust, TypeScript, Python, Go) for config scaffolding (agent configs, policy, memory). Fast, deterministic, no AI. Use during initial project setup.
+- **`ta plan from <doc>`** — reads a product document and generates a phased *development plan* using an agent. Produces a draft, requires review. Use after `ta init` when you have a product spec to decompose into implementation phases.
+- **`ta plan create`** — generates a generic plan from a hardcoded template. Use when you don't have a product doc and want quick scaffolding.
+
+#### Items
+
+1. **`PlanCommands::From` subcommand**: New variant in `plan.rs` clap enum.
+   - `ta plan from <path>` — path to a product document (Markdown, plain text, PDF)
+   - `ta plan from <path> --follow-up` — revise a previously generated plan with feedback from the rejection
+   - `ta plan from <path> --phases <n>` — hint for target number of phases (default: agent decides)
+   - `ta plan from <path> --output <path>` — output path for PLAN.md (default: `PLAN.md` in project root)
+
+2. **Plan generation goal**: `ta plan from` creates a goal with a canned prompt template:
+   - Prompt includes: the product document content, existing project structure (file tree), plan format specification (phase headings, `<!-- status: pending -->` markers, version numbering), phase sizing guidelines (1-4 hours per phase)
+   - Agent runs in staging like any other goal — PLAN.md generation is a draft artifact
+   - On completion, standard draft review flow applies
+
+3. **Plan-specific agent config** (`agents/planner.yaml`): Reuse from v0.9.9 if available, or create a lightweight config that:
+   - Has filesystem read access (to scan project structure)
+   - Has filesystem write access (to write PLAN.md)
+   - System prompt includes plan format spec, versioning policy, phase sizing guidelines
+   - Does NOT need `ta goal start`, `ta draft build`, or other runtime tools
+
+4. **Shell routing**: `plan from <path>` is a command, routes to execution. Natural language like "create a plan from my product spec" routes to the agent session, which can invoke `ta plan from` via MCP if available.
+
+5. **Workflow variable substitution** (prerequisite for YAML approach): Add `{{var}}` template expansion to `WorkflowDefinition` stage actions. This enables `--var key=value` on `ta workflow run`. Deferred if too large for this phase.
+
+#### Implementation scope
+- `apps/ta-cli/src/commands/plan.rs` — `PlanCommands::From` variant, `plan_from()` function, prompt template
+- `agents/planner.yaml` — planner agent configuration (if not already created by v0.9.9)
+- `crates/ta-workflow/src/definition.rs` — optional: `{{var}}` expansion in stage action strings
+- `docs/USAGE.md` — `ta plan from` documentation, when to use `--detect` vs `plan from`
+- Tests: plan generation from sample doc, prompt template construction, `--follow-up` flag handling
+
+#### Version: `0.9.9-alpha.1`
+
+---
+
 ### v0.9.10 — Multi-Project Daemon & Office Configuration
 <!-- status: pending -->
 **Goal**: Extend the TA daemon to manage multiple projects simultaneously, with channel-to-project routing so a single Discord bot, Slack app, or email address can serve as the interface for several independent TA workspaces.

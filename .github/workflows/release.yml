@@ -50,6 +50,7 @@ jobs:
 
       - name: Get version
         id: get_version
+        shell: bash
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "version=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
@@ -214,7 +215,7 @@ jobs:
 
           On first run, \`ta\` will prompt you to review and accept the terms of use.
 
-          **Windows users**: There is no native Windows build yet. Use [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install) and download the Linux x86_64 binary. See [USAGE.md](https://github.com/trustedautonomy/ta/blob/main/docs/USAGE.md#windows-via-wsl2) for setup instructions.
+          **Windows users**: Download the \`x86_64-pc-windows-msvc\` zip. PTY-dependent features (interactive agent sessions) are Unix-only; all other functionality works cross-platform.
 
           ### Documentation
 
