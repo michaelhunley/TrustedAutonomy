@@ -43,9 +43,15 @@ pub fn execute(
     attach: Option<&str>,
     daemon_url: Option<&str>,
     init: bool,
+    classic: bool,
 ) -> anyhow::Result<()> {
     if init {
         return init_config(project_root);
+    }
+
+    // Default to TUI mode; --classic falls back to rustyline.
+    if !classic {
+        return super::shell_tui::run(project_root, attach, daemon_url, false);
     }
 
     let base_url = daemon_url
@@ -57,7 +63,7 @@ pub fn execute(
 }
 
 /// Resolve the daemon URL from `.ta/daemon.toml` or default.
-fn resolve_daemon_url(project_root: &Path) -> String {
+pub(crate) fn resolve_daemon_url(project_root: &Path) -> String {
     let config_path = project_root.join(".ta").join("daemon.toml");
     if let Ok(content) = std::fs::read_to_string(&config_path) {
         if let Ok(config) = content.parse::<toml::Table>() {
@@ -243,15 +249,15 @@ async fn run_shell(base_url: String, attach_session: Option<String>) -> anyhow::
 // -- Daemon API calls -------------------------------------------------------
 
 #[derive(Default)]
-struct StatusInfo {
-    project: String,
-    version: String,
-    next_phase: Option<String>,
-    pending_drafts: usize,
-    active_agents: usize,
+pub(crate) struct StatusInfo {
+    pub(crate) project: String,
+    pub(crate) version: String,
+    pub(crate) next_phase: Option<String>,
+    pub(crate) pending_drafts: usize,
+    pub(crate) active_agents: usize,
 }
 
-async fn fetch_status(client: &reqwest::Client, base_url: &str) -> StatusInfo {
+pub(crate) async fn fetch_status(client: &reqwest::Client, base_url: &str) -> StatusInfo {
     let url = format!("{}/api/status", base_url);
     let resp = match client.get(&url).send().await {
         Ok(r) => r,
@@ -290,7 +296,7 @@ fn print_header(status: &StatusInfo, base_url: &str) {
     println!("Type 'help' for commands, 'exit' to quit.\n");
 }
 
-async fn send_input(
+pub(crate) async fn send_input(
     client: &reqwest::Client,
     base_url: &str,
     text: &str,
@@ -340,7 +346,7 @@ async fn send_input(
     }
 }
 
-async fn fetch_completions(client: &reqwest::Client, base_url: &str) -> Vec<String> {
+pub(crate) async fn fetch_completions(client: &reqwest::Client, base_url: &str) -> Vec<String> {
     let url = format!("{}/api/routes", base_url);
     let resp = match client.get(&url).send().await {
         Ok(r) => r,
@@ -603,7 +609,7 @@ async fn health_monitor(
     }
 }
 
-fn render_sse_event(frame: &str) -> Option<String> {
+pub(crate) fn render_sse_event(frame: &str) -> Option<String> {
     let mut event_type = None;
     let mut data = None;
     for line in frame.lines() {
@@ -817,7 +823,7 @@ impl Helper for ShellHelper {}
 
 // -- Helpers -----------------------------------------------------------------
 
-fn dirs_history_path() -> Option<std::path::PathBuf> {
+pub(crate) fn dirs_history_path() -> Option<std::path::PathBuf> {
     let home = std::env::var("HOME").ok()?;
     let dir = std::path::Path::new(&home).join(".ta");
     let _ = std::fs::create_dir_all(&dir);
