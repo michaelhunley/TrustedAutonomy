@@ -4267,6 +4267,198 @@ ta workflow publish deploy-pipeline --bump minor
 
 ---
 
+### v0.11.0 — Event-Driven Agent Routing
+<!-- status: pending -->
+**Goal**: Allow any TA event to trigger an agent workflow instead of (or in addition to) a static response. This is intelligent, adaptive event handling — not scripted hooks or n8n-style flowcharts. An agent receives the event context and decides what to do.
+
+#### Problem
+Today TA events have static responses: notify the human, block the next phase, or log to audit. When a build fails, TA tells you it failed. When a draft is denied, TA records the denial. There's no way for the system to *act* on events intelligently — try to fix the build error, re-run a goal with different parameters, escalate only certain kinds of failures.
+
+Users could wire this manually (watch SSE stream → parse events → call `ta run`), but that's fragile scripted automation. TA should support this natively with agent-grade intelligence.
+
+#### Design
+
+**Event responders** are the core primitive. Each responder binds an event type to a response strategy:
+
+```yaml
+# .ta/event-routing.yaml
+responders:
+  - event: build_failed
+    strategy: agent
+    agent: claude-code
+    prompt: |
+      A build failed. Diagnose the error from the build output and
+      propose a fix. If the fix is trivial (missing import, typo),
+      apply it directly. If it requires design decisions, ask the
+      human via ta_ask_human.
+    escalate_after: 2           # human notified after 2 failed attempts
+    max_attempts: 3
+
+  - event: draft_denied
+    strategy: notify             # default: just tell the human
+    channels: [shell, slack]
+
+  - event: goal_failed
+    strategy: agent
+    agent: claude-code
+    prompt: |
+      A goal failed. Review the error log and suggest whether to
+      retry with modified parameters, break into smaller goals,
+      or escalate to the human.
+    require_approval: true       # agent proposes, human approves
+
+  - event: policy_violation
+    strategy: block              # always block, never auto-handle
+```
+
+**Response strategies:**
+
+| Strategy | Behavior |
+|----------|----------|
+| `notify` | Deliver event to configured channels (default for most events) |
+| `block` | Halt the pipeline, require human intervention |
+| `agent` | Launch an agent goal with event context injected as prompt |
+| `workflow` | Start a named workflow with event data as input |
+| `ignore` | Suppress the event (no notification, no action) |
+
+**TA-managed defaults**: Every event has a sensible default response (mostly `notify`). Users override specific events. TA ships a default `event-routing.yaml` that users can customize per-project.
+
+**Key distinction from scripted hooks**: The agent receives full event context (what failed, the build output, the goal history, the draft diff) and makes intelligent decisions. It can call `ta_ask_human` for interactive clarification. It produces governed output (drafts, not direct changes). This is agent routing, not `if/then/else`.
+
+**Key distinction from n8n/Zapier**: No visual flow builder, no webhook chaining, no action-to-action piping. One event → one agent (or workflow) with full context. The agent handles the complexity, not a workflow graph.
+
+#### Items
+
+1. **`EventRouter`** (`crates/ta-events/src/router.rs`):
+   - Loads `event-routing.yaml` config
+   - Matches incoming events to responders (exact type match + optional filters)
+   - Dispatches to strategy handler (notify, block, agent, workflow, ignore)
+   - Tracks attempt counts for `escalate_after` and `max_attempts`
+
+2. **Agent response strategy** (`crates/ta-events/src/strategies/agent.rs`):
+   - Launches a goal via `ta run` with event context as prompt
+   - Injects event payload (build output, error log, draft diff) into agent context
+   - Respects `require_approval` — agent output goes through standard draft review
+   - Uses interactive mode (`ta_ask_human`) if agent needs human input
+   - Tracks attempts; escalates to human notification after `escalate_after`
+
+3. **Workflow response strategy** (`crates/ta-events/src/strategies/workflow.rs`):
+   - Starts a named workflow definition with event data as input variables
+   - Workflow stages can reference event fields via template expansion
+
+4. **Default event-routing config** (`templates/event-routing.yaml`):
+   - Sensible defaults for all event types
+   - Most events: `notify`
+   - `policy_violation`: `block`
+   - `build_failed`: `notify` (user can upgrade to `agent`)
+
+5. **Event filters** — optional conditions on responders:
+   ```yaml
+   - event: build_failed
+     filter:
+       severity: critical        # only on critical failures
+       phase: "v0.9.*"          # only for certain phases
+     strategy: agent
+   ```
+
+6. **`ta events routing`** CLI command:
+   - `ta events routing list` — show active responders
+   - `ta events routing test <event-type>` — dry-run: show what would happen
+   - `ta events routing set <event-type> <strategy>` — quick override
+
+7. **Guardrails**:
+   - Agent-routed events are governed goals — full staging, policy, audit
+   - `max_attempts` prevents infinite loops (agent fails → event → agent fails → ...)
+   - `escalate_after` ensures humans see persistent failures
+   - `policy_violation` and `sandbox_escape` events cannot be routed to `ignore`
+
+#### Scope boundary
+Event routing handles *reactive* responses to things that already happened. It does not handle *proactive* scheduling (cron, triggers) — that belongs in the Virtual Office Runtime project on top.
+
+#### Version: `0.11.0-alpha`
+
+---
+
+### v0.11.1 — `SourceAdapter` Unification & `ta sync`
+<!-- status: pending -->
+**Goal**: Merge the current `SubmitAdapter` trait with sync operations into a unified `SourceAdapter` trait. Add `ta sync` command. The trait defines abstract VCS operations; provider-specific mechanics (rebase, fast-forward, shelving) live in each implementation.
+
+See `docs/MISSION-AND-SCOPE.md` for the full `SourceAdapter` trait design and per-provider operation mapping.
+
+#### Items
+
+1. **`SourceAdapter` trait** (`crates/ta-submit/src/adapter.rs`):
+   - Rename `SubmitAdapter` → `SourceAdapter`
+   - Add `sync_upstream(&self) -> Result<SyncResult>` abstract method
+   - `SyncResult`: `{ updated: bool, conflicts: Vec<String>, new_commits: u32 }`
+   - Provider-specific config namespaced under `[source.git]`, `[source.perforce]`, etc.
+
+2. **Git implementation** (`crates/ta-submit/src/git.rs`):
+   - `sync_upstream`: `git fetch origin` + merge/rebase/ff per `source.git.sync_strategy`
+   - Conflict detection: parse merge output, return structured `SyncResult`
+
+3. **`ta sync` CLI command** (`apps/ta-cli/src/commands/sync.rs`):
+   - Calls `SourceAdapter::sync_upstream()`
+   - Emits `sync_completed` or `sync_conflict` event
+   - If staging is active, warns or auto-rebases per config
+
+4. **`ta shell` integration**:
+   - `ta> sync` as shell shortcut
+   - SSE event for sync results
+
+5. **Wire into `ta draft apply`**:
+   - Optional `auto_sync = true` in `[source.sync]` config
+   - After apply + commit + push, auto-sync main if configured
+
+#### Version: `0.11.1-alpha`
+
+---
+
+### v0.11.2 — `BuildAdapter` & `ta build`
+<!-- status: pending -->
+**Goal**: Add `ta build` as a governed event wrapper around project build tools. The build result flows through TA's event system so workflows, channels, event-routing agents, and audit logs all see it.
+
+See `docs/MISSION-AND-SCOPE.md` for the full design.
+
+#### Items
+
+1. **`BuildAdapter` trait** (`crates/ta-build/src/adapter.rs` — new crate):
+   - `fn build(&self) -> Result<BuildResult>`
+   - `fn test(&self) -> Result<BuildResult>`
+   - `BuildResult`: `{ success: bool, exit_code: i32, stdout: String, stderr: String, duration: Duration }`
+   - Auto-detection from framework registry (cargo, npm, make, etc.)
+
+2. **Built-in adapters**:
+   - `CargoAdapter`: `cargo build --workspace`, `cargo test --workspace`
+   - `NpmAdapter`: `npm run build`, `npm test`
+   - `ScriptAdapter`: user-defined command from config
+   - `WebhookAdapter`: POST to external CI, poll for result
+
+3. **`ta build` CLI command** (`apps/ta-cli/src/commands/build.rs`):
+   - Calls `BuildAdapter::build()` (and optionally `test()`)
+   - Emits `build_completed` or `build_failed` event with full output
+   - Exit code reflects build result
+
+4. **Config** (`.ta/workflow.toml`):
+   ```toml
+   [build]
+   adapter = "cargo"                      # or "npm", "script", "webhook", auto-detected
+   command = "cargo build --workspace"    # override for script adapter
+   test_command = "cargo test --workspace"
+   on_fail = "notify"                     # notify | block_release | block_next_phase | agent
+   ```
+
+5. **Wire into `ta release run`**:
+   - Optional `pre_steps = ["sync", "build", "test"]` in `[release]` config
+   - Release blocked if build/test fails
+
+6. **`ta shell` integration**:
+   - `ta> build` and `ta> test` as shell shortcuts
+
+#### Version: `0.11.2-alpha`
+
+---
+
 ## Projects On Top (separate repos, built on TA)
 
 > These are NOT part of TA core. They are independent projects that consume TA's extension points.

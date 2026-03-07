@@ -74,19 +74,47 @@ TA governs and orchestrates. It does **not** execute the underlying work — age
 
 **Boundary**: TA calls the VCS adapter's sync method. It does not implement rebase logic, cherry-pick, or conflict resolution — those are VCS operations. TA captures the result (success, conflict, error) as an event and surfaces it to the human.
 
-**Adapter**: `SyncAdapter` trait (or merged into `SourceAdapter` that combines current `SubmitAdapter` + sync). Each VCS provides its own implementation:
+**Adapter**: Unified `SourceAdapter` trait (merges current `SubmitAdapter` + sync into one interface). The trait defines abstract operations that make sense across all VCS types. Provider-specific mechanics (rebase, fast-forward, shelving) live in each implementation — TA's core only speaks the abstract vocabulary.
 
-| Adapter | Sync operation |
-|---------|---------------|
-| Git | `git fetch origin && git merge origin/main` (or rebase, per config) |
-| SVN | `svn update` |
-| Perforce | `p4 sync` |
+```
+trait SourceAdapter {
+    // Abstract operations — every VCS has these concepts
+    fn sync_upstream(&self) -> Result<SyncResult>;     // "make local current"
+    fn submit_changes(&self, ...) -> Result<...>;      // "publish changes"
+    fn open_review(&self, ...) -> Result<...>;         // "request review"
+    fn save_state(&self) -> Result<...>;               // "bookmark where I am"
+    fn restore_state(&self, ...) -> Result<()>;        // "go back to bookmark"
+    fn exclude_patterns(&self) -> Vec<String>;         // "VCS metadata to ignore"
+    fn detect(root: &Path) -> bool;                    // "is this my repo?"
+}
+```
 
-**Config**: Per-project in `.ta/workflow.toml`:
+Each provider implements the abstract operations using its native mechanics:
+
+| Abstract operation | Git | SVN | Perforce |
+|--------------------|-----|-----|----------|
+| `sync_upstream` | `fetch` + `merge` or `rebase` (per config) | `svn update` | `p4 sync` |
+| `submit_changes` | `add` + `commit` + `push` | `svn add` + `svn commit` | `p4 reconcile` + `p4 submit` |
+| `open_review` | `gh pr create` | N/A | Helix Swarm (if configured) |
+| `save_state` | Save current branch name | N/A | Save client/changelist |
+| `restore_state` | Checkout saved branch | N/A | Log restore |
+
+**Config**: Per-project in `.ta/workflow.toml`. Provider-specific options are namespaced — options that don't apply to a provider are silently ignored:
+
 ```toml
-[sync]
-strategy = "merge"     # merge | rebase | fast-forward
-auto_sync = false      # sync main after ta draft apply
+[source]
+adapter = "git"          # or "svn", "perforce", "none"
+
+[source.sync]
+auto_sync = false        # sync upstream after ta draft apply
+
+[source.git]
+sync_strategy = "merge"  # merge | rebase | fast-forward (git-specific)
+branch_prefix = "ta/"
+target_branch = "main"
+
+[source.perforce]
+client_name = "my-workspace"  # perforce-specific
 ```
 
 ### `ta build` — In Scope (as governed event wrapper)
@@ -113,6 +141,8 @@ on_fail = "notify"                     # notify | block_release | block_next_pha
 ```
 
 **What TA adds**: The build result flows through TA's event system. Workflows can gate on it. Channels deliver it. Audit logs record it. Without TA, the build is a side effect; with TA, it's a governed checkpoint.
+
+**Event-driven agent routing** (post-0.10.x): Build failures (and other events) should be routable to agent workflows, not just human notification. A user could configure: "on `build_failed`, launch an agent goal to diagnose and fix the error." This is not scripted hooks — it's intelligent agent routing where the agent receives the event context and decides what to do. TA manages a default set of event responses (notify human, block next phase), but users can override any event with an agent workflow. See v0.11.0 in PLAN.md.
 
 ### `ta release` — In Scope (already exists)
 
@@ -167,10 +197,11 @@ These are not part of TA core. They are independent projects that consume TA's e
 TA's extension model has two layers:
 
 **Adapters** extend TA's core by implementing a trait for a new system:
-- `SourceAdapter` (Git, SVN, Perforce) — VCS operations
+- `SourceAdapter` (Git, SVN, Perforce) — VCS submit + sync operations
 - `BuildAdapter` (Cargo, npm, script, webhook) — build verification
 - `ChannelAdapter` (CLI, web, Slack, Discord, email) — human interaction
 - `ResourceMediator` (fs, email, db, api) — staging for any resource type
+- `EventResponder` (notify, block, agent-route) — event-driven responses (post-0.10.x)
 
 Adapters are governed — they operate within TA's policy engine and emit events through TA's event system.
 
