@@ -16,6 +16,7 @@ pub mod cmd;
 pub mod events;
 pub mod goal_output;
 pub mod input;
+pub mod interactions;
 pub mod status;
 pub mod workflow;
 
@@ -27,6 +28,7 @@ use axum::routing::{delete, get, post};
 use axum::Router;
 
 use crate::config::{DaemonConfig, ShellConfig, TokenStore};
+use crate::question_registry::QuestionRegistry;
 
 /// Shared application state for all API handlers.
 pub struct AppState {
@@ -40,6 +42,7 @@ pub struct AppState {
     pub token_store: TokenStore,
     pub agent_sessions: agent::AgentSessionManager,
     pub goal_output: goal_output::GoalOutputManager,
+    pub question_registry: Arc<QuestionRegistry>,
 }
 
 impl AppState {
@@ -57,6 +60,7 @@ impl AppState {
             shell_config,
             agent_sessions: agent::AgentSessionManager::new(max_sessions),
             goal_output: goal_output::GoalOutputManager::new(),
+            question_registry: Arc::new(QuestionRegistry::new()),
             project_root,
             daemon_config,
         }
@@ -89,6 +93,12 @@ pub fn build_api_router(state: Arc<AppState>) -> Router {
         // Workflow routes (v0.9.8.2).
         .route("/api/workflows", get(workflow::list_workflows))
         .route("/api/workflow/{id}/input", post(workflow::workflow_input))
+        // Interaction routes — human responses to agent questions.
+        .route("/api/interactions/pending", get(interactions::list_pending))
+        .route(
+            "/api/interactions/{id}/respond",
+            post(interactions::respond),
+        )
         // Auth middleware on all API routes.
         .layer(middleware::from_fn_with_state(
             state.clone(),

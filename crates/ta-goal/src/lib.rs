@@ -16,6 +16,7 @@
 //! - [`EventDispatcher`] — dispatches events to notification sinks
 //! - [`NotificationSink`] — trait for receiving events (log, webhook, etc.)
 
+pub mod conversation;
 pub mod error;
 pub mod events;
 pub mod goal_run;

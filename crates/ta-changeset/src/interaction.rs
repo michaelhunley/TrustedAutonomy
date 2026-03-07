@@ -25,6 +25,8 @@ pub enum InteractionKind {
     PlanNegotiation,
     /// Agent is escalating an issue that exceeds its authority.
     Escalation,
+    /// Agent is asking the human a question mid-execution.
+    AgentQuestion,
     /// Extension point for future interaction types.
     Custom(String),
 }
@@ -36,6 +38,7 @@ impl fmt::Display for InteractionKind {
             InteractionKind::ApprovalDiscussion => write!(f, "approval_discussion"),
             InteractionKind::PlanNegotiation => write!(f, "plan_negotiation"),
             InteractionKind::Escalation => write!(f, "escalation"),
+            InteractionKind::AgentQuestion => write!(f, "agent_question"),
             InteractionKind::Custom(name) => write!(f, "custom:{}", name),
         }
     }

@@ -3676,88 +3676,76 @@ Agent: [starts goal for Phase 1]
 
 ---
 
-### v0.9.9.1 — Plan from Product Document (`ta plan from`)
-<!-- status: pending -->
-**Goal**: Generate a phased development plan from a product document (PRD, design brief, spec) for an existing project. The generated plan goes through the standard draft review flow — no plan is applied without human approval.
+### v0.9.9.1 — Interactive Mode & `ta plan from`
+<!-- status: in_progress -->
+**Goal**: Add a general interactive mode primitive — an agent can pause mid-goal to ask the human a question and wait for the answer over any configured channel. `ta plan from <doc>` is the first convenience wrapper built on this primitive.
 
-#### Problem
-Today `ta plan create` produces generic templates and `ta plan init` only detects schema from an existing PLAN.md. There's no way to hand TA a product document and get back a phased development plan tailored to the project. Users must write PLAN.md by hand or use `ta run` with a manual prompt, which has no first-class support for plan-specific constraints (phase sizing, version numbering, format compliance).
+Interactive mode is micro-iteration within the macro-iteration TA governs. The agent calls `ta_ask_human` (MCP tool), TA delivers the question through whatever channel the human is on (shell, web UI, Slack, Discord, email), and routes the response back. The agent continues.
 
-#### User Flow
+#### Architecture
 
-**Command approach (ta shell):**
 ```
-ta> plan from docs/product-spec.md
-[event] goal started: Generate development plan from product-spec.md
-[event] agent analyzing product-spec.md + project structure...
-[event] draft built: 1 file changed (PLAN.md)
+Agent calls ta_ask_human("What database?")
+  → MCP tool writes question to .ta/interactions/pending/<id>.json
+  → Emits SessionEvent::AgentNeedsInput
+  → GoalRunState transitions Running → AwaitingInput
+  → Tool polls for .ta/interactions/answers/<id>.json
 
-Proposed plan: 6 phases
-  v0.1 — Data model & API scaffold    [pending]
-  v0.2 — Auth & access control        [pending]
-  v0.3 — Search & filtering           [pending]
-  v0.4 — Notifications pipeline       [pending]
-  v0.5 — Admin dashboard              [pending]
-  v0.6 — Performance & observability   [pending]
-
-  → view a1b2c3d4
-  → approve a1b2c3d4
-  → deny a1b2c3d4
-
-ta> deny a1b2c3d4
-Reason? Phase 3 should come before Phase 2
-
-ta> plan from docs/product-spec.md --follow-up
-[event] agent revising plan with feedback...
+Human sees question in ta shell / Slack / web UI
+  → Responds via POST /api/interactions/:id/respond
+  → HTTP handler writes answer file
+  → MCP tool poll finds it, returns answer to agent
+  → GoalRunState transitions AwaitingInput → Running
 ```
-
-**Workflow YAML approach (offline-first):**
-```yaml
-# .ta/workflows/plan-from-doc.yaml
-name: plan-from-doc
-stages:
-  - name: analyze
-    action: ta run "Read {{input_doc}} and the existing codebase structure. Produce a PLAN.md following TA plan format." --source .
-    await_human: never
-  - name: review
-    action: ta draft view --latest
-    await_human: always
-  - name: apply
-    action: ta draft approve --latest
-    requires: [analyze, review]
-```
-
-Usage: `ta> workflow run plan-from-doc --var input_doc=docs/spec.md`
-
-Note: the workflow approach requires variable substitution (`{{var}}`) in the workflow engine, which is not yet implemented. This is tracked separately.
-
-#### When to use `--detect` vs `plan from`
-- **`ta init --detect`** — detects project *type* (Rust, TypeScript, Python, Go) for config scaffolding (agent configs, policy, memory). Fast, deterministic, no AI. Use during initial project setup.
-- **`ta plan from <doc>`** — reads a product document and generates a phased *development plan* using an agent. Produces a draft, requires review. Use after `ta init` when you have a product spec to decompose into implementation phases.
-- **`ta plan create`** — generates a generic plan from a hardcoded template. Use when you don't have a product doc and want quick scaffolding.
 
 #### Items
 
-1. **`PlanCommands::From` subcommand**: New variant in `plan.rs` clap enum.
-   - `ta plan from <path>` — path to a product document (Markdown, plain text, PDF)
-   - `ta plan from <path> --follow-up` — revise a previously generated plan with feedback from the rejection
-   - `ta plan from <path> --phases <n>` — hint for target number of phases (default: agent decides)
-   - `ta plan from <path> --output <path>` — output path for PLAN.md (default: `PLAN.md` in project root)
+1. **`ta_ask_human` MCP tool** (`crates/ta-mcp-gateway/src/tools/human.rs`):
+   - Parameters: `question`, `context`, `response_hint` (freeform/yes_no/choice), `choices`, `timeout_secs`
+   - File-based signaling: writes question file, polls for answer file (1s interval)
+   - Emits `AgentNeedsInput` and `AgentQuestionAnswered` events
+   - Timeout returns actionable message (not error) so agent can continue
 
-2. **Plan generation goal**: `ta plan from` creates a goal with a canned prompt template:
-   - Prompt includes: the product document content, existing project structure (file tree), plan format specification (phase headings, `<!-- status: pending -->` markers, version numbering), phase sizing guidelines (1-4 hours per phase)
-   - Agent runs in staging like any other goal — PLAN.md generation is a draft artifact
-   - On completion, standard draft review flow applies
+2. **`QuestionRegistry`** (`crates/ta-daemon/src/question_registry.rs`):
+   - In-memory coordination for future in-process use (oneshot channels)
+   - `PendingQuestion`, `HumanAnswer` types
+   - `register()`, `answer()`, `list_pending()`, `cancel()`
 
-3. **Plan-specific agent config** (`agents/planner.yaml`): Reuse from v0.9.9 if available, or create a lightweight config that:
-   - Has filesystem read access (to scan project structure)
-   - Has filesystem write access (to write PLAN.md)
-   - System prompt includes plan format spec, versioning policy, phase sizing guidelines
-   - Does NOT need `ta goal start`, `ta draft build`, or other runtime tools
+3. **HTTP response endpoints** (`crates/ta-daemon/src/api/interactions.rs`):
+   - `POST /api/interactions/:id/respond` — writes answer file + fires registry
+   - `GET /api/interactions/pending` — lists pending questions
 
-4. **Shell routing**: `plan from <path>` is a command, routes to execution. Natural language like "create a plan from my product spec" routes to the agent session, which can invoke `ta plan from` via MCP if available.
+4. **`GoalRunState::AwaitingInput`** (`crates/ta-goal/src/goal_run.rs`):
+   - New state with `interaction_id` and `question_preview`
+   - Valid transitions: `Running → AwaitingInput → Running`, `AwaitingInput → PrReady`
+   - Visible in `ta goal list` and external UIs
 
-5. **Workflow variable substitution** (prerequisite for YAML approach): Add `{{var}}` template expansion to `WorkflowDefinition` stage actions. This enables `--var key=value` on `ta workflow run`. Deferred if too large for this phase.
+5. **New `SessionEvent` variants** (`crates/ta-events/src/schema.rs`):
+   - `AgentNeedsInput` — with `suggested_actions()` returning a "respond" action
+   - `AgentQuestionAnswered`, `InteractiveSessionStarted`, `InteractiveSessionCompleted`
+
+6. **`InteractionKind::AgentQuestion`** (`crates/ta-changeset/src/interaction.rs`):
+   - New variant for channel rendering dispatch
+
+7. **Conversation history** (`crates/ta-goal/src/conversation.rs`):
+   - JSONL log at `.ta/conversations/<goal_id>.jsonl`
+   - `ConversationStore` with `append_question()`, `append_answer()`, `load()`, `next_turn()`, `conversation_so_far()`
+
+8. **Shell TUI integration** (`apps/ta-cli/src/commands/shell_tui.rs`):
+   - SSE listener handles `agent_needs_input` event
+   - `pending_question` state switches input routing to respond endpoint
+   - Visual: question displayed prominently, prompt changes to `[agent Q1] >`
+
+9. **`ta plan from <doc>` wrapper** (`apps/ta-cli/src/commands/plan.rs`):
+   - `PlanCommands::From` variant
+   - Reads document, builds planning system prompt, launches `ta run --interactive`
+   - Agent calls `ta_ask_human` to clarify requirements, propose phases, refine
+   - Output is PLAN.md in staging → standard draft review flow
+
+#### When to use `--detect` vs `plan from`
+- **`ta init --detect`** — detects project *type* for config scaffolding. Fast, deterministic, no AI.
+- **`ta plan from <doc>`** — reads a product document and generates a phased *development plan* via interactive agent session. Use after `ta init`.
+- **`ta plan create`** — generates a generic plan from a hardcoded template. Use when you don't have a product doc.
 
 #### Implementation scope
 - `apps/ta-cli/src/commands/plan.rs` — `PlanCommands::From` variant, `plan_from()` function, prompt template

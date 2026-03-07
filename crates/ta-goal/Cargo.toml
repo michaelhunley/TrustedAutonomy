@@ -6,6 +6,7 @@ description = "GoalRun lifecycle management and event dispatch for Trusted Auton
 license = "Apache-2.0"
 
 [dependencies]
+anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
