@@ -105,6 +105,24 @@ impl TerminalChannel {
                     out.push_str(&format!("  Reason: {}\n", reason));
                 }
             }
+            InteractionKind::AgentQuestion => {
+                out.push_str("  AGENT QUESTION\n");
+                out.push_str(&"-".repeat(60));
+                out.push('\n');
+                if let Some(q) = request.context.get("question").and_then(|v| v.as_str()) {
+                    out.push_str(&format!("  Question: {}\n", q));
+                }
+                if let Some(ctx) = request.context.get("context").and_then(|v| v.as_str()) {
+                    out.push_str(&format!("  Context: {}\n", ctx));
+                }
+                if let Some(hint) = request
+                    .context
+                    .get("response_hint")
+                    .and_then(|v| v.as_str())
+                {
+                    out.push_str(&format!("  Expected response: {}\n", hint));
+                }
+            }
             InteractionKind::Custom(name) => {
                 out.push_str(&format!("  INTERACTION: {}\n", name.to_uppercase()));
                 out.push_str(&"-".repeat(60));

@@ -173,6 +173,48 @@ pub enum SessionEvent {
         error: String,
         exit_code: Option<i32>,
     },
+
+    /// An agent running a goal needs human input to continue.
+    AgentNeedsInput {
+        goal_id: Uuid,
+        interaction_id: Uuid,
+        question: String,
+        #[serde(default)]
+        context: Option<String>,
+        #[serde(default = "default_response_hint")]
+        response_hint: String,
+        #[serde(default)]
+        choices: Vec<String>,
+        turn: u32,
+        #[serde(default)]
+        timeout_secs: Option<u64>,
+    },
+
+    /// A human answered an agent's question.
+    AgentQuestionAnswered {
+        goal_id: Uuid,
+        interaction_id: Uuid,
+        responder_id: String,
+        turn: u32,
+    },
+
+    /// An interactive session started (multiple exchanges expected).
+    InteractiveSessionStarted {
+        goal_id: Uuid,
+        session_type: String,
+        channel: String,
+    },
+
+    /// An interactive session completed.
+    InteractiveSessionCompleted {
+        goal_id: Uuid,
+        turn_count: u32,
+        outcome: String,
+    },
+}
+
+fn default_response_hint() -> String {
+    "freeform".to_string()
 }
 
 impl SessionEvent {
@@ -194,6 +236,10 @@ impl SessionEvent {
             Self::PolicyViolation { .. } => "policy_violation",
             Self::MemoryStored { .. } => "memory_stored",
             Self::GoalFailed { .. } => "goal_failed",
+            Self::AgentNeedsInput { .. } => "agent_needs_input",
+            Self::AgentQuestionAnswered { .. } => "agent_question_answered",
+            Self::InteractiveSessionStarted { .. } => "interactive_session_started",
+            Self::InteractiveSessionCompleted { .. } => "interactive_session_completed",
         }
     }
 
@@ -208,7 +254,11 @@ impl SessionEvent {
             | Self::DraftDenied { goal_id, .. }
             | Self::DraftApplied { goal_id, .. }
             | Self::ReviewRequested { goal_id, .. }
-            | Self::GoalFailed { goal_id, .. } => Some(*goal_id),
+            | Self::GoalFailed { goal_id, .. }
+            | Self::AgentNeedsInput { goal_id, .. }
+            | Self::AgentQuestionAnswered { goal_id, .. }
+            | Self::InteractiveSessionStarted { goal_id, .. }
+            | Self::InteractiveSessionCompleted { goal_id, .. } => Some(*goal_id),
             Self::PolicyViolation { goal_id, .. } => *goal_id,
             _ => None,
         }
@@ -261,6 +311,15 @@ impl SessionEvent {
                         format!("Deny draft {}", short_id),
                     ),
                 ]
+            }
+            Self::AgentNeedsInput { interaction_id, .. } => {
+                let iid = interaction_id.to_string();
+                let short_id = &iid[..8];
+                vec![EventAction::new(
+                    "respond",
+                    format!("ta interact respond {}", iid),
+                    format!("Respond to agent question {}", short_id),
+                )]
             }
             // All other events have no suggested actions.
             _ => vec![],
@@ -473,11 +532,37 @@ mod tests {
                 error: "agent crashed".into(),
                 exit_code: Some(1),
             },
+            SessionEvent::AgentNeedsInput {
+                goal_id: gid,
+                interaction_id: Uuid::new_v4(),
+                question: "Which DB?".into(),
+                context: None,
+                response_hint: "freeform".into(),
+                choices: vec![],
+                turn: 1,
+                timeout_secs: None,
+            },
+            SessionEvent::AgentQuestionAnswered {
+                goal_id: gid,
+                interaction_id: Uuid::new_v4(),
+                responder_id: "human".into(),
+                turn: 1,
+            },
+            SessionEvent::InteractiveSessionStarted {
+                goal_id: gid,
+                session_type: "clarification".into(),
+                channel: "cli".into(),
+            },
+            SessionEvent::InteractiveSessionCompleted {
+                goal_id: gid,
+                turn_count: 3,
+                outcome: "completed".into(),
+            },
         ];
         for e in &events {
             assert!(!e.event_type().is_empty());
         }
-        assert_eq!(events.len(), 15);
+        assert_eq!(events.len(), 19);
     }
 
     #[test]
@@ -511,5 +596,26 @@ mod tests {
             phase_title: "Fixes".into(),
         };
         assert_eq!(completed.phase(), Some("v0.7.5"));
+    }
+
+    #[test]
+    fn agent_needs_input_has_respond_action() {
+        let interaction_id = Uuid::new_v4();
+        let event = SessionEvent::AgentNeedsInput {
+            goal_id: Uuid::new_v4(),
+            interaction_id,
+            question: "What database?".into(),
+            context: None,
+            response_hint: "freeform".into(),
+            choices: vec![],
+            turn: 1,
+            timeout_secs: None,
+        };
+        let envelope = EventEnvelope::new(event);
+        assert_eq!(envelope.actions.len(), 1);
+        assert_eq!(envelope.actions[0].verb, "respond");
+        assert!(envelope.actions[0]
+            .command
+            .contains(&interaction_id.to_string()));
     }
 }

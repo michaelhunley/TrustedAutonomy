@@ -52,6 +52,12 @@ pub enum GoalRunState {
     /// Goal completed successfully.
     Completed,
 
+    /// Agent is mid-run and waiting for human input before continuing.
+    AwaitingInput {
+        interaction_id: Uuid,
+        question_preview: String,
+    },
+
     /// Goal failed at some point.
     Failed { reason: String },
 }
@@ -67,6 +73,7 @@ impl fmt::Display for GoalRunState {
             GoalRunState::Approved { .. } => write!(f, "approved"),
             GoalRunState::Applied => write!(f, "applied"),
             GoalRunState::Completed => write!(f, "completed"),
+            GoalRunState::AwaitingInput { .. } => write!(f, "awaiting_input"),
             GoalRunState::Failed { .. } => write!(f, "failed"),
         }
     }
@@ -103,6 +110,12 @@ impl GoalRunState {
                 // Macro goals: allow PrReady → Running for inner-loop iteration.
                 // Agent submits a sub-goal draft, then continues working on the next one.
                 | (GoalRunState::PrReady, GoalRunState::Running)
+                // Interactive mode: agent pauses for human input
+                | (GoalRunState::Running, GoalRunState::AwaitingInput { .. })
+                // Human responds, agent continues
+                | (GoalRunState::AwaitingInput { .. }, GoalRunState::Running)
+                // Agent completes from interactive state
+                | (GoalRunState::AwaitingInput { .. }, GoalRunState::PrReady)
         )
     }
 }
@@ -448,6 +461,32 @@ mod tests {
         let restored: GoalRun = serde_json::from_str(&json).unwrap();
         assert!(restored.workflow_id.is_none());
         assert!(restored.context_from.is_empty());
+    }
+
+    #[test]
+    fn interactive_mode_transitions() {
+        let mut gr = test_goal_run();
+        gr.transition(GoalRunState::Configured).unwrap();
+        gr.transition(GoalRunState::Running).unwrap();
+
+        // Running → AwaitingInput
+        let iid = Uuid::new_v4();
+        gr.transition(GoalRunState::AwaitingInput {
+            interaction_id: iid,
+            question_preview: "What DB?".into(),
+        })
+        .unwrap();
+
+        // AwaitingInput → Running (human responded)
+        gr.transition(GoalRunState::Running).unwrap();
+
+        // Running → AwaitingInput → PrReady (agent finishes from interactive)
+        gr.transition(GoalRunState::AwaitingInput {
+            interaction_id: Uuid::new_v4(),
+            question_preview: "Proceed?".into(),
+        })
+        .unwrap();
+        gr.transition(GoalRunState::PrReady).unwrap();
     }
 
     #[test]

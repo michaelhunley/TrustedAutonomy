@@ -33,6 +33,7 @@
 
 mod api;
 mod config;
+pub mod question_registry;
 mod web;
 
 use anyhow::Result;
