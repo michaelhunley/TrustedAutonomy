@@ -2041,7 +2041,9 @@ fn apply_package(
     }
 
     // Transition goal to Applied → update package status.
-    let _ = goal_store.transition(goal.goal_run_id, GoalRunState::Applied);
+    if let Err(e) = goal_store.transition(goal.goal_run_id, GoalRunState::Applied) {
+        eprintln!("Warning: could not transition goal to Applied: {}", e);
+    }
     pkg.status = DraftStatus::Applied {
         applied_at: Utc::now(),
     };
