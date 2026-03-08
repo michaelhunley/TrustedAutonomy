@@ -43,14 +43,15 @@ impl ChannelDispatcher {
             tracing::info!("Registered Slack channel adapter");
         }
 
-        if let Some(ref discord_cfg) = config.discord {
-            let adapter =
-                ta_connector_discord::DiscordAdapter::new(ta_connector_discord::DiscordConfig {
-                    bot_token: discord_cfg.bot_token.clone(),
-                    channel_id: discord_cfg.channel_id.clone(),
-                });
-            dispatcher.register(Arc::new(adapter));
-            tracing::info!("Registered Discord channel adapter");
+        // Note: Discord has been refactored to an external plugin (v0.10.2.1).
+        // Configure Discord via [[channels.external]] in daemon.toml or install
+        // the plugin in .ta/plugins/channels/discord/. See docs for migration.
+        if config.discord.is_some() {
+            tracing::warn!(
+                "Ignoring [channels.discord] in daemon.toml — Discord has been refactored \
+                 to an external plugin. Migrate your config to [[channels.external]] with \
+                 name = \"discord\". See docs/guides/discord-channel.md for details."
+            );
         }
 
         if let Some(ref email_cfg) = config.email {

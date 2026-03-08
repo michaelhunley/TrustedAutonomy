@@ -1,0 +1,7 @@
+name = "discord"
+version = "0.1.0"
+command = "ta-channel-discord"
+protocol = "json-stdio"
+capabilities = ["deliver_question"]
+description = "Discord channel plugin for Trusted Autonomy — posts agent questions as rich embeds with button components"
+timeout_secs = 30
