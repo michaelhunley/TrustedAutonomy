@@ -4203,6 +4203,28 @@ Slack (v0.10.3) and email (v0.10.4) are built as external plugins from the start
 
 ---
 
+### v0.10.2.1 — Refactor Discord Channel to External Plugin
+<!-- status: pending -->
+**Goal**: Extract the in-process `ta-channel-discord` crate into an external plugin using the v0.10.2 plugin system. Validates the plugin architecture with a real, tested adapter and establishes the migration pattern for any future in-process-to-plugin conversions.
+
+#### Approach
+
+The Discord adapter already implements `ChannelDelivery` and uses only HTTP (no daemon internals). The refactoring separates the core logic (message formatting, embed building, button handling) from the in-process trait impl, then wraps it in a standalone binary that speaks JSON-over-stdio.
+
+#### Items
+1. [ ] Extract core Discord logic (payload builders, embed formatting, response parsing) into a `discord-core` library module within `plugins/ta-channel-discord/`
+2. [ ] Create standalone binary that reads `ChannelQuestion` from stdin, calls Discord REST API, writes `DeliveryResult` to stdout
+3. [ ] Add `channel.toml` manifest for plugin discovery
+4. [ ] Remove `ta-channel-discord` crate from workspace — Discord becomes a pre-installed plugin, not a compiled-in dependency
+5. [ ] Update `ChannelDispatcher` registration to load Discord via plugin system instead of hardcoded match arm
+6. [ ] Migrate Discord config from in-process `ChannelsConfig` to `[[channels.external]]` in `daemon.toml`
+7. [ ] Verify all existing Discord tests pass against the plugin binary
+8. [ ] Update docs: USAGE.md Discord section, discord-channel guide
+
+#### Version: `0.10.2-alpha.1`
+
+---
+
 ### v0.10.3 — Slack Channel Plugin
 <!-- status: pending -->
 **Goal**: Slack channel plugin built on the v0.10.2 plugin system — validates that the plugin loading infrastructure works end-to-end with a real service.
