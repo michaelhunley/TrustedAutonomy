@@ -51,7 +51,7 @@ Trusted Autonomy (TA) is a governance wrapper for AI agents. It lets any agent w
    - [Daemon API](#daemon-api)
    - [Interactive Shell](#interactive-shell)
    - [Webhook Review Channel](#webhook-review-channel)
-   - [Discord Review Channel](#discord-review-channel)
+   - [Discord Channel Plugin](#discord-channel-plugin)
    - [MCP Tool Call Interception](#mcp-tool-call-interception)
    - [Session Lifecycle](#session-lifecycle)
    - [Unified Policy Config](#unified-policy-config)
@@ -1108,7 +1108,7 @@ Without this file, TA defaults to `terminal` for everything — review prompts a
 | `terminal` | Interactive terminal prompts (default) | Local development |
 | `auto-approve` | Approves everything automatically | CI pipelines, batch jobs, testing |
 | `webhook` | File-based exchange with external systems | Slack bots, custom review UIs |
-| `discord` | Native Discord embeds with buttons | Team review via Discord server |
+| `discord` | External plugin — Discord embeds with buttons | Team review via Discord server |
 
 #### Choosing a review channel
 
@@ -1122,19 +1122,7 @@ channels:
     type: auto-approve
 ```
 
-For **team review via Discord**, use `discord`:
-
-```yaml
-channels:
-  review:
-    type: discord
-    token_env: TA_DISCORD_TOKEN    # env var containing your bot token
-    channel_id: "123456789012345"  # Discord channel snowflake ID
-    allowed_roles: ["reviewer"]    # optional: restrict who can approve
-    allowed_users: ["alice#1234"]  # optional: restrict by username
-```
-
-See [Discord Review Channel](#discord-review-channel) for the full setup guide.
+For **team review via Discord**, install the Discord channel plugin and configure the daemon to deliver questions to Discord. See [Discord Channel Plugin](#discord-channel-plugin) for setup instructions.
 
 For **external review** (Slack bot, custom dashboard), use `webhook`:
 
@@ -2325,13 +2313,13 @@ Valid `decision` values:
 | `terminal` | Default | Interactive terminal prompts |
 | `auto-approve` | Available | Auto-approves everything (for CI/batch) |
 | `webhook` | Available | File-based exchange for external integrations |
-| `discord` | Available | Native Discord embeds with Approve/Deny buttons |
+| `discord` | Plugin | External plugin — Discord embeds with buttons (v0.10.2.1) |
 | `slack` | Stub | Future: Slack Block Kit cards with button callbacks |
 | `email` | Stub | Future: SMTP send with IMAP reply parsing |
 
-### Discord Review Channel
+### Discord Channel Plugin
 
-Route draft review interactions to a Discord channel as rich embeds with button components. Team members click Approve, Deny, or Discuss directly in Discord.
+Discord is available as an **external channel plugin** (refactored from a built-in crate in v0.10.2.1). It delivers agent questions as rich embeds with button components to a Discord channel.
 
 #### Quick setup
 
@@ -2340,72 +2328,60 @@ Route draft review interactions to a Discord channel as rich embeds with button 
    - Under OAuth2 → URL Generator: select `bot` scope with `Send Messages` and `Embed Links` permissions
    - Invite the bot to your server using the generated URL
 
-2. **Set the token as an environment variable**:
+2. **Set environment variables**:
    ```bash
    export TA_DISCORD_TOKEN="your-bot-token-here"
+   export TA_DISCORD_CHANNEL_ID="123456789012345678"
    ```
 
-3. **Get the channel ID**: Right-click the target channel in Discord → Copy Channel ID (enable Developer Mode in Discord settings if you don't see this option).
+3. **Install the plugin**:
+   ```bash
+   # Build from source
+   cd plugins/ta-channel-discord
+   cargo build --release
 
-4. **Configure** `.ta/config.yaml`:
-   ```yaml
-   channels:
-     review:
-       type: discord
-       channel_id: "123456789012345678"
+   # Install to project
+   mkdir -p .ta/plugins/channels/discord
+   cp target/release/ta-channel-discord .ta/plugins/channels/discord/
+   cp channel.toml .ta/plugins/channels/discord/
+   ```
+
+4. **Configure** `.ta/daemon.toml`:
+   ```toml
+   [channels]
+   default_channels = ["discord"]
    ```
 
 5. **Verify**:
    ```bash
-   ta config channels --check
-   # [PASS] type: discord — channel_id: discord:123456789012345678
+   ta config channels
+   # Should show "discord" in the registered channel types list
    ```
-
-#### Config options
-
-```yaml
-channels:
-  review:
-    type: discord
-    token_env: TA_DISCORD_TOKEN         # env var name (default: TA_DISCORD_TOKEN)
-    channel_id: "123456789012345678"    # required: Discord channel snowflake
-    response_dir: ".ta/discord-responses"  # response exchange directory (default)
-    allowed_roles: ["reviewer", "lead"] # optional: only these roles can decide
-    allowed_users: ["alice#1234"]       # optional: only these users can decide
-    timeout_secs: 3600                  # wait up to 1 hour (default)
-    poll_interval_secs: 2              # check for response every 2s (default)
-```
-
-- **`token_env`**: Name of the environment variable containing the bot token. Defaults to `TA_DISCORD_TOKEN`.
-- **`channel_id`**: Discord channel snowflake ID where review embeds are posted.
-- **`allowed_roles` / `allowed_users`**: Access control — if set, only matching users can approve or deny. If both are empty, anyone in the channel can respond.
-- **`response_dir`**: Directory where the daemon writes response files when a Discord user clicks a button. The channel polls this directory.
 
 #### How it works
 
-1. When a draft is ready, TA posts a rich embed to the Discord channel with Approve/Deny/Discuss buttons
-2. A Discord user clicks a button; the daemon's interaction handler writes `response-{id}.json` to the response directory
-3. TA polls the response directory and picks up the decision
-4. If access control is configured, unauthorized responses are silently ignored
+1. An agent calls `ta_ask_human` or needs input
+2. The daemon builds a `ChannelQuestion` and dispatches to the Discord plugin
+3. The plugin posts a rich embed with buttons (Yes/No, choices, or freeform prompt) to the configured Discord channel
+4. A human clicks a button or replies in a thread
+5. The response flows back to TA via `POST /api/interactions/{id}/respond`
 
-Different interaction types get different button labels:
-- **Draft review**: Approve / Deny / Discuss
-- **Escalation**: Acknowledge / Intervene
-- **Plan negotiation**: Accept / Reject
-- **Agent question**: Yes / No / Discuss
+#### Alternative: Inline config (no plugin install needed)
 
-#### Multi-channel with Discord
+Instead of installing the plugin directory, configure Discord directly in `.ta/daemon.toml`:
 
-You can combine Discord with other channels:
+```toml
+[[channels.external]]
+name = "discord"
+command = "/path/to/ta-channel-discord"
+protocol = "json-stdio"
+timeout_secs = 30
 
-```yaml
-channels:
-  review:
-    - type: terminal        # local terminal
-    - type: discord         # team Discord
-      channel_id: "123456789012345678"
-  strategy: first_response  # first response wins
+[channels]
+default_channels = ["discord"]
 ```
+
+See [Discord Channel Guide](guides/discord-channel.md) for the full setup guide including bot permissions, access control, and troubleshooting.
 
 ### Project Status Dashboard
 
@@ -2800,15 +2776,19 @@ When an agent calls `ta_ask_human`, the question can be delivered to external ch
 
 ```toml
 [channels]
-default_channels = ["slack"]  # Deliver questions to these channels by default
+default_channels = ["discord"]  # Deliver questions to these channels by default
 
 [channels.slack]
 bot_token = "xoxb-your-bot-token"
 channel_id = "C1234567890"
 
-[channels.discord]
-bot_token = "your-discord-bot-token"
-channel_id = "123456789012345678"
+# Discord is an external plugin (v0.10.2.1). Set TA_DISCORD_TOKEN and
+# TA_DISCORD_CHANNEL_ID as environment variables. The plugin is auto-discovered
+# from .ta/plugins/channels/discord/ or can be configured inline:
+# [[channels.external]]
+# name = "discord"
+# command = "ta-channel-discord"
+# protocol = "json-stdio"
 
 [channels.email]
 send_endpoint = "https://api.sendgrid.com/v3/mail/send"
