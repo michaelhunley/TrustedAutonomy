@@ -4248,20 +4248,44 @@ ta workflow publish deploy-pipeline --bump minor
 
 ---
 
-### v0.10.6 — Release Process Hardening
+### v0.10.6 — Release Process Hardening & Interactive Release Flow
 <!-- status: pending -->
-**Goal**: Fix release process issues and harden the `ta release run` pipeline.
+**Goal**: Fix release process issues, harden the `ta release run` pipeline, and make releases an interactive-mode workflow so the human never leaves `ta shell`.
 
 #### Known Bugs
 - ~~**Releases always marked pre-release**: `release.yml` auto-detected `alpha`/`beta` in the version string and set `prerelease: true`, which meant GitHub never updated "latest release". Fixed in v0.9.9.1 — default is now latest, with explicit `--prerelease` input on `workflow_dispatch`.~~ ✅
 - **`ta_fs_write` forbidden in orchestrator mode**: The release notes agent tries to write `.release-draft.md` directly but is blocked by orchestrator policy. The agent should either use `ta_goal` to delegate the write, or the orchestrator policy should whitelist release artifact writes. Filed as bug — the process should just work without the agent needing workarounds.
 - **Release notes agent workaround**: Currently the agent works around the `ta_fs_write` restriction by using alternative write methods, but this is fragile and shouldn't be necessary.
 
+#### Interactive Release Flow
+
+Today `ta release run` runs synchronously in the foreground — the human must exit the agent, review notes externally, then re-run. The release should be a background goal that uses interactive mode for human review checkpoints:
+
+```
+ta shell> release v0.10.6
+  → TA launches release agent as background goal
+  → Agent generates changelog, release notes draft
+  → Agent calls ta_ask_human: "Draft release notes below. Any changes?"
+  → Human reviews in ta shell, responds with feedback
+  → Agent revises, calls ta_ask_human: "Updated. Ready to publish?"
+  → Human: "yes"
+  → Agent bumps version, tags, pushes — GH Actions takes over
+  → TA emits release_completed event
+  → Shell shows: "Release v0.10.6 published. View: https://github.com/..."
+```
+
+The human stays in `ta shell` throughout. Release notes go through the standard draft review flow. Interactive mode (v0.9.9.1–v0.9.9.2) provides the `ta_ask_human` infrastructure.
+
 #### Items
 1. [ ] Fix `ta_fs_write` permission in orchestrator mode for release artifact files (`.release-draft.md`, `CHANGELOG.md`)
 2. [ ] Add orchestrator-mode write whitelist for release-specific file patterns
 3. [ ] End-to-end test for `ta release run` pipeline without manual intervention
 4. [ ] Release dry-run mode: `ta release run --dry-run` that validates all steps without publishing
+5. [ ] **Background goal launch from shell**: `ta shell> release <version>` launches release agent as a background goal via daemon API, returns control to shell immediately
+6. [ ] **Interactive release agent**: Release agent uses `ta_ask_human` for release notes review, version confirmation, and publish approval
+7. [ ] **`agents/releaser.yaml`**: Release agent config with `ta_ask_human` enabled, write access scoped to release artifacts (`.release-draft.md`, `CHANGELOG.md`, `version.json`, `Cargo.toml`)
+8. [ ] **Release workflow definition**: Optional `.ta/workflows/release.yaml` for teams that want multi-stage release (build → test → notes review → publish → announce)
+9. [ ] Wire `ta sync` and `ta build` as optional pre-release steps (depends on v0.11.1, v0.11.2)
 
 #### Version: `0.10.6-alpha`
 
