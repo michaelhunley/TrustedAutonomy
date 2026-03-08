@@ -4061,6 +4061,10 @@ channels:
     allowed_users: ["user#1234"]
 ```
 
+#### Plugin-readiness note
+
+This is built as an in-process Rust crate (the existing pattern). When v0.10.4 (Channel Plugin Loading) lands, this adapter should be refactorable to an external plugin — it already implements `ChannelDelivery` and uses only HTTP/WebSocket. Design the crate so its core logic (message formatting, button handling, webhook response parsing) is separable from the in-process trait impl. This makes it a reference implementation for community plugins in other languages.
+
 #### Version: `0.10.1-alpha`
 
 ### v0.10.2 — Native Slack Channel
@@ -4132,32 +4136,120 @@ channels:
 
 #### Version: `0.10.3-alpha`
 
-### v0.10.4 — Channel Plugin Loading
+### v0.10.4 — Channel Plugin Loading (Multi-Language)
 <!-- status: pending -->
-**Goal**: Allow third-party channel plugins without modifying TA source, enabling community-built integrations (Teams, PagerDuty, ServiceNow, etc.).
+**Goal**: Allow third-party channel plugins without modifying TA source or writing Rust, enabling community-built integrations (Teams, PagerDuty, ServiceNow, etc.) in any language.
+
+#### Current State
+
+The `ChannelDelivery` trait is a clean boundary — it depends only on serializable types from `ta-events`, and the response path is already HTTP (`POST /api/interactions/:id/respond`). But registration is hardcoded: adding a channel requires a new Rust crate in `crates/ta-connectors/`, a dependency in `daemon/Cargo.toml`, and a match arm in `channel_dispatcher.rs`. Users cannot add channels without recompiling TA.
+
+#### Design
+
+Two out-of-process plugin protocols. Both deliver `ChannelQuestion` as JSON and receive answers through the existing HTTP response endpoint. Plugins can be written in any language.
+
+**Protocol 1: JSON-over-stdio (subprocess)**
+
+TA spawns the plugin executable, sends `ChannelQuestion` JSON on stdin, reads a `DeliveryResult` JSON line from stdout. The plugin delivers the question however it wants (API call, email, push notification). When the human responds, the plugin (or the external service's webhook) POSTs to `/api/interactions/:id/respond`.
+
+```
+TA daemon
+  → spawns: python3 ta-channel-teams.py
+  → stdin:  {"interaction_id":"...","question":"What database?","choices":["Postgres","MySQL"],...}
+  → stdout: {"channel":"teams","delivery_id":"msg-123","success":true}
+  ...later...
+  → Teams webhook → POST /api/interactions/:id/respond → answer flows back to agent
+```
+
+**Protocol 2: HTTP callback**
+
+TA POSTs `ChannelQuestion` to a configured URL. The external service delivers it and POSTs the response back to `/api/interactions/:id/respond`. No subprocess needed — works with any HTTP-capable service, cloud function, or webhook relay.
+
+```toml
+[[channels.external]]
+name = "pagerduty"
+protocol = "http"
+deliver_url = "https://my-service.com/ta/deliver"
+auth_token_env = "TA_PAGERDUTY_TOKEN"
+```
+
+**Both protocols use the same JSON schema** — `ChannelQuestion` and `DeliveryResult` from `ta-events`. The subprocess just reads/writes them over stdio; the HTTP variant sends/receives them as request/response bodies.
 
 #### Items
 
-1. **Process-based plugin protocol**: Plugin is an executable that speaks JSON-over-stdio. TA spawns the process, sends `InteractionRequest` JSON via stdin, reads `InteractionResponse` from stdout. Works with any language.
-2. **Plugin discovery**: Scan `~/.config/ta/plugins/channels/` and `.ta/plugins/channels/` for plugin manifests (`channel.toml`):
+1. **`ExternalChannelAdapter`** (`crates/ta-daemon/src/channel_dispatcher.rs`):
+   - Implements `ChannelDelivery` by delegating to subprocess or HTTP
+   - Subprocess variant: spawn process, write JSON to stdin, read JSON from stdout
+   - HTTP variant: POST question JSON to configured URL, parse response
+   - Both variants: answers return via existing `/api/interactions/:id/respond`
+
+2. **Plugin manifest** (`channel.toml`):
    ```toml
    name = "teams"
    version = "0.1.0"
-   command = "ta-channel-teams"
-   capabilities = ["review", "notify"]
+   command = "python3 ta-channel-teams.py"  # or any executable
+   protocol = "json-stdio"                   # or "http"
+   deliver_url = ""                          # only for http protocol
+   capabilities = ["deliver_question"]
    ```
-3. **`ProcessChannelFactory`**: Generic `ChannelFactory` that wraps any plugin executable. Registered in `ChannelRegistry` under the plugin's `name`.
-4. **`ta plugin list`**: Show installed channel plugins with their capabilities and status.
-5. **Plugin install**: `ta plugin install <path-or-url>` copies the executable and manifest to the plugin directory.
 
-#### Config (using a community plugin)
-```yaml
-channels:
-  review:
-    type: teams              # resolved from plugin manifest
-    webhook_url_env: TA_TEAMS_WEBHOOK
-    channel: "General"
+3. **Plugin discovery**: Scan `~/.config/ta/plugins/channels/` and `.ta/plugins/channels/` for `channel.toml` manifests. Register each as an `ExternalChannelAdapter` in the `ChannelDispatcher`.
+
+4. **Open `daemon.toml` config** — `[[channels.external]]` array replaces closed-world `ChannelsConfig`:
+   ```toml
+   [[channels.external]]
+   name = "teams"
+   command = "ta-channel-teams"
+   protocol = "json-stdio"
+
+   [[channels.external]]
+   name = "custom-webhook"
+   protocol = "http"
+   deliver_url = "https://my-service.com/ta/deliver"
+   auth_token_env = "TA_CUSTOM_TOKEN"
+   ```
+
+5. **`ta plugin list`**: Show installed channel plugins with protocol, capabilities, and validation status.
+
+6. **`ta plugin install <path-or-url>`**: Copy executable + manifest to plugin directory.
+
+7. **Plugin SDK examples** — starter templates in multiple languages:
+   - `templates/channel-plugins/python/` — Python channel plugin skeleton
+   - `templates/channel-plugins/node/` — Node.js channel plugin skeleton
+   - `templates/channel-plugins/go/` — Go channel plugin skeleton
+   - Each includes: JSON schema types, stdin/stdout handling, example delivery logic
+
+#### Multi-language plugin example (Python)
+
+```python
+#!/usr/bin/env python3
+"""TA channel plugin for Microsoft Teams — reads JSON from stdin, posts to Teams."""
+import json, sys, requests
+
+def main():
+    question = json.loads(sys.stdin.readline())
+    # Post to Teams webhook
+    resp = requests.post(TEAMS_WEBHOOK, json={
+        "type": "message",
+        "attachments": [{
+            "content": {
+                "type": "AdaptiveCard",
+                "body": [{"type": "TextBlock", "text": question["question"]}],
+                "actions": [{"type": "Action.OpenUrl",
+                             "title": "Respond",
+                             "url": f"{question['callback_url']}/api/interactions/{question['interaction_id']}/respond"}]
+            }
+        }]
+    })
+    print(json.dumps({"channel": "teams", "delivery_id": resp.headers.get("x-msg-id", ""), "success": resp.ok}))
+
+if __name__ == "__main__":
+    main()
 ```
+
+#### Prep: Built-in channels should follow the same pattern
+
+When v0.10.4 lands, the built-in Slack/Discord/email adapters should be refactorable to external plugins — they already implement `ChannelDelivery` and use only HTTP. The long-term goal: TA ships with zero built-in channel adapters; all channels are plugins. The built-in ones are just pre-installed defaults.
 
 #### Version: `0.10.4-alpha`
 
