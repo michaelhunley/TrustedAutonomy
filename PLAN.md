@@ -4554,6 +4554,48 @@ timeout = 300
 
 ---
 
+### v0.10.9 — Smart Follow-Up UX
+<!-- status: pending -->
+**Goal**: Make `ta run --follow-up` a frictionless, context-aware entry point that works across VCS backends, channels, and workflow types — without requiring the user to know branch names, draft IDs, or internal state.
+
+#### Problem
+Today `--follow-up` requires the user to know which git branch holds the prior work, pass it explicitly, and understand the staging directory layout. This is wrong friction — especially for non-technical users working through email, social media, or DB migration workflows. The user's mental model is "I want to continue working on *that thing*" — TA should resolve what "that thing" means.
+
+#### Design
+`ta run --follow-up` (with no additional arguments) enters an interactive selection flow:
+
+1. **Gather candidates**: Scan recent goals, active drafts, in-progress plan phases, and open verification failures. Each candidate carries enough context to display a one-line summary.
+2. **Present picker**: Show a numbered list (or fuzzy-searchable in shell TUI) of follow-up candidates, sorted by recency. Each entry shows: phase/goal title, status (e.g., "draft denied", "verify failed", "in progress"), and age.
+3. **User selects**: User picks by number or searches. TA resolves the selection to the correct staging directory, branch, draft, or channel context.
+4. **Context injection**: TA injects relevant follow-up context into the agent's CLAUDE.md — what was attempted, what failed, what the user or reviewer said. The agent picks up where it left off.
+
+When a specific target is known, shortcuts still work:
+- `ta run --follow-up --phase 4b` — resume work on plan phase 4b
+- `ta run --follow-up --draft <id>` — follow up on a specific draft (denied, failed verify, etc.)
+- `ta run --follow-up --goal <id>` — continue from a prior goal's staging
+
+#### VCS & Channel Agnosticism
+The follow-up resolver doesn't assume git. It works from TA's own state:
+- **Goals**: `GoalRun` records in `.ta/goals/` — each has staging path, status, plan phase
+- **Drafts**: `DraftPackage` records — status, denial reason, verification warnings
+- **Plan phases**: `PLAN.md` status markers — in_progress phases are follow-up candidates
+- **Channel context**: For non-filesystem workflows (email drafts, social media posts, DB migrations), the follow-up context comes from the draft's `PatchSet` and interaction log rather than a git branch
+
+#### Items
+1. [ ] `FollowUpCandidate` struct: `source` (goal/draft/phase/verify-failure), `title`, `status`, `age`, `staging_path`, `context_summary`
+2. [ ] `gather_follow_up_candidates()`: scan goals, drafts, plan phases; filter to actionable items; sort by recency
+3. [ ] Interactive picker in `ta run --follow-up` (no args): display candidates, accept selection
+4. [ ] `--follow-up --phase <id>` shortcut: resolve directly from plan phase
+5. [ ] `--follow-up --draft <id>` shortcut: resolve from draft (inject denial reason / verify failure as context)
+6. [ ] `--follow-up --goal <id>` shortcut: resolve from prior goal
+7. [ ] Context injection: build follow-up section for CLAUDE.md with prior attempt summary, failure output, reviewer feedback
+8. [ ] Shell TUI integration: fuzzy-searchable follow-up picker when running from `ta shell`
+9. [ ] Channel-agnostic resolution: follow-up works for non-git workflows using draft PatchSet and interaction logs
+
+#### Version: `0.10.9-alpha`
+
+---
+
 ### v0.11.0 — Event-Driven Agent Routing
 <!-- status: pending -->
 **Goal**: Allow any TA event to trigger an agent workflow instead of (or in addition to) a static response. This is intelligent, adaptive event handling — not scripted hooks or n8n-style flowcharts. An agent receives the event context and decides what to do.
