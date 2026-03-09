@@ -113,7 +113,7 @@ impl Default for CommandConfig {
                 "ta init *".to_string(),
                 "ta release run *".to_string(),
             ],
-            timeout_secs: 30,
+            timeout_secs: 120,
             long_running: vec![
                 "ta run *".to_string(),
                 "run *".to_string(),
@@ -515,7 +515,7 @@ mod tests {
         assert_eq!(config.server.bind, "127.0.0.1");
         assert!(!config.auth.require_token);
         assert!(config.auth.local_bypass);
-        assert_eq!(config.commands.timeout_secs, 30);
+        assert_eq!(config.commands.timeout_secs, 120);
         assert_eq!(config.agent.max_sessions, 3);
     }
 
