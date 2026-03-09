@@ -4812,10 +4812,31 @@ auto_approve_reads = true  # SELECT is fine, INSERT/UPDATE/DELETE needs review
 
 ---
 
+---
+
 ## Projects On Top (separate repos, built on TA)
 
 > These are NOT part of TA core. They are independent projects that consume TA's extension points.
 > See `docs/ADR-product-concept-model.md` for how they integrate.
+
+### TA Web UI *(separate project)*
+> Lightweight web frontend for non-engineers to use TA without the CLI.
+
+A browser-based interface to TA's daemon API, aimed at users who need to start goals, review drafts, and respond to agent questions without touching a terminal. Same capabilities as `ta shell` but with a guided, form-based experience.
+
+- **Thin client**: SPA consuming TA's existing HTTP API + SSE events. No new backend logic.
+- **Non-engineer language**: "Review changes", "Approve", "Ask the agent a question" — not "draft", "artifact", "overlay".
+- **Dashboard**: Active goals, pending reviews, pending agent questions. One-glance status.
+- **Start Goal**: Form with title, description, agent dropdown, optional file upload. Sensible defaults, optional advanced toggle.
+- **Goal Detail**: Live agent output via SSE, state transitions, conversation history (interactive mode Q&A).
+- **Draft Review**: Side-by-side diff viewer, file tree, AI summary. Approve/deny/comment buttons. Selective approval per file.
+- **Agent Questions**: Pending questions with response input. Browser push notifications.
+- **History**: Past goals/drafts, searchable, filterable.
+- **Tech stack**: React or Svelte SPA, served as static files by daemon (`GET /ui/*`). Auth via daemon API token or session login.
+- **Extensible**: Plugin mount points at `/ui/ext/<plugin-name>` for custom pages. Configurable theme/branding via `daemon.toml`.
+- **Mobile-friendly**: Responsive layout for on-the-go approvals from phone/tablet.
+
+**TA dependencies**: Daemon HTTP API (exists), SSE events (exists), interactive mode (v0.9.9.x), static file serving from daemon (minor addition to `ta-daemon`).
 
 ### Virtual Office Runtime *(separate project)*
 > Thin orchestration layer that composes TA, agent frameworks, and MCP servers.
