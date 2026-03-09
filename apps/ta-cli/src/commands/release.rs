@@ -1248,6 +1248,27 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    /// Initialize a git repo in a temp dir with user config (needed in CI).
+    fn git_init_with_commit(dir: &std::path::Path) {
+        let run = |args: &[&str]| {
+            let out = Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {} failed: {}",
+                args.join(" "),
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        run(&["init"]);
+        run(&["config", "user.email", "test@test.com"]);
+        run(&["config", "user.name", "Test"]);
+        run(&["commit", "--allow-empty", "-m", "init"]);
+    }
+
     #[test]
     fn parse_default_pipeline() {
         let pipeline: ReleasePipeline = serde_yaml::from_str(DEFAULT_PIPELINE_YAML).unwrap();
@@ -1445,17 +1466,7 @@ steps:
     #[test]
     fn dry_run_does_not_execute() {
         let temp = TempDir::new().unwrap();
-        // Initialize a git repo so commit collection doesn't fail.
-        Command::new("git")
-            .args(["init"])
-            .current_dir(temp.path())
-            .output()
-            .unwrap();
-        Command::new("git")
-            .args(["commit", "--allow-empty", "-m", "init"])
-            .current_dir(temp.path())
-            .output()
-            .unwrap();
+        git_init_with_commit(temp.path());
 
         let config = GatewayConfig::for_project(temp.path());
 
@@ -1644,17 +1655,7 @@ steps:
     #[test]
     fn validate_release_clean_repo() {
         let temp = TempDir::new().unwrap();
-        // Initialize a git repo with a commit so validation can run.
-        Command::new("git")
-            .args(["init"])
-            .current_dir(temp.path())
-            .output()
-            .unwrap();
-        Command::new("git")
-            .args(["commit", "--allow-empty", "-m", "init"])
-            .current_dir(temp.path())
-            .output()
-            .unwrap();
+        git_init_with_commit(temp.path());
 
         let config = GatewayConfig::for_project(temp.path());
         // Should pass validation for a clean repo with available tag.
@@ -1664,22 +1665,14 @@ steps:
     #[test]
     fn validate_release_existing_tag_fails() {
         let temp = TempDir::new().unwrap();
-        Command::new("git")
-            .args(["init"])
-            .current_dir(temp.path())
-            .output()
-            .unwrap();
-        Command::new("git")
-            .args(["commit", "--allow-empty", "-m", "init"])
-            .current_dir(temp.path())
-            .output()
-            .unwrap();
+        git_init_with_commit(temp.path());
         // Use the exact tag that normalize_version("1.0.0-alpha") produces: v1.0.0-alpha.
-        Command::new("git")
+        let out = Command::new("git")
             .args(["tag", "-a", "v1.0.0-alpha", "-m", "release"])
             .current_dir(temp.path())
             .output()
             .unwrap();
+        assert!(out.status.success(), "git tag failed");
 
         let config = GatewayConfig::for_project(temp.path());
         // Should fail: tag v1.0.0-alpha already exists (1.0.0 normalizes to 1.0.0-alpha).
@@ -1690,16 +1683,7 @@ steps:
     fn e2e_pipeline_no_manual_gates() {
         // End-to-end test: pipeline with all-shell steps, --yes skips approvals.
         let temp = TempDir::new().unwrap();
-        Command::new("git")
-            .args(["init"])
-            .current_dir(temp.path())
-            .output()
-            .unwrap();
-        Command::new("git")
-            .args(["commit", "--allow-empty", "-m", "init"])
-            .current_dir(temp.path())
-            .output()
-            .unwrap();
+        git_init_with_commit(temp.path());
 
         let config = GatewayConfig::for_project(temp.path());
 
@@ -1734,16 +1718,7 @@ steps:
     #[test]
     fn dry_run_validates_all_steps() {
         let temp = TempDir::new().unwrap();
-        Command::new("git")
-            .args(["init"])
-            .current_dir(temp.path())
-            .output()
-            .unwrap();
-        Command::new("git")
-            .args(["commit", "--allow-empty", "-m", "init"])
-            .current_dir(temp.path())
-            .output()
-            .unwrap();
+        git_init_with_commit(temp.path());
 
         let config = GatewayConfig::for_project(temp.path());
 
