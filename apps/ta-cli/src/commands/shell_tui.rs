@@ -610,6 +610,9 @@ async fn handle_terminal_event(
                             return;
                         }
 
+                        // Echo the user's input immediately so they know it was received.
+                        app.push_output(OutputLine::command(format!("> {}", text)));
+
                         // Send to daemon asynchronously.
                         let client = client.clone();
                         let base_url = app.base_url.clone();
