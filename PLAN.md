@@ -4598,6 +4598,37 @@ The follow-up resolver doesn't assume git. It works from TA's own state:
 
 ---
 
+### v0.10.10 — Daemon Version Guard
+<!-- status: pending -->
+**Goal**: `ta shell` (and other CLI commands that talk to the daemon) should detect when the running daemon is an older version than the CLI and offer to restart it — rather than silently connecting to a stale daemon.
+
+#### Problem
+After `./install_local.sh` rebuilds and installs new `ta` and `ta-daemon` binaries, the old daemon process keeps running. `ta shell` connects to it, shows the version in the status bar, but doesn't warn the user or offer to restart. The user has to notice the mismatch and manually restart. This is especially confusing after upgrades since new features may not work against the old daemon.
+
+#### Design
+1. The daemon already exposes its version via `GET /api/status` (or similar health endpoint). The CLI knows its own version from `env!("CARGO_PKG_VERSION")`.
+2. On connection, `ta shell` (and `ta run`, `ta dev`, etc.) compares CLI version to daemon version.
+3. **If mismatch**: Display a prominent warning and offer to restart:
+   ```
+   Daemon version mismatch: daemon v0.10.6-alpha, CLI v0.10.10-alpha
+   Restart daemon with the new version? [Y/n]
+   ```
+4. If the user accepts, the CLI stops the old daemon (`POST /api/shutdown` or signal), waits for exit, then spawns the new one.
+5. If the user declines, proceed with a warning in the status bar (e.g., `daemon (stale)`).
+
+#### Items
+1. [ ] `GET /api/status` response includes `daemon_version` field (add if not present)
+2. [ ] `check_daemon_version()` in CLI: compare `env!("CARGO_PKG_VERSION")` to daemon's reported version
+3. [ ] Wire into `ta shell` startup: check version before entering TUI loop, prompt if mismatch
+4. [ ] Wire into `ta run` / `ta dev`: same check before launching agent
+5. [ ] Restart flow: graceful shutdown → wait for exit → spawn new daemon
+6. [ ] `--no-version-check` flag to skip (for CI or scripted use)
+7. [ ] Status bar indicator: show `(stale)` if user declined restart
+
+#### Version: `0.10.10-alpha`
+
+---
+
 ### v0.11.0 — Event-Driven Agent Routing
 <!-- status: pending -->
 **Goal**: Allow any TA event to trigger an agent workflow instead of (or in addition to) a static response. This is intelligent, adaptive event handling — not scripted hooks or n8n-style flowcharts. An agent receives the event context and decides what to do.
