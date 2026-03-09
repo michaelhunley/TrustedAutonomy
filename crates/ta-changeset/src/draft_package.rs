@@ -465,6 +465,22 @@ pub struct DraftPackage {
     /// Tracks the review status (not in the JSON schema — internal state).
     #[serde(default)]
     pub status: DraftStatus,
+
+    /// Verification warnings from pre-draft verification gate (v0.10.8).
+    /// Populated when `[verify] on_failure = "warn"` and a command fails.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub verification_warnings: Vec<VerificationWarning>,
+}
+
+/// A warning from a pre-draft verification command failure (v0.10.8).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VerificationWarning {
+    /// The command that failed.
+    pub command: String,
+    /// The exit code (if available).
+    pub exit_code: Option<i32>,
+    /// Captured stderr/stdout output (truncated to 2000 chars).
+    pub output: String,
 }
 
 /// Execution plan included in the PR package.
@@ -624,6 +640,7 @@ mod tests {
                 gateway_attestation: None,
             },
             status: DraftStatus::Draft,
+            verification_warnings: vec![],
         }
     }
 

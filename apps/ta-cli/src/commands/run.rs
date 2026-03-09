@@ -232,6 +232,7 @@ pub fn execute(
     macro_goal: bool,
     resume: Option<&str>,
     headless: bool,
+    skip_verify: bool,
     existing_goal_id: Option<&str>,
 ) -> anyhow::Result<()> {
     // ── Resume an existing session ──────────────────────────────
@@ -611,6 +612,65 @@ pub fn execute(
         restore_mcp_server_config(&staging_path)?;
     }
 
+    // 6b. Pre-draft verification gate (v0.10.8).
+    //     Runs [verify] commands from workflow.toml before creating the draft.
+    let verification_warnings = if !skip_verify {
+        let workflow_toml = staging_path.join(".ta/workflow.toml");
+        let workflow_config = ta_submit::WorkflowConfig::load_or_default(&workflow_toml);
+
+        if !workflow_config.verify.commands.is_empty() {
+            let result = super::verify::run_verification(&workflow_config.verify, &staging_path);
+
+            if !result.passed {
+                match workflow_config.verify.on_failure {
+                    ta_submit::VerifyOnFailure::Block => {
+                        println!();
+                        println!("Verification failed — draft NOT created.");
+                        println!();
+                        for w in &result.warnings {
+                            println!("  FAIL: {}", w.command);
+                            if !w.output.is_empty() {
+                                for line in w.output.lines().take(5) {
+                                    println!("        {}", line);
+                                }
+                            }
+                        }
+                        println!();
+                        println!("To fix and retry:");
+                        println!("  ta run --follow-up     — re-enter the agent to fix issues");
+                        println!(
+                            "  ta verify {}  — re-run verification manually",
+                            &goal_id[..8]
+                        );
+                        println!();
+                        println!("To bypass verification:");
+                        println!("  ta run --skip-verify   — skip verification on next run");
+                        return Ok(());
+                    }
+                    ta_submit::VerifyOnFailure::Warn => {
+                        println!();
+                        println!("Verification failed — creating draft with warnings.");
+                        // Continue to draft build, passing warnings.
+                    }
+                    ta_submit::VerifyOnFailure::Agent => {
+                        println!();
+                        println!("Verification failed — agent re-launch not yet implemented.");
+                        println!("Falling back to block mode. Draft NOT created.");
+                        println!();
+                        println!("To fix: ta run --follow-up");
+                        return Ok(());
+                    }
+                }
+            }
+            result.warnings
+        } else {
+            Vec::new()
+        }
+    } else {
+        println!("  Skipping verification (--skip-verify).");
+        Vec::new()
+    };
+
     // 7. Build draft package from the diff.
     //    In macro sessions, the agent may have already submitted/applied drafts
     //    via MCP tools, transitioning the goal out of Running state. Only build
@@ -627,6 +687,19 @@ pub fn execute(
             },
             config,
         )?;
+
+        // 7a. If there are verification warnings (warn mode), attach them to the draft.
+        if !verification_warnings.is_empty() {
+            if let Some(draft_id) = find_latest_draft_id(config, &goal_id) {
+                if let Ok(draft_uuid) = uuid::Uuid::parse_str(&draft_id) {
+                    if let Ok(mut pkg) = super::draft::load_package(config, draft_uuid) {
+                        pkg.verification_warnings = verification_warnings;
+                        let _ = super::draft::save_package(config, &pkg);
+                    }
+                }
+            }
+        }
+
         true
     } else {
         println!(
@@ -1936,6 +2009,7 @@ mod tests {
             false,
             None,
             false, // not headless
+            false, // skip_verify = false
             None,  // no existing goal id
         )
         .unwrap();
@@ -2439,6 +2513,7 @@ pre_launch:
                 gateway_attestation: None,
             },
             status: DraftStatus::PendingReview,
+            verification_warnings: vec![],
         };
 
         // Save the draft package.
@@ -2589,6 +2664,7 @@ pre_launch:
                 gateway_attestation: None,
             },
             status: DraftStatus::PendingReview,
+            verification_warnings: vec![],
         };
 
         super::super::draft::save_package(&config, &parent_draft).unwrap();

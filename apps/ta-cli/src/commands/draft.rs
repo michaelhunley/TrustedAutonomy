@@ -955,6 +955,7 @@ pub(crate) fn build_package(
             gateway_attestation: None,
         },
         status: DraftStatus::PendingReview,
+        verification_warnings: vec![],
     };
 
     // Handle PR supersession for follow-up goals.
@@ -1324,6 +1325,36 @@ fn view_package(
     let output = adapter.render(&ctx).map_err(|e| anyhow::anyhow!("{}", e))?;
 
     println!("{}", output);
+
+    // Show verification warnings if any (v0.10.8).
+    if !pkg.verification_warnings.is_empty() {
+        println!();
+        println!(
+            "VERIFICATION WARNINGS ({}):",
+            pkg.verification_warnings.len()
+        );
+        println!("{}", "=".repeat(60));
+        println!("These commands failed during pre-draft verification.");
+        println!("The draft was created with on_failure = \"warn\".");
+        println!();
+        for (i, w) in pkg.verification_warnings.iter().enumerate() {
+            println!(
+                "  {}. FAIL: {} (exit code: {})",
+                i + 1,
+                w.command,
+                w.exit_code.map_or("N/A".to_string(), |c| c.to_string())
+            );
+            if !w.output.is_empty() && effective_detail != DetailLevel::Top {
+                for line in w.output.lines().take(10) {
+                    println!("     {}", line);
+                }
+                let line_count = w.output.lines().count();
+                if line_count > 10 {
+                    println!("     ... ({} more lines)", line_count - 10);
+                }
+            }
+        }
+    }
 
     // Show pending actions if any (v0.5.1).
     if !pkg.changes.pending_actions.is_empty() {
@@ -2495,6 +2526,7 @@ fn fix_package(
         false, // not macro
         None,  // not resuming
         false, // not headless
+        false, // skip_verify = false
         None,  // no existing goal id
     )?;
 

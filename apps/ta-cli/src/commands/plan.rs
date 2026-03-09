@@ -1305,6 +1305,7 @@ fn plan_from(
         false, // macro_goal = false
         None,  // resume = None
         false, // headless = false
+        false, // skip_verify = false
         None,  // existing_goal_id = None
     )
 }

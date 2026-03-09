@@ -302,6 +302,7 @@ mod tests {
                 gateway_attestation: None,
             },
             status: DraftStatus::Draft,
+            verification_warnings: vec![],
         };
         pkg.status = DraftStatus::PendingReview;
 
