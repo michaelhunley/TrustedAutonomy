@@ -325,6 +325,27 @@ pub(crate) async fn send_input(
         return Err(anyhow::anyhow!("HTTP {}", status_code));
     }
 
+    // Check for disambiguation responses (ambiguous command parse).
+    if json["ambiguous"].as_bool() == Some(true) {
+        let mut output = String::new();
+        if let Some(msg) = json["message"].as_str() {
+            output.push_str(msg);
+            output.push('\n');
+        }
+        if let Some(options) = json["options"].as_array() {
+            for opt in options {
+                let idx = opt["index"].as_u64().unwrap_or(0);
+                let desc = opt["description"].as_str().unwrap_or("?");
+                let cmd = opt["command"].as_str().unwrap_or("?");
+                output.push_str(&format!("  {}> {}\n", idx, desc));
+                output.push_str(&format!("     command: {}\n", cmd));
+            }
+        }
+        output.push_str("\nRe-run with the exact command, or quote the title:\n");
+        output.push_str("  run \"your multi-word title here\" --flag value\n");
+        return Ok(output);
+    }
+
     // For command results, prefer stdout; for agent results, prefer response.
     if let Some(stdout) = json["stdout"].as_str() {
         let mut output = stdout.to_string();
@@ -372,8 +393,45 @@ pub(crate) async fn fetch_completions(client: &reqwest::Client, base_url: &str) 
 
 fn default_completions() -> Vec<String> {
     vec![
-        "approve", "deny", "view", "apply", "status", "plan", "goals", "drafts", "workflow",
-        "exit", "quit", "help", ":status", ":help",
+        // Shortcuts
+        "approve",
+        "deny",
+        "view",
+        "apply",
+        "goals",
+        "drafts",
+        // ta subcommands (bare word → `ta <word>`)
+        "goal",
+        "draft",
+        "audit",
+        "run",
+        "session",
+        "plan",
+        "context",
+        "credentials",
+        "events",
+        "token",
+        "dev",
+        "setup",
+        "init",
+        "agent",
+        "adapter",
+        "release",
+        "office",
+        "plugin",
+        "workflow",
+        "policy",
+        "config",
+        "gc",
+        "status",
+        "conversation",
+        // Shell built-ins
+        "exit",
+        "quit",
+        "help",
+        ":status",
+        ":help",
+        ":tail",
     ]
     .into_iter()
     .map(String::from)
@@ -746,6 +804,20 @@ pub(crate) fn render_sse_event(frame: &str) -> Option<String> {
             let turn = payload["turn"].as_u64().unwrap_or(1);
             let responder = payload["responder_id"].as_str().unwrap_or("?");
             format!("agent question answered (turn {}, by {})", turn, responder)
+        }
+        "command_failed" => {
+            let cmd = payload["command"].as_str().unwrap_or("?");
+            let code = payload["exit_code"].as_i64().unwrap_or(-1);
+            let stderr = payload["stderr"].as_str().unwrap_or("");
+            let mut msg = format!("command failed (exit {}): {}", code, cmd);
+            if !stderr.is_empty() {
+                // Show last 3 lines of stderr inline.
+                let tail: Vec<&str> = stderr.lines().rev().take(3).collect();
+                for line in tail.iter().rev() {
+                    msg.push_str(&format!("\n  {}", line));
+                }
+            }
+            msg
         }
         _ => {
             // Fallback: use summary field or event type.

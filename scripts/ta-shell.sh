@@ -30,6 +30,7 @@ DAEMON_URL="http://${BIND}:${PORT}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="${SCRIPT_DIR}/.."
 DEV_SCRIPT="${REPO_ROOT}/dev"
+DAEMON_LOG="${REPO_ROOT}/.ta/daemon.log"
 
 # ── Build ─────────────────────────────────────────────────────
 if [[ "$SKIP_BUILD" == false ]]; then
@@ -119,7 +120,8 @@ if daemon_healthy; then
     fi
 
     echo "Starting daemon at ${DAEMON_URL} ..."
-    "$DAEMON_BIN" --api --project-root "$PROJECT_ROOT" &
+    mkdir -p "$(dirname "$DAEMON_LOG")"
+    "$DAEMON_BIN" --api --project-root "$PROJECT_ROOT" >> "$DAEMON_LOG" 2>&1 &
     DAEMON_PID=$!
 
     for i in $(seq 1 20); do
@@ -145,7 +147,8 @@ if daemon_healthy; then
   fi
 else
   echo "Starting daemon at ${DAEMON_URL} ..."
-  "$DAEMON_BIN" --api --project-root "$PROJECT_ROOT" &
+  mkdir -p "$(dirname "$DAEMON_LOG")"
+  "$DAEMON_BIN" --api --project-root "$PROJECT_ROOT" >> "$DAEMON_LOG" 2>&1 &
   DAEMON_PID=$!
 
   # Wait up to 10 seconds for the daemon to become healthy.
@@ -170,4 +173,5 @@ else
 fi
 
 # ── Launch the shell ─────────────────────────────────────────
+echo "Daemon log: ${DAEMON_LOG}"
 exec "$TA_BIN" shell --url "$DAEMON_URL" "${SHELL_ARGS[@]}"

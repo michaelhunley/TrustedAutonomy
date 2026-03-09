@@ -146,6 +146,14 @@ pub fn route_input(text: &str, config: &ShellConfig) -> RouteDecision {
         }
     }
 
+    // Check if the first word is a known `ta` subcommand.
+    // This lets users type `run ...` instead of `ta run ...`.
+    if let Some(first_word) = text.split_whitespace().next() {
+        if config.ta_subcommands.iter().any(|s| s == first_word) {
+            return RouteDecision::Command(format!("ta {}", text));
+        }
+    }
+
     // No route matched — send to agent.
     RouteDecision::Agent(text.to_string())
 }
@@ -201,17 +209,6 @@ mod tests {
     }
 
     #[test]
-    fn route_to_agent() {
-        let config = default_config();
-        match route_input("What should we work on next?", &config) {
-            RouteDecision::Agent(prompt) => {
-                assert_eq!(prompt, "What should we work on next?");
-            }
-            _ => panic!("expected Agent"),
-        }
-    }
-
-    #[test]
     fn shortcut_expansion() {
         let config = default_config();
         match route_input("approve abc123", &config) {
@@ -253,6 +250,48 @@ mod tests {
         match route_input("release", &config) {
             RouteDecision::Command(cmd) => assert_eq!(cmd, "ta release run"),
             _ => panic!("expected Command from release shortcut"),
+        }
+    }
+
+    #[test]
+    fn bare_subcommand_routes_to_ta() {
+        let config = default_config();
+        // `run` is a ta subcommand — should auto-prefix with `ta `.
+        match route_input("run v0.10.7 — Documentation Review", &config) {
+            RouteDecision::Command(cmd) => {
+                assert_eq!(cmd, "ta run v0.10.7 — Documentation Review")
+            }
+            _ => panic!("expected Command from subcommand match"),
+        }
+    }
+
+    #[test]
+    fn bare_subcommand_dev() {
+        let config = default_config();
+        match route_input("dev", &config) {
+            RouteDecision::Command(cmd) => assert_eq!(cmd, "ta dev"),
+            _ => panic!("expected Command from subcommand match"),
+        }
+    }
+
+    #[test]
+    fn bare_subcommand_goal_with_args() {
+        let config = default_config();
+        match route_input("goal list", &config) {
+            RouteDecision::Command(cmd) => assert_eq!(cmd, "ta goal list"),
+            _ => panic!("expected Command from subcommand match"),
+        }
+    }
+
+    #[test]
+    fn unknown_word_routes_to_agent() {
+        let config = default_config();
+        // Not a subcommand — should go to agent.
+        match route_input("What should we work on next?", &config) {
+            RouteDecision::Agent(prompt) => {
+                assert_eq!(prompt, "What should we work on next?");
+            }
+            _ => panic!("expected Agent"),
         }
     }
 }
