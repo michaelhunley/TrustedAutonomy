@@ -4412,6 +4412,7 @@ ta workflow publish deploy-pipeline --bump minor
 8. [ ] Press release template configuration (`ta release config set press_release_template`)
 9. [ ] `ta workflow publish` command for authoring and publishing to registry
 10. [ ] Documentation: authoring guide for workflow/agent packages
+11. [ ] **Multi-language plugin builds**: Add `build_command` field to `channel.toml` so `ta plugin build` works with non-Rust plugins (Python, Go, Node). Rust plugins default to `cargo build --release`; others specify their own build step (e.g., `go build -o ta-channel-teams .`, `pip install -e .`). Extend v0.10.2.2's build runner to read and execute `build_command`.
 
 #### Version: `0.10.5-alpha`
 
