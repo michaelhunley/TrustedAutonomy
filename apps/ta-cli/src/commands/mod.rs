@@ -28,4 +28,5 @@ pub mod shell_tui;
 pub mod status;
 pub mod terms;
 pub mod token;
+pub mod verify;
 pub mod workflow;

@@ -1,6 +1,6 @@
 # Trusted Autonomy -- User Guide
 
-**Version**: v0.10.7-alpha
+**Version**: v0.10.8-alpha
 
 Trusted Autonomy (TA) is a governance wrapper for AI agents. It lets any agent work freely in an isolated workspace, then holds the proposed changes at a human review checkpoint before anything takes effect. You see what the agent wants to do, approve or reject each change, and maintain a complete audit trail.
 
@@ -425,6 +425,40 @@ When the parent goal's staging directory still exists, TA prompts to reuse it. C
 default_mode = "extend"       # "extend" (reuse staging) or "standalone" (fresh copy)
 auto_supersede = true          # auto-supersede parent draft when extending
 ```
+
+### Pre-Draft Verification
+
+Run build/lint/test checks automatically after the agent exits but before the draft is created. If any check fails, the draft is blocked — no broken code reaches review.
+
+```toml
+# .ta/workflow.toml
+[verify]
+commands = [
+    "cargo build --workspace",
+    "cargo test --workspace",
+    "cargo clippy --workspace --all-targets -- -D warnings",
+    "cargo fmt --all -- --check",
+]
+on_failure = "block"   # "block" (no draft), "warn" (draft with warnings)
+timeout = 300          # seconds per command
+```
+
+When a command fails in block mode, TA prints the failed command and output, then suggests next steps:
+
+```bash
+# Re-enter the agent to fix issues
+ta run --follow-up
+
+# Re-run verification manually
+ta verify <goal-id-prefix>
+
+# Skip verification (use sparingly)
+ta run --skip-verify
+```
+
+In warn mode (`on_failure = "warn"`), the draft is created but carries verification warnings visible in `ta draft view`.
+
+`ta init` generates a pre-populated `[verify]` section for Rust projects. Other project types get commented-out examples.
 
 ### Macro Goals (multi-draft sessions)
 
@@ -3922,6 +3956,7 @@ TA has a working end-to-end workflow: staging isolation, agent wrapping, draft r
 | v0.10.5 | External workflow & agent definitions | Done |
 | v0.10.6 | Release process hardening & interactive release flow | Done |
 | v0.10.7 | Documentation review & consolidation | Done |
+| v0.10.8 | Pre-draft verification gate | Done |
 
 See [PLAN.md](../PLAN.md) for full details on each phase.
 

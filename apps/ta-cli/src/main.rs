@@ -106,6 +106,9 @@ enum Commands {
         /// No PTY, pipes stdout, returns draft ID on completion.
         #[arg(long)]
         headless: bool,
+        /// Skip pre-draft verification checks (from [verify] in workflow.toml).
+        #[arg(long)]
+        skip_verify: bool,
         /// Reuse an existing goal record instead of creating a new one.
         /// Used by the MCP orchestrator to avoid duplicate goal creation
         /// when `ta_goal_start` has already created the goal.
@@ -242,6 +245,15 @@ enum Commands {
     ViewTerms,
     /// Show terms acceptance status.
     TermsStatus,
+    /// Run pre-draft verification checks against a staging workspace.
+    ///
+    /// Runs the [verify] commands from .ta/workflow.toml in the staging
+    /// directory. Useful for manual verification without running `ta run`.
+    Verify {
+        /// Goal ID (or prefix) whose staging directory to verify.
+        /// Defaults to the most recent active goal.
+        goal_id: Option<String>,
+    },
     /// View the interactive conversation history for a goal.
     Conversation {
         /// Goal run ID (or prefix).
@@ -381,6 +393,7 @@ fn main() -> anyhow::Result<()> {
             macro_goal,
             resume,
             headless,
+            skip_verify,
             goal_id,
         } => {
             // Phase-aware title resolution: if the positional title looks like
@@ -401,6 +414,7 @@ fn main() -> anyhow::Result<()> {
                 *macro_goal,
                 resume.as_deref(),
                 *headless,
+                *skip_verify,
                 goal_id.as_deref(),
             )
         }
@@ -447,6 +461,7 @@ fn main() -> anyhow::Result<()> {
         } => commands::gc::execute(&config, *dry_run, *threshold_days, *all, *archive),
         Commands::Status => commands::status::execute(&config),
         Commands::Serve => commands::serve::execute(&project_root),
+        Commands::Verify { goal_id } => commands::verify::execute(&config, goal_id.as_deref()),
         Commands::Conversation { goal_id, json } => {
             commands::conversation::execute(&config, goal_id, *json)
         }

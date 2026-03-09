@@ -14,7 +14,9 @@ pub mod registry;
 pub mod svn;
 
 pub use adapter::{CommitResult, PushResult, ReviewResult, SavedVcsState, SubmitAdapter};
-pub use config::{BuildConfig, DiffConfig, GitConfig, SubmitConfig, WorkflowConfig};
+pub use config::{
+    BuildConfig, DiffConfig, GitConfig, SubmitConfig, VerifyConfig, VerifyOnFailure, WorkflowConfig,
+};
 pub use git::GitAdapter;
 pub use none::NoneAdapter;
 pub use perforce::PerforceAdapter;

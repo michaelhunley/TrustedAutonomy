@@ -29,6 +29,10 @@ pub struct WorkflowConfig {
     /// Follow-up goal behavior configuration
     #[serde(default)]
     pub follow_up: FollowUpConfig,
+
+    /// Pre-draft verification gate configuration
+    #[serde(default)]
+    pub verify: VerifyConfig,
 }
 
 /// Submit adapter configuration
@@ -261,6 +265,62 @@ fn default_health_check() -> bool {
     true
 }
 
+/// Failure handling strategy for verification commands.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum VerifyOnFailure {
+    /// Do not create a draft. Print which command failed with output.
+    #[default]
+    Block,
+    /// Create the draft but attach verification warnings visible in `ta draft view`.
+    Warn,
+    /// Re-launch the agent with the failure output injected as context.
+    Agent,
+}
+
+impl std::fmt::Display for VerifyOnFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Block => write!(f, "block"),
+            Self::Warn => write!(f, "warn"),
+            Self::Agent => write!(f, "agent"),
+        }
+    }
+}
+
+/// Pre-draft verification gate configuration.
+///
+/// Commands run in the staging directory after the agent exits but before
+/// the draft is created. If any command fails, behavior depends on `on_failure`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VerifyConfig {
+    /// Commands to run sequentially. All must exit 0 for verification to pass.
+    #[serde(default)]
+    pub commands: Vec<String>,
+
+    /// Behavior when a command fails: "block" (default), "warn", or "agent".
+    #[serde(default)]
+    pub on_failure: VerifyOnFailure,
+
+    /// Timeout per command in seconds. Default: 300 (5 minutes).
+    #[serde(default = "default_verify_timeout")]
+    pub timeout: u64,
+}
+
+impl Default for VerifyConfig {
+    fn default() -> Self {
+        Self {
+            commands: Vec::new(),
+            on_failure: VerifyOnFailure::default(),
+            timeout: default_verify_timeout(),
+        }
+    }
+}
+
+fn default_verify_timeout() -> u64 {
+    300
+}
+
 impl WorkflowConfig {
     /// Load workflow config from .ta/workflow.toml
     pub fn load(path: &std::path::Path) -> Result<Self, Box<dyn std::error::Error>> {
@@ -372,5 +432,69 @@ rebase_on_apply = false
         assert_eq!(config.follow_up.default_mode, "standalone");
         assert!(!config.follow_up.auto_supersede);
         assert!(!config.follow_up.rebase_on_apply);
+    }
+
+    #[test]
+    fn verify_config_defaults() {
+        let config = VerifyConfig::default();
+        assert!(config.commands.is_empty());
+        assert_eq!(config.on_failure, VerifyOnFailure::Block);
+        assert_eq!(config.timeout, 300);
+    }
+
+    #[test]
+    fn workflow_config_default_has_verify_section() {
+        let config = WorkflowConfig::default();
+        assert!(config.verify.commands.is_empty());
+        assert_eq!(config.verify.on_failure, VerifyOnFailure::Block);
+        assert_eq!(config.verify.timeout, 300);
+    }
+
+    #[test]
+    fn parse_toml_with_verify_section() {
+        let toml = r#"
+[verify]
+commands = [
+    "cargo build --workspace",
+    "cargo test --workspace",
+]
+on_failure = "warn"
+timeout = 600
+"#;
+        let config: WorkflowConfig = toml::from_str(toml).unwrap();
+        assert_eq!(config.verify.commands.len(), 2);
+        assert_eq!(config.verify.commands[0], "cargo build --workspace");
+        assert_eq!(config.verify.on_failure, VerifyOnFailure::Warn);
+        assert_eq!(config.verify.timeout, 600);
+    }
+
+    #[test]
+    fn parse_toml_with_verify_agent_mode() {
+        let toml = r#"
+[verify]
+commands = ["make test"]
+on_failure = "agent"
+"#;
+        let config: WorkflowConfig = toml::from_str(toml).unwrap();
+        assert_eq!(config.verify.on_failure, VerifyOnFailure::Agent);
+        assert_eq!(config.verify.timeout, 300); // default
+    }
+
+    #[test]
+    fn parse_toml_without_verify_section_uses_default() {
+        let toml = r#"
+[submit]
+adapter = "git"
+"#;
+        let config: WorkflowConfig = toml::from_str(toml).unwrap();
+        assert!(config.verify.commands.is_empty());
+        assert_eq!(config.verify.on_failure, VerifyOnFailure::Block);
+    }
+
+    #[test]
+    fn verify_on_failure_display() {
+        assert_eq!(VerifyOnFailure::Block.to_string(), "block");
+        assert_eq!(VerifyOnFailure::Warn.to_string(), "warn");
+        assert_eq!(VerifyOnFailure::Agent.to_string(), "agent");
     }
 }

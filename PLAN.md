@@ -2551,16 +2551,23 @@ timeout = 300
 5. **Any fail** (`on_failure = "warn"`): Draft is created with a verification warning visible in `ta draft view`
 6. **Any fail** (`on_failure = "agent"`): Re-launch the agent with the failure output injected as context (uses interactive mode if available)
 
-#### Items
-1. [ ] `VerifyConfig` struct in `crates/ta-submit/src/config.rs`: `commands`, `on_failure`, `timeout`
-2. [ ] `run_verification()` in `apps/ta-cli/src/commands/run.rs`: execute commands in staging dir after agent exit
-3. [ ] Wire into `ta run` flow: after agent exit, before `ta draft build`
-4. [ ] Block mode: abort draft creation on failure, print actionable error with failed command output
-5. [ ] Warn mode: create draft with `verification_warnings` field, show in `ta draft view`
-6. [ ] Agent mode: re-launch agent with failure context (depends on interactive mode v0.9.9.x)
-7. [ ] `--skip-verify` flag on `ta run` to bypass when needed
-8. [ ] Default `[verify]` section in `ta init` template with commented-out examples
-9. [ ] `ta verify` standalone command: run verification manually against current staging
+#### Completed
+1. ✅ `VerifyConfig` struct in `crates/ta-submit/src/config.rs`: `commands`, `on_failure` (enum: Block/Warn/Agent), `timeout` with serde defaults
+2. ✅ `run_verification()` in `apps/ta-cli/src/commands/verify.rs`: runs commands sequentially with per-command timeout, captures output, returns `VerificationResult`
+3. ✅ Wire into `ta run` flow: verification runs after agent exit + file restoration, before `ta draft build`
+4. ✅ Block mode: aborts draft creation on failure, prints failed commands with output, suggests `ta run --follow-up` and `ta verify`
+5. ✅ Warn mode: creates draft with `verification_warnings` field on `DraftPackage`, displayed in `ta draft view` with command, exit code, and output
+6. ✅ Agent mode: stub implemented (falls back to block with message that re-launch is not yet implemented)
+7. ✅ `--skip-verify` flag on `ta run` to bypass verification
+8. ✅ Default `[verify]` section in `ta init` template: Rust projects get pre-populated commands; others get commented-out examples
+9. ✅ `ta verify` standalone command: resolves goal by ID/prefix or most recent active goal, loads `[verify]` from staging's workflow.toml, runs verification, exits with code 1 on failure
+
+#### Remaining
+- Agent mode full implementation (re-launch with failure context injection) deferred — depends on interactive mode maturity
+
+#### Tests
+- 7 new config tests: defaults, TOML parsing for all modes, display formatting
+- 5 new verification tests: empty commands pass, passing/failing commands, mixed commands, output capture, timeout handling
 
 #### Version: `0.10.8-alpha`
 

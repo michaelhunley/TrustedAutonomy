@@ -105,6 +105,7 @@ mod tests {
                 gateway_attestation: None,
             },
             status: PRStatus::Draft,
+            verification_warnings: vec![],
         };
 
         let adapter = JsonAdapter::new();
