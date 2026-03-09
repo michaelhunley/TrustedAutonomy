@@ -4695,6 +4695,123 @@ See `docs/MISSION-AND-SCOPE.md` for the full design.
 
 ---
 
+### v0.11.3 — Reflink/COW Overlay Optimization
+<!-- status: pending -->
+**Goal**: Replace full-copy staging with copy-on-write to eliminate filesystem bloat. Detect APFS/Btrfs and use native reflinks; fall back to FUSE overlay on unsupported filesystems.
+
+#### Items
+
+1. [ ] Detect filesystem type (APFS, Btrfs, ext4, etc.) at staging creation time
+2. [ ] APFS: use `cp -c` (reflink) for instant zero-cost copies on macOS
+3. [ ] Btrfs: use `cp --reflink=always` on Linux
+4. [ ] Fallback: full copy on unsupported filesystems (current behavior)
+5. [ ] Optional FUSE overlay for cross-platform COW on filesystems without reflink support
+6. [ ] Benchmark: measure staging creation time and disk usage before/after
+7. [ ] Update OverlayWorkspace to detect and select strategy automatically
+
+#### Version: `0.11.3-alpha`
+
+---
+
+### v0.11.4 — MCP Transport Abstraction (TCP/Unix Socket)
+<!-- status: pending -->
+**Goal**: Abstract MCP transport so agents can communicate with TA over TCP or Unix sockets, not just stdio pipes. Critical enabler for container-based isolation (SecureTA) and remote agent execution.
+
+#### Items
+
+1. [ ] `TransportLayer` trait: `Stdio`, `UnixSocket`, `Tcp` variants
+2. [ ] TCP transport: MCP server listens on configurable port, agent connects over network
+3. [ ] Unix socket transport: MCP server creates socket file, agent connects locally (faster than TCP, works across container boundaries via mount)
+4. [ ] Transport selection in agent config: `transport = "stdio" | "unix" | "tcp"`
+5. [ ] TLS support for TCP transport (optional, for remote agents)
+6. [ ] Connection authentication: bearer token exchange on connect
+7. [ ] Update `ta run` to configure transport based on runtime adapter
+
+#### Version: `0.11.4-alpha`
+
+---
+
+### v0.11.5 — Runtime Adapter Trait
+<!-- status: pending -->
+**Goal**: Abstract how TA spawns and manages agent processes. Today it's hardcoded as a bare child process. A `RuntimeAdapter` trait enables container, VM, and remote execution backends — TA provides BareProcess, SecureTA provides OCI/VM.
+
+#### Items
+
+1. [ ] `RuntimeAdapter` trait with `spawn()`, `stop()`, `status()`, `attach_transport()` methods
+2. [ ] `BareProcessRuntime`: extract current process spawning into this adapter (no behavior change)
+3. [ ] Runtime selection in agent/workflow config: `runtime = "process" | "oci" | "vm"`
+4. [ ] Plugin-based runtime loading: SecureTA registers OCI/VM runtimes as plugins
+5. [ ] Runtime lifecycle events: `AgentSpawned`, `AgentExited`, `RuntimeError` fed into event system
+6. [ ] Credential injection API: `RuntimeAdapter::inject_credentials()` for scoped secret injection into runtime environment
+
+#### Version: `0.11.5-alpha`
+
+---
+
+### v0.11.6 — External Action Governance Framework
+<!-- status: pending -->
+**Goal**: Provide the governance framework for agents performing external actions — sending emails, posting on social media, making API calls, executing financial transactions. TA doesn't implement the actions; it provides the policy, approval, capture, and audit layer so projects like SecureTA or custom workflows can govern them.
+
+**Design**:
+- `ExternalAction` trait: defines an action type (email, social post, API call, DB query) with metadata schema
+- `ActionPolicy`: per-action-type rules — auto-approve, require human approval, block, rate-limit
+- `ActionCapture`: every attempted external action is logged with full payload before execution
+- `ActionReview`: captured actions go through the same draft review flow (approve/deny/modify before send)
+- Plugins register action types; TA provides the governance pipeline
+
+#### Items
+
+1. [ ] `ExternalAction` trait: `action_type()`, `payload_schema()`, `validate()`, `execute()` — plugins implement this
+2. [ ] `ActionPolicy` config in `.ta/workflow.toml`: per-action-type rules (auto, review, block, rate-limit)
+3. [ ] `ActionCapture` log: every attempted action logged with full payload, timestamp, goal context
+4. [ ] Review flow integration: captured actions surface in `ta draft view` as "pending external actions" alongside file changes
+5. [ ] MCP tool `ta_external_action`: agent calls this to request an external action; TA applies policy before execution
+6. [ ] Rate limiting: configurable per-action-type limits (e.g., max 5 emails per goal, max 1 social post per hour)
+7. [ ] Dry-run mode: capture and log actions without executing, for testing workflows
+8. [ ] Built-in action type stubs: `email`, `social_post`, `api_call`, `db_query` — schema only, no implementation (plugins provide the actual send/post/call logic)
+
+**Config example**:
+```toml
+[actions.email]
+policy = "review"          # require human approval before sending
+rate_limit = 10            # max 10 per goal
+
+[actions.social_post]
+policy = "review"
+rate_limit = 1
+
+[actions.api_call]
+policy = "auto"            # auto-approve known API calls
+allowed_domains = ["api.stripe.com", "api.github.com"]
+
+[actions.db_query]
+policy = "review"          # review all DB mutations
+auto_approve_reads = true  # SELECT is fine, INSERT/UPDATE/DELETE needs review
+```
+
+#### Version: `0.11.6-alpha`
+
+---
+
+### v0.11.7 — Database Proxy Plugins
+<!-- status: pending -->
+**Goal**: Plugin-based database proxies that intercept agent DB operations. The agent connects to a local proxy thinking it's a real database; TA captures every query, enforces read/write policies, and logs mutations for review. Plugins provide wire protocol implementations; TA provides the governance framework (v0.11.6).
+
+#### Items
+
+1. [ ] `DbProxyPlugin` trait extending `ExternalAction`: `wire_protocol()`, `parse_query()`, `classify_mutation()`, `proxy_port()`
+2. [ ] Proxy lifecycle: TA starts proxy before agent, stops after agent exits
+3. [ ] Query classification: READ vs WRITE vs DDL vs ADMIN — policy applied per class
+4. [ ] Mutation capture: all write operations logged with full query + parameters in draft audit trail
+5. [ ] Replay support: captured mutations can replay against real DB on `ta draft apply`
+6. [ ] Reference plugin: `ta-db-proxy-sqlite` — SQLite VFS shim, simplest implementation
+7. [ ] Reference plugin: `ta-db-proxy-postgres` — Postgres wire protocol proxy
+8. [ ] Future plugins (community): MySQL, MongoDB, Redis
+
+#### Version: `0.11.7-alpha`
+
+---
+
 ## Projects On Top (separate repos, built on TA)
 
 > These are NOT part of TA core. They are independent projects that consume TA's extension points.
