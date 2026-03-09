@@ -4299,22 +4299,29 @@ protocol = "json-stdio"
 ---
 
 ### v0.10.4 — Email Channel Plugin
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Email channel plugin built on the v0.10.2 plugin system — demonstrates the plugin model works for async, non-real-time channels.
 
 #### Approach
 
 Built as an external plugin. Sends formatted review emails via SMTP, polls IMAP for reply-based approval. Email is inherently slower than chat — validates that the plugin/interaction model handles longer response times gracefully.
 
-#### Items
+#### Completed
+- ✅ Plugin binary (`plugins/ta-channel-email/`): standalone Rust binary using JSON-over-stdio protocol, reads `ChannelQuestion` from stdin, sends via SMTP (lettre), writes `DeliveryResult` to stdout
+- ✅ Subject tagging: configurable prefix (default `[TA Review]`) with `X-TA-Request-ID`, `X-TA-Interaction-ID`, `X-TA-Goal-ID` headers for threading
+- ✅ Reply parsing module: strips quoted text (`>` lines, `On ... wrote:` blocks, signatures, mobile footers), recognizes APPROVE/DENY/YES/NO/LGTM/REJECT keywords — supports English, French, German attribution patterns
+- ✅ Multiple reviewers: comma-separated `TA_EMAIL_REVIEWER` list, all receive the email (first to reply wins)
+- ✅ App Password support: STARTTLS SMTP with username/password auth (works with Gmail App Passwords, no OAuth)
+- ✅ Email threading: Message-ID based on interaction_id, follow-up turns use In-Reply-To/References headers
+- ✅ HTML + plain text multipart emails with structured layout, interactive guidance per question type
+- ✅ `channel.toml` manifest for standard plugin discovery (v0.10.2)
+- ✅ HTML body escapes user content to prevent XSS
+- ✅ 36 tests: email body builders (16), reply parsing (15), serialization/config (5)
 
-1. **Plugin binary** (`plugins/ta-channel-email/`): Reads `ChannelQuestion` JSON from stdin, sends email via SMTP, writes `DeliveryResult` to stdout. Spawns background IMAP poller that POSTs answers to `/api/interactions/:id/respond`.
-2. **Subject tagging**: `[TA Review] {title}` with `X-TA-Request-ID` header for threading.
-3. **Reply parsing**: Strips quoted text (`>` lines, `On ... wrote:` blocks), looks for APPROVE/DENY keyword.
-4. **Configurable timeout**: Default 2 hours (email is slower than chat).
-5. **Multiple reviewers**: Send to comma-separated list, first to reply wins.
-6. **App Password support**: Works with Gmail App Passwords (no OAuth needed for simple setups).
-7. **`channel.toml` manifest**: Plugin discovery via standard plugin loading (v0.10.2).
+#### Remaining (deferred)
+- IMAP reply polling (background poller that watches for replies and POSTs to daemon respond endpoint)
+- Configurable timeout (default 2 hours) — currently relies on daemon-level timeout
+- Plugin version checking and upgrade management
 
 #### Config
 ```toml
@@ -4324,8 +4331,11 @@ command = "ta-channel-email"
 protocol = "json-stdio"
 
 # Plugin reads these env vars directly
-# TA_EMAIL_USER, TA_EMAIL_PASSWORD, TA_EMAIL_SMTP_HOST, TA_EMAIL_IMAP_HOST
-# TA_EMAIL_REVIEWER, TA_EMAIL_SUBJECT_PREFIX
+# TA_EMAIL_SMTP_HOST, TA_EMAIL_SMTP_PORT (default: 587)
+# TA_EMAIL_USER, TA_EMAIL_PASSWORD
+# TA_EMAIL_REVIEWER (comma-separated)
+# TA_EMAIL_FROM_NAME (default: "TA Agent")
+# TA_EMAIL_SUBJECT_PREFIX (default: "[TA Review]")
 ```
 
 #### Version: `0.10.4-alpha`

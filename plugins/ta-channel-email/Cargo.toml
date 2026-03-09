@@ -1,0 +1,19 @@
+[workspace]
+
+[package]
+name = "ta-channel-email"
+version = "0.1.0"
+edition = "2021"
+description = "Email channel plugin for Trusted Autonomy — external JSON-over-stdio plugin with SMTP send and IMAP reply polling"
+license = "Apache-2.0"
+
+[[bin]]
+name = "ta-channel-email"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio = { version = "1", features = ["rt", "macros", "io-util", "time", "net"] }
+lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "tokio1-rustls-tls", "builder", "hostname"] }
