@@ -964,12 +964,75 @@ fn run_interactive_release(config: &GatewayConfig, version: &str) -> anyhow::Res
 ///
 /// Checks: version format, git state, tag availability, pipeline config,
 /// and required tooling.
+/// Pre-collected environment state for release validation.
+/// Separates git/filesystem probing from validation logic so tests
+/// don't need a real git repo.
+struct ReleaseEnvironment {
+    /// Whether the working tree has no uncommitted changes.
+    working_tree_clean: bool,
+    /// Set of existing tags (e.g., ["v1.0.0-alpha", "v0.9.0"]).
+    existing_tags: std::collections::HashSet<String>,
+    /// Whether the ./dev script exists.
+    dev_script_exists: bool,
+    /// Commits since last tag (commit text, last tag name).
+    commits_since_tag: Result<(String, Option<String>), String>,
+}
+
+impl ReleaseEnvironment {
+    /// Probe the real environment from a project root.
+    fn from_project(root: &Path) -> Self {
+        let git_clean = Command::new("git")
+            .args(["diff", "--quiet"])
+            .current_dir(root)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        let git_staged_clean = Command::new("git")
+            .args(["diff", "--cached", "--quiet"])
+            .current_dir(root)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+
+        let existing_tags = Command::new("git")
+            .args(["tag", "-l"])
+            .current_dir(root)
+            .output()
+            .map(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .map(|l| l.trim().to_string())
+                    .filter(|l| !l.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let commits_since_tag = collect_commits_since_last_tag(root).map_err(|e| e.to_string());
+
+        Self {
+            working_tree_clean: git_clean && git_staged_clean,
+            existing_tags,
+            dev_script_exists: root.join("dev").exists(),
+            commits_since_tag,
+        }
+    }
+}
+
 fn validate_release(
     config: &GatewayConfig,
     version: &str,
     pipeline_path: Option<&Path>,
 ) -> anyhow::Result<()> {
+    let env = ReleaseEnvironment::from_project(&config.workspace_root);
     let pipeline = load_pipeline(config, pipeline_path)?;
+    validate_release_with_env(version, &pipeline, &env)
+}
+
+fn validate_release_with_env(
+    version: &str,
+    pipeline: &ReleasePipeline,
+    env: &ReleaseEnvironment,
+) -> anyhow::Result<()> {
     let version = normalize_version(version, &pipeline.version_policy);
 
     println!("Validating release v{} ...", version);
@@ -988,20 +1051,7 @@ fn validate_release(
     }
 
     // 2. Git state.
-    let git_clean = Command::new("git")
-        .args(["diff", "--quiet"])
-        .current_dir(&config.workspace_root)
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
-    let git_staged_clean = Command::new("git")
-        .args(["diff", "--cached", "--quiet"])
-        .current_dir(&config.workspace_root)
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
-
-    if git_clean && git_staged_clean {
+    if env.working_tree_clean {
         println!("  [ok] Working tree is clean");
     } else {
         warnings.push("Working tree has uncommitted changes".to_string());
@@ -1010,14 +1060,7 @@ fn validate_release(
 
     // 3. Tag availability.
     let tag = format!("v{}", version);
-    let tag_exists = Command::new("git")
-        .args(["tag", "-l", &tag])
-        .current_dir(&config.workspace_root)
-        .output()
-        .map(|o| !o.stdout.is_empty())
-        .unwrap_or(false);
-
-    if tag_exists {
+    if env.existing_tags.contains(&tag) {
         errors.push(format!("Tag '{}' already exists", tag));
         println!("  [FAIL] Tag '{}' already exists", tag);
     } else {
@@ -1047,8 +1090,7 @@ fn validate_release(
     }
 
     // 5. Dev toolchain check.
-    let dev_script = config.workspace_root.join("dev");
-    if dev_script.exists() {
+    if env.dev_script_exists {
         println!("  [ok] ./dev script found");
     } else {
         warnings.push("./dev script not found — build steps may fail".to_string());
@@ -1056,7 +1098,7 @@ fn validate_release(
     }
 
     // 6. Commits since last tag.
-    match collect_commits_since_last_tag(&config.workspace_root) {
+    match &env.commits_since_tag {
         Ok((commits, last_tag)) => {
             let count = commits.lines().filter(|l| !l.is_empty()).count();
             println!(
@@ -1654,29 +1696,28 @@ steps:
 
     #[test]
     fn validate_release_clean_repo() {
-        let temp = TempDir::new().unwrap();
-        git_init_with_commit(temp.path());
-
-        let config = GatewayConfig::for_project(temp.path());
-        // Should pass validation for a clean repo with available tag.
-        validate_release(&config, "1.0.0", None).unwrap();
+        let pipeline: ReleasePipeline = serde_yaml::from_str(DEFAULT_PIPELINE_YAML).unwrap();
+        let env = ReleaseEnvironment {
+            working_tree_clean: true,
+            existing_tags: std::collections::HashSet::new(),
+            dev_script_exists: false,
+            commits_since_tag: Ok(("".to_string(), None)),
+        };
+        // Should pass: clean tree, no conflicting tags.
+        validate_release_with_env("1.0.0", &pipeline, &env).unwrap();
     }
 
     #[test]
     fn validate_release_existing_tag_fails() {
-        let temp = TempDir::new().unwrap();
-        git_init_with_commit(temp.path());
-        // Use the exact tag that normalize_version("1.0.0-alpha") produces: v1.0.0-alpha.
-        let out = Command::new("git")
-            .args(["tag", "-a", "v1.0.0-alpha", "-m", "release"])
-            .current_dir(temp.path())
-            .output()
-            .unwrap();
-        assert!(out.status.success(), "git tag failed");
-
-        let config = GatewayConfig::for_project(temp.path());
-        // Should fail: tag v1.0.0-alpha already exists (1.0.0 normalizes to 1.0.0-alpha).
-        assert!(validate_release(&config, "1.0.0-alpha", None).is_err());
+        let pipeline: ReleasePipeline = serde_yaml::from_str(DEFAULT_PIPELINE_YAML).unwrap();
+        let env = ReleaseEnvironment {
+            working_tree_clean: true,
+            existing_tags: ["v1.0.0-alpha".to_string()].into_iter().collect(),
+            dev_script_exists: false,
+            commits_since_tag: Ok(("".to_string(), None)),
+        };
+        // Should fail: tag v1.0.0-alpha already exists.
+        assert!(validate_release_with_env("1.0.0-alpha", &pipeline, &env).is_err());
     }
 
     #[test]
