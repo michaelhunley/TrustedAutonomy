@@ -53,6 +53,7 @@ Trusted Autonomy (TA) is a governance wrapper for AI agents. It lets any agent w
    - [Webhook Review Channel](#webhook-review-channel)
    - [Discord Channel Plugin](#discord-channel-plugin)
    - [Slack Channel Plugin](#slack-channel-plugin)
+   - [Email Channel Plugin](#email-channel-plugin)
    - [MCP Tool Call Interception](#mcp-tool-call-interception)
    - [Session Lifecycle](#session-lifecycle)
    - [Unified Policy Config](#unified-policy-config)
@@ -2452,6 +2453,79 @@ timeout_secs = 30
 [channels]
 default_channels = ["slack"]
 ```
+
+### Email Channel Plugin
+
+Email is available as an **external channel plugin**. It delivers agent questions as formatted HTML+text emails via SMTP with reply-based response parsing.
+
+#### Setup
+
+1. **Build the plugin:**
+
+```bash
+ta plugin build email
+# Or manually:
+cd plugins/ta-channel-email
+cargo build --release
+cp target/release/ta-channel-email .ta/plugins/channels/email/
+cp channel.toml .ta/plugins/channels/email/
+```
+
+2. **Set environment variables:**
+
+```bash
+export TA_EMAIL_SMTP_HOST="smtp.gmail.com"   # SMTP server
+export TA_EMAIL_SMTP_PORT="587"              # SMTP port (default: 587, STARTTLS)
+export TA_EMAIL_USER="agent@company.com"     # Sender email / SMTP username
+export TA_EMAIL_PASSWORD="xxxx-xxxx-xxxx"    # SMTP password or app password
+export TA_EMAIL_REVIEWER="reviewer@company.com,lead@company.com"  # Comma-separated
+```
+
+Optional:
+```bash
+export TA_EMAIL_FROM_NAME="TA Agent"         # Display name (default: "TA Agent")
+export TA_EMAIL_SUBJECT_PREFIX="[TA Review]" # Subject prefix (default: "[TA Review]")
+```
+
+3. **Configure the daemon** (`.ta/daemon.toml`):
+
+```toml
+[[channels.external]]
+name = "email"
+command = "ta-channel-email"
+protocol = "json-stdio"
+timeout_secs = 60
+
+[channels]
+default_channels = ["email"]
+```
+
+#### How it works
+
+1. An agent calls `ta_ask_human` with a question
+2. The daemon spawns `ta-channel-email`, passing the question as JSON on stdin
+3. The plugin sends an HTML+text email to all reviewers via SMTP
+4. Emails include the question, context, and response guidance based on question type
+5. The reviewer replies to the email (APPROVE/DENY for yes/no, or freeform text)
+6. The response flows back to TA via `POST /api/interactions/{id}/respond`
+
+#### Gmail App Passwords
+
+For Gmail, use an [App Password](https://myaccount.google.com/apppasswords) instead of your account password:
+1. Enable 2-Step Verification on your Google account
+2. Generate an App Password at the link above
+3. Set `TA_EMAIL_PASSWORD` to the generated 16-character password
+
+#### Reply format
+
+The email plugin recognizes these keywords in replies (case-insensitive):
+- **Approve**: `APPROVE`, `APPROVED`, `YES`, `LGTM`, `ACK`
+- **Deny**: `DENY`, `DENIED`, `NO`, `REJECT`, `REJECTED`, `NACK`
+- **Freeform**: Any other text (quoted text, signatures, and attribution lines are stripped)
+
+#### Email threading
+
+Follow-up questions on the same interaction use `In-Reply-To` and `References` headers, so email clients group them into a single thread.
 
 ### Project Status Dashboard
 

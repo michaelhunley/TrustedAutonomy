@@ -1,0 +1,7 @@
+name = "email"
+version = "0.1.0"
+command = "ta-channel-email"
+protocol = "json-stdio"
+capabilities = ["deliver_question"]
+description = "Email channel plugin for Trusted Autonomy — sends agent questions as formatted emails via SMTP with IMAP reply polling for async review workflows"
+timeout_secs = 60
