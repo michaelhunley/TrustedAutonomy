@@ -215,6 +215,13 @@ pub enum SessionEvent {
         turn_count: u32,
         outcome: String,
     },
+
+    /// A background command (e.g., `ta run`) failed.
+    CommandFailed {
+        command: String,
+        exit_code: i32,
+        stderr: String,
+    },
 }
 
 fn default_response_hint() -> String {
@@ -244,6 +251,7 @@ impl SessionEvent {
             Self::AgentQuestionAnswered { .. } => "agent_question_answered",
             Self::InteractiveSessionStarted { .. } => "interactive_session_started",
             Self::InteractiveSessionCompleted { .. } => "interactive_session_completed",
+            Self::CommandFailed { .. } => "command_failed",
         }
     }
 
@@ -323,6 +331,13 @@ impl SessionEvent {
                     "respond",
                     format!("ta interact respond {}", iid),
                     format!("Respond to agent question {}", short_id),
+                )]
+            }
+            Self::CommandFailed { command, .. } => {
+                vec![EventAction::new(
+                    "retry",
+                    command.clone(),
+                    format!("Retry: {}", command),
                 )]
             }
             // All other events have no suggested actions.

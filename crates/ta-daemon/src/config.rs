@@ -169,6 +169,43 @@ pub struct ShellConfig {
     pub routes: Vec<RouteEntry>,
     #[serde(default)]
     pub shortcuts: Vec<ShortcutEntry>,
+    /// Known `ta` subcommands. Bare words matching these are auto-prefixed
+    /// with `ta ` so users can type `run ...` instead of `ta run ...`.
+    #[serde(default = "default_ta_subcommands")]
+    pub ta_subcommands: Vec<String>,
+}
+
+fn default_ta_subcommands() -> Vec<String> {
+    [
+        "goal",
+        "draft",
+        "audit",
+        "run",
+        "session",
+        "plan",
+        "context",
+        "credentials",
+        "events",
+        "token",
+        "dev",
+        "setup",
+        "init",
+        "agent",
+        "adapter",
+        "release",
+        "office",
+        "plugin",
+        "workflow",
+        "policy",
+        "config",
+        "gc",
+        "status",
+        "serve",
+        "conversation",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
 }
 
 impl Default for ShellConfig {
@@ -232,6 +269,7 @@ impl Default for ShellConfig {
                     expand: "ta release run".to_string(),
                 },
             ],
+            ta_subcommands: default_ta_subcommands(),
         }
     }
 }
@@ -484,6 +522,9 @@ mod tests {
         assert!(!config.shortcuts.is_empty());
         assert_eq!(config.routes[0].prefix, "ta ");
         assert_eq!(config.shortcuts[0].r#match, "approve");
+        assert!(config.ta_subcommands.contains(&"run".to_string()));
+        assert!(config.ta_subcommands.contains(&"dev".to_string()));
+        assert!(config.ta_subcommands.contains(&"goal".to_string()));
     }
 
     #[test]
