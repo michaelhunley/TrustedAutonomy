@@ -1011,10 +1011,10 @@ fn validate_release(
     // 3. Tag availability.
     let tag = format!("v{}", version);
     let tag_exists = Command::new("git")
-        .args(["rev-parse", &tag])
+        .args(["tag", "-l", &tag])
         .current_dir(&config.workspace_root)
         .output()
-        .map(|o| o.status.success())
+        .map(|o| !o.stdout.is_empty())
         .unwrap_or(false);
 
     if tag_exists {
