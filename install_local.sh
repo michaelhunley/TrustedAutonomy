@@ -77,8 +77,10 @@ fi
 # Install to ~/.local/bin.
 mkdir -p "$INSTALL_DIR"
 
-cp "$TA_BINARY" "$INSTALL_DIR/ta"
-chmod +x "$INSTALL_DIR/ta"
+# Use `install` instead of `cp` to create a fresh inode. On macOS,
+# syspolicyd caches provenance decisions per-inode — `cp` overwrites
+# can inherit a stale "kill" decision, causing SIGKILL on launch.
+install -m 755 "$TA_BINARY" "$INSTALL_DIR/ta"
 echo "Installed: $INSTALL_DIR/ta"
 "$INSTALL_DIR/ta" --version
 
@@ -87,8 +89,7 @@ if [[ "$BUILD_DAEMON" == true ]]; then
         echo "Error: Build succeeded but ta-daemon binary not found at $DAEMON_BINARY"
         exit 1
     fi
-    cp "$DAEMON_BINARY" "$INSTALL_DIR/ta-daemon"
-    chmod +x "$INSTALL_DIR/ta-daemon"
+    install -m 755 "$DAEMON_BINARY" "$INSTALL_DIR/ta-daemon"
     echo "Installed: $INSTALL_DIR/ta-daemon"
 fi
 
