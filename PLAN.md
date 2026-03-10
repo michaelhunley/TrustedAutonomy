@@ -1507,7 +1507,7 @@ This pattern extends beyond VCS to any adapter type:
 ---
 
 ### v0.9.9 — Conversational Project Bootstrapping (`ta new`)
-<!-- status: pending -->
+<!-- status: deferred -->
 **Goal**: Start a new project from any interface by describing what you want in natural language. A planner agent generates the project structure and PLAN.md through conversation, then initializes the TA workspace.
 
 #### User Flow (from any interface)
@@ -2488,7 +2488,7 @@ The human stays in `ta shell` throughout. Release notes go through the standard 
 ---
 
 ### v0.10.7 — Documentation Review & Consolidation
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Full documentation audit and refinement pass after the v0.10.x feature set is complete. Ensure all docs are accurate, consistent, and organized for both users and integration developers.
 
 #### Scope
