@@ -57,4 +57,4 @@ Full changelog: https://github.com/trustedautonomy/ta/compare/v0.2.2-alpha...v0.
 
 ---
 
-Full changelog: https://github.com/michaelhunley/TrustedAutonomy/commits/v0.2.2-alpha
+Full changelog: https://github.com/Trusted-Autonomy/TrustedAutonomy/commits/v0.2.2-alpha
