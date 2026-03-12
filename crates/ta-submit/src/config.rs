@@ -357,7 +357,7 @@ fn default_tail_backfill_lines() -> usize {
 }
 
 fn default_output_buffer_lines() -> usize {
-    10000
+    50000
 }
 
 fn default_auto_tail() -> bool {
@@ -545,7 +545,7 @@ adapter = "git"
     fn shell_config_defaults() {
         let config = ShellConfig::default();
         assert_eq!(config.tail_backfill_lines, 5);
-        assert_eq!(config.output_buffer_lines, 10000);
+        assert_eq!(config.output_buffer_lines, 50000);
         assert!(config.auto_tail);
     }
 
@@ -553,7 +553,7 @@ adapter = "git"
     fn workflow_config_default_has_shell_section() {
         let config = WorkflowConfig::default();
         assert_eq!(config.shell.tail_backfill_lines, 5);
-        assert_eq!(config.shell.output_buffer_lines, 10000);
+        assert_eq!(config.shell.output_buffer_lines, 50000);
         assert!(config.shell.auto_tail);
     }
 
@@ -579,7 +579,7 @@ adapter = "git"
 "#;
         let config: WorkflowConfig = toml::from_str(toml).unwrap();
         assert_eq!(config.shell.tail_backfill_lines, 5);
-        assert_eq!(config.shell.output_buffer_lines, 10000);
+        assert_eq!(config.shell.output_buffer_lines, 50000);
         assert!(config.shell.auto_tail);
     }
 }
