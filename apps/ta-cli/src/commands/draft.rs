@@ -2170,6 +2170,28 @@ fn apply_package(
             eprintln!("Warning: adapter prepare failed: {}", e);
         }
 
+        // Pre-commit verification gate: run configured checks before committing.
+        if !workflow_config.verify.commands.is_empty() {
+            println!("\nRunning pre-commit verification...");
+            let verify_result =
+                super::verify::run_verification(&workflow_config.verify, &target_dir);
+            if !verify_result.passed {
+                let failed: Vec<_> = verify_result
+                    .warnings
+                    .iter()
+                    .map(|w| format!("  - {}", w.command))
+                    .collect();
+                eprintln!(
+                    "\nPre-commit verification failed ({} command(s)):\n{}",
+                    failed.len(),
+                    failed.join("\n")
+                );
+                eprintln!("Fix the issues and re-run `ta draft apply --git-commit`.");
+                anyhow::bail!("Pre-commit verification failed");
+            }
+            println!("  All pre-commit checks passed.\n");
+        }
+
         // Commit changes — goal title as subject, complete draft summary as body.
         println!("Committing changes...");
         let commit_msg = build_commit_message(goal, &pkg);
