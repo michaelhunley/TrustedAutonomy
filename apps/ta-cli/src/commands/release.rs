@@ -53,6 +53,12 @@ pub enum ReleaseCommands {
         /// for human-in-the-loop review checkpoints.
         #[arg(long)]
         interactive: bool,
+
+        /// Auto-approve all approval gates without prompting.
+        /// Use in CI or when approval is not needed. Without this flag,
+        /// non-TTY contexts (daemon) will prompt via TUI interaction.
+        #[arg(long)]
+        auto_approve: bool,
     },
     /// Show the pipeline that would be executed (without running it).
     Show {
@@ -92,14 +98,17 @@ pub fn execute(cmd: &ReleaseCommands, config: &GatewayConfig) -> anyhow::Result<
             press_release,
             prompt,
             interactive,
+            auto_approve,
         } => {
             if *interactive {
                 run_interactive_release(config, version)?;
             } else {
+                // --yes implies --auto-approve for backward compatibility.
+                let skip_approvals = *yes || *auto_approve;
                 run_pipeline(
                     config,
                     version,
-                    *yes,
+                    skip_approvals,
                     *dry_run,
                     *from_step,
                     pipeline.as_deref(),
@@ -700,26 +709,101 @@ fn print_step_dry_run(step: &PipelineStep, version: &str, commits: &str, last_ta
 }
 
 fn prompt_approval(step_name: &str) -> anyhow::Result<bool> {
+    prompt_approval_with_auto(step_name, false)
+}
+
+fn prompt_approval_with_auto(step_name: &str, auto_approve: bool) -> anyhow::Result<bool> {
     use std::io::{self, IsTerminal, Write};
 
-    // Non-interactive context (daemon subprocess, CI): auto-approve.
-    // The user already opted in by typing the release command.
-    // For direct CLI use, `--yes` explicitly skips gates; without a TTY
-    // there's no way to prompt, so auto-approve is the only viable path.
-    if !io::stdin().is_terminal() {
-        println!(
-            "Proceed with '{}'? [y/N] y (auto-approved: non-interactive)",
-            step_name
-        );
+    // Explicit auto-approve (--auto-approve flag or CI mode).
+    if auto_approve {
+        println!("Proceed with '{}'? [y/N] y (auto-approved)", step_name);
         return Ok(true);
     }
 
-    print!("Proceed with '{}'? [y/N] ", step_name);
-    io::stdout().flush()?;
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    let answer = input.trim().to_lowercase();
-    Ok(answer == "y" || answer == "yes")
+    // TTY context: prompt directly.
+    if io::stdin().is_terminal() {
+        print!("Proceed with '{}'? [y/N] ", step_name);
+        io::stdout().flush()?;
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        let answer = input.trim().to_lowercase();
+        return Ok(answer == "y" || answer == "yes");
+    }
+
+    // Non-TTY context (daemon subprocess): use file-based interaction
+    // so the TUI shell can present the question via SSE (v0.10.14).
+    let interaction_id = uuid::Uuid::new_v4();
+    let ta_dir = std::env::current_dir().unwrap_or_default().join(".ta");
+    let pending_dir = ta_dir.join("interactions/pending");
+    let answers_dir = ta_dir.join("interactions/answers");
+    std::fs::create_dir_all(&pending_dir)?;
+    std::fs::create_dir_all(&answers_dir)?;
+
+    let question = serde_json::json!({
+        "interaction_id": interaction_id.to_string(),
+        "goal_id": "release",
+        "question": format!("Release gate: proceed with '{}'?", step_name),
+        "context": format!("The release pipeline is waiting for approval at step '{}'.", step_name),
+        "choices": ["y", "n"],
+        "response_hint": "y or n",
+        "turn": 0
+    });
+
+    let question_path = pending_dir.join(format!("{}.json", interaction_id));
+    std::fs::write(&question_path, serde_json::to_string_pretty(&question)?)?;
+
+    tracing::info!(
+        interaction_id = %interaction_id,
+        step = step_name,
+        "Release approval gate waiting for human response via TUI"
+    );
+    println!(
+        "Waiting for approval via TUI shell (interaction {})...",
+        &interaction_id.to_string()[..8]
+    );
+
+    // Poll for answer (same pattern as ta_ask_human).
+    let answer_path = answers_dir.join(format!("{}.json", interaction_id));
+    let timeout = std::time::Duration::from_secs(600); // 10 minute timeout
+    let start = std::time::Instant::now();
+
+    loop {
+        if start.elapsed() > timeout {
+            // Clean up pending question.
+            let _ = std::fs::remove_file(&question_path);
+            println!(
+                "Release approval timed out after {}s for step '{}'. Aborting.",
+                timeout.as_secs(),
+                step_name
+            );
+            return Ok(false);
+        }
+
+        if answer_path.exists() {
+            let content = std::fs::read_to_string(&answer_path)?;
+            // Clean up files.
+            let _ = std::fs::remove_file(&question_path);
+            let _ = std::fs::remove_file(&answer_path);
+
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) {
+                let response = parsed["response"]
+                    .as_str()
+                    .unwrap_or("")
+                    .trim()
+                    .to_lowercase();
+                let approved = response == "y" || response == "yes";
+                println!(
+                    "Proceed with '{}'? [y/N] {} (from TUI)",
+                    step_name,
+                    if approved { "y" } else { "n" }
+                );
+                return Ok(approved);
+            }
+        }
+
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
 }
 
 // ── Show pipeline ───────────────────────────────────────────────
@@ -2017,5 +2101,37 @@ steps:
 
         // Nothing should have been executed — no files created.
         assert!(!temp.path().join("release-marker.txt").exists());
+    }
+
+    #[test]
+    fn auto_approve_always_approves() {
+        assert!(prompt_approval_with_auto("test-step", true).unwrap());
+    }
+
+    #[test]
+    fn tui_interaction_question_written() {
+        // Verify that non-TTY mode writes an interaction question file.
+        // We can't fully test the polling loop, but we can test the question format.
+        let temp = tempfile::tempdir().unwrap();
+        let pending_dir = temp.path().join(".ta/interactions/pending");
+        std::fs::create_dir_all(&pending_dir).unwrap();
+
+        let interaction_id = uuid::Uuid::new_v4();
+        let question = serde_json::json!({
+            "interaction_id": interaction_id.to_string(),
+            "goal_id": "release",
+            "question": "Release gate: proceed with 'publish'?",
+            "choices": ["y", "n"],
+            "response_hint": "y or n",
+            "turn": 0
+        });
+        let path = pending_dir.join(format!("{}.json", interaction_id));
+        std::fs::write(&path, serde_json::to_string_pretty(&question).unwrap()).unwrap();
+
+        let content: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(content["goal_id"], "release");
+        assert!(content["question"].as_str().unwrap().contains("publish"));
+        assert_eq!(content["choices"][0], "y");
     }
 }

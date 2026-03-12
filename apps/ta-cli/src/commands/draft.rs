@@ -1313,19 +1313,70 @@ fn file_size_display(path: &std::path::Path) -> String {
     }
 }
 
-/// DiffProvider implementation using StagingWorkspace.
-#[allow(dead_code)]
-struct StagingDiffProvider {
-    staging: StagingWorkspace,
+/// DiffProvider backed by a loaded Vec<ChangeSet>.
+///
+/// Resolves `changeset:N` references to actual diff content from the
+/// ChangeSet store. Created from the goal's store_path + goal_id.
+struct ChangeSetDiffProvider {
+    changesets: Vec<ChangeSet>,
 }
 
-impl DiffProvider for StagingDiffProvider {
+impl ChangeSetDiffProvider {
+    /// Load changesets for a goal from the store path.
+    fn load(store_path: &std::path::Path, goal_id: &str) -> Option<Self> {
+        let store = JsonFileStore::new(store_path).ok()?;
+        let changesets = store.list(goal_id).ok()?;
+        if changesets.is_empty() {
+            return None;
+        }
+        Some(Self { changesets })
+    }
+}
+
+impl DiffProvider for ChangeSetDiffProvider {
     fn get_diff(&self, diff_ref: &str) -> Result<String, ta_changeset::ChangeSetError> {
         // diff_ref format: "changeset:N" where N is the changeset index.
-        // For now, we'll need to extract the file path from artifacts.
-        // This is a simple implementation — in production, we'd store a mapping.
-        // For v0.2.3, we'll return a placeholder and enhance in follow-up.
-        Ok(format!("[Diff content for {}]", diff_ref))
+        let idx = diff_ref
+            .strip_prefix("changeset:")
+            .and_then(|s| s.parse::<usize>().ok())
+            .ok_or_else(|| {
+                ta_changeset::ChangeSetError::InvalidData(format!(
+                    "Invalid diff_ref format: '{}' (expected 'changeset:N')",
+                    diff_ref
+                ))
+            })?;
+
+        let cs = self.changesets.get(idx).ok_or_else(|| {
+            ta_changeset::ChangeSetError::InvalidData(format!(
+                "Changeset index {} out of range (have {} changesets)",
+                idx,
+                self.changesets.len()
+            ))
+        })?;
+
+        match &cs.diff_content {
+            DiffContent::UnifiedDiff { content } => Ok(content.clone()),
+            DiffContent::CreateFile { content } => {
+                // Show as "new file" diff: all lines prefixed with +
+                let lines: Vec<String> = content.lines().map(|l| format!("+{}", l)).collect();
+                Ok(format!(
+                    "--- /dev/null\n+++ b/new\n@@ -0,0 +1,{} @@\n{}",
+                    lines.len(),
+                    lines.join("\n")
+                ))
+            }
+            DiffContent::DeleteFile => {
+                Ok("--- a/deleted\n+++ /dev/null\n@@ -1 +0,0 @@\n-[file deleted]".to_string())
+            }
+            DiffContent::BinarySummary {
+                mime_type,
+                size_bytes,
+                ..
+            } => Ok(format!(
+                "[Binary file: {} ({} bytes)]",
+                mime_type, size_bytes
+            )),
+        }
     }
 }
 
@@ -1399,14 +1450,34 @@ fn view_package(
         detail_level
     };
 
-    // Create render context.
-    // For DetailLevel::Full, we'd need a DiffProvider, but for v0.2.3 we'll support
-    // it without diffs initially (diffs can be added as follow-up).
+    // Load changeset-based diff provider when full detail is requested.
+    let diff_provider = if effective_detail == DetailLevel::Full {
+        if let Ok(goal_store) = GoalRunStore::new(&config.goals_dir) {
+            if let Ok(goals) = goal_store.list() {
+                goals
+                    .iter()
+                    .find(|g| {
+                        g.goal_run_id.to_string() == pkg.goal.goal_id
+                            || g.pr_package_id == Some(package_id)
+                    })
+                    .and_then(|goal| {
+                        ChangeSetDiffProvider::load(&goal.store_path, &goal.goal_run_id.to_string())
+                    })
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     let ctx = RenderContext {
         package: &pkg,
         detail_level: effective_detail,
         file_filter: file_filter.map(String::from),
-        diff_provider: None, // TODO: Wire up StagingWorkspace diff provider in follow-up
+        diff_provider: diff_provider.as_ref().map(|p| p as &dyn DiffProvider),
     };
 
     // Resolve color: CLI --color overrides config default.
@@ -5068,5 +5139,92 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("No draft matching"));
+    }
+
+    #[test]
+    fn changeset_diff_provider_unified_diff() {
+        let cs = ChangeSet::new(
+            "fs://workspace/src/main.rs".to_string(),
+            ChangeKind::FsPatch,
+            DiffContent::UnifiedDiff {
+                content: "--- a/src/main.rs\n+++ b/src/main.rs\n@@ -1 +1 @@\n-old\n+new"
+                    .to_string(),
+            },
+        );
+        let provider = ChangeSetDiffProvider {
+            changesets: vec![cs],
+        };
+        let diff = provider.get_diff("changeset:0").unwrap();
+        assert!(diff.contains("-old"));
+        assert!(diff.contains("+new"));
+    }
+
+    #[test]
+    fn changeset_diff_provider_create_file() {
+        let cs = ChangeSet::new(
+            "fs://workspace/new.txt".to_string(),
+            ChangeKind::FsPatch,
+            DiffContent::CreateFile {
+                content: "hello\nworld".to_string(),
+            },
+        );
+        let provider = ChangeSetDiffProvider {
+            changesets: vec![cs],
+        };
+        let diff = provider.get_diff("changeset:0").unwrap();
+        assert!(diff.contains("+hello"));
+        assert!(diff.contains("+world"));
+        assert!(diff.contains("/dev/null"));
+    }
+
+    #[test]
+    fn changeset_diff_provider_delete_file() {
+        let cs = ChangeSet::new(
+            "fs://workspace/old.txt".to_string(),
+            ChangeKind::FsPatch,
+            DiffContent::DeleteFile,
+        );
+        let provider = ChangeSetDiffProvider {
+            changesets: vec![cs],
+        };
+        let diff = provider.get_diff("changeset:0").unwrap();
+        assert!(diff.contains("deleted"));
+    }
+
+    #[test]
+    fn changeset_diff_provider_invalid_ref() {
+        let provider = ChangeSetDiffProvider { changesets: vec![] };
+        assert!(provider.get_diff("invalid").is_err());
+        assert!(provider.get_diff("changeset:abc").is_err());
+    }
+
+    #[test]
+    fn changeset_diff_provider_out_of_range() {
+        let provider = ChangeSetDiffProvider { changesets: vec![] };
+        let err = provider.get_diff("changeset:0").unwrap_err();
+        assert!(err.to_string().contains("out of range"));
+    }
+
+    #[test]
+    fn changeset_diff_provider_multiple_changesets() {
+        let cs0 = ChangeSet::new(
+            "fs://workspace/a.rs".to_string(),
+            ChangeKind::FsPatch,
+            DiffContent::UnifiedDiff {
+                content: "diff-a".to_string(),
+            },
+        );
+        let cs1 = ChangeSet::new(
+            "fs://workspace/b.rs".to_string(),
+            ChangeKind::FsPatch,
+            DiffContent::UnifiedDiff {
+                content: "diff-b".to_string(),
+            },
+        );
+        let provider = ChangeSetDiffProvider {
+            changesets: vec![cs0, cs1],
+        };
+        assert_eq!(provider.get_diff("changeset:0").unwrap(), "diff-a");
+        assert_eq!(provider.get_diff("changeset:1").unwrap(), "diff-b");
     }
 }

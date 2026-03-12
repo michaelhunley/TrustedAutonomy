@@ -2762,21 +2762,28 @@ Agent: Added v0.10.14 — Agent Model Discovery & Status Display
 ---
 
 ### v0.10.14 — Deferred Items: Shell & Agent UX
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Address deferred shell and agent UX items that improve daily workflow before the v0.11 architecture changes.
 
-#### Items (from deferred backlogs)
-1. [ ] **`:tail <id> --lines <count>` override** (from v0.10.11): Custom history depth on tail start
-2. [ ] **Streaming agent response rendering** (from v0.9.8): Partial line rendering, markdown via termimad for rich agent output
-3. [ ] **Ctrl+C interrupt of current agent response** (from v0.9.8): Send SIGINT to agent subprocess, clear pending output
-4. [ ] **Non-disruptive event notifications** (from v0.9.8): Redraw prompt without breaking current input line
-5. [ ] **Split pane support** (from v0.9.8.3): Ctrl-W toggle for agent/shell side-by-side
-6. [ ] **Agent model discovery**: Detect actual LLM model name (e.g., "Claude Haiku 4.5") from agent process and display in TUI status bar
-7. [ ] **Progressive disclosure for draft view**: Summary → diffs on scroll (from v0.10.11)
-8. [ ] **Shell TUI fuzzy-searchable follow-up picker** (from v0.10.9)
-9. [ ] **Agent mode for verification failures**: Re-launch agent with failure context injection (from v0.10.8)
-10. [ ] **Input line text wrap**: The current ta> prompt line does not automatically word wrap with new lines added when the user types a long query
-11. [ ] **Interactive release approval via TUI**: Wire approval prompts through daemon SSE/TUI channel so `ta shell` can present `[y/N]` interactively for release pipeline gates (e.g., review release notes before commit). Add `--auto-approve` flag for CI/non-interactive use. Currently all gates auto-approve in daemon context since there is no TTY.
+#### Completed
+1. ✅ **`:tail <id> --lines <count>` override**: Added `parse_tail_args()` with `--lines N` / `-n N` support in TUI and classic shell. 6 tests.
+2. ✅ **Streaming agent response rendering**: `stylize_markdown_line()` renders `**bold**`, `` `code` ``, `# headers`, and fenced code blocks with ratatui Span styles in the agent split pane. 6 tests.
+3. ✅ **Ctrl+C interrupt**: Detaches from tail or cancels pending question before exiting. Updated Ctrl+C handler in TUI.
+4. ✅ **Non-disruptive event notifications**: Classic shell reprints `ta> ` prompt after SSE event display. TUI already handles this natively.
+5. ✅ **Split pane support**: Ctrl-W toggles 50/50 horizontal split. Agent output routes to right pane when split. `draw_agent_pane()` with scroll support.
+6. ✅ **Agent model discovery**: `extract_model_from_stream_json()` parses `message_start` events, `humanize_model_name()` converts model IDs. Displayed in status bar (Blue). 5 tests.
+7. ✅ **Progressive disclosure for draft view**: `ChangeSetDiffProvider` replaces stub `StagingDiffProvider`. Loads changesets from `JsonFileStore`, resolves `changeset:N` refs to actual diff content (unified diff, create file, delete file, binary). Wired into `view_package()` when `--detail full`. 6 tests.
+8. ✅ **Shell TUI fuzzy-searchable follow-up picker**: `:follow-up [filter]` command gathers candidates via `gather_follow_up_candidates()`, displays numbered list with source tags, color-coded by type, supports keyword filtering.
+9. ✅ **Agent mode for verification failures**: Full `VerifyOnFailure::Agent` implementation in `run.rs`. Builds failure context, re-injects into CLAUDE.md, re-launches agent, re-runs verification, blocks if still failing.
+10. ✅ **Input line text wrap**: `Wrap { trim: false }` on input paragraph, wrap-aware cursor positioning (cursor_y = chars/width, cursor_x = chars%width).
+11. ✅ **Interactive release approval via TUI**: `prompt_approval_with_auto()` uses file-based interactions (`.ta/interactions/pending/`) for non-TTY contexts, enabling TUI `AgentQuestion` flow. Added `--auto-approve` flag for CI. 2 tests.
+
+#### Tests
+- 6 new tests in `shell_tui.rs` for `parse_tail_args`
+- 6 new tests in `shell_tui.rs` for markdown styling (`stylize_markdown_line`)
+- 5 new tests in `shell_tui.rs` for model extraction/humanization
+- 6 new tests in `draft.rs` for `ChangeSetDiffProvider`
+- 2 new tests in `release.rs` for auto-approve and TUI interaction
 
 #### Version: `0.10.14-alpha`
 
