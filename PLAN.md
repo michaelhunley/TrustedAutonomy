@@ -2746,6 +2746,17 @@ Agent: Added v0.10.14 — Agent Model Discovery & Status Display
 4. **Shell integration**: `plan add` available as a shell command, runs as background goal with interactive mode.
 5. **Non-interactive mode**: `ta plan add "description" --auto` for CI/scripted use — agent makes best-guess placement without asking questions.
 
+#### Completed
+- [x] `ta plan add <description>` CLI command with `--agent`, `--source`, `--after`, `--auto`, `--follow-up` flags
+- [x] Existing plan awareness: reads PLAN.md, parses phases, validates `--after` phase ID, reports plan summary (total/done/pending)
+- [x] Diff-based output: delegates to `ta run` so changes go through standard draft review
+- [x] Shell integration: `plan add <desc>` available as shell shortcut in both classic and TUI shells
+- [x] Non-interactive mode: `--auto` flag skips interactive Q&A, agent makes best-guess placement
+- [x] `build_plan_add_prompt()`: constructs agent prompt with full plan context, placement hints, and format rules
+- [x] `truncate_title()` helper for display-friendly goal titles
+- [x] Error handling: missing plan, empty plan, invalid `--after` phase ID with actionable messages
+- [x] 13 new tests (11 plan_add tests + 2 truncate_title tests)
+
 #### Version: `0.10.13-alpha`
 
 ---

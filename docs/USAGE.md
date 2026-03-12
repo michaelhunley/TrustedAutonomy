@@ -1,6 +1,6 @@
 # Trusted Autonomy -- User Guide
 
-**Version**: v0.10.11-alpha
+**Version**: v0.10.13-alpha
 
 Trusted Autonomy (TA) is a governance wrapper for AI agents. It lets any agent work freely in an isolated workspace, then holds the proposed changes at a human review checkpoint before anything takes effect. You see what the agent wants to do, approve or reject each change, and maintain a complete audit trail.
 
@@ -682,6 +682,8 @@ ta plan init                         # Extract plan-schema.yaml from existing pl
 ta plan create                       # Generate new plan from template
 ta plan create --template feature    # Feature template
 ta plan from docs/PRD.md             # Generate plan from a product document (interactive)
+ta plan add "Add auth middleware"    # Add a phase to the existing plan (interactive)
+ta plan add "Quick fix" --auto       # Add phase non-interactively (best-guess placement)
 ```
 
 #### Generating a Plan from a Document
@@ -696,6 +698,22 @@ ta plan from requirements.txt --source ./my-project
 
 The agent reads the document, asks clarifying questions interactively, and writes a `PLAN.md` in the staging workspace. The result goes through the standard draft review flow — you review, approve, and apply it just like any other TA draft.
 
+#### Adding Phases to an Existing Plan
+
+Use `ta plan add <description>` to intelligently add a new phase to your existing plan. The agent reads the current PLAN.md, understands the phase structure, and proposes placement and version numbering through interactive dialog:
+
+```bash
+ta plan add "Add status bar model display"
+ta plan add "Refactor auth middleware" --after v0.10.12
+ta plan add "Quick bugfix phase" --auto
+```
+
+In interactive mode (default), the agent asks clarifying questions before modifying the plan — confirming whether this should be a standalone phase or added to an existing one, proposing version numbers, and checking for dependencies.
+
+Use `--auto` for non-interactive mode where the agent makes best-guess placement without asking questions. Use `--after <phase-id>` to hint where the new phase should be inserted.
+
+The result goes through standard draft review, so you always see and approve the plan change before it's applied.
+
 **When to use which command:**
 
 | Command | Use when | AI-powered? |
@@ -703,6 +721,7 @@ The agent reads the document, asks clarifying questions interactively, and write
 | `ta init --detect` | Scaffolding a `.ta/` config for an existing project | No |
 | `ta plan create` | Starting from a generic template (greenfield/feature/bugfix) | No |
 | `ta plan from <doc>` | You have a product document and want a tailored plan | Yes (interactive) |
+| `ta plan add <desc>` | Adding a phase to an existing plan | Yes (interactive or `--auto`) |
 
 #### Deferred Phases
 
@@ -4049,6 +4068,8 @@ TA has a working end-to-end workflow: staging isolation, agent wrapping, draft r
 | v0.10.9 | Smart follow-up UX | Done |
 | v0.10.10 | Daemon version guard | Done |
 | v0.10.11 | Shell TUI UX overhaul | Done |
+| v0.10.12 | Streaming agent Q&A & status bar enhancements | Done |
+| v0.10.13 | `ta plan add` command (agent-powered plan updates) | Done |
 
 See [PLAN.md](../PLAN.md) for full details on each phase.
 
