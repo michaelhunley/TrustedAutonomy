@@ -93,6 +93,34 @@ pub enum PlanCommands {
         #[arg(long)]
         follow_up: Option<Option<String>>,
     },
+    /// Add a new phase to the existing plan using an interactive agent session.
+    ///
+    /// The agent reads the current PLAN.md, understands phase ordering and version
+    /// numbering, and proposes placement through interactive Q&A. The resulting
+    /// PLAN.md change goes through standard draft review.
+    ///
+    /// Example: `ta plan add "Add status bar model display"`
+    /// Example: `ta plan add "Refactor auth middleware" --after v0.10.12`
+    /// Example: `ta plan add "Quick bugfix phase" --auto`
+    Add {
+        /// Description of the phase or feature to add to the plan.
+        description: String,
+        /// Agent system to use (default: claude-code).
+        #[arg(long, default_value = "claude-code")]
+        agent: String,
+        /// Source directory to overlay (defaults to current directory).
+        #[arg(long)]
+        source: Option<std::path::PathBuf>,
+        /// Insert after this phase ID (e.g., "v0.10.12"). Agent uses this as a hint.
+        #[arg(long)]
+        after: Option<String>,
+        /// Non-interactive mode: agent makes best-guess placement without asking questions.
+        #[arg(long)]
+        auto: bool,
+        /// Follow up on a previous goal (ID prefix or omit for latest).
+        #[arg(long)]
+        follow_up: Option<Option<String>>,
+    },
 }
 
 pub fn execute(cmd: &PlanCommands, config: &GatewayConfig) -> anyhow::Result<()> {
@@ -115,6 +143,22 @@ pub fn execute(cmd: &PlanCommands, config: &GatewayConfig) -> anyhow::Result<()>
             source,
             follow_up,
         } => plan_from(config, path, agent, source.as_deref(), follow_up.as_ref()),
+        PlanCommands::Add {
+            description,
+            agent,
+            source,
+            after,
+            auto,
+            follow_up,
+        } => plan_add(
+            config,
+            description,
+            agent,
+            source.as_deref(),
+            after.as_deref(),
+            *auto,
+            follow_up.as_ref(),
+        ),
     }
 }
 
@@ -1180,6 +1224,239 @@ fn try_agent_file_resolve(workspace_root: &Path, filename: &Path) -> Option<std:
     walk_for_file(workspace_root, name, 0)
 }
 
+fn plan_add(
+    config: &GatewayConfig,
+    description: &str,
+    agent: &str,
+    source: Option<&Path>,
+    after: Option<&str>,
+    auto: bool,
+    follow_up: Option<&Option<String>>,
+) -> anyhow::Result<()> {
+    // Load the existing plan.
+    let schema = PlanSchema::load_or_default(&config.workspace_root);
+    let plan_path = config.workspace_root.join(&schema.source);
+    if !plan_path.exists() {
+        anyhow::bail!(
+            "No {} found in {}.\n\
+             Create a plan first with `ta plan create` or `ta plan from <doc>`.",
+            schema.source,
+            config.workspace_root.display()
+        );
+    }
+    let plan_content = std::fs::read_to_string(&plan_path)
+        .map_err(|e| anyhow::anyhow!("Failed to read plan '{}': {}", plan_path.display(), e))?;
+
+    if plan_content.trim().is_empty() {
+        anyhow::bail!(
+            "Plan file '{}' is empty.\n\
+             Create a plan first with `ta plan create` or `ta plan from <doc>`.",
+            plan_path.display()
+        );
+    }
+
+    // Parse plan to provide context summary.
+    let phases = parse_plan_with_schema(&plan_content, &schema);
+    let total = phases.len();
+    let done = phases
+        .iter()
+        .filter(|p| p.status == PlanStatus::Done)
+        .count();
+    let pending = phases
+        .iter()
+        .filter(|p| p.status == PlanStatus::Pending)
+        .count();
+
+    // Validate --after phase if provided.
+    if let Some(after_id) = after {
+        let stripped = after_id.strip_prefix('v').unwrap_or(after_id);
+        let found = phases.iter().any(|p| {
+            let p_stripped = p.id.strip_prefix('v').unwrap_or(&p.id);
+            p_stripped == stripped
+        });
+        if !found {
+            anyhow::bail!(
+                "Phase '{}' not found in the plan.\n\
+                 Available phases: {}\n\
+                 Run `ta plan list` to see all phases.",
+                after_id,
+                phases
+                    .iter()
+                    .rev()
+                    .take(5)
+                    .map(|p| format!("v{}", p.id))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+    }
+
+    let objective = build_plan_add_prompt(description, &plan_content, after, auto);
+    let title = format!("Plan update: {}", truncate_title(description, 60));
+
+    println!("Adding to plan: {}", description);
+    println!(
+        "  Current plan: {} phases ({} done, {} pending)",
+        total, done, pending
+    );
+    if let Some(after_id) = after {
+        println!("  Placement hint: after {}", after_id);
+    }
+    println!("  Agent: {}", agent);
+    if auto {
+        println!("  Mode: non-interactive (--auto)");
+    }
+    println!();
+
+    if auto {
+        println!("Launching non-interactive planning session...");
+        println!("  The agent will determine placement and version number automatically.");
+    } else {
+        println!("Launching interactive planning session...");
+        println!("  The agent will ask clarifying questions before modifying the plan.");
+    }
+    println!();
+
+    // Delegate to `ta run` with the planning objective.
+    // In auto mode, we skip interactive Q&A.
+    super::run::execute(
+        config,
+        Some(&title),
+        agent,
+        source,
+        &objective,
+        None, // no phase — this modifies the plan itself
+        follow_up,
+        None,  // follow_up_draft
+        None,  // follow_up_goal
+        None,  // no objective file
+        false, // no_launch = false
+        !auto, // interactive = !auto (interactive unless --auto)
+        false, // macro_goal = false
+        None,  // resume = None
+        false, // headless = false
+        false, // skip_verify = false
+        None,  // existing_goal_id = None
+    )
+}
+
+/// Truncate a title string to max_len characters, adding "..." if truncated.
+fn truncate_title(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        s.to_string()
+    } else {
+        format!("{}...", &s[..max_len.saturating_sub(3)])
+    }
+}
+
+/// Build the agent prompt for `ta plan add`.
+///
+/// The prompt provides the full current plan, the user's description, placement
+/// hints, and instructions for how to modify the plan intelligently.
+pub fn build_plan_add_prompt(
+    description: &str,
+    plan_content: &str,
+    after: Option<&str>,
+    auto: bool,
+) -> String {
+    // Truncate very large plans to avoid overwhelming the prompt.
+    let max_chars = 100_000;
+    let truncated_plan = if plan_content.len() > max_chars {
+        format!(
+            "{}\n\n[... truncated at {} chars — read the full PLAN.md for complete context ...]",
+            &plan_content[..max_chars],
+            plan_content.len()
+        )
+    } else {
+        plan_content.to_string()
+    };
+
+    let after_hint = if let Some(phase_id) = after {
+        format!(
+            "\n**Placement hint**: The user wants this phase placed after `{}`. \
+             Use the next available version number after that phase.",
+            phase_id
+        )
+    } else {
+        String::new()
+    };
+
+    let interaction_instructions = if auto {
+        "You are in **non-interactive mode**. Do NOT use `ta_ask_human`. \
+         Make your best judgment about placement, version number, and items \
+         based on the plan structure and the description provided."
+            .to_string()
+    } else {
+        "You are in **interactive mode**. Before modifying the plan, use `ta_ask_human` to:\n\
+         - Confirm whether this should be a standalone phase or added to an existing one.\n\
+         - Clarify scope if the description is ambiguous.\n\
+         - Propose the version number and placement for approval.\n\
+         - Ask about dependencies on other phases.\n\
+         Only modify PLAN.md after the user confirms your proposal."
+            .to_string()
+    };
+
+    format!(
+        r#"You are a project planner. Your task is to add a new phase or items to an existing development plan.
+
+## User Request
+
+> {description}
+{after_hint}
+
+## Current Plan (PLAN.md)
+
+```markdown
+{plan}
+```
+
+## Instructions
+
+{interaction}
+
+### How to Modify the Plan
+
+1. **Understand the existing structure**: Read the current phases, their version numbering scheme, status markers, and ordering. The plan uses `<!-- status: pending -->` markers after each phase header.
+
+2. **Determine placement**: Find the right position for the new phase based on:
+   - Dependencies (what must exist first?)
+   - Logical ordering (infrastructure before features, features before polish)
+   - The `--after` hint if provided
+   - Version number continuity (e.g., if the last phase is v0.10.12, the next would be v0.10.13)
+
+3. **Assign a version number**: Follow the existing versioning pattern. For sub-phases, use dot notation (e.g., v0.10.13.1). Include a `#### Version: X.Y.Z-alpha` line.
+
+4. **Write the phase**: Use this format:
+   ```markdown
+   ### vX.Y.Z — Phase Title
+   <!-- status: pending -->
+   **Goal**: One-sentence description of what this phase achieves.
+
+   #### Items
+   1. **Item title**: Description of the deliverable.
+   2. **Item title**: Description of the deliverable.
+
+   #### Version: `X.Y.Z-alpha`
+   ```
+
+5. **Update PLAN.md**: Write the modified plan to the workspace root. Preserve all existing phases exactly as they are — only add or insert the new content.
+
+## Rules
+
+- Do NOT modify existing phases (don't change their status, items, or descriptions).
+- Do NOT remove or reorder existing phases.
+- Do NOT change any `<!-- status: ... -->` markers on existing phases.
+- New phases should be marked `<!-- status: pending -->`.
+- Keep the phase scope to 1-3 working sessions.
+- Include 2-6 concrete items per phase.
+- Only modify PLAN.md — do not create or modify other files."#,
+        description = description,
+        after_hint = after_hint,
+        plan = truncated_plan,
+        interaction = interaction_instructions,
+    )
+}
+
 fn plan_from(
     config: &GatewayConfig,
     doc_path: &std::path::PathBuf,
@@ -2047,5 +2324,181 @@ Build it.
 
         let found = try_agent_file_resolve(dir.path(), Path::new("spec.md"));
         assert!(found.is_none(), "should skip target/");
+    }
+
+    // ── plan add tests ────────────────────────────────────────────
+
+    #[test]
+    fn build_plan_add_prompt_includes_description() {
+        let prompt = build_plan_add_prompt(
+            "Add status bar model display",
+            "# Plan\n## v0.10.12\n<!-- status: done -->",
+            None,
+            false,
+        );
+        assert!(
+            prompt.contains("Add status bar model display"),
+            "should include user description"
+        );
+    }
+
+    #[test]
+    fn build_plan_add_prompt_includes_plan_content() {
+        let plan = "# Plan\n\n## v0.10.12 — Streaming\n<!-- status: done -->\nDone.";
+        let prompt = build_plan_add_prompt("New feature", plan, None, false);
+        assert!(
+            prompt.contains("v0.10.12 — Streaming"),
+            "should include existing plan content"
+        );
+    }
+
+    #[test]
+    fn build_plan_add_prompt_includes_after_hint() {
+        let prompt = build_plan_add_prompt("New feature", "# Plan", Some("v0.10.12"), false);
+        assert!(
+            prompt.contains("after `v0.10.12`"),
+            "should include placement hint"
+        );
+    }
+
+    #[test]
+    fn build_plan_add_prompt_no_after_hint_when_none() {
+        let prompt = build_plan_add_prompt("New feature", "# Plan", None, false);
+        assert!(
+            !prompt.contains("Placement hint"),
+            "should not include placement hint when after is None"
+        );
+    }
+
+    #[test]
+    fn build_plan_add_prompt_auto_mode_skips_interactive() {
+        let prompt = build_plan_add_prompt("New feature", "# Plan", None, true);
+        assert!(
+            prompt.contains("non-interactive mode"),
+            "should mention non-interactive mode"
+        );
+        assert!(
+            !prompt.contains("use `ta_ask_human` to"),
+            "should not instruct to ask questions in auto mode"
+        );
+    }
+
+    #[test]
+    fn build_plan_add_prompt_interactive_mode_asks_questions() {
+        let prompt = build_plan_add_prompt("New feature", "# Plan", None, false);
+        assert!(
+            prompt.contains("interactive mode"),
+            "should mention interactive mode"
+        );
+        assert!(
+            prompt.contains("ta_ask_human"),
+            "should instruct to use ta_ask_human"
+        );
+    }
+
+    #[test]
+    fn build_plan_add_prompt_truncates_large_plan() {
+        let large_plan = "x".repeat(200_000);
+        let prompt = build_plan_add_prompt("New feature", &large_plan, None, false);
+        assert!(
+            prompt.contains("truncated at 200000 chars"),
+            "should indicate truncation"
+        );
+        assert!(prompt.len() < 250_000, "prompt should be bounded");
+    }
+
+    #[test]
+    fn build_plan_add_prompt_contains_modification_rules() {
+        let prompt = build_plan_add_prompt("New feature", "# Plan", None, false);
+        assert!(
+            prompt.contains("Do NOT modify existing phases"),
+            "should include preservation rules"
+        );
+        assert!(
+            prompt.contains("<!-- status: pending -->"),
+            "should show the status marker format"
+        );
+    }
+
+    #[test]
+    fn plan_add_rejects_missing_plan() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = GatewayConfig::for_project(dir.path());
+        let result = plan_add(
+            &config,
+            "New feature",
+            "claude-code",
+            None,
+            None,
+            false,
+            None,
+        );
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("No"),
+            "error should mention missing plan: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn plan_add_rejects_empty_plan() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("PLAN.md"), "   \n  ").unwrap();
+        let config = GatewayConfig::for_project(dir.path());
+        let result = plan_add(
+            &config,
+            "New feature",
+            "claude-code",
+            None,
+            None,
+            false,
+            None,
+        );
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("empty"),
+            "error should mention empty plan: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn plan_add_rejects_invalid_after_phase() {
+        let dir = tempfile::tempdir().unwrap();
+        let plan = "# Plan\n\n### v0.10.12 — Streaming\n<!-- status: done -->\nDone.\n";
+        std::fs::write(dir.path().join("PLAN.md"), plan).unwrap();
+        let config = GatewayConfig::for_project(dir.path());
+        let result = plan_add(
+            &config,
+            "New feature",
+            "claude-code",
+            None,
+            Some("v99.99.99"),
+            false,
+            None,
+        );
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("not found"),
+            "error should mention phase not found: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn truncate_title_short_unchanged() {
+        assert_eq!(truncate_title("short", 60), "short");
+    }
+
+    #[test]
+    fn truncate_title_long_gets_ellipsis() {
+        let long = "a".repeat(100);
+        let result = truncate_title(&long, 20);
+        assert_eq!(result.len(), 20);
+        assert!(result.ends_with("..."));
     }
 }

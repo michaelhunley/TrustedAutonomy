@@ -1666,6 +1666,7 @@ Commands:
   apply <id>         Shortcut for: ta draft apply <id>
   status             Shortcut for: ta status
   plan               Shortcut for: ta plan list
+  plan add <desc>    Add a phase to the plan via agent session
   goals              Shortcut for: ta goal list
   drafts             Shortcut for: ta draft list
   <anything else>    Sent to agent session (if attached)
