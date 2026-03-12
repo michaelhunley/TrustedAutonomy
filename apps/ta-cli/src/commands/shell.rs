@@ -203,13 +203,9 @@ async fn run_shell(base_url: String, attach_session: Option<String>) -> anyhow::
                         continue;
                     }
                     s if s.starts_with(":tail") => {
-                        let arg = s.strip_prefix(":tail").unwrap().trim();
-                        tail_goal_output(
-                            &client,
-                            &base_url,
-                            if arg.is_empty() { None } else { Some(arg) },
-                        )
-                        .await;
+                        let (goal_id, lines) = super::shell_tui::parse_tail_args(s, 0);
+                        let _ = lines; // classic shell doesn't backfill
+                        tail_goal_output(&client, &base_url, goal_id.as_deref()).await;
                         continue;
                     }
                     _ => {}
@@ -274,6 +270,8 @@ pub(crate) struct StatusInfo {
     pub(crate) active_agents: usize,
     /// The default agent binary name (e.g., "claude-code").
     pub(crate) default_agent: String,
+    /// The LLM model name detected from the active agent (e.g., "Claude Haiku 4.5").
+    pub(crate) agent_model: Option<String>,
 }
 
 pub(crate) async fn fetch_status(client: &reqwest::Client, base_url: &str) -> StatusInfo {
@@ -303,6 +301,17 @@ pub(crate) async fn fetch_status(client: &reqwest::Client, base_url: &str) -> St
             .as_str()
             .unwrap_or("claude-code")
             .to_string(),
+        agent_model: json["agent_model"]
+            .as_str()
+            .map(|s| s.to_string())
+            .or_else(|| {
+                // Try to extract model from first active agent's metadata.
+                json["active_agents"].as_array().and_then(|agents| {
+                    agents
+                        .iter()
+                        .find_map(|a| a["model"].as_str().map(String::from))
+                })
+            }),
     }
 }
 
@@ -501,8 +510,10 @@ async fn sse_listener(client: reqwest::Client, url: &str, running: Arc<AtomicBoo
                 let frame = buffer[..pos].to_string();
                 buffer = buffer[pos + 2..].to_string();
                 if let Some(rendered) = render_sse_event(&frame) {
-                    // Print event inline (interrupt prompt).
+                    // Print event on its own line, then re-show the prompt hint
+                    // to minimize disruption to the user's current input (v0.10.14).
                     let _ = std::io::stdout().write_all(rendered.as_bytes());
+                    let _ = std::io::stdout().write_all(b"ta> ");
                     let _ = std::io::stdout().flush();
                 }
             }
@@ -981,7 +992,7 @@ Commands:
   <anything else>    Sent to agent session (if attached)
 
 Shell commands:
-  :tail [id]         Tail live agent output (auto-picks if one goal running)
+  :tail [id] [--lines N]  Tail live agent output (--lines overrides backfill count)
   :status            Refresh the status header
   help / ?           Show this help
   exit / quit / :q   Exit the shell

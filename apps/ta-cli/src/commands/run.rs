@@ -750,7 +750,8 @@ pub fn execute(
         let workflow_config = ta_submit::WorkflowConfig::load_or_default(&workflow_toml);
 
         if !workflow_config.verify.commands.is_empty() {
-            let result = super::verify::run_verification(&workflow_config.verify, &staging_path);
+            let mut result =
+                super::verify::run_verification(&workflow_config.verify, &staging_path);
 
             if !result.passed {
                 match workflow_config.verify.on_failure {
@@ -785,11 +786,92 @@ pub fn execute(
                     }
                     ta_submit::VerifyOnFailure::Agent => {
                         println!();
-                        println!("Verification failed — agent re-launch not yet implemented.");
-                        println!("Falling back to block mode. Draft NOT created.");
+                        println!(
+                            "Verification failed — re-launching agent with failure context..."
+                        );
                         println!();
-                        println!("To fix: ta run --follow-up");
-                        return Ok(());
+
+                        // Build failure context for re-injection (v0.10.14).
+                        let mut failure_context = String::new();
+                        failure_context.push_str("\n## Verification Failures (auto-injected)\n\n");
+                        failure_context.push_str(
+                            "The following verification commands failed. Fix these issues and ensure all checks pass.\n\n",
+                        );
+                        for w in &result.warnings {
+                            failure_context.push_str(&format!("### `{}`\n", w.command));
+                            failure_context.push_str(&format!(
+                                "Exit code: {}\n",
+                                w.exit_code.map_or("N/A".to_string(), |c| c.to_string())
+                            ));
+                            if !w.output.is_empty() {
+                                failure_context.push_str("```\n");
+                                for line in w.output.lines().take(30) {
+                                    failure_context.push_str(line);
+                                    failure_context.push('\n');
+                                }
+                                failure_context.push_str("```\n");
+                            }
+                            failure_context.push('\n');
+                        }
+
+                        // Re-inject CLAUDE.md with failure context.
+                        if agent_config.injects_context_file {
+                            let claude_md_path = staging_path.join("CLAUDE.md");
+                            if let Ok(existing) = std::fs::read_to_string(&claude_md_path) {
+                                let updated = format!("{}\n{}", existing, failure_context);
+                                let _ = std::fs::write(&claude_md_path, updated);
+                            }
+                        }
+
+                        // Re-launch the agent with a fix prompt.
+                        let fix_prompt = "Verification checks failed after your previous changes. \
+                             Fix the issues described in the CLAUDE.md 'Verification Failures' \
+                             section. Run the failing commands to confirm they pass before exiting."
+                            .to_string();
+                        println!(
+                            "Re-launching {} to fix verification failures...",
+                            agent_config.command
+                        );
+                        let relaunch_result =
+                            launch_agent(&agent_config, &staging_path, &fix_prompt);
+                        match relaunch_result {
+                            Ok(exit) if exit.success() => {
+                                println!("\nAgent fix session exited successfully.");
+                            }
+                            Ok(exit) => {
+                                println!("\nAgent fix session exited with status {}.", exit);
+                            }
+                            Err(e) => {
+                                println!("Failed to re-launch agent: {}", e);
+                                println!("Draft NOT created. To fix manually: ta run --follow-up");
+                                return Ok(());
+                            }
+                        }
+
+                        // Restore CLAUDE.md after re-launch.
+                        if agent_config.injects_context_file {
+                            restore_claude_md(&staging_path)?;
+                        }
+
+                        // Re-run verification after the fix.
+                        let recheck =
+                            super::verify::run_verification(&workflow_config.verify, &staging_path);
+                        if !recheck.passed {
+                            println!();
+                            println!("Verification STILL failing after agent fix session.");
+                            println!("Draft NOT created.");
+                            println!();
+                            for w in &recheck.warnings {
+                                println!("  FAIL: {}", w.command);
+                            }
+                            println!();
+                            println!("To fix: ta run --follow-up");
+                            return Ok(());
+                        }
+                        println!("Verification passed after agent fix session.");
+                        // Replace result with the passing recheck so
+                        // result.warnings is empty below.
+                        result = recheck;
                     }
                 }
             }

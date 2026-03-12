@@ -185,10 +185,18 @@ struct App {
     auto_tail: bool,
     /// Number of lines to show as backfill when attaching to tail (v0.10.11).
     tail_backfill_lines: usize,
+    /// Whether split-pane mode is active (Ctrl-W toggle, v0.10.14).
+    split_pane: bool,
+    /// Agent output lines (displayed in right/bottom pane when split, v0.10.14).
+    agent_output: Vec<OutputLine>,
+    /// Scroll offset for agent pane in split mode.
+    agent_scroll_offset: u16,
+    /// Project root path for local commands like follow-up picker (v0.10.14).
+    project_root: std::path::PathBuf,
 }
 
 impl App {
-    fn new(base_url: String, session_id: Option<String>) -> Self {
+    fn new(base_url: String, session_id: Option<String>, project_root: std::path::PathBuf) -> Self {
         Self {
             output: Vec::new(),
             input: String::new(),
@@ -210,6 +218,10 @@ impl App {
             output_buffer_limit: 10000,
             auto_tail: true,
             tail_backfill_lines: 5,
+            split_pane: false,
+            agent_output: Vec::new(),
+            agent_scroll_offset: 0,
+            project_root,
         }
     }
 
@@ -447,10 +459,19 @@ pub fn run(
         // All results proceed — the function already printed warnings/prompts.
     }
 
-    rt.block_on(run_tui(base_url, attach.map(|s| s.to_string())))
+    let project_root = project_root.to_path_buf();
+    rt.block_on(run_tui(
+        base_url,
+        attach.map(|s| s.to_string()),
+        project_root,
+    ))
 }
 
-async fn run_tui(base_url: String, attach_session: Option<String>) -> anyhow::Result<()> {
+async fn run_tui(
+    base_url: String,
+    attach_session: Option<String>,
+    project_root: std::path::PathBuf,
+) -> anyhow::Result<()> {
     let client = reqwest::Client::new();
 
     // Check daemon connectivity before entering TUI mode.
@@ -488,7 +509,7 @@ async fn run_tui(base_url: String, attach_session: Option<String>) -> anyhow::Re
     };
 
     // Create app state.
-    let mut app = App::new(base_url.clone(), attach_session.clone());
+    let mut app = App::new(base_url.clone(), attach_session.clone(), project_root);
     app.status = initial_status;
     app.daemon_connected = true;
     app.completions = completions;
@@ -648,7 +669,21 @@ async fn handle_terminal_event(
         }) => {
             match (code, modifiers) {
                 (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
-                    app.running = false;
+                    // If tailing agent output, Ctrl-C detaches instead of exiting (v0.10.14).
+                    if app.tailing_goal.is_some() {
+                        let goal_id = app.tailing_goal.take().unwrap();
+                        let short = &goal_id[..8.min(goal_id.len())];
+                        app.push_output(OutputLine::info(format!(
+                            "Detached from {} (Ctrl-C)",
+                            short
+                        )));
+                    } else if app.pending_question.is_some() {
+                        // Cancel pending question prompt.
+                        app.pending_question = None;
+                        app.push_output(OutputLine::info("Agent question cancelled.".to_string()));
+                    } else {
+                        app.running = false;
+                    }
                 }
                 (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
                     if app.input.is_empty() {
@@ -663,6 +698,15 @@ async fn handle_terminal_event(
                 }
                 (KeyCode::Char('k'), KeyModifiers::CONTROL) => {
                     app.input.truncate(app.cursor);
+                }
+                (KeyCode::Char('w'), KeyModifiers::CONTROL) => {
+                    // Toggle split-pane mode (v0.10.14).
+                    app.split_pane = !app.split_pane;
+                    let mode = if app.split_pane { "on" } else { "off" };
+                    app.push_output(OutputLine::info(format!(
+                        "Split pane: {} (Ctrl-W to toggle)",
+                        mode
+                    )));
                 }
                 (KeyCode::Char('l'), KeyModifiers::CONTROL) => {
                     app.output.clear();
@@ -730,16 +774,13 @@ async fn handle_terminal_event(
                         }
 
                         // :tail — attach to goal output stream (v0.10.11).
+                        // Supports: :tail [id] [--lines <count>]
                         if text.starts_with(":tail") {
-                            let goal_id_arg = text.strip_prefix(":tail").map(|s| s.trim());
-                            let goal_id_arg = match goal_id_arg {
-                                Some(s) if !s.is_empty() => Some(s.to_string()),
-                                _ => None,
-                            };
+                            let (goal_id_arg, backfill) =
+                                parse_tail_args(&text, app.tail_backfill_lines);
                             let client = client.clone();
                             let base_url = app.base_url.clone();
                             let tx = tx.clone();
-                            let backfill = app.tail_backfill_lines;
                             tokio::spawn(async move {
                                 start_tail_stream(
                                     client,
@@ -750,6 +791,12 @@ async fn handle_terminal_event(
                                 )
                                 .await;
                             });
+                            return;
+                        }
+
+                        // :follow-up — fuzzy-searchable follow-up picker (v0.10.14).
+                        if text.starts_with(":follow-up") || text.starts_with(":followup") {
+                            handle_follow_up_picker(app, &text);
                             return;
                         }
 
@@ -889,13 +936,29 @@ fn handle_tui_message(app: &mut App, msg: TuiMessage) {
             } else {
                 // Try to parse stream-json format from `claude --output-format stream-json`.
                 // Extract human-readable text content from JSON lines.
+                // Also detect model name from message_start events (v0.10.14).
+                if app.status.agent_model.is_none() {
+                    if let Some(model) = extract_model_from_stream_json(&line.line) {
+                        app.status.agent_model = Some(model);
+                    }
+                }
                 match parse_stream_json_text(&line.line) {
                     Some(text) if !text.is_empty() => OutputLine::agent_stdout(text),
                     Some(_) => return, // Empty text chunk — skip.
                     None => OutputLine::agent_stdout(line.line), // Not JSON — show raw.
                 }
             };
-            app.push_output(styled);
+            // In split-pane mode, route agent output to the agent pane (v0.10.14).
+            if app.split_pane {
+                app.agent_output.push(styled);
+                // Enforce buffer limit on agent pane too.
+                if app.agent_output.len() > app.output_buffer_limit {
+                    let excess = app.agent_output.len() - app.output_buffer_limit;
+                    app.agent_output.drain(..excess);
+                }
+            } else {
+                app.push_output(styled);
+            }
         }
         TuiMessage::GoalStarted { goal_id, title } => {
             app.push_output(OutputLine::notification(format!(
@@ -938,17 +1001,40 @@ fn handle_tui_message(app: &mut App, msg: TuiMessage) {
 fn draw_ui(f: &mut Frame, app: &App) {
     let size = f.area();
 
-    // Layout: output (flexible), input (3 lines), status bar (1 line).
+    // Calculate input area height dynamically based on wrapped text (v0.10.14).
+    // The block has top+bottom borders (2 lines), plus content lines.
+    let prompt = app.prompt_str();
+    let display_len = prompt.len() + app.input.chars().count();
+    // Inner width = total width minus 0 (no side borders on input block).
+    let inner_width = size.width.saturating_sub(0) as usize;
+    let content_lines = if inner_width == 0 {
+        1
+    } else {
+        display_len.div_ceil(inner_width).max(1)
+    };
+    // Borders add 2 lines; cap at half the terminal to keep output visible.
+    let input_height = (content_lines as u16 + 2).min(size.height / 2).max(3);
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(3),    // Output pane
-            Constraint::Length(3), // Input area
-            Constraint::Length(1), // Status bar
+            Constraint::Min(3),               // Output pane
+            Constraint::Length(input_height), // Input area (dynamic)
+            Constraint::Length(1),            // Status bar
         ])
         .split(size);
 
-    draw_output(f, app, chunks[0]);
+    // In split-pane mode, divide the output area into two side-by-side panes (v0.10.14).
+    if app.split_pane {
+        let split = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(chunks[0]);
+        draw_output(f, app, split[0]);
+        draw_agent_pane(f, app, split[1]);
+    } else {
+        draw_output(f, app, chunks[0]);
+    }
     draw_input(f, app, chunks[1]);
     draw_status_bar(f, app, chunks[2]);
 }
@@ -1005,6 +1091,171 @@ fn draw_output(f: &mut Frame, app: &App, area: Rect) {
     }
 }
 
+/// Draw the agent output pane (right side in split-pane mode, v0.10.14).
+/// Convert a markdown-ish text line into styled ratatui Spans (v0.10.14).
+///
+/// Handles: `# headers`, `**bold**`, `` `inline code` ``, `- list items`.
+/// When `in_code_block` is true, the entire line is rendered as code.
+/// Returns updated `in_code_block` state (toggled by ``` fences).
+fn stylize_markdown_line<'a>(
+    text: &'a str,
+    base_style: Style,
+    in_code_block: &mut bool,
+) -> Line<'a> {
+    let trimmed = text.trim();
+
+    // Toggle code block on ``` fences.
+    if trimmed.starts_with("```") {
+        *in_code_block = !*in_code_block;
+        let fence_style = base_style.fg(Color::DarkGray);
+        return Line::from(Span::styled(text.to_string(), fence_style));
+    }
+
+    // Inside a code block: render as monospace-styled.
+    if *in_code_block {
+        let code_style = base_style.fg(Color::Yellow);
+        return Line::from(Span::styled(text.to_string(), code_style));
+    }
+
+    // Headers: # / ## / ###
+    if trimmed.starts_with("# ") {
+        let header_style = base_style.fg(Color::Cyan).add_modifier(Modifier::BOLD);
+        return Line::from(Span::styled(text.to_string(), header_style));
+    }
+    if trimmed.starts_with("## ") || trimmed.starts_with("### ") {
+        let header_style = base_style.fg(Color::Cyan);
+        return Line::from(Span::styled(text.to_string(), header_style));
+    }
+
+    // List items: - or *
+    let list_prefix = trimmed.starts_with("- ") || trimmed.starts_with("* ");
+
+    // Parse inline formatting: **bold** and `code`.
+    let mut spans = Vec::new();
+    let mut chars = text.char_indices().peekable();
+    let mut current_start = 0;
+
+    while let Some(&(i, ch)) = chars.peek() {
+        if ch == '*' {
+            // Check for **bold**.
+            let rest = &text[i..];
+            if let Some(after_stars) = rest.strip_prefix("**") {
+                if let Some(end) = after_stars.find("**") {
+                    // Push preceding text.
+                    if i > current_start {
+                        spans.push(Span::styled(text[current_start..i].to_string(), base_style));
+                    }
+                    let bold_text = &text[i + 2..i + 2 + end];
+                    spans.push(Span::styled(
+                        bold_text.to_string(),
+                        base_style.add_modifier(Modifier::BOLD),
+                    ));
+                    // Advance past **...**
+                    let skip_to = i + 2 + end + 2;
+                    while chars.peek().is_some_and(|&(ci, _)| ci < skip_to) {
+                        chars.next();
+                    }
+                    current_start = skip_to;
+                    continue;
+                }
+            }
+        } else if ch == '`' {
+            // Inline code.
+            let rest = &text[i + 1..];
+            if let Some(end) = rest.find('`') {
+                if i > current_start {
+                    spans.push(Span::styled(text[current_start..i].to_string(), base_style));
+                }
+                let code_text = &text[i + 1..i + 1 + end];
+                spans.push(Span::styled(
+                    code_text.to_string(),
+                    base_style.fg(Color::Yellow),
+                ));
+                let skip_to = i + 1 + end + 1;
+                while chars.peek().is_some_and(|&(ci, _)| ci < skip_to) {
+                    chars.next();
+                }
+                current_start = skip_to;
+                continue;
+            }
+        }
+        chars.next();
+    }
+
+    // Remaining text.
+    if current_start < text.len() {
+        let remaining_style = if list_prefix && spans.is_empty() {
+            base_style.fg(Color::White)
+        } else {
+            base_style
+        };
+        spans.push(Span::styled(
+            text[current_start..].to_string(),
+            remaining_style,
+        ));
+    }
+
+    if spans.is_empty() {
+        Line::from(Span::styled(text.to_string(), base_style))
+    } else {
+        Line::from(spans)
+    }
+}
+
+fn draw_agent_pane(f: &mut Frame, app: &App, area: Rect) {
+    let title = if let Some(ref goal_id) = app.tailing_goal {
+        let short = &goal_id[..8.min(goal_id.len())];
+        format!(" Agent ({}) ", short)
+    } else {
+        " Agent ".to_string()
+    };
+    let block = Block::default()
+        .borders(Borders::LEFT)
+        .border_style(Style::default().fg(Color::DarkGray))
+        .title(Span::styled(title, Style::default().fg(Color::Green)));
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    if app.agent_output.is_empty() {
+        let hint = Paragraph::new("No agent output yet.\nStart a goal to see output here.")
+            .style(Style::default().fg(Color::DarkGray));
+        f.render_widget(hint, inner);
+        return;
+    }
+
+    let visible_height = inner.height as usize;
+    let wrap_width = inner.width as usize;
+
+    let visual_line_count: usize = app
+        .agent_output
+        .iter()
+        .map(|ol| {
+            if ol.text.is_empty() || wrap_width == 0 {
+                1
+            } else {
+                ol.text.len().div_ceil(wrap_width)
+            }
+        })
+        .sum();
+
+    // Render agent output with inline markdown styling (v0.10.14).
+    let mut render_code_block = false;
+    let lines: Vec<Line> = app
+        .agent_output
+        .iter()
+        .map(|ol| stylize_markdown_line(&ol.text, ol.style, &mut render_code_block))
+        .collect();
+
+    let max_scroll = visual_line_count.saturating_sub(visible_height);
+    let scroll_y = max_scroll.saturating_sub(app.agent_scroll_offset as usize);
+
+    let paragraph = Paragraph::new(lines)
+        .wrap(Wrap { trim: false })
+        .scroll((scroll_y as u16, 0));
+    f.render_widget(paragraph, inner);
+}
+
 fn draw_input(f: &mut Frame, app: &App, area: Rect) {
     let prompt = app.prompt_str();
     let display = format!("{}{}", &prompt, &app.input);
@@ -1014,14 +1265,19 @@ fn draw_input(f: &mut Frame, app: &App, area: Rect) {
         .border_style(Style::default().fg(Color::DarkGray));
 
     let inner = block.inner(area);
-    let paragraph = Paragraph::new(display.clone()).block(block);
+    let paragraph = Paragraph::new(display.clone())
+        .wrap(Wrap { trim: false })
+        .block(block);
     f.render_widget(paragraph, area);
 
-    // Position cursor (use char count, not byte offset, for display width).
-    let cursor_x = (prompt.len() + app.input[..app.cursor].chars().count()) as u16;
-    // Clamp to prevent overflow on very narrow terminals.
+    // Position cursor accounting for line wrap (v0.10.14).
+    let cursor_chars = prompt.len() + app.input[..app.cursor].chars().count();
+    let wrap_width = inner.width.max(1) as usize;
+    let cursor_y = (cursor_chars / wrap_width) as u16;
+    let cursor_x = (cursor_chars % wrap_width) as u16;
     let x = inner.x + cursor_x.min(inner.width.saturating_sub(1));
-    f.set_cursor_position((x, inner.y));
+    let y = inner.y + cursor_y.min(inner.height.saturating_sub(1));
+    f.set_cursor_position((x, y));
 }
 
 fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
@@ -1076,6 +1332,15 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
             Style::default().fg(Color::Magenta),
         ),
     ];
+
+    // Agent model indicator (v0.10.14).
+    if let Some(ref model) = app.status.agent_model {
+        spans.push(Span::raw("│"));
+        spans.push(Span::styled(
+            format!(" {} ", model),
+            Style::default().fg(Color::Blue),
+        ));
+    }
 
     // Unread event badge.
     if app.unread_events > 0 {
@@ -1256,6 +1521,15 @@ async fn background_health(
                             .as_str()
                             .unwrap_or("claude-code")
                             .to_string(),
+                        agent_model: json["agent_model"].as_str().map(|s| s.to_string()).or_else(
+                            || {
+                                json["active_agents"].as_array().and_then(|agents| {
+                                    agents
+                                        .iter()
+                                        .find_map(|a| a["model"].as_str().map(String::from))
+                                })
+                            },
+                        ),
                     };
                     let _ = tx.send(TuiMessage::StatusUpdate(status));
                 }
@@ -1590,6 +1864,192 @@ fn parse_stream_json_text(line: &str) -> Option<String> {
     None
 }
 
+/// Extract LLM model name from a stream-json line (v0.10.14).
+///
+/// Claude's stream-json format includes the model in `message_start` events:
+///   `{"type":"message_start","message":{"model":"claude-sonnet-4-20250514",...}}`
+/// Also checks `system` events which may contain a model field.
+fn extract_model_from_stream_json(line: &str) -> Option<String> {
+    let json: serde_json::Value = serde_json::from_str(line).ok()?;
+
+    // message_start has the model in message.model
+    if json["type"].as_str() == Some("message_start") {
+        if let Some(model) = json["message"]["model"].as_str() {
+            return Some(humanize_model_name(model));
+        }
+    }
+
+    // Some formats put model at top level
+    if let Some(model) = json["model"].as_str() {
+        return Some(humanize_model_name(model));
+    }
+
+    None
+}
+
+/// Convert API model IDs to human-readable names.
+fn humanize_model_name(model_id: &str) -> String {
+    // Map known model IDs to friendly names.
+    if model_id.starts_with("claude-opus-4") {
+        "Claude Opus 4".to_string()
+    } else if model_id.starts_with("claude-sonnet-4") {
+        "Claude Sonnet 4".to_string()
+    } else if model_id.starts_with("claude-haiku-4") {
+        "Claude Haiku 4".to_string()
+    } else if model_id.starts_with("claude-3-5-sonnet") {
+        "Claude 3.5 Sonnet".to_string()
+    } else if model_id.starts_with("claude-3-5-haiku") {
+        "Claude 3.5 Haiku".to_string()
+    } else if model_id.starts_with("claude-3-opus") {
+        "Claude 3 Opus".to_string()
+    } else if model_id.starts_with("claude-3-sonnet") {
+        "Claude 3 Sonnet".to_string()
+    } else if model_id.starts_with("claude-3-haiku") {
+        "Claude 3 Haiku".to_string()
+    } else {
+        // Return the raw model ID if not recognized.
+        model_id.to_string()
+    }
+}
+
+/// Handle `:follow-up [filter]` command — gather and display follow-up candidates (v0.10.14).
+///
+/// Without arguments: shows all candidates with numbered list.
+/// With a filter: shows candidates matching the filter text (case-insensitive).
+fn handle_follow_up_picker(app: &mut App, text: &str) {
+    let filter = text
+        .strip_prefix(":follow-up")
+        .or_else(|| text.strip_prefix(":followup"))
+        .unwrap_or("")
+        .trim();
+
+    let config = ta_mcp_gateway::GatewayConfig::for_project(&app.project_root);
+    let goal_store = match ta_goal::GoalRunStore::new(&config.goals_dir) {
+        Ok(store) => store,
+        Err(e) => {
+            app.push_output(OutputLine::error(format!(
+                "Failed to open goal store: {}",
+                e
+            )));
+            return;
+        }
+    };
+
+    let candidates = match super::follow_up::gather_follow_up_candidates(&config, &goal_store) {
+        Ok(c) => c,
+        Err(e) => {
+            app.push_output(OutputLine::error(format!(
+                "Failed to gather follow-up candidates: {}",
+                e
+            )));
+            return;
+        }
+    };
+
+    if candidates.is_empty() {
+        app.push_output(OutputLine::info(
+            "No follow-up candidates found. All goals are complete or no work has been started."
+                .into(),
+        ));
+        return;
+    }
+
+    // Apply filter if provided.
+    let filtered: Vec<(usize, &super::follow_up::FollowUpCandidate)> = candidates
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| {
+            if filter.is_empty() {
+                return true;
+            }
+            let lower_filter = filter.to_lowercase();
+            c.title.to_lowercase().contains(&lower_filter)
+                || c.status.to_lowercase().contains(&lower_filter)
+                || c.source.to_string().to_lowercase().contains(&lower_filter)
+                || c.context_summary.to_lowercase().contains(&lower_filter)
+        })
+        .collect();
+
+    if filtered.is_empty() {
+        app.push_output(OutputLine::info(format!(
+            "No candidates matching '{}'. {} total candidates available.",
+            filter,
+            candidates.len()
+        )));
+        return;
+    }
+
+    app.push_output(OutputLine::separator(format!(
+        "━━━ Follow-Up Candidates ({}{}) ━━━",
+        filtered.len(),
+        if filter.is_empty() {
+            String::new()
+        } else {
+            format!(" matching '{}'", filter)
+        }
+    )));
+
+    for (idx, candidate) in &filtered {
+        let source_tag = match candidate.source {
+            super::follow_up::CandidateSource::Goal => "[goal]",
+            super::follow_up::CandidateSource::Draft => "[draft]",
+            super::follow_up::CandidateSource::Phase => "[phase]",
+            super::follow_up::CandidateSource::VerifyFailure => "[verify]",
+        };
+        let line = format!(
+            "  {:>2}. {} {} — {} ({})",
+            idx + 1,
+            source_tag,
+            candidate.title,
+            candidate.status,
+            candidate.age,
+        );
+        let style = match candidate.source {
+            super::follow_up::CandidateSource::VerifyFailure => Style::default().fg(Color::Red),
+            super::follow_up::CandidateSource::Draft => Style::default().fg(Color::Yellow),
+            _ => Style::default().fg(Color::White),
+        };
+        app.push_output(OutputLine { text: line, style });
+    }
+
+    app.push_output(OutputLine::info(
+        "Use `ta run --follow-up` to start a follow-up session from the CLI.".into(),
+    ));
+}
+
+/// Parse `:tail [id] [--lines <count>]` arguments.
+///
+/// Returns `(goal_id, backfill_lines)`. If `--lines` is not specified, uses
+/// the provided `default_backfill` from config.
+pub(crate) fn parse_tail_args(text: &str, default_backfill: usize) -> (Option<String>, usize) {
+    let rest = text.strip_prefix(":tail").unwrap_or("").trim();
+    if rest.is_empty() {
+        return (None, default_backfill);
+    }
+
+    let parts: Vec<&str> = rest.split_whitespace().collect();
+    let mut goal_id: Option<String> = None;
+    let mut backfill = default_backfill;
+    let mut i = 0;
+
+    while i < parts.len() {
+        if parts[i] == "--lines" || parts[i] == "-n" {
+            if i + 1 < parts.len() {
+                if let Ok(n) = parts[i + 1].parse::<usize>() {
+                    backfill = n;
+                }
+                i += 2;
+                continue;
+            }
+        } else if goal_id.is_none() {
+            goal_id = Some(parts[i].to_string());
+        }
+        i += 1;
+    }
+
+    (goal_id, backfill)
+}
+
 /// Parse an SSE frame for a `goal_started` event.
 /// Returns `Some((goal_id, title))` if found.
 fn parse_goal_started(frame: &str) -> Option<(String, String)> {
@@ -1672,8 +2132,12 @@ Commands:
   <anything else>    Sent to agent session (if attached)
 
 Agent output:
-  :tail [id]         Attach to goal output stream (auto-resolves single running goal)
+  :tail [id] [--lines N]  Attach to goal output (--lines overrides backfill count)
   Agent output auto-streams when a goal starts (configurable: shell.auto_tail)
+
+Follow-up:
+  :follow-up             List all follow-up candidates (failed goals, denied drafts, etc.)
+  :follow-up <filter>    Filter candidates by keyword (fuzzy match on title/status/type)
 
 Interactive mode:
   When an agent asks a question, the prompt changes to [agent Q1] >
@@ -1685,7 +2149,8 @@ Shell commands:
   Ctrl-L             Clear the output pane
   PgUp / PgDn        Scroll output (retained history, configurable: shell.output_buffer_lines)
   Tab                Auto-complete commands
-  Ctrl-C / exit      Exit the shell";
+  Ctrl-W             Toggle split pane (shell | agent side-by-side)
+  Ctrl-C / exit      Exit the shell (Ctrl-C detaches when tailing)";
 
 #[cfg(test)]
 mod tests {
@@ -1693,7 +2158,11 @@ mod tests {
 
     #[test]
     fn app_insert_and_backspace() {
-        let mut app = App::new("http://localhost".into(), None);
+        let mut app = App::new(
+            "http://localhost".into(),
+            None,
+            std::path::PathBuf::from("/tmp"),
+        );
         app.insert_char('h');
         app.insert_char('i');
         assert_eq!(app.input, "hi");
@@ -1705,7 +2174,11 @@ mod tests {
 
     #[test]
     fn app_cursor_movement() {
-        let mut app = App::new("http://localhost".into(), None);
+        let mut app = App::new(
+            "http://localhost".into(),
+            None,
+            std::path::PathBuf::from("/tmp"),
+        );
         app.input = "hello".into();
         app.cursor = 5;
         app.cursor_left();
@@ -1722,7 +2195,11 @@ mod tests {
 
     #[test]
     fn app_history_navigation() {
-        let mut app = App::new("http://localhost".into(), None);
+        let mut app = App::new(
+            "http://localhost".into(),
+            None,
+            std::path::PathBuf::from("/tmp"),
+        );
         app.history = vec!["first".into(), "second".into()];
         app.input = "current".into();
         app.cursor = 7;
@@ -1748,7 +2225,11 @@ mod tests {
 
     #[test]
     fn app_submit_adds_to_history() {
-        let mut app = App::new("http://localhost".into(), None);
+        let mut app = App::new(
+            "http://localhost".into(),
+            None,
+            std::path::PathBuf::from("/tmp"),
+        );
         app.input = "test command".into();
         app.cursor = 12;
         let cmd = app.submit();
@@ -1760,7 +2241,11 @@ mod tests {
 
     #[test]
     fn app_submit_empty_returns_none() {
-        let mut app = App::new("http://localhost".into(), None);
+        let mut app = App::new(
+            "http://localhost".into(),
+            None,
+            std::path::PathBuf::from("/tmp"),
+        );
         app.input = "   ".into();
         let cmd = app.submit();
         assert!(cmd.is_none());
@@ -1768,7 +2253,11 @@ mod tests {
 
     #[test]
     fn app_submit_dedup_history() {
-        let mut app = App::new("http://localhost".into(), None);
+        let mut app = App::new(
+            "http://localhost".into(),
+            None,
+            std::path::PathBuf::from("/tmp"),
+        );
         app.history = vec!["same".into()];
         app.input = "same".into();
         app.cursor = 4;
@@ -1778,7 +2267,11 @@ mod tests {
 
     #[test]
     fn app_scroll() {
-        let mut app = App::new("http://localhost".into(), None);
+        let mut app = App::new(
+            "http://localhost".into(),
+            None,
+            std::path::PathBuf::from("/tmp"),
+        );
         for i in 0..50 {
             app.push_output(OutputLine::command(format!("line {}", i)));
         }
@@ -1799,7 +2292,11 @@ mod tests {
 
     #[test]
     fn app_tab_complete() {
-        let mut app = App::new("http://localhost".into(), None);
+        let mut app = App::new(
+            "http://localhost".into(),
+            None,
+            std::path::PathBuf::from("/tmp"),
+        );
         app.completions = vec!["approve".into(), "apply".into(), "deny".into()];
         app.input = "app".into();
         app.cursor = 3;
@@ -1819,7 +2316,11 @@ mod tests {
 
     #[test]
     fn app_delete_at_cursor() {
-        let mut app = App::new("http://localhost".into(), None);
+        let mut app = App::new(
+            "http://localhost".into(),
+            None,
+            std::path::PathBuf::from("/tmp"),
+        );
         app.input = "hello".into();
         app.cursor = 2;
         app.delete();
@@ -1829,7 +2330,11 @@ mod tests {
 
     #[test]
     fn app_multibyte_cursor_operations() {
-        let mut app = App::new("http://localhost".into(), None);
+        let mut app = App::new(
+            "http://localhost".into(),
+            None,
+            std::path::PathBuf::from("/tmp"),
+        );
         // Insert multi-byte chars (e.g., emoji, accented)
         app.insert_char('h');
         app.insert_char('é'); // 2-byte UTF-8
@@ -1870,7 +2375,11 @@ mod tests {
 
     #[test]
     fn app_prompt_changes_in_workflow_mode() {
-        let mut app = App::new("http://localhost".into(), None);
+        let mut app = App::new(
+            "http://localhost".into(),
+            None,
+            std::path::PathBuf::from("/tmp"),
+        );
         assert_eq!(app.prompt_str(), "ta> ");
         app.workflow_prompt = Some("review".into());
         assert_eq!(app.prompt_str(), "workflow> ");
@@ -1878,7 +2387,11 @@ mod tests {
 
     #[test]
     fn app_prompt_changes_for_agent_question() {
-        let mut app = App::new("http://localhost".into(), None);
+        let mut app = App::new(
+            "http://localhost".into(),
+            None,
+            std::path::PathBuf::from("/tmp"),
+        );
         assert_eq!(app.prompt_str(), "ta> ");
         app.pending_question = Some(PendingQuestion {
             interaction_id: "abc123".into(),
@@ -1924,7 +2437,11 @@ mod tests {
 
     #[test]
     fn handle_tui_message_agent_question() {
-        let mut app = App::new("http://localhost".into(), None);
+        let mut app = App::new(
+            "http://localhost".into(),
+            None,
+            std::path::PathBuf::from("/tmp"),
+        );
         let pq = PendingQuestion {
             interaction_id: "abc".into(),
             goal_id: "goal1".into(),
@@ -1943,7 +2460,11 @@ mod tests {
 
     #[test]
     fn handle_tui_message_daemon_down_up() {
-        let mut app = App::new("http://localhost".into(), None);
+        let mut app = App::new(
+            "http://localhost".into(),
+            None,
+            std::path::PathBuf::from("/tmp"),
+        );
         app.daemon_connected = true;
 
         handle_tui_message(&mut app, TuiMessage::DaemonDown);
@@ -1961,7 +2482,11 @@ mod tests {
 
     #[test]
     fn handle_tui_message_sse_event() {
-        let mut app = App::new("http://localhost".into(), None);
+        let mut app = App::new(
+            "http://localhost".into(),
+            None,
+            std::path::PathBuf::from("/tmp"),
+        );
         handle_tui_message(
             &mut app,
             TuiMessage::SseEvent("goal started: \"test\"".into()),
@@ -1972,7 +2497,11 @@ mod tests {
 
     #[test]
     fn handle_tui_message_workflow_prompt() {
-        let mut app = App::new("http://localhost".into(), None);
+        let mut app = App::new(
+            "http://localhost".into(),
+            None,
+            std::path::PathBuf::from("/tmp"),
+        );
         handle_tui_message(
             &mut app,
             TuiMessage::SseEvent("workflow paused at 'review': Need approval".into()),
@@ -2049,7 +2578,11 @@ mod tests {
 
     #[test]
     fn handle_agent_output_message() {
-        let mut app = App::new("http://localhost".into(), None);
+        let mut app = App::new(
+            "http://localhost".into(),
+            None,
+            std::path::PathBuf::from("/tmp"),
+        );
         handle_tui_message(
             &mut app,
             TuiMessage::AgentOutput(AgentOutputLine {
@@ -2065,7 +2598,11 @@ mod tests {
 
     #[test]
     fn handle_agent_stderr_output() {
-        let mut app = App::new("http://localhost".into(), None);
+        let mut app = App::new(
+            "http://localhost".into(),
+            None,
+            std::path::PathBuf::from("/tmp"),
+        );
         handle_tui_message(
             &mut app,
             TuiMessage::AgentOutput(AgentOutputLine {
@@ -2079,7 +2616,11 @@ mod tests {
 
     #[test]
     fn handle_goal_started_auto_tail() {
-        let mut app = App::new("http://localhost".into(), None);
+        let mut app = App::new(
+            "http://localhost".into(),
+            None,
+            std::path::PathBuf::from("/tmp"),
+        );
         app.auto_tail = true;
         handle_tui_message(
             &mut app,
@@ -2099,7 +2640,11 @@ mod tests {
 
     #[test]
     fn handle_goal_started_no_auto_tail_when_already_tailing() {
-        let mut app = App::new("http://localhost".into(), None);
+        let mut app = App::new(
+            "http://localhost".into(),
+            None,
+            std::path::PathBuf::from("/tmp"),
+        );
         app.auto_tail = true;
         app.tailing_goal = Some("existing-goal".into());
         handle_tui_message(
@@ -2115,7 +2660,11 @@ mod tests {
 
     #[test]
     fn handle_goal_started_no_auto_tail_when_disabled() {
-        let mut app = App::new("http://localhost".into(), None);
+        let mut app = App::new(
+            "http://localhost".into(),
+            None,
+            std::path::PathBuf::from("/tmp"),
+        );
         app.auto_tail = false;
         handle_tui_message(
             &mut app,
@@ -2129,7 +2678,11 @@ mod tests {
 
     #[test]
     fn handle_agent_output_done_clears_tail() {
-        let mut app = App::new("http://localhost".into(), None);
+        let mut app = App::new(
+            "http://localhost".into(),
+            None,
+            std::path::PathBuf::from("/tmp"),
+        );
         app.tailing_goal = Some("goal-123".into());
         handle_tui_message(&mut app, TuiMessage::AgentOutputDone("goal-123".into()));
         assert!(app.tailing_goal.is_none());
@@ -2138,7 +2691,11 @@ mod tests {
 
     #[test]
     fn handle_draft_ready_notification() {
-        let mut app = App::new("http://localhost".into(), None);
+        let mut app = App::new(
+            "http://localhost".into(),
+            None,
+            std::path::PathBuf::from("/tmp"),
+        );
         handle_tui_message(
             &mut app,
             TuiMessage::DraftReady {
@@ -2155,7 +2712,11 @@ mod tests {
 
     #[test]
     fn output_buffer_limit_enforced() {
-        let mut app = App::new("http://localhost".into(), None);
+        let mut app = App::new(
+            "http://localhost".into(),
+            None,
+            std::path::PathBuf::from("/tmp"),
+        );
         app.output_buffer_limit = 10;
         for i in 0..20 {
             app.push_output(OutputLine::command(format!("line {}", i)));
@@ -2167,7 +2728,11 @@ mod tests {
 
     #[test]
     fn output_buffer_limit_adjusts_scroll() {
-        let mut app = App::new("http://localhost".into(), None);
+        let mut app = App::new(
+            "http://localhost".into(),
+            None,
+            std::path::PathBuf::from("/tmp"),
+        );
         app.output_buffer_limit = 10;
         for i in 0..10 {
             app.push_output(OutputLine::command(format!("line {}", i)));
@@ -2212,5 +2777,147 @@ mod tests {
     fn parse_stream_json_plain_text_returns_none() {
         let line = "This is not JSON";
         assert_eq!(parse_stream_json_text(line), None);
+    }
+
+    // -- v0.10.14 tests --
+
+    #[test]
+    fn parse_tail_args_no_args() {
+        let (id, lines) = parse_tail_args(":tail", 5);
+        assert!(id.is_none());
+        assert_eq!(lines, 5);
+    }
+
+    #[test]
+    fn parse_tail_args_id_only() {
+        let (id, lines) = parse_tail_args(":tail abc123", 5);
+        assert_eq!(id.as_deref(), Some("abc123"));
+        assert_eq!(lines, 5);
+    }
+
+    #[test]
+    fn parse_tail_args_lines_only() {
+        let (id, lines) = parse_tail_args(":tail --lines 50", 5);
+        assert!(id.is_none());
+        assert_eq!(lines, 50);
+    }
+
+    #[test]
+    fn parse_tail_args_id_and_lines() {
+        let (id, lines) = parse_tail_args(":tail abc123 --lines 20", 5);
+        assert_eq!(id.as_deref(), Some("abc123"));
+        assert_eq!(lines, 20);
+    }
+
+    #[test]
+    fn parse_tail_args_lines_before_id() {
+        let (id, lines) = parse_tail_args(":tail --lines 10 abc123", 5);
+        assert_eq!(id.as_deref(), Some("abc123"));
+        assert_eq!(lines, 10);
+    }
+
+    #[test]
+    fn parse_tail_args_short_flag() {
+        let (id, lines) = parse_tail_args(":tail -n 30", 5);
+        assert!(id.is_none());
+        assert_eq!(lines, 30);
+    }
+
+    #[test]
+    fn extract_model_from_message_start() {
+        let line = r#"{"type":"message_start","message":{"model":"claude-sonnet-4-20250514","role":"assistant"}}"#;
+        assert_eq!(
+            extract_model_from_stream_json(line),
+            Some("Claude Sonnet 4".into())
+        );
+    }
+
+    #[test]
+    fn extract_model_from_top_level() {
+        let line = r#"{"model":"claude-haiku-4-20250101","type":"system"}"#;
+        assert_eq!(
+            extract_model_from_stream_json(line),
+            Some("Claude Haiku 4".into())
+        );
+    }
+
+    #[test]
+    fn extract_model_unknown_id() {
+        let line = r#"{"type":"message_start","message":{"model":"gpt-4o"}}"#;
+        assert_eq!(extract_model_from_stream_json(line), Some("gpt-4o".into()));
+    }
+
+    #[test]
+    fn extract_model_no_model_field() {
+        let line = r#"{"type":"content_block_delta","delta":{"text":"hello"}}"#;
+        assert!(extract_model_from_stream_json(line).is_none());
+    }
+
+    #[test]
+    fn humanize_model_names() {
+        assert_eq!(humanize_model_name("claude-opus-4-6"), "Claude Opus 4");
+        assert_eq!(
+            humanize_model_name("claude-sonnet-4-20250514"),
+            "Claude Sonnet 4"
+        );
+        assert_eq!(
+            humanize_model_name("claude-3-5-sonnet-20241022"),
+            "Claude 3.5 Sonnet"
+        );
+        assert_eq!(humanize_model_name("custom-model"), "custom-model");
+    }
+
+    // --- stylize_markdown_line tests (v0.10.14) ---
+
+    #[test]
+    fn md_plain_text_unchanged() {
+        let mut code_block = false;
+        let line = stylize_markdown_line("hello world", Style::default(), &mut code_block);
+        assert_eq!(line.spans.len(), 1);
+        assert!(!code_block);
+    }
+
+    #[test]
+    fn md_header_styled() {
+        let mut code_block = false;
+        let line = stylize_markdown_line("# Title", Style::default(), &mut code_block);
+        assert!(line.spans[0].style.fg == Some(Color::Cyan));
+    }
+
+    #[test]
+    fn md_bold_inline() {
+        let mut code_block = false;
+        let line =
+            stylize_markdown_line("before **bold** after", Style::default(), &mut code_block);
+        assert!(line.spans.len() >= 3);
+        // Middle span should be bold.
+        assert!(line.spans[1].style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn md_inline_code() {
+        let mut code_block = false;
+        let line = stylize_markdown_line("run `cargo test` now", Style::default(), &mut code_block);
+        assert!(line.spans.len() >= 3);
+        assert_eq!(line.spans[1].style.fg, Some(Color::Yellow));
+    }
+
+    #[test]
+    fn md_code_block_toggle() {
+        let mut code_block = false;
+        let _ = stylize_markdown_line("```rust", Style::default(), &mut code_block);
+        assert!(code_block);
+        let inside = stylize_markdown_line("let x = 1;", Style::default(), &mut code_block);
+        assert_eq!(inside.spans[0].style.fg, Some(Color::Yellow));
+        let _ = stylize_markdown_line("```", Style::default(), &mut code_block);
+        assert!(!code_block);
+    }
+
+    #[test]
+    fn md_no_false_bold_on_single_star() {
+        let mut code_block = false;
+        let line = stylize_markdown_line("a * b * c", Style::default(), &mut code_block);
+        // Should not detect bold — single stars are not bold markers.
+        assert_eq!(line.spans.len(), 1);
     }
 }

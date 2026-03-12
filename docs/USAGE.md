@@ -1,6 +1,6 @@
 # Trusted Autonomy -- User Guide
 
-**Version**: v0.10.13-alpha
+**Version**: v0.10.14-alpha
 
 Trusted Autonomy (TA) is a governance wrapper for AI agents. It lets any agent work freely in an isolated workspace, then holds the proposed changes at a human review checkpoint before anything takes effect. You see what the agent wants to do, approve or reject each change, and maintain a complete audit trail.
 
@@ -352,7 +352,7 @@ ta draft view <id>
 # Summary only (grouped file list, no detailed artifacts)
 ta draft view <id> --detail top
 
-# Full diffs included
+# Full diffs included (renders colored unified diffs from changeset store)
 ta draft view <id> --detail full
 
 # Machine-readable JSON output
@@ -1395,6 +1395,7 @@ ta release run 0.4.0-alpha --interactive
 
 # Skip approval gates (CI mode)
 ta release run 0.4.0-alpha --yes
+ta release run 0.4.0-alpha --auto-approve  # Explicit auto-approve for CI
 
 # Show pipeline steps
 ta release show
@@ -1410,6 +1411,8 @@ ta shell> release v0.10.6
 ```
 
 The `--interactive` flag uses the `releaser` agent with `ta_ask_human` for review checkpoints. The human stays in `ta shell` throughout — the agent asks for release notes approval and publish confirmation interactively.
+
+When running release commands from `ta shell` (non-TTY context), approval gates are presented as interactive questions in the TUI via the same file-based interaction mechanism used by `ta_ask_human`. Use `--auto-approve` to skip all gates in CI/non-interactive environments.
 
 The `ta release validate` command checks prerequisites before running: version format, git cleanliness, tag availability, pipeline configuration, and toolchain presence. Use it in CI to gate releases.
 
@@ -2229,23 +2232,27 @@ Built-in shell commands:
 | Command | Description |
 |---------|-------------|
 | `help` / `?` | Show help |
-| `:tail [id]` | Attach to goal output stream (auto-resolves single running goal) |
+| `:tail [id] [--lines N]` | Attach to goal output stream (`--lines` overrides backfill count) |
+| `:follow-up [filter]` | List follow-up candidates (failed goals, denied drafts); filter by keyword |
 | `:status` | Refresh the status bar |
 | `clear` / `Ctrl-L` | Clear the output pane |
 | `PgUp` / `PgDn` | Scroll output |
 | `Tab` | Auto-complete commands |
+| `Ctrl-W` | Toggle split-pane mode (agent output on the right) |
 | `Ctrl-A` / `Ctrl-E` | Jump to start/end of input |
 | `Ctrl-U` / `Ctrl-K` | Clear input before/after cursor |
-| `Ctrl-C` / `exit` / `quit` / `:q` | Exit the shell |
+| `Ctrl-C` | Detach from tail or cancel pending question; exit if idle |
 
 #### Live Agent Output
 
 When a goal starts, the shell automatically streams the agent's stdout/stderr into the output pane. Agent output appears in real-time alongside TA events — no need to switch terminals or manually `:tail`.
 
 - **Auto-tail**: When a goal starts (detected via SSE `goal_started` event), the shell subscribes to `GET /api/goals/:id/output` and interleaves agent output with TA events. Stdout lines appear in white, stderr in yellow.
-- **Manual tail**: Use `:tail` to attach to a specific goal's output, or `:tail <id>` to target a specific goal when multiple are running.
+- **Manual tail**: Use `:tail` to attach to a specific goal's output, or `:tail <id>` to target a specific goal when multiple are running. Use `--lines N` to override the backfill count.
 - **Draft-ready notification**: When a draft finishes building, a green notification appears: `[draft ready] "title" (display-id) — run: draft view <id>`.
 - **Tailing indicator**: The status bar shows a green badge while streaming agent output.
+- **Split pane**: Press `Ctrl-W` to toggle a side-by-side view with agent output in the right pane. Agent output is rendered with markdown styling — bold, inline code, headers, and fenced code blocks are syntax-highlighted.
+- **Agent model**: The status bar shows the detected LLM model name (e.g., "Claude Opus 4") when streaming agent output.
 
 #### Draft IDs
 
@@ -4070,6 +4077,7 @@ TA has a working end-to-end workflow: staging isolation, agent wrapping, draft r
 | v0.10.11 | Shell TUI UX overhaul | Done |
 | v0.10.12 | Streaming agent Q&A & status bar enhancements | Done |
 | v0.10.13 | `ta plan add` command (agent-powered plan updates) | Done |
+| v0.10.14 | Deferred items: shell & agent UX | Done |
 
 See [PLAN.md](../PLAN.md) for full details on each phase.
 
