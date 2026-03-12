@@ -1074,20 +1074,56 @@ fn draw_output(f: &mut Frame, app: &App, area: Rect) {
         })
         .sum();
 
-    // Build all lines for the paragraph — ratatui's `.scroll()` handles the offset.
-    let lines: Vec<Line> = app
-        .output
+    // `scroll_offset` 0 = bottom. Convert to a top-based visual-line offset.
+    let max_scroll = visual_line_count.saturating_sub(visible_height);
+    let scroll_y = max_scroll.saturating_sub(app.scroll_offset);
+
+    // Ratatui's Paragraph::scroll() takes (u16, u16), which overflows beyond
+    // 65 535 visual lines. To support unlimited scrollback we pre-slice the
+    // logical lines to just the visible window and use a small residual scroll
+    // for the partial first line.
+    let mut cumulative: usize = 0;
+    let mut start_idx: usize = 0;
+    let mut residual_scroll: u16 = 0;
+    for (i, ol) in app.output.iter().enumerate() {
+        let vlines = if ol.text.is_empty() || wrap_width == 0 {
+            1
+        } else {
+            ol.text.len().div_ceil(wrap_width)
+        };
+        if cumulative + vlines > scroll_y {
+            start_idx = i;
+            residual_scroll = (scroll_y - cumulative) as u16;
+            break;
+        }
+        cumulative += vlines;
+        start_idx = i + 1;
+    }
+
+    // Take enough logical lines to fill the visible area (with margin).
+    let mut end_idx = start_idx;
+    let mut visible_vlines: usize = 0;
+    for ol in app.output.iter().skip(start_idx) {
+        let vlines = if ol.text.is_empty() || wrap_width == 0 {
+            1
+        } else {
+            ol.text.len().div_ceil(wrap_width)
+        };
+        visible_vlines += vlines;
+        end_idx += 1;
+        if visible_vlines >= visible_height + residual_scroll as usize {
+            break;
+        }
+    }
+
+    let lines: Vec<Line> = app.output[start_idx..end_idx.min(app.output.len())]
         .iter()
         .map(|ol| Line::styled(ol.text.clone(), ol.style))
         .collect();
 
-    // `scroll_offset` 0 = bottom. Convert to a top-based scroll position.
-    let max_scroll = visual_line_count.saturating_sub(visible_height);
-    let scroll_y = max_scroll.saturating_sub(app.scroll_offset);
-
     let paragraph = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
-        .scroll((scroll_y as u16, 0));
+        .scroll((residual_scroll, 0));
     f.render_widget(paragraph, inner);
 
     // Scrollbar.
@@ -1246,20 +1282,55 @@ fn draw_agent_pane(f: &mut Frame, app: &App, area: Rect) {
         })
         .sum();
 
+    let max_scroll = visual_line_count.saturating_sub(visible_height);
+    let scroll_y = max_scroll.saturating_sub(app.agent_scroll_offset);
+
+    // Pre-slice logical lines to avoid ratatui's u16 scroll overflow
+    // (same approach as draw_output).
+    let mut cumulative: usize = 0;
+    let mut start_idx: usize = 0;
+    let mut residual_scroll: u16 = 0;
+    for (i, ol) in app.agent_output.iter().enumerate() {
+        let vlines = if ol.text.is_empty() || wrap_width == 0 {
+            1
+        } else {
+            ol.text.len().div_ceil(wrap_width)
+        };
+        if cumulative + vlines > scroll_y {
+            start_idx = i;
+            residual_scroll = (scroll_y - cumulative) as u16;
+            break;
+        }
+        cumulative += vlines;
+        start_idx = i + 1;
+    }
+
+    let mut end_idx = start_idx;
+    let mut visible_vlines: usize = 0;
+    for ol in app.agent_output.iter().skip(start_idx) {
+        let vlines = if ol.text.is_empty() || wrap_width == 0 {
+            1
+        } else {
+            ol.text.len().div_ceil(wrap_width)
+        };
+        visible_vlines += vlines;
+        end_idx += 1;
+        if visible_vlines >= visible_height + residual_scroll as usize {
+            break;
+        }
+    }
+
     // Render agent output with inline markdown styling (v0.10.14).
     let mut render_code_block = false;
-    let lines: Vec<Line> = app
-        .agent_output
+    let lines: Vec<Line> = app.agent_output
+        [start_idx..end_idx.min(app.agent_output.len())]
         .iter()
         .map(|ol| stylize_markdown_line(&ol.text, ol.style, &mut render_code_block))
         .collect();
 
-    let max_scroll = visual_line_count.saturating_sub(visible_height);
-    let scroll_y = max_scroll.saturating_sub(app.agent_scroll_offset);
-
     let paragraph = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
-        .scroll((scroll_y as u16, 0));
+        .scroll((residual_scroll, 0));
     f.render_widget(paragraph, inner);
 }
 
