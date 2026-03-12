@@ -158,7 +158,7 @@ struct App {
     /// Saved input when browsing history.
     saved_input: String,
     /// Scroll offset (0 = bottom, positive = scrolled up).
-    scroll_offset: u16,
+    scroll_offset: usize,
     /// Daemon status info.
     status: StatusInfo,
     /// Whether the daemon is connected.
@@ -190,7 +190,7 @@ struct App {
     /// Agent output lines (displayed in right/bottom pane when split, v0.10.14).
     agent_output: Vec<OutputLine>,
     /// Scroll offset for agent pane in split mode.
-    agent_scroll_offset: u16,
+    agent_scroll_offset: usize,
     /// Project root path for local commands like follow-up picker (v0.10.14).
     project_root: std::path::PathBuf,
 }
@@ -215,7 +215,7 @@ impl App {
             session_id,
             pending_question: None,
             tailing_goal: None,
-            output_buffer_limit: 10000,
+            output_buffer_limit: 50000,
             auto_tail: true,
             tail_backfill_lines: 5,
             split_pane: false,
@@ -232,7 +232,7 @@ impl App {
             let excess = self.output.len() - self.output_buffer_limit;
             self.output.drain(..excess);
             // Adjust scroll offset to compensate for removed lines.
-            self.scroll_offset = self.scroll_offset.saturating_sub(excess as u16);
+            self.scroll_offset = self.scroll_offset.saturating_sub(excess);
         }
         // If scrolled up, don't auto-scroll — increment unread.
         if self.scroll_offset > 0 {
@@ -408,13 +408,16 @@ impl App {
     }
 
     /// Scroll up in the output pane.
-    fn scroll_up(&mut self, amount: u16) {
-        let max_scroll = self.output.len().saturating_sub(1) as u16;
+    fn scroll_up(&mut self, amount: usize) {
+        // Use logical line count as upper bound. The actual visual max is
+        // computed in draw_output with the real terminal width, but logical
+        // lines are a safe ceiling — you can't scroll past all content.
+        let max_scroll = self.output.len().saturating_sub(1);
         self.scroll_offset = (self.scroll_offset + amount).min(max_scroll);
     }
 
     /// Scroll down in the output pane.
-    fn scroll_down(&mut self, amount: u16) {
+    fn scroll_down(&mut self, amount: usize) {
         self.scroll_offset = self.scroll_offset.saturating_sub(amount);
         if self.scroll_offset == 0 {
             self.unread_events = 0;
@@ -800,6 +803,10 @@ async fn handle_terminal_event(
                             return;
                         }
 
+                        // Immediate ack so the user sees activity before the
+                        // daemon responds (v0.10.15.1).
+                        app.push_output(OutputLine::info(format!("Dispatching: {}", text)));
+
                         // Send to daemon asynchronously.
                         let client = client.clone();
                         let base_url = app.base_url.clone();
@@ -1076,7 +1083,7 @@ fn draw_output(f: &mut Frame, app: &App, area: Rect) {
 
     // `scroll_offset` 0 = bottom. Convert to a top-based scroll position.
     let max_scroll = visual_line_count.saturating_sub(visible_height);
-    let scroll_y = max_scroll.saturating_sub(app.scroll_offset as usize);
+    let scroll_y = max_scroll.saturating_sub(app.scroll_offset);
 
     let paragraph = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
@@ -1248,7 +1255,7 @@ fn draw_agent_pane(f: &mut Frame, app: &App, area: Rect) {
         .collect();
 
     let max_scroll = visual_line_count.saturating_sub(visible_height);
-    let scroll_y = max_scroll.saturating_sub(app.agent_scroll_offset as usize);
+    let scroll_y = max_scroll.saturating_sub(app.agent_scroll_offset);
 
     let paragraph = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
