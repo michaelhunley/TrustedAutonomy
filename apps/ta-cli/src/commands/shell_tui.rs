@@ -1322,8 +1322,7 @@ fn draw_agent_pane(f: &mut Frame, app: &App, area: Rect) {
 
     // Render agent output with inline markdown styling (v0.10.14).
     let mut render_code_block = false;
-    let lines: Vec<Line> = app.agent_output
-        [start_idx..end_idx.min(app.agent_output.len())]
+    let lines: Vec<Line> = app.agent_output[start_idx..end_idx.min(app.agent_output.len())]
         .iter()
         .map(|ol| stylize_markdown_line(&ol.text, ol.style, &mut render_code_block))
         .collect();
