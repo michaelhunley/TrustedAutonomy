@@ -138,6 +138,8 @@ fn auto_start_daemon(project_root: &Path) -> anyhow::Result<()> {
                             ));
                         }
                     }
+                    #[cfg(not(unix))]
+                    let _ = pid;
                     // Stale PID file — remove it.
                     let _ = std::fs::remove_file(&pid_path);
                 }

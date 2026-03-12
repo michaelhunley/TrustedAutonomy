@@ -167,7 +167,10 @@ async fn resolve_goal_id(state: &AppState, query: &str) -> Option<String> {
     }
     // Reverse prefix: an active key is a prefix of the query (e.g. alias "d01f0930"
     // matches query "d01f0930-bc2f-432f-bbf3-40c75b991e15").
-    let reverse: Vec<_> = active.iter().filter(|id| query.starts_with(id.as_str())).collect();
+    let reverse: Vec<_> = active
+        .iter()
+        .filter(|id| query.starts_with(id.as_str()))
+        .collect();
     if reverse.len() == 1 {
         return Some(reverse[0].clone());
     }
