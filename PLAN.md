@@ -2868,13 +2868,13 @@ Tests: 25 new tests (name validation, template resolution, scaffold generation, 
 ---
 
 ### v0.10.17.1 — Shell Reliability & Command Timeout Fixes
-<!-- status: in_progress -->
+<!-- status: done -->
 **Goal**: Fix three reliability issues in the TUI shell: auto-tail race condition (still failing despite retries), draft view scrollback not rendering full output, and `draft apply` timing out due to pre-commit verification.
 
 #### Items
-1. [ ] **Auto-tail client-side prefix resolution**: When the UUID-based tail lookup fails, query `active-output` and do client-side prefix matching to find the output channel. Eliminates dependency on stderr alias registration timing.
-2. [ ] **`draft apply` as long-running command**: Add `draft apply` to daemon's `long_running` patterns so it streams output instead of timing out at 120s. Pre-commit verification (fmt + clippy + test) easily exceeds this.
-3. [ ] **Scrollback pre-slicing** (from v0.10.15.1): Already implemented — pre-slices logical lines to bypass ratatui's `u16` scroll overflow. Verify working with rebuilt binary.
+1. [x] **Auto-tail client-side prefix resolution**: `resolve_via_active_output()` queries `/api/goals/active-output` and does client-side prefix matching when UUID lookup fails. Eliminates dependency on stderr alias registration timing.
+2. [x] **`draft apply` as long-running command**: Added `ta draft apply *` and `draft apply *` to daemon's `long_running` patterns. Streams output in background instead of 120s timeout.
+3. [x] **Scrollback pre-slicing** (from v0.10.15.1): Pre-slices logical lines to bypass ratatui's `u16` scroll overflow. Both output pane and agent pane use `residual_scroll` instead of `Paragraph::scroll()`.
 
 #### Version: `0.10.17-alpha.1`
 
