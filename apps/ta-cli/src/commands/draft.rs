@@ -118,27 +118,44 @@ pub enum DraftCommands {
         reviewer: String,
     },
     /// Apply approved changes to the target directory.
+    ///
+    /// By default, runs the full submit workflow (stage + submit + review) when a
+    /// VCS adapter is detected or configured. Use --no-submit to copy files only.
     Apply {
         /// Draft package ID, goal title, or phase (e.g., "v0.10.7"). Omit to auto-select if only one pending draft.
         id: Option<String>,
         /// Target directory (defaults to project root).
         #[arg(long)]
         target: Option<String>,
-        /// Create a git commit after applying.
-        #[arg(long)]
-        git_commit: bool,
-        /// Push to remote after committing (implies --git-commit).
-        #[arg(long)]
-        git_push: bool,
-        /// Run full submit workflow (commit + push + open review).
-        /// Equivalent to --git-commit --git-push with auto PR creation.
-        #[arg(long)]
+        /// Run the full submit workflow for the configured VCS adapter.
+        /// This is the default when a VCS adapter is detected/configured.
+        /// Use --no-submit to copy files only without any VCS operations.
+        #[arg(long, overrides_with = "no_submit")]
         submit: bool,
+        /// Copy files only — skip all VCS operations (no commit, push, or review).
+        #[arg(long)]
+        no_submit: bool,
+        /// Open a review (PR, CL review) after submitting.
+        /// Default: true when adapter supports review. Use --no-review to skip.
+        #[arg(long, overrides_with = "no_review")]
+        review: bool,
+        /// Skip review creation even when adapter supports it.
+        #[arg(long)]
+        no_review: bool,
+        /// Show what the submit workflow would do without actually doing it.
+        #[arg(long)]
+        dry_run: bool,
+        /// **Deprecated**: Use --submit instead. Alias for backward compatibility.
+        #[arg(long, hide = true)]
+        git_commit: bool,
+        /// **Deprecated**: Use --submit instead. Alias for backward compatibility.
+        #[arg(long, hide = true)]
+        git_push: bool,
         /// Skip pre-commit verification checks.
         #[arg(long)]
         skip_verify: bool,
         /// Conflict resolution strategy: abort (default), force-overwrite, merge.
-        /// v0.2.1: Determines what happens if source files have changed since goal start.
+        /// Determines what happens if source files have changed since goal start.
         #[arg(long, default_value = "abort")]
         conflict_resolution: String,
         /// Approve artifacts matching these patterns (repeatable).
@@ -156,7 +173,7 @@ pub enum DraftCommands {
         /// When omitted, uses the goal's linked plan_phase.
         #[arg(long)]
         phase: Option<String>,
-        /// Force human review even when auto-approve policy is configured (v0.10.15).
+        /// Force human review even when auto-approve policy is configured.
         /// Useful for high-risk changes that should always get a human look.
         #[arg(long)]
         require_review: bool,
@@ -374,9 +391,13 @@ pub fn execute(cmd: &DraftCommands, config: &GatewayConfig) -> anyhow::Result<()
         DraftCommands::Apply {
             id,
             target,
+            submit,
+            no_submit,
+            review,
+            no_review,
+            dry_run,
             git_commit,
             git_push,
-            submit,
             skip_verify,
             conflict_resolution,
             approve_patterns,
@@ -386,6 +407,11 @@ pub fn execute(cmd: &DraftCommands, config: &GatewayConfig) -> anyhow::Result<()
             require_review,
         } => {
             let resolved = resolve_draft_id_flexible(config, id.as_deref())?;
+
+            // Warn on deprecated flags.
+            if *git_commit || *git_push {
+                eprintln!("  Note: --git-commit/--git-push are deprecated. Use --submit instead.");
+            }
 
             if *require_review {
                 eprintln!(
@@ -398,11 +424,30 @@ pub fn execute(cmd: &DraftCommands, config: &GatewayConfig) -> anyhow::Result<()
                 &config.workspace_root.join(".ta/workflow.toml"),
             );
 
-            // CLI flags override config. --submit implies full workflow.
-            let do_commit =
-                *git_commit || *git_push || *submit || workflow_config.submit.auto_commit;
-            let do_push = *git_push || *submit || workflow_config.submit.auto_push;
-            let do_review = *submit || workflow_config.submit.auto_review || *require_review;
+            // Resolve submit behavior:
+            // 1. --no-submit explicitly disables everything
+            // 2. --submit or deprecated --git-commit/--git-push explicitly enable
+            // 3. Otherwise use config defaults (auto_submit, which defaults to
+            //    true when adapter != "none")
+            let do_submit = if *no_submit {
+                false
+            } else if *submit || *git_commit || *git_push {
+                true
+            } else {
+                workflow_config.submit.effective_auto_submit()
+            };
+
+            // Resolve review behavior:
+            // 1. --no-review explicitly disables
+            // 2. --review or --require-review explicitly enables
+            // 3. Otherwise use config defaults
+            let do_review = if *no_review {
+                false
+            } else if *review || *require_review {
+                true
+            } else {
+                do_submit && workflow_config.submit.effective_auto_review()
+            };
 
             // Parse conflict resolution strategy.
             use ta_workspace::ConflictResolution;
@@ -420,10 +465,11 @@ pub fn execute(cmd: &DraftCommands, config: &GatewayConfig) -> anyhow::Result<()
                 config,
                 &resolved,
                 target.as_deref(),
-                do_commit,
-                do_push,
+                do_submit,
+                do_submit, // push is always part of submit
                 do_review,
                 *skip_verify,
+                *dry_run,
                 resolution,
                 SelectiveReviewPatterns {
                     approve: approve_patterns,
@@ -1777,6 +1823,7 @@ fn apply_package(
     git_push: bool,
     git_review: bool,
     skip_verify: bool,
+    dry_run: bool,
     conflict_resolution: ta_workspace::ConflictResolution,
     patterns: SelectiveReviewPatterns,
     phase_override: Option<&str>,
@@ -2149,7 +2196,7 @@ fn apply_package(
         }
     }
 
-    // Submit workflow integration (git or other adapters).
+    // Submit workflow integration (VCS-agnostic: git, svn, perforce, etc.).
     if git_commit {
         use ta_submit::{select_adapter, SubmitAdapter, WorkflowConfig};
 
@@ -2160,117 +2207,151 @@ fn apply_package(
         // Select adapter via registry (auto-detects VCS if config is default "none").
         let adapter: Box<dyn SubmitAdapter> = select_adapter(&target_dir, &workflow_config.submit);
 
-        println!("\nUsing submit adapter: {}", adapter.name());
-
-        // Save VCS state so we can restore after apply operations.
-        // Uses a closure to ensure restore_state() always runs, even on
-        // early bail!() errors from verification, commit, or push.
-        let saved_state = match adapter.save_state() {
-            Ok(state) => state,
-            Err(e) => {
-                tracing::warn!(error = %e, "Could not save VCS state before apply");
-                None
-            }
-        };
-
-        let submit_result = (|| -> anyhow::Result<()> {
-            // Prepare (create branch if needed).
-            if let Err(e) = adapter.prepare(goal, &workflow_config.submit) {
-                eprintln!("Warning: adapter prepare failed: {}", e);
-            }
-
-            // Pre-commit verification gate: run configured checks before committing.
-            if skip_verify {
-                println!("\n  Skipping pre-commit verification (--skip-verify).");
-            } else if !workflow_config.verify.commands.is_empty() {
-                println!("\nRunning pre-commit verification...");
-                let verify_result =
-                    super::verify::run_verification(&workflow_config.verify, &target_dir);
-                if !verify_result.passed {
-                    for w in &verify_result.warnings {
-                        eprintln!(
-                            "\n--- {} (exit code: {}) ---",
-                            w.command,
-                            w.exit_code.map_or("N/A".into(), |c| c.to_string())
-                        );
-                        if !w.output.is_empty() {
-                            eprintln!("{}", w.output);
-                        }
-                        eprintln!("---");
-                    }
-                    let total = workflow_config.verify.commands.len();
-                    let failed = verify_result.warnings.len();
-                    eprintln!(
-                        "\nPre-commit verification failed — {} of {} checks failed.",
-                        failed, total
-                    );
-                    eprintln!("\nFix the issues above and re-run `ta draft apply --git-commit`.");
-                    eprintln!("To skip verification: `ta draft apply --git-commit --skip-verify`");
-                    anyhow::bail!("Pre-commit verification failed");
-                }
-                println!("  All pre-commit checks passed.\n");
-            }
-
-            // Commit changes — goal title as subject, complete draft summary as body.
-            println!("Committing changes...");
-            let commit_msg = build_commit_message(goal, &pkg);
-
-            match adapter.commit(goal, &pkg, &commit_msg) {
-                Ok(result) => {
-                    println!("[ok] {}", result.message);
-                }
-                Err(e) => {
-                    eprintln!("Commit failed: {}", e);
-                    // Continue anyway if this is a "none" adapter
-                    if adapter.name() != "none" {
-                        anyhow::bail!("Failed to commit changes: {}", e);
-                    }
-                }
-            }
-
-            // Push to remote if requested.
-            if git_push {
-                println!("Pushing to remote...");
-                match adapter.push(goal) {
-                    Ok(result) => {
-                        println!("[ok] {}", result.message);
-                    }
-                    Err(e) => {
-                        if adapter.name() != "none" {
-                            anyhow::bail!("Failed to push: {}", e);
-                        }
-                    }
-                }
-            }
-
-            // Open review (PR) if requested.
-            if git_review {
-                println!("Creating pull request...");
-                match adapter.open_review(goal, &pkg) {
-                    Ok(result) => {
-                        println!("[ok] {}", result.message);
-                        if !result.review_url.starts_with("none://") {
-                            println!("  PR URL: {}", result.review_url);
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("Warning: PR creation failed: {}", e);
-                        eprintln!("  You can manually create a PR from the pushed branch.");
-                    }
-                }
-            }
-
-            Ok(())
-        })();
-
-        // Always restore VCS state (e.g., switch back to original branch for Git),
-        // regardless of whether the submit operations succeeded or failed.
-        if let Err(e) = adapter.restore_state(saved_state) {
-            eprintln!("Warning: could not restore VCS state after apply: {}", e);
+        if adapter.name() == "none" && !dry_run {
+            eprintln!(
+                "Warning: submit was requested but no VCS adapter detected. \
+                 Files were copied but no VCS operations will run.\n  \
+                 Configure [submit].adapter in .ta/workflow.toml or use --no-submit."
+            );
+        } else {
+            println!("\nUsing submit adapter: {}", adapter.name());
         }
 
-        // Now propagate any error from the submit operations.
-        submit_result?;
+        // --dry-run: show what would happen and exit without making changes.
+        if dry_run {
+            println!(
+                "\n[dry-run] Submit workflow preview (adapter: {}):",
+                adapter.name()
+            );
+            println!("  Stage:  adapter.prepare() — create working branch/changelist");
+            println!("  Commit: adapter.commit() — stage changes for the configured VCS");
+            if git_push {
+                println!("  Submit: adapter.push() — submit/push to remote");
+            }
+            if git_review {
+                println!("  Review: adapter.open_review() — create PR/review request");
+            }
+            if !workflow_config.verify.commands.is_empty() && !skip_verify {
+                println!(
+                    "  Verify: {} pre-submit check(s) would run first",
+                    workflow_config.verify.commands.len()
+                );
+            }
+            println!("\n  No changes were made. Remove --dry-run to execute.");
+            // Skip the actual submit workflow but continue with goal state transitions.
+        } else {
+            // Save VCS state so we can restore after apply operations.
+            // Uses a closure to ensure restore_state() always runs, even on
+            // early bail!() errors from verification, commit, or push.
+            let saved_state = match adapter.save_state() {
+                Ok(state) => state,
+                Err(e) => {
+                    tracing::warn!(error = %e, "Could not save VCS state before apply");
+                    None
+                }
+            };
+
+            let submit_result = (|| -> anyhow::Result<()> {
+                // Prepare (create branch if needed).
+                if let Err(e) = adapter.prepare(goal, &workflow_config.submit) {
+                    eprintln!("Warning: adapter prepare failed: {}", e);
+                }
+
+                // Pre-submit verification gate: run configured checks before committing.
+                if skip_verify {
+                    println!("\n  Skipping pre-submit verification (--skip-verify).");
+                } else if !workflow_config.verify.commands.is_empty() {
+                    println!("\nRunning pre-submit verification...");
+                    let verify_result =
+                        super::verify::run_verification(&workflow_config.verify, &target_dir);
+                    if !verify_result.passed {
+                        for w in &verify_result.warnings {
+                            eprintln!(
+                                "\n--- {} (exit code: {}) ---",
+                                w.command,
+                                w.exit_code.map_or("N/A".into(), |c| c.to_string())
+                            );
+                            if !w.output.is_empty() {
+                                eprintln!("{}", w.output);
+                            }
+                            eprintln!("---");
+                        }
+                        let total = workflow_config.verify.commands.len();
+                        let failed = verify_result.warnings.len();
+                        eprintln!(
+                            "\nPre-submit verification failed — {} of {} checks failed.",
+                            failed, total
+                        );
+                        eprintln!("\nFix the issues above and re-run `ta draft apply`.");
+                        eprintln!("To skip verification: `ta draft apply --skip-verify`");
+                        anyhow::bail!("Pre-submit verification failed");
+                    }
+                    println!("  All pre-submit checks passed.\n");
+                }
+
+                // Commit changes — goal title as subject, complete draft summary as body.
+                println!("Staging changes...");
+                let commit_msg = build_commit_message(goal, &pkg);
+
+                match adapter.commit(goal, &pkg, &commit_msg) {
+                    Ok(result) => {
+                        println!("[ok] {}", result.message);
+                    }
+                    Err(e) => {
+                        eprintln!("Stage/commit failed: {}", e);
+                        // Continue anyway if this is a "none" adapter
+                        if adapter.name() != "none" {
+                            anyhow::bail!("Failed to stage changes: {}", e);
+                        }
+                    }
+                }
+
+                // Submit (push) to remote if requested.
+                if git_push {
+                    println!("Submitting to remote...");
+                    match adapter.push(goal) {
+                        Ok(result) => {
+                            println!("[ok] {}", result.message);
+                        }
+                        Err(e) => {
+                            if adapter.name() != "none" {
+                                anyhow::bail!("Failed to submit: {}", e);
+                            }
+                        }
+                    }
+                }
+
+                // Open review (PR / CL review) if requested.
+                if git_review {
+                    println!("Creating review request...");
+                    match adapter.open_review(goal, &pkg) {
+                        Ok(result) => {
+                            println!("[ok] {}", result.message);
+                            if !result.review_url.starts_with("none://") {
+                                println!("  Review URL: {}", result.review_url);
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Warning: review creation failed: {}", e);
+                            eprintln!(
+                                "  You can manually create a review from the submitted branch."
+                            );
+                        }
+                    }
+                }
+
+                Ok(())
+            })();
+
+            // Always restore VCS state (e.g., switch back to original branch for Git),
+            // regardless of whether the submit operations succeeded or failed.
+            if let Err(e) = adapter.restore_state(saved_state) {
+                eprintln!("Warning: could not restore VCS state after apply: {}", e);
+            }
+
+            // Now propagate any error from the submit operations.
+            submit_result?;
+        } // end of non-dry-run block
     }
 
     // Transition goal to Applied. The pre-flight check validated the state
@@ -2356,10 +2437,15 @@ fn apply_package(
         }
     }
     if git_commit {
-        println!(
-            "  Submit: committed{}",
-            if git_push { " + pushed" } else { "" }
-        );
+        if dry_run {
+            println!("  Submit: [dry-run] — no VCS operations performed");
+        } else {
+            println!(
+                "  Submit: staged{}{}",
+                if git_push { " + submitted" } else { "" },
+                if git_review { " + review" } else { "" }
+            );
+        }
     }
 
     Ok(())
@@ -3734,6 +3820,7 @@ mod tests {
             false,
             false,
             false, // skip_verify
+            false, // dry_run
             ta_workspace::ConflictResolution::Abort,
             SelectiveReviewPatterns::default(),
             None,
@@ -3824,6 +3911,7 @@ mod tests {
             false,
             false,
             false, // skip_verify
+            false, // dry_run
             ta_workspace::ConflictResolution::Abort,
             SelectiveReviewPatterns::default(),
             None,
@@ -4085,6 +4173,7 @@ mod tests {
             false,
             false,
             false, // skip_verify
+            false, // dry_run
             ta_workspace::ConflictResolution::Abort,
             SelectiveReviewPatterns {
                 approve: &["src/**".to_string()],
@@ -4149,6 +4238,7 @@ mod tests {
             false,
             false,
             false, // skip_verify
+            false, // dry_run
             ta_workspace::ConflictResolution::Abort,
             SelectiveReviewPatterns {
                 approve: &["all".to_string()],
@@ -4210,6 +4300,7 @@ mod tests {
             false,
             false,
             false, // skip_verify
+            false, // dry_run
             ta_workspace::ConflictResolution::Abort,
             SelectiveReviewPatterns {
                 approve: &["all".to_string()],
@@ -4270,6 +4361,7 @@ mod tests {
             false,
             false,
             false, // skip_verify
+            false, // dry_run
             ta_workspace::ConflictResolution::Abort,
             SelectiveReviewPatterns {
                 approve: &["rest".to_string()],
@@ -4369,6 +4461,7 @@ mod tests {
             false,
             false,
             false, // skip_verify
+            false, // dry_run
             ta_workspace::ConflictResolution::Abort,
             SelectiveReviewPatterns {
                 approve: &["src/main.rs".to_string()],
@@ -5292,5 +5385,210 @@ mod tests {
         };
         assert_eq!(provider.get_diff("changeset:0").unwrap(), "diff-a");
         assert_eq!(provider.get_diff("changeset:1").unwrap(), "diff-b");
+    }
+
+    #[test]
+    fn apply_default_submit_when_vcs_detected() {
+        // In a git repo with no explicit flags, apply should run the full
+        // submit workflow (git_commit = true) because the adapter auto-detects.
+        let project = TempDir::new().unwrap();
+
+        // Initialize git repo.
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(project.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(project.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(project.path())
+            .output()
+            .unwrap();
+
+        std::fs::write(project.path().join("README.md"), "# Test\n").unwrap();
+
+        std::process::Command::new("git")
+            .args(["add", "-A"])
+            .current_dir(project.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(project.path())
+            .output()
+            .unwrap();
+
+        let config = GatewayConfig::for_project(project.path());
+
+        // Start goal.
+        super::super::goal::execute(
+            &super::super::goal::GoalCommands::Start {
+                title: "Default submit test".to_string(),
+                source: Some(project.path().to_path_buf()),
+                objective: "Test default submit".to_string(),
+                agent: "test-agent".to_string(),
+                phase: None,
+                follow_up: None,
+                objective_file: None,
+            },
+            &config,
+        )
+        .unwrap();
+
+        let goal_store = GoalRunStore::new(&config.goals_dir).unwrap();
+        let goals = goal_store.list().unwrap();
+        let goal = &goals[0];
+        let goal_id = goal.goal_run_id.to_string();
+
+        // Modify file in staging.
+        std::fs::write(goal.workspace_path.join("README.md"), "# Default submit\n").unwrap();
+
+        // Build + approve.
+        build_package(&config, &goal_id, "Default submit test", false).unwrap();
+        let packages = load_all_packages(&config).unwrap();
+        let pkg_id = packages[0].package_id.to_string();
+        approve_package(&config, &pkg_id, "tester").unwrap();
+
+        // Apply with git_commit=true (simulating new default when VCS detected),
+        // git_push=false (no remote), git_review=false.
+        apply_package(
+            &config,
+            &pkg_id,
+            None,
+            true,  // submit (stage+commit)
+            false, // no push (no remote in test)
+            false, // no review
+            false, // skip_verify
+            false, // dry_run
+            ta_workspace::ConflictResolution::Abort,
+            SelectiveReviewPatterns::default(),
+            None,
+        )
+        .unwrap();
+
+        // Verify a commit was created on a ta/ branch.
+        let log = std::process::Command::new("git")
+            .args(["log", "--all", "--oneline", "-5"])
+            .current_dir(project.path())
+            .output()
+            .unwrap();
+        let log_output = String::from_utf8_lossy(&log.stdout);
+        assert!(log_output.contains("Default submit test"));
+
+        // Verify ta/ branch exists.
+        let branches = std::process::Command::new("git")
+            .args(["branch", "--list", "ta/*"])
+            .current_dir(project.path())
+            .output()
+            .unwrap();
+        let branch_list = String::from_utf8_lossy(&branches.stdout);
+        assert!(
+            !branch_list.trim().is_empty(),
+            "Expected ta/ branch to exist"
+        );
+    }
+
+    #[test]
+    fn apply_no_submit_copies_files_only() {
+        // With --no-submit (git_commit=false), only files are copied — no VCS ops.
+        let project = TempDir::new().unwrap();
+
+        // Initialize git repo.
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(project.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(project.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(project.path())
+            .output()
+            .unwrap();
+
+        std::fs::write(project.path().join("README.md"), "# Test\n").unwrap();
+
+        std::process::Command::new("git")
+            .args(["add", "-A"])
+            .current_dir(project.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(project.path())
+            .output()
+            .unwrap();
+
+        let config = GatewayConfig::for_project(project.path());
+
+        // Start goal.
+        super::super::goal::execute(
+            &super::super::goal::GoalCommands::Start {
+                title: "No submit test".to_string(),
+                source: Some(project.path().to_path_buf()),
+                objective: "Test no-submit".to_string(),
+                agent: "test-agent".to_string(),
+                phase: None,
+                follow_up: None,
+                objective_file: None,
+            },
+            &config,
+        )
+        .unwrap();
+
+        let goal_store = GoalRunStore::new(&config.goals_dir).unwrap();
+        let goals = goal_store.list().unwrap();
+        let goal = &goals[0];
+        let goal_id = goal.goal_run_id.to_string();
+
+        // Modify file in staging.
+        std::fs::write(goal.workspace_path.join("README.md"), "# No submit\n").unwrap();
+
+        // Build + approve.
+        build_package(&config, &goal_id, "No submit test", false).unwrap();
+        let packages = load_all_packages(&config).unwrap();
+        let pkg_id = packages[0].package_id.to_string();
+        approve_package(&config, &pkg_id, "tester").unwrap();
+
+        // Apply with --no-submit (git_commit=false).
+        apply_package(
+            &config,
+            &pkg_id,
+            None,
+            false, // no submit
+            false,
+            false,
+            false, // skip_verify
+            false, // dry_run
+            ta_workspace::ConflictResolution::Abort,
+            SelectiveReviewPatterns::default(),
+            None,
+        )
+        .unwrap();
+
+        // Files should be copied.
+        let readme = std::fs::read_to_string(project.path().join("README.md")).unwrap();
+        assert_eq!(readme, "# No submit\n");
+
+        // No ta/ branches should exist — only the initial main branch.
+        let branches = std::process::Command::new("git")
+            .args(["branch", "--list", "ta/*"])
+            .current_dir(project.path())
+            .output()
+            .unwrap();
+        let branch_list = String::from_utf8_lossy(&branches.stdout);
+        assert!(
+            branch_list.trim().is_empty(),
+            "Expected no ta/ branch with --no-submit"
+        );
     }
 }

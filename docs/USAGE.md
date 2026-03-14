@@ -418,10 +418,12 @@ ta draft approve <draft-id>
 ta draft apply <draft-id>
 ```
 
-To apply with a git commit in one step:
+When a VCS adapter is detected (e.g., Git), `ta draft apply` automatically runs the full submit workflow (commit + push + PR). Use `--no-submit` to copy files only:
 
 ```bash
-ta draft apply <draft-id> --git-commit
+ta draft apply <draft-id>              # auto-submits when VCS detected
+ta draft apply <draft-id> --no-submit  # copy files only, no VCS ops
+ta draft apply <draft-id> --dry-run    # preview what would happen
 ```
 
 ### Follow-Up Iterations
@@ -539,11 +541,11 @@ ta verify <goal-id-prefix>
 # Skip verification on run (use sparingly)
 ta run --skip-verify
 
-# Skip pre-commit verification on apply
-ta draft apply <draft-id> --git-commit --skip-verify
+# Skip pre-submit verification on apply
+ta draft apply <draft-id> --skip-verify
 ```
 
-If pre-commit verification fails during `ta draft apply --git-commit`, the changes are already applied to your project but not committed. You can fix the issues and re-run the apply, skip verification, or revert with `git checkout -- .`.
+If pre-submit verification fails during `ta draft apply`, the changes are already applied to your project but not committed. You can fix the issues and re-run the apply, skip verification, or revert with `git checkout -- .`.
 
 In warn mode (`on_failure = "warn"`), the draft is created but carries verification warnings visible in `ta draft view`.
 
@@ -1050,9 +1052,8 @@ The central configuration file for TA behavior:
 ```toml
 [submit]
 adapter = "git"                    # "git", "svn", "perforce", or "none"
-auto_commit = true                 # Commit on ta draft apply
-auto_push = true                   # Push after commit
-auto_review = true                 # Open GitHub PR after push
+auto_submit = true                 # Run full submit workflow on apply (default: true when adapter != "none")
+auto_review = true                 # Open review after submit (default: true when adapter != "none")
 co_author = "Trusted Autonomy <266386695+trustedautonomy-agent@users.noreply.github.com>"  # Co-author trailer on commits
 
 [submit.git]
@@ -1060,6 +1061,14 @@ branch_prefix = "ta/"              # Branch naming: ta/goal-title
 target_branch = "main"             # GitHub PR base branch
 merge_strategy = "squash"          # squash | merge | rebase
 pr_template = ".ta/pr-template.md" # GitHub PR body template
+remote = "origin"                  # Git remote name
+
+[submit.perforce]
+workspace = "my-workspace"         # Perforce workspace/client name
+shelve_by_default = true           # Shelve instead of submit to depot
+
+[submit.svn]
+repo_url = "svn://example.com/trunk"  # SVN repository URL
 
 [follow_up]
 default_mode = "extend"            # extend | standalone
@@ -1074,11 +1083,11 @@ stale_threshold_days = 7
 health_check = true
 ```
 
-Without this file, TA auto-detects your VCS (Git > SVN > Perforce > none) and uses sensible defaults.
+Without this file, TA auto-detects your VCS (Git > SVN > Perforce > none) and uses sensible defaults. When VCS is detected, `ta draft apply` runs the full submit workflow automatically — no flags needed.
 
 ### Commit Co-Authorship
 
-Every commit made through `ta draft apply --git-commit` includes a `Co-Authored-By` trailer. This gives TA shared credit alongside the human author in GitHub's contribution graph, PR history, and `git log`.
+Every commit made through `ta draft apply` includes a `Co-Authored-By` trailer. This gives TA shared credit alongside the human author in GitHub's contribution graph, PR history, and `git log`.
 
 The default co-author is `Trusted Autonomy <266386695+trustedautonomy-agent@users.noreply.github.com>`. To make this appear in GitHub's contribution graph, the email must match a verified email on a GitHub account.
 
@@ -1484,28 +1493,38 @@ description = "Blender scene"
 
 When you run `ta draft view <id> --file image.png`, it opens in the configured handler. Use `--no-open-external` to force inline display.
 
-### Git Integration
+### VCS Integration
+
+`ta draft apply` automatically runs the full submit workflow when a VCS adapter is detected or configured. No flags needed in the common case.
 
 ```bash
-# Apply and commit
-ta draft apply <draft-id> --git-commit
+# Default: auto-detects VCS, commits, pushes, opens PR
+ta draft apply <draft-id>
 
-# Full workflow: apply, commit, push, open GitHub PR
-ta draft apply <draft-id> --submit
+# Preview what would happen without executing
+ta draft apply <draft-id> --dry-run
+
+# Copy files only, skip all VCS operations
+ta draft apply <draft-id> --no-submit
+
+# Submit but skip review (PR) creation
+ta draft apply <draft-id> --no-review
 ```
 
 Configure in `.ta/workflow.toml`:
 
 ```toml
 [submit]
-adapter = "git"
-auto_commit = true
-auto_push = true
+adapter = "git"          # auto-detected if not set
+auto_submit = true       # default: true when adapter != "none"
+auto_review = true       # default: true when adapter != "none"
 
 [submit.git]
 branch_prefix = "ta/"
 target_branch = "main"
 ```
+
+The deprecated `--git-commit` and `--git-push` flags still work as aliases for `--submit`.
 
 ### Release Pipeline
 

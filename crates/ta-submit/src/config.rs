@@ -46,21 +46,29 @@ pub struct WorkflowConfig {
 /// Submit adapter configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubmitConfig {
-    /// Adapter type: "git", "none", or future adapters
+    /// Adapter type: "git", "svn", "perforce", or "none"
     #[serde(default = "default_adapter")]
     pub adapter: String,
 
-    /// Auto-commit on `ta pr apply` (only active when .ta/workflow.toml exists)
+    /// Run full submit workflow (stage + submit) on `ta draft apply`.
+    /// Default: true when adapter != "none". `--no-submit` overrides.
+    /// Replaces the deprecated `auto_commit` + `auto_push` pair.
+    #[serde(default)]
+    pub auto_submit: Option<bool>,
+
+    /// Auto-create review (PR/CL review) after submit.
+    /// Default: true when adapter != "none".
+    #[serde(default)]
+    pub auto_review: Option<bool>,
+
+    /// **Deprecated**: Use `auto_submit` instead. Kept for backward compat.
+    /// If `auto_submit` is not set, `auto_commit` is used as fallback.
     #[serde(default)]
     pub auto_commit: bool,
 
-    /// Auto-push after commit
+    /// **Deprecated**: Use `auto_submit` instead. Kept for backward compat.
     #[serde(default)]
     pub auto_push: bool,
-
-    /// Auto-create review (PR) after push
-    #[serde(default)]
-    pub auto_review: bool,
 
     /// Co-author trailer appended to every commit made through TA.
     /// Format: "Name <email>". The email should match a GitHub account's
@@ -72,19 +80,85 @@ pub struct SubmitConfig {
     /// Git-specific configuration
     #[serde(default)]
     pub git: GitConfig,
+
+    /// Perforce-specific configuration
+    #[serde(default)]
+    pub perforce: PerforceConfig,
+
+    /// SVN-specific configuration
+    #[serde(default)]
+    pub svn: SvnConfig,
+}
+
+impl SubmitConfig {
+    /// Whether the full submit workflow should run by default.
+    ///
+    /// Resolution order:
+    /// 1. `auto_submit` if explicitly set
+    /// 2. `auto_commit && auto_push` (deprecated fallback)
+    /// 3. `true` when adapter is not "none" (new default behavior)
+    pub fn effective_auto_submit(&self) -> bool {
+        if let Some(v) = self.auto_submit {
+            return v;
+        }
+        // Backward compat: if the old auto_commit/auto_push were both set,
+        // treat that as auto_submit = true.
+        if self.auto_commit && self.auto_push {
+            return true;
+        }
+        // Legacy: if only auto_commit was set (no auto_push), preserve
+        // commit-only behavior by NOT defaulting to full submit.
+        if self.auto_commit {
+            return false;
+        }
+        // New default: submit when VCS adapter is configured or detected.
+        self.adapter != "none"
+    }
+
+    /// Whether review should be opened after submit.
+    ///
+    /// Resolution: explicit `auto_review` > default (true when adapter != "none").
+    pub fn effective_auto_review(&self) -> bool {
+        self.auto_review.unwrap_or(self.adapter != "none")
+    }
 }
 
 impl Default for SubmitConfig {
     fn default() -> Self {
         Self {
             adapter: default_adapter(),
+            auto_submit: None,
+            auto_review: None,
             auto_commit: false,
             auto_push: false,
-            auto_review: false,
             co_author: default_co_author(),
             git: GitConfig::default(),
+            perforce: PerforceConfig::default(),
+            svn: SvnConfig::default(),
         }
     }
+}
+
+/// Perforce adapter configuration
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PerforceConfig {
+    /// Perforce workspace/client name
+    pub workspace: Option<String>,
+
+    /// Shelve changes instead of submitting to depot. Default: true.
+    #[serde(default = "default_shelve")]
+    pub shelve_by_default: bool,
+}
+
+fn default_shelve() -> bool {
+    true
+}
+
+/// SVN adapter configuration
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SvnConfig {
+    /// SVN repository URL (for commit messages / metadata)
+    pub repo_url: Option<String>,
 }
 
 /// Git adapter configuration
@@ -766,5 +840,141 @@ adapter = "git"
         assert_eq!(config.shell.tail_backfill_lines, 5);
         assert_eq!(config.shell.output_buffer_lines, 50000);
         assert!(config.shell.auto_tail);
+    }
+
+    // ── v0.11.0.1: auto_submit / auto_review / backward compat ──
+
+    #[test]
+    fn effective_auto_submit_defaults_true_when_adapter_set() {
+        let config = SubmitConfig {
+            adapter: "git".to_string(),
+            ..Default::default()
+        };
+        assert!(config.effective_auto_submit());
+    }
+
+    #[test]
+    fn effective_auto_submit_defaults_false_when_no_adapter() {
+        let config = SubmitConfig::default(); // adapter = "none"
+        assert!(!config.effective_auto_submit());
+    }
+
+    #[test]
+    fn effective_auto_submit_explicit_override() {
+        let config = SubmitConfig {
+            adapter: "git".to_string(),
+            auto_submit: Some(false),
+            ..Default::default()
+        };
+        assert!(!config.effective_auto_submit());
+    }
+
+    #[test]
+    fn effective_auto_submit_backward_compat_both_auto() {
+        // Legacy: auto_commit + auto_push = auto_submit.
+        let config = SubmitConfig {
+            adapter: "none".to_string(),
+            auto_commit: true,
+            auto_push: true,
+            ..Default::default()
+        };
+        assert!(config.effective_auto_submit());
+    }
+
+    #[test]
+    fn effective_auto_submit_backward_compat_commit_only() {
+        // Legacy: only auto_commit (no auto_push) = commit-only, not full submit.
+        let config = SubmitConfig {
+            adapter: "none".to_string(),
+            auto_commit: true,
+            auto_push: false,
+            ..Default::default()
+        };
+        assert!(!config.effective_auto_submit());
+    }
+
+    #[test]
+    fn effective_auto_review_defaults_true_when_adapter_set() {
+        let config = SubmitConfig {
+            adapter: "git".to_string(),
+            ..Default::default()
+        };
+        assert!(config.effective_auto_review());
+    }
+
+    #[test]
+    fn effective_auto_review_defaults_false_when_no_adapter() {
+        let config = SubmitConfig::default();
+        assert!(!config.effective_auto_review());
+    }
+
+    #[test]
+    fn effective_auto_review_explicit_override() {
+        let config = SubmitConfig {
+            adapter: "git".to_string(),
+            auto_review: Some(false),
+            ..Default::default()
+        };
+        assert!(!config.effective_auto_review());
+    }
+
+    #[test]
+    fn parse_toml_with_auto_submit() {
+        let toml = r#"
+[submit]
+adapter = "git"
+auto_submit = true
+auto_review = false
+"#;
+        let config: WorkflowConfig = toml::from_str(toml).unwrap();
+        assert!(config.submit.effective_auto_submit());
+        assert!(!config.submit.effective_auto_review());
+    }
+
+    #[test]
+    fn parse_toml_with_deprecated_auto_commit_auto_push() {
+        // Old-style config should still work.
+        let toml = r#"
+[submit]
+adapter = "none"
+auto_commit = true
+auto_push = true
+auto_review = true
+"#;
+        let config: WorkflowConfig = toml::from_str(toml).unwrap();
+        assert!(config.submit.effective_auto_submit());
+        // auto_review was a bool before; now Option<bool>. Explicit true in TOML
+        // should be parsed as Some(true).
+        assert!(config.submit.effective_auto_review());
+    }
+
+    #[test]
+    fn parse_toml_with_adapter_specific_sections() {
+        let toml = r#"
+[submit]
+adapter = "git"
+
+[submit.git]
+branch_prefix = "feature/"
+target_branch = "develop"
+remote = "upstream"
+
+[submit.perforce]
+workspace = "my-ws"
+shelve_by_default = false
+
+[submit.svn]
+repo_url = "svn://example.com/trunk"
+"#;
+        let config: WorkflowConfig = toml::from_str(toml).unwrap();
+        assert_eq!(config.submit.git.branch_prefix, "feature/");
+        assert_eq!(config.submit.git.target_branch, "develop");
+        assert_eq!(config.submit.git.remote, "upstream");
+        assert_eq!(config.submit.perforce.workspace.as_deref(), Some("my-ws"));
+        assert!(!config.submit.perforce.shelve_by_default);
+        assert_eq!(
+            config.submit.svn.repo_url.as_deref(),
+            Some("svn://example.com/trunk")
+        );
     }
 }

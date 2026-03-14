@@ -3193,7 +3193,7 @@ Event routing handles *reactive* responses to things that already happened. It d
 ---
 
 ### v0.11.0.1 — Draft Apply Defaults & CLI Flag Cleanup
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Make `ta draft apply` do the right thing by default when VCS is configured. Today the full submit workflow (commit + push + PR) only runs if the user passes `--git-commit` or has `auto_commit = true` in `workflow.toml`. Users shouldn't need to remember flags or configure workflow.toml to get basic VCS integration.
 
 #### Problem
@@ -3229,13 +3229,27 @@ shelve_by_default = true  # shelve instead of submit
 ```
 
 #### Items
-1. [ ] **VCS-agnostic CLI flags**: Replace `--git-commit`/`--git-push` with `--submit`/`--no-submit` and `--review`/`--no-review`. `--submit` means "run the full stage+submit workflow for the configured adapter." `--no-submit` copies files only. Backward compat aliases for `--git-commit` and `--git-push`.
-2. [ ] **Default to `--submit` when adapter is configured**: If `[submit].adapter` is anything other than `"none"`, default to running the full submit workflow. `--no-submit` overrides. Plain `ta draft apply <id>` does the right thing.
-3. [ ] **Rename workflow.toml settings**: `auto_commit`/`auto_push` → `auto_submit`. `auto_review` stays. Deprecate old names with backward compat.
-4. [ ] **Adapter-specific config sections**: Each adapter reads its own `[submit.<adapter>]` section. Git reads `[submit.git]`, Perforce reads `[submit.perforce]`, etc. Common settings stay in `[submit]`.
-5. [ ] **`--dry-run` for submit**: Show what the adapter would do (git: "would create branch ta/foo, push to origin, open PR targeting main"; P4: "would create CL 12345, shelve files") without actually doing it.
-6. [ ] **Test: default submit when VCS detected**: Apply without flags in a git repo → expect full stage+submit+review.
-7. [ ] **Test: `--no-submit` copies files only**: Apply with `--no-submit` → files copied, no VCS operations.
+1. [x] **VCS-agnostic CLI flags**: Replace `--git-commit`/`--git-push` with `--submit`/`--no-submit` and `--review`/`--no-review`. `--submit` means "run the full stage+submit workflow for the configured adapter." `--no-submit` copies files only. Backward compat aliases for `--git-commit` and `--git-push`.
+2. [x] **Default to `--submit` when adapter is configured**: If `[submit].adapter` is anything other than `"none"`, default to running the full submit workflow. `--no-submit` overrides. Plain `ta draft apply <id>` does the right thing.
+3. [x] **Rename workflow.toml settings**: `auto_commit`/`auto_push` → `auto_submit`. `auto_review` stays (now `Option<bool>`). Deprecate old names with backward compat.
+4. [x] **Adapter-specific config sections**: Each adapter reads its own `[submit.<adapter>]` section. Git reads `[submit.git]`, Perforce reads `[submit.perforce]`, SVN reads `[submit.svn]`. Common settings stay in `[submit]`.
+5. [x] **`--dry-run` for submit**: Show what the adapter would do without actually executing. Available on both `ta draft apply` and `ta pr apply`.
+6. [x] **Test: default submit when VCS detected**: `apply_default_submit_when_vcs_detected` — apply in a git repo with no flags, verify ta/ branch created with commit.
+7. [x] **Test: `--no-submit` copies files only**: `apply_no_submit_copies_files_only` — apply with git_commit=false, verify files copied but no ta/ branch.
+
+#### Tests added (12 total)
+- `config::tests::effective_auto_submit_defaults_true_when_adapter_set`
+- `config::tests::effective_auto_submit_defaults_false_when_no_adapter`
+- `config::tests::effective_auto_submit_explicit_override`
+- `config::tests::effective_auto_submit_backward_compat_both_auto`
+- `config::tests::effective_auto_submit_backward_compat_commit_only`
+- `config::tests::effective_auto_review_defaults_true_when_adapter_set`
+- `config::tests::effective_auto_review_defaults_false_when_no_adapter`
+- `config::tests::effective_auto_review_explicit_override`
+- `config::tests::parse_toml_with_auto_submit`
+- `config::tests::parse_toml_with_adapter_specific_sections`
+- `commands::draft::tests::apply_default_submit_when_vcs_detected`
+- `commands::draft::tests::apply_no_submit_copies_files_only`
 
 #### Version: `0.11.0-alpha.1`
 
