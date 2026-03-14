@@ -1,8 +1,9 @@
-//! Submit adapters for VCS integration
+//! Source adapters for VCS integration
 //!
-//! This crate provides pluggable adapters for submitting changes through different
-//! version control systems and workflows. The core abstraction is the `SubmitAdapter`
-//! trait, with built-in implementations for Git, SVN (stub), Perforce (stub),
+//! This crate provides pluggable adapters for source control operations through
+//! different version control systems and workflows. The core abstraction is the
+//! `SourceAdapter` trait (unified from the former `SubmitAdapter` in v0.11.1),
+//! with built-in implementations for Git, SVN (stub), Perforce (stub),
 //! and a "none" fallback.
 
 pub mod adapter;
@@ -13,13 +14,20 @@ pub mod perforce;
 pub mod registry;
 pub mod svn;
 
-pub use adapter::{CommitResult, PushResult, ReviewResult, SavedVcsState, SubmitAdapter};
+// Primary exports (v0.11.1+)
+pub use adapter::{
+    CommitResult, PushResult, ReviewResult, SavedVcsState, SourceAdapter, SyncResult,
+};
+
+// Backward-compatible re-export: SubmitAdapter is a type alias for SourceAdapter.
+pub use adapter::SubmitAdapter;
+
 pub use config::{
     BuildConfig, DiffConfig, GitConfig, PerforceConfig, ShellConfig, SubmitConfig, SvnConfig,
-    VerifyCommand, VerifyConfig, VerifyOnFailure, WorkflowConfig,
+    SyncConfig, VerifyCommand, VerifyConfig, VerifyOnFailure, WorkflowConfig,
 };
 pub use git::GitAdapter;
 pub use none::NoneAdapter;
 pub use perforce::PerforceAdapter;
-pub use registry::{detect_adapter, known_adapters, select_adapter};
+pub use registry::{detect_adapter, known_adapters, select_adapter, select_adapter_with_sync};
 pub use svn::SvnAdapter;

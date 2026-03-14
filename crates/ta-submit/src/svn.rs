@@ -13,7 +13,9 @@ use std::process::Command;
 use ta_changeset::DraftPackage;
 use ta_goal::GoalRun;
 
-use crate::adapter::{CommitResult, PushResult, Result, ReviewResult, SubmitAdapter, SubmitError};
+use crate::adapter::{
+    CommitResult, PushResult, Result, ReviewResult, SourceAdapter, SubmitError, SyncResult,
+};
 use crate::config::SubmitConfig;
 
 /// SVN adapter implementing Subversion workflow.
@@ -54,7 +56,7 @@ impl SvnAdapter {
     }
 }
 
-impl SubmitAdapter for SvnAdapter {
+impl SourceAdapter for SvnAdapter {
     fn prepare(&self, _goal: &GoalRun, _config: &SubmitConfig) -> Result<()> {
         // SVN doesn't use branches the same way as Git.
         // No-op: the working copy is already pointing at the correct location.
@@ -113,6 +115,39 @@ impl SubmitAdapter for SvnAdapter {
             message: "SVN has no built-in review workflow. Consider using a code review tool like Crucible or ReviewBoard.".to_string(),
             metadata: Default::default(),
         })
+    }
+
+    fn sync_upstream(&self) -> Result<SyncResult> {
+        tracing::info!("SvnAdapter: running svn update");
+
+        match self.svn_cmd(&["update"]) {
+            Ok(output) => {
+                // Try to detect conflicts from "C " prefix lines in svn update output.
+                let conflicts: Vec<String> = output
+                    .lines()
+                    .filter(|l| l.starts_with("C ") || l.starts_with("C\t"))
+                    .map(|l| l[2..].trim().to_string())
+                    .collect();
+
+                // Try to count updated files from "U " prefix lines.
+                let updated_count = output
+                    .lines()
+                    .filter(|l| l.starts_with("U ") || l.starts_with("A ") || l.starts_with("D "))
+                    .count();
+
+                Ok(SyncResult {
+                    updated: updated_count > 0 || !conflicts.is_empty(),
+                    conflicts,
+                    new_commits: updated_count as u32,
+                    message: format!(
+                        "svn update completed. {}",
+                        output.lines().last().unwrap_or("")
+                    ),
+                    metadata: Default::default(),
+                })
+            }
+            Err(e) => Err(SubmitError::SyncError(format!("svn update failed: {}", e))),
+        }
     }
 
     fn name(&self) -> &str {

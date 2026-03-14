@@ -3256,35 +3256,34 @@ shelve_by_default = true  # shelve instead of submit
 ---
 
 ### v0.11.1 — `SourceAdapter` Unification & `ta sync`
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Merge the current `SubmitAdapter` trait with sync operations into a unified `SourceAdapter` trait. Add `ta sync` command. The trait defines abstract VCS operations; provider-specific mechanics (rebase, fast-forward, shelving) live in each implementation.
 
 See `docs/MISSION-AND-SCOPE.md` for the full `SourceAdapter` trait design and per-provider operation mapping.
 
-#### Items
+#### Completed
 
-1. **`SourceAdapter` trait** (`crates/ta-submit/src/adapter.rs`):
-   - Rename `SubmitAdapter` → `SourceAdapter`
-   - Add `sync_upstream(&self) -> Result<SyncResult>` abstract method
-   - `SyncResult`: `{ updated: bool, conflicts: Vec<String>, new_commits: u32 }`
-   - Provider-specific config namespaced under `[source.git]`, `[source.perforce]`, etc.
+1. [x] **`SourceAdapter` trait** (`crates/ta-submit/src/adapter.rs`): Renamed `SubmitAdapter` → `SourceAdapter` with backward-compatible type alias. Added `sync_upstream(&self) -> Result<SyncResult>` with default no-op implementation. Added `SyncResult` struct with `updated`, `conflicts`, `new_commits`, `message`, and `metadata` fields. Added `SyncError` and `SyncConflict` variants to `SubmitError`. Added `SourceConfig` and `SyncConfig` to workflow config (`[source.sync]` section with `auto_sync`, `strategy`, `remote`, `branch`).
+2. [x] **Git implementation** (`crates/ta-submit/src/git.rs`): `sync_upstream()` runs `git fetch` + merge/rebase/ff-only per `source.sync.strategy` config. Counts new commits via `rev-list --count`. Conflict detection via `git diff --name-only --diff-filter=U`. Returns structured `SyncResult` with conflict file list. Added `with_full_config()` constructor accepting `SyncConfig`.
+3. [x] **SVN implementation** (`crates/ta-submit/src/svn.rs`): `sync_upstream()` runs `svn update`, parses output for conflicts ("C " lines) and updates ("U ", "A ", "D " lines).
+4. [x] **Perforce implementation** (`crates/ta-submit/src/perforce.rs`): `sync_upstream()` runs `p4 sync`, counts synced files from output.
+5. [x] **`ta sync` CLI command** (`apps/ta-cli/src/commands/sync.rs`): Calls `SourceAdapter::sync_upstream()`, emits `sync_completed` or `sync_conflict` events via `FsEventStore`, warns about active staging workspaces, shows troubleshooting on failure.
+6. [x] **`ta shell` integration**: Added `sync` and `verify` to daemon's `ta_subcommands` list so `ta> sync` routes automatically as `ta sync`.
+7. [x] **Wire into `ta draft apply`**: Optional `auto_sync = true` in `[source.sync]` config. After apply + commit + push + review, auto-syncs upstream with conflict warning if needed.
+8. [x] **Events**: Added `SyncCompleted { adapter, new_commits, message }` and `SyncConflict { adapter, conflicts, message }` variants to `SessionEvent`.
+9. [x] **Registry**: Added `select_adapter_with_sync()` for passing `SyncConfig` to adapters. Updated all registry and consumer code to use `SourceAdapter`.
+10. [x] **Backward compatibility**: `SubmitAdapter` remains as a type alias for `SourceAdapter`. All existing imports continue to work.
 
-2. **Git implementation** (`crates/ta-submit/src/git.rs`):
-   - `sync_upstream`: `git fetch origin` + merge/rebase/ff per `source.git.sync_strategy`
-   - Conflict detection: parse merge output, return structured `SyncResult`
-
-3. **`ta sync` CLI command** (`apps/ta-cli/src/commands/sync.rs`):
-   - Calls `SourceAdapter::sync_upstream()`
-   - Emits `sync_completed` or `sync_conflict` event
-   - If staging is active, warns or auto-rebases per config
-
-4. **`ta shell` integration**:
-   - `ta> sync` as shell shortcut
-   - SSE event for sync results
-
-5. **Wire into `ta draft apply`**:
-   - Optional `auto_sync = true` in `[source.sync]` config
-   - After apply + commit + push, auto-sync main if configured
+#### Tests: 9 new tests
+- `sync_result_is_clean_when_no_conflicts` (adapter.rs)
+- `sync_result_is_not_clean_with_conflicts` (adapter.rs)
+- `sync_result_serialization_roundtrip` (adapter.rs)
+- `test_git_adapter_sync_upstream_already_up_to_date` (git.rs)
+- `test_git_adapter_sync_upstream_with_local_remote` (git.rs)
+- `sync_config_defaults` (config.rs)
+- `parse_toml_with_source_sync_section` (config.rs)
+- `parse_toml_without_source_section_uses_default` (config.rs)
+- `none_adapter_sync_returns_not_updated` (sync.rs)
 
 #### Version: `0.11.1-alpha`
 
@@ -3583,7 +3582,7 @@ Alternative sources (no registry needed):
 
 #### Items
 1. [ ] **`ta new --plugins` flag**: Declare required plugins at project creation. `ta new --name my-bot --plugins discord,slack --vcs git` generates a `project.toml` with those declarations pre-filled.
-2. [ ] **`ta new --vcs` flag**: Set the VCS adapter. Defaults to `git`. `--vcs perforce` adds `ta-submit-perforce` to the plugin requirements.
+2. [ ] **`ta new --vcs` flag + interactive VCS prompt**: Set the VCS adapter explicitly via `--vcs git|svn|perforce|none`. When `--vcs` is omitted in interactive mode, `ta new` asks "Do you want version control?" with options derived from available adapters/plugins (e.g., `[git, svn, perforce, none]`). The selected adapter is written into `.ta/workflow.toml` `[submit].adapter`, and for Git, runs `git init` + initial commit automatically. `--vcs perforce` also adds `ta-submit-perforce` to the plugin requirements in `project.toml`.
 3. [ ] **Template project generator**: `ta new` produces a project with `project.toml`, `README.md` with setup instructions, `.ta/` config pre-wired for the declared plugins, and a `setup.sh` fallback for users without TA installed.
 4. [ ] **`setup.sh` bootstrap**: Standalone shell script (committed to the template repo) that installs TA if missing, runs `ta setup`, and prints next steps. Works on macOS/Linux. PowerShell equivalent for Windows.
 5. [ ] **Reference template: ta-discord-template**: Published to `Trusted-Autonomy/ta-discord-template`. Demonstrates Discord channel plugin integration with a local TA daemon. Includes project.toml, setup.sh, .env.example, test-connection script.

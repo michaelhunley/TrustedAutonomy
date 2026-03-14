@@ -2198,14 +2198,14 @@ fn apply_package(
 
     // Submit workflow integration (VCS-agnostic: git, svn, perforce, etc.).
     if git_commit {
-        use ta_submit::{select_adapter, SubmitAdapter, WorkflowConfig};
+        use ta_submit::{select_adapter, SourceAdapter, WorkflowConfig};
 
         // Load workflow config if it exists.
         let workflow_config_path = target_dir.join(".ta/workflow.toml");
         let workflow_config = WorkflowConfig::load_or_default(&workflow_config_path);
 
         // Select adapter via registry (auto-detects VCS if config is default "none").
-        let adapter: Box<dyn SubmitAdapter> = select_adapter(&target_dir, &workflow_config.submit);
+        let adapter: Box<dyn SourceAdapter> = select_adapter(&target_dir, &workflow_config.submit);
 
         if adapter.name() == "none" && !dry_run {
             eprintln!(
@@ -2336,6 +2336,32 @@ fn apply_package(
                             eprintln!(
                                 "  You can manually create a review from the submitted branch."
                             );
+                        }
+                    }
+                }
+
+                // Auto-sync upstream if configured (v0.11.1).
+                if workflow_config.source.sync.auto_sync {
+                    println!("\nAuto-syncing upstream (source.sync.auto_sync = true)...");
+                    match adapter.sync_upstream() {
+                        Ok(result) if result.is_clean() && result.updated => {
+                            println!(
+                                "[ok] Synced {} new commit(s) from upstream.",
+                                result.new_commits
+                            );
+                        }
+                        Ok(result) if !result.is_clean() => {
+                            eprintln!(
+                                "Warning: auto-sync found {} conflict(s). \
+                                 Resolve manually with `ta sync`.",
+                                result.conflicts.len()
+                            );
+                        }
+                        Ok(_) => {
+                            println!("[ok] Already up to date.");
+                        }
+                        Err(e) => {
+                            eprintln!("Warning: auto-sync failed: {}. Run `ta sync` manually.", e);
                         }
                     }
                 }

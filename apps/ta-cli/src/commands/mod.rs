@@ -31,6 +31,7 @@ pub mod setup;
 pub mod shell;
 pub mod shell_tui;
 pub mod status;
+pub mod sync;
 pub mod terms;
 pub mod token;
 pub mod verify;

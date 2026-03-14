@@ -1138,6 +1138,7 @@ Each adapter contributes VCS-specific exclude patterns that are merged with your
 | `commit()` | `git add` + `git commit` | `svn add` + `svn commit` | `p4 reconcile` + `p4 shelve` |
 | `push()` | `git push` | No-op (commit is remote) | `p4 submit` |
 | `open_review()` | `gh pr create` | No-op | Helix Swarm (if configured) |
+| `sync_upstream()` | `git fetch` + merge/rebase/ff | `svn update` | `p4 sync` |
 | `save_state()` | Save current branch | No-op | Save client/changelist |
 | `restore_state()` | Switch back to original branch | No-op | Log restore |
 
@@ -1152,6 +1153,32 @@ adapter = "perforce"
 ```
 
 **Build-time VCS revision**: The `ta` binary embeds a VCS revision at build time. Set `TA_REVISION` environment variable to override auto-detection (useful in CI for non-Git builds).
+
+### Syncing Upstream (`ta sync`)
+
+After a PR merges, your local branch is stale. `ta sync` pulls upstream changes through the configured VCS adapter:
+
+```bash
+ta sync
+```
+
+For Git, this runs `git fetch` followed by merge, rebase, or fast-forward depending on your configuration. If conflicts are detected, `ta sync` reports them without aborting — you resolve conflicts manually.
+
+Configure sync behavior in `.ta/workflow.toml`:
+
+```toml
+[source.sync]
+auto_sync = false    # auto-sync after ta draft apply (default: false)
+strategy = "merge"   # "merge" (default), "rebase", or "ff-only"
+remote = "origin"    # remote to sync from (default: "origin")
+branch = "main"      # branch to sync from (default: "main")
+```
+
+**Auto-sync after apply**: Set `auto_sync = true` to automatically sync upstream after `ta draft apply` completes the submit workflow. If conflicts are found during auto-sync, a warning is printed and you can run `ta sync` manually to resolve.
+
+**Shell shortcut**: In `ta shell`, type `sync` to run `ta sync` directly.
+
+**Events**: `ta sync` emits `sync_completed` or `sync_conflict` events, which flow through channels and event routing like all other TA events.
 
 ### Agent Configuration
 
@@ -4587,6 +4614,8 @@ TA has a working end-to-end workflow: staging isolation, agent wrapping, draft r
 | v0.10.18.6 | `ta daemon` subcommand (start/stop/restart/status/log) | Done |
 | v0.10.18.7 | Per-platform icon packaging | Done |
 | v0.11.0 | Event-driven agent routing | Done |
+| v0.11.0.1 | Draft apply defaults & CLI flag cleanup | Done |
+| v0.11.1 | `SourceAdapter` unification & `ta sync` | Done |
 
 See [PLAN.md](../PLAN.md) for full details on each phase.
 

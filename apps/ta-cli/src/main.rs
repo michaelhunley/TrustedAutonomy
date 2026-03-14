@@ -277,6 +277,12 @@ enum Commands {
         /// Agent ID (required for show/accept, optional for status).
         agent: Option<String>,
     },
+    /// Sync the local workspace with upstream changes.
+    ///
+    /// Calls the configured VCS adapter's sync operation (e.g., git fetch + merge/rebase).
+    /// Emits `sync_completed` or `sync_conflict` events. Configure sync behavior
+    /// in `[source.sync]` in `.ta/workflow.toml`.
+    Sync,
     /// Run pre-draft verification checks against a staging workspace.
     ///
     /// Runs the [verify] commands from .ta/workflow.toml in the staging
@@ -535,6 +541,7 @@ fn main() -> anyhow::Result<()> {
         } => commands::gc::execute(&config, *dry_run, *threshold_days, *all, *archive),
         Commands::Status => commands::status::execute(&config),
         Commands::Serve => commands::serve::execute(&project_root),
+        Commands::Sync => commands::sync::execute(&config),
         Commands::Verify { goal_id } => commands::verify::execute(&config, goal_id.as_deref()),
         Commands::Conversation { goal_id, json } => {
             commands::conversation::execute(&config, goal_id, *json)
