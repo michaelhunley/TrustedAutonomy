@@ -6,9 +6,11 @@ use ta_changeset::DraftPackage;
 use ta_goal::GoalRun;
 
 use crate::adapter::{
-    CommitResult, PushResult, Result, ReviewResult, SavedVcsState, SubmitAdapter, SubmitError,
+    CommitResult, PushResult, Result, ReviewResult, SavedVcsState, SourceAdapter, SubmitError,
+    SyncResult,
 };
 use crate::config::SubmitConfig;
+use crate::config::SyncConfig;
 
 /// Git adapter implementing branch-based workflow
 ///
@@ -22,6 +24,8 @@ pub struct GitAdapter {
     work_dir: std::path::PathBuf,
     /// Submit configuration (co-author, branch prefix, etc.)
     config: SubmitConfig,
+    /// Sync configuration (strategy, remote, branch)
+    sync_config: SyncConfig,
 }
 
 impl GitAdapter {
@@ -30,6 +34,7 @@ impl GitAdapter {
         Self {
             work_dir: work_dir.into(),
             config: SubmitConfig::default(),
+            sync_config: SyncConfig::default(),
         }
     }
 
@@ -38,6 +43,20 @@ impl GitAdapter {
         Self {
             work_dir: work_dir.into(),
             config,
+            sync_config: SyncConfig::default(),
+        }
+    }
+
+    /// Create a new GitAdapter with submit and sync configuration
+    pub fn with_full_config(
+        work_dir: impl Into<std::path::PathBuf>,
+        config: SubmitConfig,
+        sync_config: SyncConfig,
+    ) -> Self {
+        Self {
+            work_dir: work_dir.into(),
+            config,
+            sync_config,
         }
     }
 
@@ -106,7 +125,7 @@ impl GitAdapter {
     }
 }
 
-impl SubmitAdapter for GitAdapter {
+impl SourceAdapter for GitAdapter {
     fn prepare(&self, goal: &GoalRun, config: &SubmitConfig) -> Result<()> {
         let branch_name = self.branch_name(goal, config);
 
@@ -250,6 +269,112 @@ impl SubmitAdapter for GitAdapter {
 
     fn exclude_patterns(&self) -> Vec<String> {
         vec![".git/".to_string()]
+    }
+
+    fn sync_upstream(&self) -> Result<SyncResult> {
+        let remote = &self.sync_config.remote;
+        let branch = &self.sync_config.branch;
+        let strategy = &self.sync_config.strategy;
+
+        tracing::info!(
+            remote = %remote,
+            branch = %branch,
+            strategy = %strategy,
+            "GitAdapter: syncing upstream"
+        );
+
+        // Fetch from remote.
+        self.git_cmd(&["fetch", remote])?;
+
+        // Count new commits on remote that we don't have locally.
+        let remote_ref = format!("{}/{}", remote, branch);
+        let count_output = self
+            .git_cmd(&["rev-list", "--count", &format!("HEAD..{}", remote_ref)])
+            .unwrap_or_else(|_| "0".to_string());
+        let new_commits: u32 = count_output.trim().parse().unwrap_or(0);
+
+        if new_commits == 0 {
+            return Ok(SyncResult {
+                updated: false,
+                conflicts: vec![],
+                new_commits: 0,
+                message: format!("Already up to date with {}/{}.", remote, branch),
+                metadata: [
+                    ("remote".to_string(), remote.clone()),
+                    ("branch".to_string(), branch.clone()),
+                ]
+                .into_iter()
+                .collect(),
+            });
+        }
+
+        // Apply the upstream changes using the configured strategy.
+        let merge_result = match strategy.as_str() {
+            "rebase" => self.git_cmd(&["rebase", &remote_ref]),
+            "ff-only" => self.git_cmd(&["merge", "--ff-only", &remote_ref]),
+            _ => self.git_cmd(&["merge", &remote_ref]),
+        };
+
+        match merge_result {
+            Ok(output) => Ok(SyncResult {
+                updated: true,
+                conflicts: vec![],
+                new_commits,
+                message: format!(
+                    "Synced {} new commit(s) from {}/{} (strategy: {}). {}",
+                    new_commits, remote, branch, strategy, output
+                ),
+                metadata: [
+                    ("remote".to_string(), remote.clone()),
+                    ("branch".to_string(), branch.clone()),
+                    ("strategy".to_string(), strategy.clone()),
+                ]
+                .into_iter()
+                .collect(),
+            }),
+            Err(e) => {
+                // Check for merge conflicts.
+                let conflict_output = self
+                    .git_cmd(&["diff", "--name-only", "--diff-filter=U"])
+                    .unwrap_or_default();
+                let conflicts: Vec<String> = conflict_output
+                    .lines()
+                    .filter(|l| !l.is_empty())
+                    .map(|l| l.to_string())
+                    .collect();
+
+                if conflicts.is_empty() {
+                    // Not a conflict — infrastructure failure.
+                    Err(SubmitError::SyncError(format!(
+                        "Failed to sync {}/{} using strategy '{}': {}",
+                        remote, branch, strategy, e
+                    )))
+                } else {
+                    // Conflicts detected — return Ok with conflict info.
+                    // The caller decides whether to abort the merge.
+                    Ok(SyncResult {
+                        updated: true,
+                        conflicts: conflicts.clone(),
+                        new_commits,
+                        message: format!(
+                            "Synced {} new commit(s) from {}/{} but {} file(s) have conflicts. \
+                             Resolve conflicts manually, then `git add` and `git commit`.",
+                            new_commits,
+                            remote,
+                            branch,
+                            conflicts.len()
+                        ),
+                        metadata: [
+                            ("remote".to_string(), remote.clone()),
+                            ("branch".to_string(), branch.clone()),
+                            ("strategy".to_string(), strategy.clone()),
+                        ]
+                        .into_iter()
+                        .collect(),
+                    })
+                }
+            }
+        }
     }
 
     fn save_state(&self) -> Result<Option<SavedVcsState>> {
@@ -568,6 +693,80 @@ mod tests {
         adapter.restore_state(state).unwrap();
         let restored = adapter.current_branch().unwrap();
         assert_eq!(restored, original_branch);
+    }
+
+    #[test]
+    fn test_git_adapter_sync_upstream_already_up_to_date() {
+        let dir = tempdir().unwrap();
+        init_git_repo(dir.path()).unwrap();
+
+        let adapter = GitAdapter::new(dir.path());
+        // No remote configured, so sync should fail gracefully or show up-to-date.
+        // Since there's no remote "origin", fetch will fail.
+        let result = adapter.sync_upstream();
+        // Without a remote, this will return an error (VCS operation failed).
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_git_adapter_sync_upstream_with_local_remote() {
+        // Create a "remote" repo and a "local" clone to test sync.
+        let remote_dir = tempdir().unwrap();
+        init_git_repo(remote_dir.path()).unwrap();
+
+        // Clone it to create a local repo with origin pointing to remote.
+        let local_dir = tempdir().unwrap();
+        Command::new("git")
+            .args(["clone", &remote_dir.path().to_string_lossy(), "."])
+            .current_dir(local_dir.path())
+            .output()
+            .unwrap();
+
+        // Detect the actual default branch name (may be "main" or "master").
+        let branch_output = Command::new("git")
+            .args(["rev-parse", "--abbrev-ref", "HEAD"])
+            .current_dir(local_dir.path())
+            .output()
+            .unwrap();
+        let branch_name = String::from_utf8_lossy(&branch_output.stdout)
+            .trim()
+            .to_string();
+
+        // Configure the sync adapter with the correct branch.
+        let sync_config = crate::config::SyncConfig {
+            branch: branch_name,
+            ..Default::default()
+        };
+        let adapter =
+            GitAdapter::with_full_config(local_dir.path(), SubmitConfig::default(), sync_config);
+
+        // At this point local is up to date with remote.
+        let result = adapter.sync_upstream().unwrap();
+        assert!(!result.updated);
+        assert_eq!(result.new_commits, 0);
+        assert!(result.is_clean());
+
+        // Now add a commit to the remote.
+        std::fs::write(remote_dir.path().join("new_file.txt"), "hello\n").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(remote_dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "Remote commit"])
+            .current_dir(remote_dir.path())
+            .output()
+            .unwrap();
+
+        // Sync should pick up the new commit.
+        let result = adapter.sync_upstream().unwrap();
+        assert!(result.updated);
+        assert_eq!(result.new_commits, 1);
+        assert!(result.is_clean());
+
+        // Verify the file is now present locally.
+        assert!(local_dir.path().join("new_file.txt").exists());
     }
 
     #[test]

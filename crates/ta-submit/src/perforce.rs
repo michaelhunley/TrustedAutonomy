@@ -15,7 +15,8 @@ use ta_changeset::DraftPackage;
 use ta_goal::GoalRun;
 
 use crate::adapter::{
-    CommitResult, PushResult, Result, ReviewResult, SavedVcsState, SubmitAdapter, SubmitError,
+    CommitResult, PushResult, Result, ReviewResult, SavedVcsState, SourceAdapter, SubmitError,
+    SyncResult,
 };
 use crate::config::SubmitConfig;
 
@@ -69,7 +70,7 @@ impl PerforceAdapter {
     }
 }
 
-impl SubmitAdapter for PerforceAdapter {
+impl SourceAdapter for PerforceAdapter {
     fn prepare(&self, goal: &GoalRun, _config: &SubmitConfig) -> Result<()> {
         tracing::info!(
             "PerforceAdapter: creating pending changelist for goal {}",
@@ -174,6 +175,26 @@ impl SubmitAdapter for PerforceAdapter {
             message: "Changes shelved. If Helix Swarm is configured, the review is available in the Swarm web UI.".to_string(),
             metadata: Default::default(),
         })
+    }
+
+    fn sync_upstream(&self) -> Result<SyncResult> {
+        tracing::info!("PerforceAdapter: running p4 sync");
+
+        match self.p4_cmd(&["sync"]) {
+            Ok(output) => {
+                // Count synced files from p4 sync output.
+                let file_count = output.lines().count();
+
+                Ok(SyncResult {
+                    updated: file_count > 0,
+                    conflicts: vec![],
+                    new_commits: file_count as u32,
+                    message: format!("p4 sync completed: {} file(s) updated.", file_count),
+                    metadata: Default::default(),
+                })
+            }
+            Err(e) => Err(SubmitError::SyncError(format!("p4 sync failed: {}", e))),
+        }
     }
 
     fn name(&self) -> &str {

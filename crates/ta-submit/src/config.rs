@@ -10,6 +10,10 @@ pub struct WorkflowConfig {
     #[serde(default)]
     pub submit: SubmitConfig,
 
+    /// Source sync configuration (v0.11.1)
+    #[serde(default)]
+    pub source: SourceConfig,
+
     /// Diff viewing configuration
     #[serde(default)]
     pub diff: DiffConfig,
@@ -159,6 +163,58 @@ fn default_shelve() -> bool {
 pub struct SvnConfig {
     /// SVN repository URL (for commit messages / metadata)
     pub repo_url: Option<String>,
+}
+
+/// Source-level configuration section (`[source]` in workflow.toml).
+///
+/// Groups adapter-agnostic sync settings. Provider-specific options
+/// live in `[submit.git]`, `[submit.svn]`, etc.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SourceConfig {
+    /// Sync behavior configuration.
+    #[serde(default)]
+    pub sync: SyncConfig,
+}
+
+/// Sync upstream configuration (`[source.sync]` in workflow.toml).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncConfig {
+    /// Automatically sync upstream after `ta draft apply` succeeds.
+    /// Default: false.
+    #[serde(default)]
+    pub auto_sync: bool,
+
+    /// Git sync strategy: "merge" (default), "rebase", or "ff-only".
+    /// Other adapters ignore this field.
+    #[serde(default = "default_sync_strategy")]
+    pub strategy: String,
+
+    /// Remote name to sync from. Default: "origin".
+    #[serde(default = "default_remote")]
+    pub remote: String,
+
+    /// Branch to sync from. Default: "main".
+    #[serde(default = "default_sync_branch")]
+    pub branch: String,
+}
+
+impl Default for SyncConfig {
+    fn default() -> Self {
+        Self {
+            auto_sync: false,
+            strategy: default_sync_strategy(),
+            remote: default_remote(),
+            branch: default_sync_branch(),
+        }
+    }
+}
+
+fn default_sync_strategy() -> String {
+    "merge".to_string()
+}
+
+fn default_sync_branch() -> String {
+    "main".to_string()
 }
 
 /// Git adapter configuration
@@ -946,6 +1002,42 @@ auto_review = true
         // auto_review was a bool before; now Option<bool>. Explicit true in TOML
         // should be parsed as Some(true).
         assert!(config.submit.effective_auto_review());
+    }
+
+    #[test]
+    fn sync_config_defaults() {
+        let config = SyncConfig::default();
+        assert!(!config.auto_sync);
+        assert_eq!(config.strategy, "merge");
+        assert_eq!(config.remote, "origin");
+        assert_eq!(config.branch, "main");
+    }
+
+    #[test]
+    fn parse_toml_with_source_sync_section() {
+        let toml = r#"
+[source.sync]
+auto_sync = true
+strategy = "rebase"
+remote = "upstream"
+branch = "develop"
+"#;
+        let config: WorkflowConfig = toml::from_str(toml).unwrap();
+        assert!(config.source.sync.auto_sync);
+        assert_eq!(config.source.sync.strategy, "rebase");
+        assert_eq!(config.source.sync.remote, "upstream");
+        assert_eq!(config.source.sync.branch, "develop");
+    }
+
+    #[test]
+    fn parse_toml_without_source_section_uses_default() {
+        let toml = r#"
+[submit]
+adapter = "git"
+"#;
+        let config: WorkflowConfig = toml::from_str(toml).unwrap();
+        assert!(!config.source.sync.auto_sync);
+        assert_eq!(config.source.sync.strategy, "merge");
     }
 
     #[test]

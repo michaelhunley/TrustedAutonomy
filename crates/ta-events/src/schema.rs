@@ -222,6 +222,20 @@ pub enum SessionEvent {
         exit_code: i32,
         stderr: String,
     },
+
+    /// Upstream sync completed successfully (v0.11.1).
+    SyncCompleted {
+        adapter: String,
+        new_commits: u32,
+        message: String,
+    },
+
+    /// Upstream sync detected conflicts (v0.11.1).
+    SyncConflict {
+        adapter: String,
+        conflicts: Vec<String>,
+        message: String,
+    },
 }
 
 fn default_response_hint() -> String {
@@ -252,6 +266,8 @@ impl SessionEvent {
             Self::InteractiveSessionStarted { .. } => "interactive_session_started",
             Self::InteractiveSessionCompleted { .. } => "interactive_session_completed",
             Self::CommandFailed { .. } => "command_failed",
+            Self::SyncCompleted { .. } => "sync_completed",
+            Self::SyncConflict { .. } => "sync_conflict",
         }
     }
 
@@ -578,11 +594,21 @@ mod tests {
                 turn_count: 3,
                 outcome: "completed".into(),
             },
+            SessionEvent::SyncCompleted {
+                adapter: "git".into(),
+                new_commits: 3,
+                message: "ok".into(),
+            },
+            SessionEvent::SyncConflict {
+                adapter: "git".into(),
+                conflicts: vec!["a.rs".into()],
+                message: "conflict".into(),
+            },
         ];
         for e in &events {
             assert!(!e.event_type().is_empty());
         }
-        assert_eq!(events.len(), 19);
+        assert_eq!(events.len(), 21);
     }
 
     #[test]

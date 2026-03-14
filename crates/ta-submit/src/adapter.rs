@@ -1,4 +1,8 @@
-//! Core SubmitAdapter trait and result types
+//! Core SourceAdapter trait and result types
+//!
+//! The `SourceAdapter` trait (formerly `SubmitAdapter`) is the unified abstraction
+//! for VCS operations. It combines submit operations (commit, push, open review)
+//! with sync operations (fetch upstream, detect conflicts).
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -9,7 +13,7 @@ use thiserror::Error;
 
 use crate::config::SubmitConfig;
 
-/// Errors that can occur during submit operations
+/// Errors that can occur during source operations
 #[derive(Debug, Error)]
 pub enum SubmitError {
     #[error("Adapter not configured: {0}")]
@@ -29,6 +33,12 @@ pub enum SubmitError {
 
     #[error("Invalid state: {0}")]
     InvalidState(String),
+
+    #[error("Sync failed: {0}")]
+    SyncError(String),
+
+    #[error("Sync conflict: {conflicts} file(s) in conflict")]
+    SyncConflict { conflicts: usize },
 }
 
 pub type Result<T> = std::result::Result<T, SubmitError>;
@@ -78,6 +88,33 @@ pub struct ReviewResult {
     pub metadata: HashMap<String, String>,
 }
 
+/// Result of a sync operation — pulling upstream changes into the local workspace.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncResult {
+    /// Whether upstream had new changes that were incorporated.
+    pub updated: bool,
+
+    /// Files with merge conflicts (empty if none).
+    pub conflicts: Vec<String>,
+
+    /// Number of new upstream commits incorporated.
+    pub new_commits: u32,
+
+    /// Human-readable summary of what happened.
+    pub message: String,
+
+    /// Adapter-specific metadata.
+    #[serde(default)]
+    pub metadata: HashMap<String, String>,
+}
+
+impl SyncResult {
+    /// Whether the sync completed without conflicts.
+    pub fn is_clean(&self) -> bool {
+        self.conflicts.is_empty()
+    }
+}
+
 /// Opaque saved VCS state for save/restore around apply operations.
 ///
 /// Each adapter stores its own state (e.g., Git saves the current branch name,
@@ -90,11 +127,14 @@ pub struct SavedVcsState {
     pub data: Box<dyn std::any::Any + Send>,
 }
 
-/// Pluggable adapter for submitting changes through different VCS workflows
+/// Pluggable adapter for source control operations (submit + sync).
 ///
 /// The staging->review->apply loop is VCS-agnostic. This trait allows
 /// different implementations for Git, Perforce, SVN, or custom workflows.
-pub trait SubmitAdapter: Send + Sync {
+///
+/// Renamed from `SubmitAdapter` in v0.11.1 to reflect the unified scope
+/// (submit + sync). The old name is available as a type alias.
+pub trait SourceAdapter: Send + Sync {
     /// Create a working branch/changelist/workspace for this goal
     ///
     /// For Git: creates a feature branch
@@ -122,6 +162,27 @@ pub trait SubmitAdapter: Send + Sync {
     /// For Perforce: create Swarm review
     /// For "none": no-op
     fn open_review(&self, goal: &GoalRun, pr: &DraftPackage) -> Result<ReviewResult>;
+
+    /// Sync the local workspace with upstream changes.
+    ///
+    /// For Git: `git fetch` + merge/rebase/ff per `source.git.sync_strategy`
+    /// For SVN: `svn update`
+    /// For Perforce: `p4 sync`
+    /// For "none": no-op (always returns updated=false)
+    ///
+    /// Returns a `SyncResult` describing what happened. If conflicts are
+    /// detected, `SyncResult.conflicts` is non-empty but the method still
+    /// returns `Ok` — the caller decides how to handle conflicts. Only
+    /// returns `Err` for infrastructure failures (network, permissions).
+    fn sync_upstream(&self) -> Result<SyncResult> {
+        Ok(SyncResult {
+            updated: false,
+            conflicts: vec![],
+            new_commits: 0,
+            message: "No sync operation (default implementation)".to_string(),
+            metadata: HashMap::new(),
+        })
+    }
 
     /// Adapter display name (for CLI output)
     fn name(&self) -> &str;
@@ -174,5 +235,57 @@ pub trait SubmitAdapter: Send + Sync {
     {
         let _ = project_root;
         false
+    }
+}
+
+/// Backward-compatible alias: `SubmitAdapter` is the old name for `SourceAdapter`.
+///
+/// Deprecated in v0.11.1. Use `SourceAdapter` instead.
+pub use SourceAdapter as SubmitAdapter;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sync_result_is_clean_when_no_conflicts() {
+        let result = SyncResult {
+            updated: true,
+            conflicts: vec![],
+            new_commits: 3,
+            message: "ok".to_string(),
+            metadata: HashMap::new(),
+        };
+        assert!(result.is_clean());
+    }
+
+    #[test]
+    fn sync_result_is_not_clean_with_conflicts() {
+        let result = SyncResult {
+            updated: true,
+            conflicts: vec!["src/main.rs".to_string()],
+            new_commits: 3,
+            message: "conflict".to_string(),
+            metadata: HashMap::new(),
+        };
+        assert!(!result.is_clean());
+    }
+
+    #[test]
+    fn sync_result_serialization_roundtrip() {
+        let result = SyncResult {
+            updated: true,
+            conflicts: vec!["a.rs".to_string()],
+            new_commits: 5,
+            message: "synced".to_string(),
+            metadata: [("branch".to_string(), "main".to_string())]
+                .into_iter()
+                .collect(),
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        let restored: SyncResult = serde_json::from_str(&json).unwrap();
+        assert!(restored.updated);
+        assert_eq!(restored.conflicts, vec!["a.rs"]);
+        assert_eq!(restored.new_commits, 5);
     }
 }

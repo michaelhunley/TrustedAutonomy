@@ -6,8 +6,8 @@
 
 use std::path::Path;
 
-use crate::adapter::SubmitAdapter;
-use crate::config::SubmitConfig;
+use crate::adapter::SourceAdapter;
+use crate::config::{SubmitConfig, SyncConfig};
 use crate::git::GitAdapter;
 use crate::none::NoneAdapter;
 use crate::perforce::PerforceAdapter;
@@ -18,7 +18,7 @@ use crate::svn::SvnAdapter;
 /// Detection order: Git -> SVN -> Perforce -> None.
 /// First match wins.
 /// Auto-detect the appropriate VCS adapter with default config.
-pub fn detect_adapter(project_root: &Path) -> Box<dyn SubmitAdapter> {
+pub fn detect_adapter(project_root: &Path) -> Box<dyn SourceAdapter> {
     detect_adapter_with_config(project_root, &SubmitConfig::default())
 }
 
@@ -27,7 +27,7 @@ pub fn detect_adapter(project_root: &Path) -> Box<dyn SubmitAdapter> {
 pub fn detect_adapter_with_config(
     project_root: &Path,
     config: &SubmitConfig,
-) -> Box<dyn SubmitAdapter> {
+) -> Box<dyn SourceAdapter> {
     if GitAdapter::detect(project_root) {
         tracing::info!(adapter = "git", "Auto-detected Git repository");
         return Box::new(GitAdapter::with_config(project_root, config.clone()));
@@ -55,7 +55,7 @@ pub fn detect_adapter_with_config(
 /// 3. If auto-detection fails, fall back to NoneAdapter.
 ///
 /// This replaces the raw `.git/` existence check that was previously in `draft.rs`.
-pub fn select_adapter(project_root: &Path, config: &SubmitConfig) -> Box<dyn SubmitAdapter> {
+pub fn select_adapter(project_root: &Path, config: &SubmitConfig) -> Box<dyn SourceAdapter> {
     match config.adapter.as_str() {
         "git" => {
             tracing::info!(adapter = "git", "Using configured Git adapter");
@@ -83,6 +83,32 @@ pub fn select_adapter(project_root: &Path, config: &SubmitConfig) -> Box<dyn Sub
             );
             detect_adapter_with_config(project_root, config)
         }
+    }
+}
+
+/// Select an adapter with full configuration including sync settings.
+///
+/// Same as `select_adapter` but passes `SyncConfig` to adapters that support it
+/// (currently Git). Other adapters ignore sync config.
+pub fn select_adapter_with_sync(
+    project_root: &Path,
+    config: &SubmitConfig,
+    sync_config: &SyncConfig,
+) -> Box<dyn SourceAdapter> {
+    match config.adapter.as_str() {
+        "git" => {
+            tracing::info!(
+                adapter = "git",
+                "Using configured Git adapter (with sync config)"
+            );
+            Box::new(GitAdapter::with_full_config(
+                project_root,
+                config.clone(),
+                sync_config.clone(),
+            ))
+        }
+        // Other adapters don't use sync config — delegate to select_adapter.
+        _ => select_adapter(project_root, config),
     }
 }
 

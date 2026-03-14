@@ -240,6 +240,8 @@ fn default_ta_subcommands() -> Vec<String> {
         "gc",
         "status",
         "serve",
+        "sync",
+        "verify",
         "conversation",
     ]
     .iter()

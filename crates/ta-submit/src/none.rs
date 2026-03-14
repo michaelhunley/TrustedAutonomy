@@ -3,7 +3,7 @@
 use ta_changeset::DraftPackage;
 use ta_goal::GoalRun;
 
-use crate::adapter::{CommitResult, PushResult, Result, ReviewResult, SubmitAdapter};
+use crate::adapter::{CommitResult, PushResult, Result, ReviewResult, SourceAdapter};
 use crate::config::SubmitConfig;
 
 /// Fallback adapter that performs no VCS operations
@@ -25,7 +25,7 @@ impl Default for NoneAdapter {
     }
 }
 
-impl SubmitAdapter for NoneAdapter {
+impl SourceAdapter for NoneAdapter {
     fn prepare(&self, _goal: &GoalRun, _config: &SubmitConfig) -> Result<()> {
         // No-op: no workspace preparation needed
         tracing::debug!("NoneAdapter: prepare() - no-op");
