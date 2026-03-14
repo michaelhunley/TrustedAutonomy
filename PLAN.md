@@ -3558,6 +3558,10 @@ The current `--listen` mode on `ta-channel-discord` is a quick integration that 
 14. [ ] **Response threading**: Post command responses as thread replies to the original message instead of top-level messages, to keep the channel clean.
 15. [ ] **Long-running command status**: For commands that take >5s (e.g., `ta run`), post an initial "Running..." message, then edit it with the result when done. Use Discord message editing API.
 16. [ ] **Remove `--listen` flag**: Once the daemon manages the listener lifecycle (item 12), the standalone `--listen` mode becomes internal. The user-facing entry point is `ta daemon start` with Discord configured in `daemon.toml`.
+17. [ ] **Goal progress streaming**: Subscribe to daemon SSE events for active goals and post progress updates to the Discord channel (stage transitions, key milestones). Avoids flooding by batching/throttling updates.
+18. [ ] **Draft summary on completion**: When a goal finishes and produces a draft, post the AI summary + artifact list to Discord. Include approve/deny buttons that call the daemon API.
+19. [ ] **`ta plugin build <name|all>`**: Build channel/submit plugins from the main workspace. `ta plugin build discord` builds `plugins/ta-channel-discord`, `ta plugin build all` builds all plugins. Re-signs binaries on macOS after copy.
+20. [ ] **PID guard for listener**: (done in v0.10.18) Prevent duplicate listener instances via `.ta/discord-listener.pid`. Verify guard works correctly when daemon manages listener lifecycle.
 
 #### Version: `0.12.1-alpha`
 
