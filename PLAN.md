@@ -3192,6 +3192,27 @@ Event routing handles *reactive* responses to things that already happened. It d
 
 ---
 
+### v0.11.0.1 — Draft Apply Defaults & CLI Flag Cleanup
+<!-- status: pending -->
+**Goal**: Make `ta draft apply` do the right thing by default when VCS is configured. Today the full submit workflow (commit + push + PR) only runs if the user passes `--git-commit` or has `auto_commit = true` in `workflow.toml`. Users shouldn't need to remember flags or configure workflow.toml to get basic VCS integration.
+
+#### Problem
+- `--git-commit`, `--git-push`, and `--submit` are VCS-implementation-specific flag names that leak git terminology into the abstract submit flow.
+- Without `--git-commit`, `ta draft apply` silently copies files with no commit, even when the project is a git repo. This is confusing — the user expects VCS integration when VCS is present.
+- The `workflow.toml` `auto_commit`/`auto_push`/`auto_review` settings are workarounds for bad defaults.
+
+#### Items
+1. [ ] **Rename flags**: `--git-commit` → `--commit` (alias: `--git-commit` for backward compat). `--git-push` → `--push`. `--submit` stays. Add `--no-commit`, `--no-push`, `--no-review` to explicitly opt out.
+2. [ ] **Default to `--commit` when VCS is detected**: If a `SubmitAdapter` other than `"none"` is detected (or configured), default to commit + push + PR. `--no-commit` overrides. This means plain `ta draft apply <id>` does the full workflow when git is present.
+3. [ ] **Deprecate `auto_commit`/`auto_push`/`auto_review` in workflow.toml**: These become unnecessary once the default behavior is correct. Keep them as overrides but mark deprecated. Print a note on first use: "These settings are now the default when VCS is configured."
+4. [ ] **`--dry-run` for submit**: Show what would happen (which branch, which remote, PR title) without actually doing it.
+5. [ ] **Test: default commit when git detected**: Apply without any flags in a git repo → expect commit + push + PR.
+6. [ ] **Test: `--no-commit` suppresses commit**: Apply with `--no-commit` → expect files copied but no commit.
+
+#### Version: `0.11.0-alpha.1`
+
+---
+
 ### v0.11.1 — `SourceAdapter` Unification & `ta sync`
 <!-- status: pending -->
 **Goal**: Merge the current `SubmitAdapter` trait with sync operations into a unified `SourceAdapter` trait. Add `ta sync` command. The trait defines abstract VCS operations; provider-specific mechanics (rebase, fast-forward, shelving) live in each implementation.
