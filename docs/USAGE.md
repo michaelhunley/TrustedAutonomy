@@ -1,6 +1,6 @@
 # Trusted Autonomy -- User Guide
 
-**Version**: v0.10.18.5-alpha
+**Version**: 0.10.18-alpha.1
 
 Trusted Autonomy (TA) is a governance wrapper for AI agents. It lets any agent work freely in an isolated workspace, then holds the proposed changes at a human review checkpoint before anything takes effect. You see what the agent wants to do, approve or reject each change, and maintain a complete audit trail.
 
@@ -82,26 +82,26 @@ Trusted Autonomy (TA) is a governance wrapper for AI agents. It lets any agent w
 **Option A -- One-line installer (macOS / Linux)**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/trustedautonomy/ta/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Trusted-Autonomy/TrustedAutonomy/main/install.sh | bash
 ```
 
-Set a specific version: `TA_VERSION=v0.9.3-alpha curl -fsSL ... | bash`
+Set a specific version: `TA_VERSION=v0.10.12-alpha curl -fsSL ... | bash`
 
 **Option B -- Binary download**
 
 ```bash
 # macOS (Apple Silicon)
-curl -LO https://github.com/trustedautonomy/ta/releases/latest/download/ta-aarch64-apple-darwin.tar.gz
+curl -LO https://github.com/Trusted-Autonomy/TrustedAutonomy/releases/latest/download/ta-aarch64-apple-darwin.tar.gz
 tar xzf ta-aarch64-apple-darwin.tar.gz
 sudo mv ta /usr/local/bin/
 
 # macOS (Intel)
-curl -LO https://github.com/trustedautonomy/ta/releases/latest/download/ta-x86_64-apple-darwin.tar.gz
+curl -LO https://github.com/Trusted-Autonomy/TrustedAutonomy/releases/latest/download/ta-x86_64-apple-darwin.tar.gz
 tar xzf ta-x86_64-apple-darwin.tar.gz
 sudo mv ta /usr/local/bin/
 
 # Linux (x86_64)
-curl -LO https://github.com/trustedautonomy/ta/releases/latest/download/ta-x86_64-unknown-linux-musl.tar.gz
+curl -LO https://github.com/Trusted-Autonomy/TrustedAutonomy/releases/latest/download/ta-x86_64-unknown-linux-musl.tar.gz
 tar xzf ta-x86_64-unknown-linux-musl.tar.gz
 sudo mv ta /usr/local/bin/
 
@@ -113,27 +113,27 @@ sudo mv ta /usr/local/bin/
 **Option C -- Docker**
 
 ```bash
-docker pull ghcr.io/trustedautonomy/ta:latest
+docker pull ghcr.io/trustedautonomy/ta:latest  # coming soon — not yet published
 docker run -it -v $(pwd):/workspace ta --help
 ```
 
 **Option D -- Cargo install**
 
 ```bash
-cargo install ta-cli
+cargo install ta-cli  # coming soon — not yet published
 ```
 
 **Option E -- Nix**
 
 ```bash
-nix run github:trustedautonomy/ta
+nix run github:Trusted-Autonomy/TrustedAutonomy
 ```
 
 **Option F -- Build from source**
 
 ```bash
-git clone https://github.com/trustedautonomy/ta.git
-cd ta
+git clone https://github.com/Trusted-Autonomy/TrustedAutonomy.git
+cd TrustedAutonomy
 ./dev cargo build --workspace --release
 # Binary is at target/release/ta
 ```
@@ -154,7 +154,7 @@ This creates `.ta/` with workflow config, agent configs, policy, memory settings
 
 ```bash
 cd my-existing-project
-ta init --detect
+ta init run --detect
 ```
 
 TA scans your project root (Cargo.toml, package.json, pyproject.toml, go.mod, etc.) and generates config matched to your toolchain, test runner, and build system.
@@ -1168,6 +1168,8 @@ Config fields:
 
 #### Handling Agent Stdin Prompts
 
+> **Planned for v0.10.18.5** — not yet implemented. See [PLAN.md](../PLAN.md) for status.
+
 When the daemon spawns an agent as a background process, stdin is normally unavailable. TA provides three layers to handle agents that require interactive input:
 
 **Layer 1: Non-interactive env vars** — Suppress prompts entirely by setting environment variables in headless mode:
@@ -1683,7 +1685,7 @@ ta context list --limit 10
 ta context forget "auth-architecture"
 ```
 
-#### New commands (v0.5.7)
+#### New commands
 
 ```bash
 # Semantic search (dedicated command)
@@ -1707,7 +1709,7 @@ ta context store "temp-note" --value "remember this for 30 days" \
 ta context list --category architecture
 ```
 
-#### Memory dashboard (v0.5.7)
+#### Memory dashboard
 
 When running `ta serve`, the web UI at `http://127.0.0.1:<port>` now includes a **Memory** tab alongside Drafts. The memory dashboard lets you:
 
@@ -1760,7 +1762,7 @@ Agent calls: ta_context { action: "stats" }
 Agent calls: ta_context { action: "similar", key: "entry-uuid-here", limit: 5 }
 ```
 
-#### Automatic State Capture (v0.5.6)
+#### Automatic State Capture
 
 TA can automatically capture knowledge from lifecycle events so agents don't repeat mistakes and new agents start with context from previous sessions:
 
@@ -1794,7 +1796,7 @@ When `ta run` launches an agent, it queries the memory store and injects relevan
 
 **Semantic ranking**: With the ruvector backend (now default), injection uses semantic similarity to rank entries by relevance to the goal title.
 
-#### Project-Aware Key Schema (v0.6.3)
+#### Project-Aware Key Schema
 
 Memory keys use `{domain}:{topic}` format with domains auto-detected from your project type:
 
@@ -1825,7 +1827,7 @@ type_system = "trait"
 backend = "ruvector"   # default; or "fs" for filesystem-only
 ```
 
-#### Negative Paths (v0.6.3)
+#### Negative Paths
 
 When a draft is rejected, TA stores it as a **negative path** entry (`negative_path` category) with a `neg:{phase}:{slug}` key. Future agents see these during context injection and avoid repeating the same mistakes.
 
@@ -2982,7 +2984,7 @@ When using Claude Flow as your agent:
 
 See `examples/claude-settings.json` for a complete optimized configuration.
 
-### Session Lifecycle (v0.6.0)
+### Session Lifecycle
 
 TA sessions track the full conversation lifecycle for a goal, including review iterations. Each session records what the agent was told, what it produced, and how the human responded.
 
@@ -3020,7 +3022,7 @@ Session states: `Starting` → `AgentRunning` → `DraftReady` → `WaitingForRe
 
 Sessions are stored in `.ta/sessions/<session-id>.json` and emit events (`SessionPaused`, `SessionResumed`, `SessionAborted`, `DraftBuilt`, `ReviewDecision`, `SessionIteration`) to the event stream.
 
-### Unified Policy Config (v0.6.1)
+### Unified Policy Config
 
 All supervision configuration resolves to a single `PolicyDocument` loaded from `.ta/policy.yaml`. Configuration is merged from 6 layers, where each layer can tighten but never loosen restrictions.
 
@@ -3113,7 +3115,7 @@ assert!(!filter.permits("src/secret_key.rs")); // denied wins
 
 Sandbox commands also support a `denied_commands` list that takes precedence over the allowlist.
 
-### Resource Mediation (v0.6.2)
+### Resource Mediation
 
 The `ResourceMediator` trait generalizes TA's staging pattern from files to any resource type. Each mediator handles a URI scheme (`fs://`, `email://`, `db://`, etc.) and provides stage → preview → apply → rollback operations.
 
@@ -3432,6 +3434,8 @@ ta run "task" --accept-terms
 
 ### Agent Terms Consent
 
+> **Planned for v0.10.18.4** — not yet implemented.
+
 When using AI agents (like Claude Code or Codex), TA requires explicit consent for each agent's terms of service. This replaces the previous behavior where the daemon silently passed `--accept-terms` on the user's behalf.
 
 ```bash
@@ -3448,6 +3452,8 @@ ta terms status
 Consent is stored per-project in `.ta/consent.json` and tracked per-agent and per-version. When an agent's terms version changes, `ta shell` will prompt you to re-accept before dispatching goals.
 
 ### Live Agent Output in Shell
+
+> **Planned for v0.10.18.4** — not yet implemented.
 
 When `ta shell` dispatches a goal, the daemon now runs the agent in headless mode with streaming output. For Claude Code, this uses `--output-format stream-json` to stream rich progress (text output, tool calls, results) to the shell TUI in real time.
 
@@ -4408,10 +4414,10 @@ TA has a working end-to-end workflow: staging isolation, agent wrapping, draft r
 | v0.10.17.1 | Shell reliability & command timeout fixes | Done |
 | v0.10.18 | Deferred items: workflow & multi-project | Done |
 | v0.10.18.1 | Developer loop: verification, notifications & shell fixes | Done |
-| v0.10.18.2 | Shell TUI: scrollback & command output visibility | Done |
-| v0.10.18.3 | Verification streaming, heartbeat & configurable timeout | Done |
-| v0.10.18.4 | Live agent output in shell & terms consent | Done |
-| v0.10.18.5 | Agent stdin relay & interactive prompt handling | Done |
+| v0.10.18.2 | Shell TUI: scrollback & command output visibility | In Progress |
+| v0.10.18.3 | Verification streaming, heartbeat & configurable timeout | In Progress |
+| v0.10.18.4 | Live agent output in shell & terms consent | Pending |
+| v0.10.18.5 | Agent stdin relay & interactive prompt handling | Pending |
 
 See [PLAN.md](../PLAN.md) for full details on each phase.
 
