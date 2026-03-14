@@ -3197,17 +3197,45 @@ Event routing handles *reactive* responses to things that already happened. It d
 **Goal**: Make `ta draft apply` do the right thing by default when VCS is configured. Today the full submit workflow (commit + push + PR) only runs if the user passes `--git-commit` or has `auto_commit = true` in `workflow.toml`. Users shouldn't need to remember flags or configure workflow.toml to get basic VCS integration.
 
 #### Problem
-- `--git-commit`, `--git-push`, and `--submit` are VCS-implementation-specific flag names that leak git terminology into the abstract submit flow.
-- Without `--git-commit`, `ta draft apply` silently copies files with no commit, even when the project is a git repo. This is confusing — the user expects VCS integration when VCS is present.
-- The `workflow.toml` `auto_commit`/`auto_push`/`auto_review` settings are workarounds for bad defaults.
+- `--git-commit`, `--git-push`, and `--submit` leak git-specific terminology into what should be a VCS-agnostic workflow. The abstract operations are "stage changes", "submit to remote", and "request review" — these map differently per VCS.
+- Without `--git-commit`, `ta draft apply` silently copies files with no VCS integration, even when a VCS adapter is configured. The user expects the configured VCS workflow to run by default.
+- The `workflow.toml` `auto_commit`/`auto_push`/`auto_review` settings are workarounds for bad defaults and use git-specific naming.
+
+#### Design
+The submit workflow has three abstract stages, each mapped by the adapter:
+
+| Abstract Stage | Git | Perforce | SVN |
+|---|---|---|---|
+| **Stage** | create branch + commit | create changelist + add files | working copy (implicit) |
+| **Submit** | push to remote | shelve (or submit to depot) | svn commit |
+| **Review** | open PR via `gh` | request review on shelved CL | email / external tool |
+
+CLI flags use the abstract names. The adapter translates. Users configure their VCS and review workflow in `workflow.toml`:
+
+```toml
+[submit]
+adapter = "git"           # or "perforce", "svn", "none"
+auto_submit = true        # default: true when adapter != "none"
+auto_review = true        # default: true when adapter supports review
+
+[submit.git]
+branch_prefix = "ta/"
+target_branch = "main"
+remote = "origin"
+
+[submit.perforce]
+workspace = "my-workspace"
+shelve_by_default = true  # shelve instead of submit
+```
 
 #### Items
-1. [ ] **Rename flags**: `--git-commit` → `--commit` (alias: `--git-commit` for backward compat). `--git-push` → `--push`. `--submit` stays. Add `--no-commit`, `--no-push`, `--no-review` to explicitly opt out.
-2. [ ] **Default to `--commit` when VCS is detected**: If a `SubmitAdapter` other than `"none"` is detected (or configured), default to commit + push + PR. `--no-commit` overrides. This means plain `ta draft apply <id>` does the full workflow when git is present.
-3. [ ] **Deprecate `auto_commit`/`auto_push`/`auto_review` in workflow.toml**: These become unnecessary once the default behavior is correct. Keep them as overrides but mark deprecated. Print a note on first use: "These settings are now the default when VCS is configured."
-4. [ ] **`--dry-run` for submit**: Show what would happen (which branch, which remote, PR title) without actually doing it.
-5. [ ] **Test: default commit when git detected**: Apply without any flags in a git repo → expect commit + push + PR.
-6. [ ] **Test: `--no-commit` suppresses commit**: Apply with `--no-commit` → expect files copied but no commit.
+1. [ ] **VCS-agnostic CLI flags**: Replace `--git-commit`/`--git-push` with `--submit`/`--no-submit` and `--review`/`--no-review`. `--submit` means "run the full stage+submit workflow for the configured adapter." `--no-submit` copies files only. Backward compat aliases for `--git-commit` and `--git-push`.
+2. [ ] **Default to `--submit` when adapter is configured**: If `[submit].adapter` is anything other than `"none"`, default to running the full submit workflow. `--no-submit` overrides. Plain `ta draft apply <id>` does the right thing.
+3. [ ] **Rename workflow.toml settings**: `auto_commit`/`auto_push` → `auto_submit`. `auto_review` stays. Deprecate old names with backward compat.
+4. [ ] **Adapter-specific config sections**: Each adapter reads its own `[submit.<adapter>]` section. Git reads `[submit.git]`, Perforce reads `[submit.perforce]`, etc. Common settings stay in `[submit]`.
+5. [ ] **`--dry-run` for submit**: Show what the adapter would do (git: "would create branch ta/foo, push to origin, open PR targeting main"; P4: "would create CL 12345, shelve files") without actually doing it.
+6. [ ] **Test: default submit when VCS detected**: Apply without flags in a git repo → expect full stage+submit+review.
+7. [ ] **Test: `--no-submit` copies files only**: Apply with `--no-submit` → files copied, no VCS operations.
 
 #### Version: `0.11.0-alpha.1`
 
