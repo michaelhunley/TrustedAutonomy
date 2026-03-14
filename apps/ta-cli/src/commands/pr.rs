@@ -78,15 +78,27 @@ pub enum PrCommands {
         /// Target directory (defaults to project root).
         #[arg(long)]
         target: Option<String>,
-        /// Create a git commit after applying.
-        #[arg(long)]
-        git_commit: bool,
-        /// Push to remote after committing (implies --git-commit).
-        #[arg(long)]
-        git_push: bool,
-        /// Run full submit workflow (commit + push + open review).
-        #[arg(long)]
+        /// Run the full submit workflow. Default when VCS adapter is detected.
+        #[arg(long, overrides_with = "no_submit")]
         submit: bool,
+        /// Copy files only — skip all VCS operations.
+        #[arg(long)]
+        no_submit: bool,
+        /// Open a review after submitting.
+        #[arg(long, overrides_with = "no_review")]
+        review: bool,
+        /// Skip review creation.
+        #[arg(long)]
+        no_review: bool,
+        /// Show what would happen without executing.
+        #[arg(long)]
+        dry_run: bool,
+        /// **Deprecated**: Use --submit instead.
+        #[arg(long, hide = true)]
+        git_commit: bool,
+        /// **Deprecated**: Use --submit instead.
+        #[arg(long, hide = true)]
+        git_push: bool,
         /// Conflict resolution strategy: abort (default), force-overwrite, merge.
         #[arg(long, default_value = "abort")]
         conflict_resolution: String,
@@ -162,9 +174,13 @@ fn to_draft_command(cmd: &PrCommands) -> draft::DraftCommands {
         PrCommands::Apply {
             id,
             target,
+            submit,
+            no_submit,
+            review,
+            no_review,
+            dry_run,
             git_commit,
             git_push,
-            submit,
             conflict_resolution,
             approve_patterns,
             reject_patterns,
@@ -172,9 +188,13 @@ fn to_draft_command(cmd: &PrCommands) -> draft::DraftCommands {
         } => draft::DraftCommands::Apply {
             id: Some(id.clone()),
             target: target.clone(),
+            submit: *submit,
+            no_submit: *no_submit,
+            review: *review,
+            no_review: *no_review,
+            dry_run: *dry_run,
             git_commit: *git_commit,
             git_push: *git_push,
-            submit: *submit,
             conflict_resolution: conflict_resolution.clone(),
             approve_patterns: approve_patterns.clone(),
             reject_patterns: reject_patterns.clone(),
