@@ -524,24 +524,53 @@ async fn run_tui(
     let client = reqwest::Client::new();
 
     // Check daemon connectivity before entering TUI mode.
-    let initial_status = super::shell::fetch_status(&client, &base_url).await;
+    let mut initial_status = super::shell::fetch_status(&client, &base_url).await;
     if initial_status.version.is_empty() || initial_status.version == "?" {
-        eprintln!("Error: Cannot reach daemon at {}", base_url);
-        eprintln!();
-        eprintln!("Start the daemon with:");
-        eprintln!("  ta daemon start                # start in background");
-        eprintln!("  ta daemon start --foreground   # start in foreground (for debugging)");
-        return Err(anyhow::anyhow!("daemon not reachable at {}", base_url));
+        // Auto-start the daemon (v0.11.2.1 — match classic shell behavior).
+        match super::daemon::ensure_running(&project_root) {
+            Ok(()) => {
+                initial_status = super::shell::fetch_status(&client, &base_url).await;
+                if initial_status.version.is_empty() || initial_status.version == "?" {
+                    eprintln!("Error: Daemon started but status fetch still failed.");
+                    eprintln!("  Check logs: ta daemon log");
+                    return Err(anyhow::anyhow!("daemon not reachable at {}", base_url));
+                }
+                eprintln!("Daemon auto-started (v{}).", initial_status.version);
+            }
+            Err(e) => {
+                eprintln!("Error: Cannot reach daemon at {}", base_url);
+                eprintln!("  Auto-start failed: {}", e);
+                eprintln!();
+                eprintln!("Start the daemon manually with:");
+                eprintln!("  ta daemon start                # start in background");
+                eprintln!("  ta daemon start --foreground   # start in foreground (for debugging)");
+                return Err(anyhow::anyhow!("daemon not reachable at {}", base_url));
+            }
+        }
     }
 
-    // Version mismatch warning.
+    // Version mismatch — auto-restart the daemon to match CLI version.
     let cli_version = env!("CARGO_PKG_VERSION");
     if initial_status.version != cli_version {
         eprintln!(
-            "Warning: daemon is v{} but this CLI is v{}",
+            "Daemon is v{} but CLI is v{} — restarting daemon...",
             initial_status.version, cli_version
         );
-        eprintln!("  Restart with matching version: pkill -f 'ta-daemon' && ta-daemon --api --project-root .");
+        match super::daemon::restart(&project_root, None) {
+            Ok(_pid) => {
+                // Wait briefly for the new daemon to be ready.
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                // Re-fetch status after restart.
+                initial_status = super::shell::fetch_status(&client, &base_url).await;
+                eprintln!("Daemon restarted (v{}).", initial_status.version);
+            }
+            Err(e) => {
+                eprintln!(
+                    "Warning: daemon restart failed: {}. Continuing with v{}.",
+                    e, initial_status.version
+                );
+            }
+        }
     }
 
     // Fetch completions.

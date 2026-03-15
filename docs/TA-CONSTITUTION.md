@@ -207,9 +207,12 @@ Constitution violations are always Warning or higher.
 The agent (and shell) propose actions. The daemon evaluates policy, records audit events, and mediates execution. The agent never writes directly to the source project — all changes flow through staging → diff → draft → apply.
 
 ### 9.3 Daemon Auto-Start
-If `ta shell` cannot reach the daemon, it attempts auto-start via `daemon::ensure_running()`. If the daemon is still unreachable after auto-start, shell fails with a clear error.
+If `ta shell` cannot reach the daemon, it MUST auto-start via `daemon::ensure_running()`. The user should never have to manually start the daemon to use the shell. If the daemon is still unreachable after auto-start, shell fails with a clear error.
 
-### 9.4 Agent Read-Only Inspection
+### 9.4 Daemon Version Guard
+If the running daemon version does not match the CLI version, the shell MUST auto-restart the daemon to ensure version parity. The CLI and daemon are tightly coupled — running mismatched versions leads to silent failures, missing features, and protocol incompatibilities. The restart happens automatically before entering the shell; the user sees the version transition in startup output.
+
+### 9.5 Agent Read-Only Inspection
 The agent can read daemon state (goal status, draft details, plan progress, logs) through MCP tools or daemon API. It cannot mutate state without daemon mediation and policy evaluation.
 
 ---
@@ -335,7 +338,7 @@ For pre-release review, verify each command against these rules:
 | `ta goal start` | 3.1 (staging copy), 5.1 (Created → Configured) |
 | `ta goal delete` | 7.4 (terminal audit) |
 | `ta goal gc` | 5.5 (zombie detection), 7.4 (terminal audit) |
-| `ta shell` | 9.1-9.4 (thin client, daemon mediates) |
+| `ta shell` | 9.1-9.5 (thin client, daemon mediates, auto-start, version guard) |
 | `ta plan *` | 9.4 (read-only agent inspection) |
 | `ta audit verify` | 7.2 (hash chain validation) |
 | Plugins | 11.2-11.4 (discovery, isolation, signing) |
