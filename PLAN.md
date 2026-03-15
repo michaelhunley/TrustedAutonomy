@@ -3110,6 +3110,31 @@ Each platform has a different mechanism for icon embedding:
 
 ---
 
+### v0.10.19 — Shell Agent Routing & TUI Copy Support
+<!-- status: pending -->
+**Goal**: Fix two immediate shell usability issues discovered in v0.10.18: (1) agent Q&A sessions fail when `default_agent` is not `claude-code`, and (2) TUI raw mode prevents text selection/copy.
+
+#### Problem 1: Agent Q&A routing broken for non-claude-code agents
+When `default_agent = "claude-flow"` in `daemon.toml`, natural language questions in `ta shell` hit the generic fallback in `resolve_agent_command()` (`agent.rs:384`): `claude-flow "prompt"`. Claude-flow is a framework/MCP server — it doesn't accept bare prompts as CLI arguments. The process exits immediately with no useful output, showing "agent output ended" in the shell.
+
+The root issue is that `default_agent` serves two different purposes:
+- **Goal execution** (`ta run`): which agent framework to spawn for goals — claude-flow is correct here
+- **Shell Q&A** (`ask_agent`): which LLM to answer ad-hoc questions — needs a prompt-capable agent (claude-code)
+
+#### Problem 2: TUI raw mode blocks text selection/copy
+The shell TUI (`shell_tui.rs`) enables mouse capture for scroll support (`MouseEventKind::ScrollUp/Down`). This intercepts the terminal emulator's native text selection, making it impossible to copy agent output. Users need to copy command output, error messages, and goal IDs regularly.
+
+#### Items
+1. [ ] **Separate `qa_agent` config**: Add `[agent].qa_agent` (default: `"claude-code"`) in `daemon.toml` for shell Q&A sessions. `ask_agent()` uses `qa_agent` instead of `default_agent`. The default agent for goals remains independently configurable.
+2. [ ] **Add `claude-flow` to `resolve_agent_command()`**: Add a match arm for `"claude-flow"` that invokes it correctly for agent prompts (or falls back to claude-code for Q&A).
+3. [ ] **Toggle mouse capture with keybinding**: Add a keybinding (e.g., `Shift+M` or `Ctrl+Shift+C`) that temporarily disables mouse capture so the user can select and copy text. Re-enable on next keypress. Show mode indicator in status bar.
+4. [ ] **Copy-mode**: Alternative approach — a `:copy` shell command that dumps the last N lines of output to a temp file and opens it in `$PAGER` (or `less`), where native selection works. Or copies to system clipboard via `pbcopy`/`xclip`/`xsel`.
+5. [ ] **`--classic` shell flag**: Allow launching the non-TUI shell (`shell.rs`) which uses readline and doesn't capture mouse, as a fallback for users who need unrestricted copy. Already exists as code path but may not be easily selectable.
+
+#### Version: `0.10.19-alpha`
+
+---
+
 ### v0.11.0 — Event-Driven Agent Routing
 <!-- status: done -->
 **Goal**: Allow any TA event to trigger an agent workflow instead of (or in addition to) a static response. This is intelligent, adaptive event handling — not scripted hooks or n8n-style flowcharts. An agent receives the event context and decides what to do.
