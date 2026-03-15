@@ -3665,6 +3665,66 @@ Even on the happy path, the `GoalHistoryEntry` lacks:
 
 ---
 
+### v0.12.3 — Self-Service Operations, Draft Amend & Plan Intelligence
+<!-- status: pending -->
+**Goal**: Make `ta shell` (and Discord after v0.12.1) the 99% interface for TA work. Today, deep inspection of goals, drafts, git PRs, and zombie processes requires an external agent with filesystem access. This phase moves that capability into TA itself, adds lightweight draft amendment for PR iteration, and gives the agent read-only introspection tools so it can diagnose issues and recommend actions — with the daemon mediating all writes through user approval.
+
+#### Problem
+1. **Draft iteration is heavyweight**: After `ta draft apply`, iterating on the PR (fixing CI, addressing review comments) requires either a full new goal with staging copy or dropping out of TA entirely to work in raw git. There's no lightweight path to amend an existing draft/PR from within TA.
+2. **Operational inspection requires external agent**: Checking why a goal is stuck, whether a process is alive, what state a draft is in, or viewing daemon logs currently requires `ps aux`, `cat .ta/goals/...`, or asking an AI agent to read filesystem state. The TA shell and agent should be able to do this via daemon API.
+3. **Plan editing is manual**: Adding items, moving items between phases, creating new phases, and cross-referencing plan items requires manual file editing of PLAN.md. An agent-mediated flow would let users describe what they want and have the agent recommend placement, with explicit approval before writing.
+
+#### Draft Amend (lightweight follow-up for PR iteration)
+1. [ ] **`ta draft amend <draft-id>`**: Lightweight follow-up that works with the existing feature branch instead of creating new staging. Checks out the feature branch created by the original `ta draft apply`, launches agent with context about what needs fixing (CI failure, review comments), then commits amendments to the same branch.
+2. [ ] **Amend context injection**: Inject PR review comments, CI failure logs, and the original draft summary into CLAUDE.md so the agent knows exactly what to fix.
+3. [ ] **PR update on amend apply**: After agent finishes, `ta draft amend apply` commits to the existing branch, pushes, and the PR updates automatically. No new PR created.
+4. [ ] **Draft metadata update**: The original draft package is updated with amendment details (what changed, why, timestamp) rather than creating a new draft. History of amendments preserved.
+5. [ ] **`ta draft amend --ci-failure`**: Auto-fetch the latest CI failure log from the PR (via `gh`) and inject as context. Agent sees exactly what broke.
+6. [ ] **`ta draft amend --review-comments`**: Auto-fetch PR review comments and inject as context. Agent addresses each comment.
+7. [ ] **Branch safety**: Amend refuses to operate if the feature branch has been modified outside of TA (e.g., manual commits). Detects by comparing branch HEAD to the commit recorded in the draft package.
+
+#### Daemon Observability (agent-accessible via MCP/API)
+8. [ ] **`ta goal inspect <id>`**: Detailed goal status including PID, process health, elapsed time, last event, staging path, draft state, agent log tail. Available via daemon API so agents and shell can query it.
+9. [ ] **`ta draft inspect <id>`**: Detailed draft status including all artifacts, verification results, approval history, amendment history, associated PR URL, CI status.
+10. [ ] **`ta status --deep`**: Combined view of daemon health, active goals, pending drafts, pending questions, recent events, disk usage. Single command for "what's going on?"
+11. [ ] **`ta daemon health`**: Daemon self-check — API responsive, event system working, plugin status, disk space, goal process liveness.
+12. [ ] **`ta daemon logs [--follow]`**: View daemon logs from ta shell without needing filesystem access. Filterable by level, component, goal ID.
+
+#### Goal Diagnostics
+13. [ ] **`ta goal post-mortem <id>`**: Analyze a failed/stuck goal — show timeline of events, last agent output, state transitions, errors, duration, and suggest likely cause of failure.
+14. [ ] **`ta goal pre-flight <title>`**: Before starting a goal, check prerequisites — disk space, daemon running, agent binary available, VCS configured, required env vars set. Report issues before wasting time.
+15. [ ] **`ta doctor`**: System-wide health check — Nix toolchain, cargo, agent binaries, daemon, plugins, .ta directory integrity, git status, disk space. Reports issues with fix suggestions.
+
+#### Plan Intelligence (agent-mediated, daemon-approved)
+16. [ ] **`ta plan add-item --phase <id> "description"`**: Agent-mediated item addition. The agent recommends placement within the phase (logical ordering, cross-references) and presents the change for user approval before writing.
+17. [ ] **`ta plan move-item <item> --from <phase> --to <phase>`**: Move an item between phases with agent-recommended placement and cross-reference updates.
+18. [ ] **`ta plan discuss <topic>`**: Agent reads the full plan, understands context, and discusses where a new idea fits — which phase, what dependencies, what items it relates to. Proposes plan edits for approval.
+19. [ ] **`ta plan create-phase <id> "title"`**: Create a new plan phase with agent-recommended placement in the plan ordering, version number, and dependency analysis.
+20. [ ] **`ta plan status --check-constitution`**: Validate plan items against `TA-CONSTITUTION.md` — flag items that would violate constitutional rules if implemented as described.
+
+#### Plugin Lifecycle
+21. [ ] **`ta plugin build <name|all>`**: Build channel/submit plugins from the main workspace. Re-sign on macOS.
+22. [ ] **`ta plugin status`**: Show installed plugins, versions, health status, last used.
+23. [ ] **`ta plugin logs <name>`**: View plugin stderr logs from daemon.
+
+#### Git/PR Lifecycle (agent-accessible)
+24. [ ] **`ta pr status <draft-id>`**: Show PR state (open/merged/closed), CI status, review status, comments. Links draft to its PR.
+25. [ ] **`ta pr list`**: List open PRs created by TA, with their draft IDs, goal IDs, and CI status.
+26. [ ] **Goal→PR linkage**: Store PR URL in goal metadata when `ta draft apply` creates a PR. `ta goal status` shows the PR link.
+
+#### Staging & Disk Management
+27. [ ] **Auto-clean staging on apply**: When `ta draft apply` succeeds, automatically remove the staging directory (configurable in `workflow.toml`: `staging.auto_clean = true`, default: true).
+28. [ ] **Disk space pre-flight**: Before creating staging copies, check available disk space. Warn if below threshold (configurable, default: 2GB).
+29. [ ] **`ta gc` unified**: Single `ta gc` command that cleans zombie goals, stale staging, old drafts, and expired audit entries. `--dry-run` shows what would be removed.
+
+#### Constitution Compliance
+30. [ ] **`TA-CONSTITUTION.md` reference**: Constitution document created (v0.10.18). Commands should be validated against it during pre-release review.
+31. [ ] **`ta verify constitution`**: Automated checks that validate command behavior against constitutional rules (branch restoration, injection cleanup, audit completeness, etc.).
+
+#### Version: `0.12.3-alpha`
+
+---
+
 ## Projects On Top (separate repos, built on TA)
 
 > These are NOT part of TA core. They are independent projects that consume TA's extension points.
