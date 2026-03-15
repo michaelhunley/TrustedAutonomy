@@ -3725,6 +3725,66 @@ Even on the happy path, the `GoalHistoryEntry` lacks:
 
 ---
 
+### v0.12.4 — Autonomous Operations & Self-Healing Daemon
+<!-- status: pending -->
+**Goal**: Shift from "user runs commands to inspect and fix problems" to "daemon detects, diagnoses, and proposes fixes — user approves." The v0.12.3 observability commands become the foundation, but instead of the user running `ta goal inspect` and `ta doctor` manually, the daemon runs them continuously and surfaces issues proactively. The user's primary interaction becomes reviewing and approving corrective actions, not discovering and diagnosing problems.
+
+#### Design Philosophy
+Today's TA workflow requires the user to be the monitoring layer: notice something is wrong, run diagnostic commands, interpret output, decide on a fix, run the fix. That's the same cognitive load TA was built to eliminate for code work. The daemon should be the monitoring layer — it already sees every event, every state transition, every process exit. It just needs to act on what it sees.
+
+The trust model stays the same: daemon detects and diagnoses, agent proposes corrective action, user approves. No autonomous mutation without human consent (unless explicitly configured for low-risk actions via auto-heal policy).
+
+**Key insight**: Instead of 15 diagnostic commands the user memorizes, there's one intelligent layer that says "Goal X is stuck — the agent process crashed 10 minutes ago. I can transition it to failed and clean up staging. Approve?"
+
+#### Continuous Health Monitor
+1. [ ] **Daemon watchdog loop**: Background task that runs every 30s (configurable). Checks: goal process liveness, disk space, plugin health, event system, pending questions aging out. Emits `health.check` events with findings.
+2. [ ] **Goal process liveness integration**: Absorb v0.12.1 item 22 (goal process liveness monitor). When a `running` goal's process has exited, the daemon detects it within one watchdog cycle and creates a corrective action proposal.
+3. [ ] **Disk space monitoring**: When available disk drops below threshold (configurable, default 2GB), daemon identifies largest staging directories and proposes cleanup. Absorbs v0.12.3 item 28 (disk pre-flight) into continuous monitoring.
+4. [ ] **Plugin health monitoring**: Periodic health check on channel plugins (Discord listener alive?), submit plugins (git reachable?). Restart crashed plugins automatically (low-risk auto-heal) or propose restart for user approval.
+5. [ ] **Stale question detection**: Agent questions pending >1h (configurable) get escalated — re-notify via all configured channels, flag in `ta status`.
+
+#### Corrective Action Framework
+6. [ ] **`CorrectiveAction` type**: Structured proposal: `{ issue, severity, diagnosis, proposed_action, auto_healable, requires_approval }`. Displayed in shell, Discord, and web UI.
+7. [ ] **Action approval flow**: Corrective actions are surfaced via the existing question/interaction system. User sees the issue + proposed fix in ta shell or Discord, responds approve/deny/modify. On approve, daemon executes the action and emits audit event.
+8. [ ] **Auto-heal policy**: Low-risk actions can be auto-approved via `daemon.toml`:
+   ```toml
+   [operations.auto_heal]
+   enabled = true
+   # Actions the daemon can take without asking:
+   allowed = [
+     "restart_crashed_plugin",     # restart a plugin that exited unexpectedly
+     "transition_zombie_to_failed", # mark dead-process goals as failed
+     "clean_applied_staging",       # remove staging for successfully applied goals
+   ]
+   # Everything else requires approval:
+   # "delete_goal", "gc_drafts", "kill_process", etc.
+   ```
+9. [ ] **Corrective action audit trail**: Every auto-heal and approved action emits a full audit event with the `CorrectiveAction` details, who approved (or "auto-heal policy"), and the outcome.
+10. [ ] **`ta operations log`**: View history of corrective actions — what was detected, what was proposed, what was approved/denied, outcome. Replaces manual `ta daemon logs` inspection for operational issues.
+
+#### Agent-Assisted Diagnosis
+11. [ ] **Daemon-to-agent diagnostic requests**: When the watchdog detects an issue it can't diagnose from metrics alone (e.g., goal failed with unclear error), it can spawn a lightweight diagnostic goal: "Analyze the logs for goal X and explain why it failed." The diagnostic agent has read-only access to goal state, agent logs, and daemon events.
+12. [ ] **Diagnostic goal type**: A new goal type `diagnostic` that is read-only by design — no staging copy, no draft, no apply. Just reads state and produces a text report. Policy engine enforces read-only grants. Lightweight and fast.
+13. [ ] **Shell agent as advisor**: In `ta shell`, the agent can proactively surface issues: "I notice goal abc123 has been running for 3 hours with no events in the last 45 minutes. Want me to check on it?" The agent reads daemon health data and offers to investigate.
+14. [ ] **Root cause correlation**: When multiple issues occur together (disk full + goal failed + plugin crashed), the diagnostic agent correlates them: "The goal failed because disk was full, which also crashed the Discord plugin. Recommend: clean 3 stale staging dirs (reclaim ~12GB), restart Discord plugin, retry the goal."
+
+#### Intelligent Surface (fewer commands, smarter defaults)
+15. [ ] **`ta status` as the one command**: Replaces the need for `ta goal list`, `ta draft list`, `ta plan status`, `ta daemon health`, and `ta doctor`. Shows a unified, prioritized view: urgent items first (stuck goals, pending approvals, health issues), then active work, then recent completions. Details expand on demand.
+16. [ ] **Proactive notifications**: Instead of the user polling with commands, the daemon pushes notifications for: goal completed, goal failed, draft ready for review, corrective action needed, disk warning. Delivered via configured channels (shell SSE, Discord, future: email/Slack).
+17. [ ] **Intent-based interaction**: In `ta shell`, instead of remembering `ta goal gc --include-staging --threshold-days 7`, the user says "clean up old goals" and the shell agent translates to the right command sequence, shows what it would do, and asks for approval.
+18. [ ] **Suggested next actions**: After any command completes, the daemon suggests what to do next based on current state. "Draft applied successfully. PR #157 created. Next: check CI status with `ta pr status` or start next phase with `ta run`." Replaces the need to memorize workflows.
+19. [ ] **`ta` with no arguments**: Instead of showing help, show `ta status` (item 15). The bare command becomes the dashboard.
+20. [ ] **Reduce command surface**: Deprecate commands that are subsumed by the intelligent layer. Mark as "advanced" in help rather than removing — power users can still use them directly, but the default path is through the intelligent surface.
+
+#### Operational Runbooks
+21. [ ] **Runbook definitions**: YAML files in `.ta/runbooks/` that define common operational procedures as sequences of corrective actions. Example: `disk-pressure.yaml` defines the steps for handling low disk space (identify largest staging, propose cleanup, execute, verify).
+22. [ ] **Runbook triggers**: Runbooks can be triggered automatically by watchdog conditions or manually via `ta run-book <name>`. Each step is presented for approval unless auto-heal policy covers it.
+23. [ ] **Built-in runbooks**: Ship with default runbooks for common scenarios: disk pressure, zombie goals, crashed plugins, stale drafts, failed CI. Users can customize or add their own.
+
+#### Version: `0.12.4-alpha`
+
+---
+
 ## Projects On Top (separate repos, built on TA)
 
 > These are NOT part of TA core. They are independent projects that consume TA's extension points.

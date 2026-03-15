@@ -297,6 +297,31 @@ Use `tracing::warn`/`tracing::error` for operational issues. Include structured 
 
 ---
 
+## 14. Autonomous Operations & Self-Healing
+
+### 14.1 Detection Without Mutation
+The daemon watchdog may detect issues (dead processes, low disk, crashed plugins) continuously and without human consent. Detection is read-only observation — no state is changed.
+
+### 14.2 Corrective Action Approval
+All corrective actions are proposals. The daemon presents the issue, diagnosis, and proposed fix. The user approves or denies. No corrective mutation happens without consent, unless covered by auto-heal policy.
+
+### 14.3 Auto-Heal Policy Scope
+Auto-heal is opt-in and explicitly scoped. Only actions listed in `[operations.auto_heal].allowed` may execute without approval. The allowed list must be conservative — only low-risk, reversible actions qualify (restart plugin, mark zombie failed, clean applied staging). High-risk actions (delete goal, kill process, gc drafts) always require approval.
+
+### 14.4 Diagnostic Goals Are Read-Only
+Diagnostic goals spawned by the daemon for issue investigation have read-only access. They produce reports, not changes. The policy engine enforces this via read-only capability manifests with no write/apply grants.
+
+### 14.5 Corrective Action Audit
+Every corrective action — whether auto-healed or human-approved — produces an audit event with: what was detected, what was proposed, who/what approved (human or auto-heal policy), and the outcome. The audit trail must be as complete for automated operations as for human-initiated ones.
+
+### 14.6 Escalation Path
+If a corrective action fails, or if the daemon detects an issue it cannot diagnose, it escalates to the user via all configured channels. Auto-heal never retries a failed corrective action — it escalates instead.
+
+### 14.7 Runbook Transparency
+Operational runbooks execute step-by-step with each step visible to the user. The user can interrupt, modify, or cancel at any step. Runbooks do not execute as opaque batches.
+
+---
+
 ## Appendix: Constitution Compliance Checklist
 
 For pre-release review, verify each command against these rules:
@@ -314,3 +339,8 @@ For pre-release review, verify each command against these rules:
 | `ta plan *` | 9.4 (read-only agent inspection) |
 | `ta audit verify` | 7.2 (hash chain validation) |
 | Plugins | 11.2-11.4 (discovery, isolation, signing) |
+| Watchdog | 14.1 (detection without mutation), 14.5 (audit) |
+| Auto-heal | 14.2-14.3 (approval, scoped policy), 14.6 (escalation) |
+| Diagnostic goals | 14.4 (read-only), 6.1-6.5 (policy enforcement) |
+| Runbooks | 14.7 (step-by-step transparency), 14.2 (approval per step) |
+| `ta status` | 13.3 (confirmation), 14.1 (surfaces watchdog findings) |
