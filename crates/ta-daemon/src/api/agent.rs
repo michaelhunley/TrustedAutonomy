@@ -402,6 +402,7 @@ fn resolve_agent_command(agent: &str, prompt: &str) -> (String, Vec<String>) {
             "claude".to_string(),
             vec![
                 "--print".to_string(),
+                "--verbose".to_string(),
                 "--output-format".to_string(),
                 "stream-json".to_string(),
                 "-p".to_string(),
@@ -528,7 +529,7 @@ mod tests {
         assert_eq!(bin, "claude");
         assert_eq!(
             args,
-            vec!["--print", "--output-format", "stream-json", "-p", "hello"]
+            vec!["--print", "--verbose", "--output-format", "stream-json", "-p", "hello"]
         );
     }
 
