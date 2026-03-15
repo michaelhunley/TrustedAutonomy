@@ -124,17 +124,26 @@ async fn run_shell(
         }
     }
 
-    // Warn if the daemon version doesn't match the CLI version.
+    // Version mismatch — auto-restart the daemon to match CLI version.
     let cli_version = env!("CARGO_PKG_VERSION");
     if status.version != cli_version {
         eprintln!(
-            "Warning: daemon is v{} but this CLI is v{}",
+            "Daemon is v{} but CLI is v{} — restarting daemon...",
             status.version, cli_version
         );
-        eprintln!("  The daemon may behave differently than expected.");
-        eprintln!("  To fix: restart the daemon with the matching version:");
-        eprintln!("    ta daemon restart");
-        eprintln!();
+        match super::daemon::restart(project_root, None) {
+            Ok(_pid) => {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                status = fetch_status(&client, &base_url).await;
+                eprintln!("Daemon restarted (v{}).", status.version);
+            }
+            Err(e) => {
+                eprintln!(
+                    "Warning: daemon restart failed: {}. Continuing with v{}.",
+                    e, status.version
+                );
+            }
+        }
     }
 
     print_header(&status, &base_url);
