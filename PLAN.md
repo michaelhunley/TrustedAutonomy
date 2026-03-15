@@ -3499,6 +3499,70 @@ example: shell-routing-01, fix-auth-03, v0.11.2.1-01
 
 ---
 
+### v0.11.2.4 — Daemon Watchdog & Process Liveness
+<!-- status: pending -->
+**Goal**: The daemon already sees every process spawn, every state transition, every exit. Make it act on that knowledge. Add a lightweight watchdog loop that monitors goal process health and surfaces problems proactively — no user action required to discover that something is stuck or dead.
+
+This pulls forward the zero-dependency items from v0.12.4 (Autonomous Operations) and v0.12.1 (Template Projects item 22). The full corrective action framework, agent-assisted diagnosis, and runbooks remain in v0.12.4 — they need the observability and governance layers built first. This phase gives us the monitoring foundation those later phases build on.
+
+#### Problem
+1. **Zombie goals**: When an agent process crashes, exits unexpectedly, or never starts, the goal stays in `running` forever. `ta goal list` shows `running` with no way to distinguish "actively working" from "dead process." The human has to manually check with `ps aux` or notice the silence.
+2. **No daemon heartbeat for silent operations**: Long-running daemon-dispatched commands (draft apply, run, dev) can go silent for extended periods during git operations, network calls, or agent init. The shell shows nothing — the human doesn't know if it's working or hung.
+3. **No process health in goal status**: `ta goal list` and `ta goal status` show lifecycle state but not process health. A goal in `running` state whose process exited 30 minutes ago looks identical to one actively producing output.
+4. **Stale questions go unnoticed**: Agent questions pending for hours (awaiting human input) are easy to miss in the shell — there's no re-notification or escalation.
+
+#### Items
+
+1. [ ] **Daemon watchdog loop**: Background tokio task spawned at daemon startup, runs every 30s (configurable via `daemon.toml`: `[operations].watchdog_interval_secs`). Each cycle: check goal process liveness, detect stale questions, emit `health.check` event with findings. Lightweight — no disk I/O unless issues are found.
+2. [ ] **Goal process liveness check**: For each goal in `running` state, verify the agent PID is still alive (platform-specific: `kill(pid, 0)` on Unix, `OpenProcess` on Windows). If the process has exited:
+   - Exit code 0 → transition to `pr_ready` (agent completed normally but didn't build draft) or `completed` if draft already exists.
+   - Non-zero/unknown → transition to `failed` with reason: "Agent process exited (code: N) without updating goal state."
+   - Emit `goal.process_exited` event with goal ID, PID, exit code, elapsed time.
+3. [ ] **Store agent PID on GoalRun**: Add `agent_pid: Option<u32>` to `GoalRun`. Populated by `ta run --headless` when the agent subprocess starts. The watchdog reads this to check liveness. If PID is `None` (legacy goals or spawn failures), skip liveness check but flag in status.
+4. [ ] **Goal process health in status output**: `ta goal list` gains a HEALTH column:
+   ```
+   TAG              TITLE                    STATE     HEALTH    AGE
+   shell-routing-01 Shell agent routing...   running   alive     12m
+   fix-auth-03      Fix OAuth token...       running   dead(1)   3h
+   v0.11.2.2-01     Agent output schema...   applied   —         2d
+   ```
+   `alive` = PID running. `dead(N)` = exited with code N. `—` = terminal state (no process). `unknown` = no PID stored (legacy).
+5. [ ] **Goal process health in `/api/status`**: Add `process_health: Option<String>` to `AgentInfo` in the status endpoint. The shell status bar and `ta status` can show it without extra queries.
+6. [ ] **Stale question detection**: Watchdog checks for goals in `awaiting_input` state where `updated_at` is older than threshold (configurable, default 1h). For stale questions:
+   - Emit `question.stale` event with goal ID and question preview.
+   - Re-surface in shell via SSE: "[reminder] Goal X is waiting for input: 'question preview...'"
+   - If desktop notifications are enabled, send a re-notification.
+7. [ ] **Watchdog health event**: Each cycle emits a structured `health.check` event:
+   ```json
+   {
+     "type": "health.check",
+     "timestamp": "...",
+     "goals_checked": 3,
+     "issues": [
+       {"kind": "zombie_goal", "goal_id": "...", "detail": "process exited 45m ago"},
+       {"kind": "stale_question", "goal_id": "...", "detail": "pending 2h"}
+     ]
+   }
+   ```
+   No event emitted when everything is healthy (avoids log noise).
+8. [ ] **Watchdog config in daemon.toml**:
+   ```toml
+   [operations]
+   watchdog_interval_secs = 30      # check cycle (default: 30)
+   zombie_transition_delay_secs = 60 # wait before transitioning dead process (default: 60)
+   stale_question_threshold_secs = 3600 # re-notify after this (default: 1h)
+   ```
+   The `zombie_transition_delay_secs` prevents false positives from brief process restarts.
+9. [ ] **Shell surfaces watchdog findings**: When the TUI receives a `health.check` SSE event with issues, display them as notification lines:
+   - `[watchdog] Goal fix-auth-03: agent process exited (code 1) — transitioning to failed`
+   - `[watchdog] Goal shell-routing-01: question pending 2h — "Which auth provider?"`
+10. [ ] **`ta goal gc` integrates with watchdog**: `ta goal gc` consults the watchdog's last findings to identify zombie goals. If the watchdog already transitioned a zombie to `failed`, gc can clean its staging. If not yet transitioned (within delay window), gc reports it as a candidate.
+11. [ ] **Cross-reference v0.12.4**: Update v0.12.4 items 1-2 to note they are absorbed by this phase. v0.12.4's watchdog becomes "extend the watchdog with corrective action proposals" rather than "build the watchdog from scratch." Similarly update v0.12.1 item 22.
+
+#### Version: `0.11.2-alpha.4`
+
+---
+
 ### v0.11.3 — Reflink/COW Overlay Optimization
 <!-- status: pending -->
 **Goal**: Replace full-copy staging with copy-on-write to eliminate filesystem bloat. Detect APFS/Btrfs and use native reflinks; fall back to FUSE overlay on unsupported filesystems.
@@ -3778,7 +3842,7 @@ Known issue from v0.10.18: Discord-dispatched `ta run` created a goal record (st
 - No heartbeat or liveness check: once a goal enters `running`, nothing verifies the agent process is still alive. A crashed or never-started agent leaves the goal stuck forever.
 - `ta goal list` shows `running` with no way to distinguish "actively working" from "zombie".
 
-22. [ ] **Goal process liveness monitor**: Daemon periodically checks that the agent PID for each `running` goal is still alive. If the process has exited, transition the goal to `completed` (exit 0) or `failed` (non-zero/missing) and emit the appropriate event. Check interval: configurable, default 30s.
+22. [ ] **Goal process liveness monitor**: *(Moved to v0.11.2.4 items 1-3)* Daemon periodically checks that the agent PID for each `running` goal is still alive. If the process has exited, transition the goal to `completed` (exit 0) or `failed` (non-zero/missing) and emit the appropriate event. Check interval: configurable, default 30s.
 23. [ ] **Goal launch failure capture**: If `ta run` fails to start (spawn error, immediate crash, missing binary), update the goal state to `failed` with the error message before returning the HTTP response. The Discord listener (or any caller) should see the failure in the command output.
 24. [ ] **`ta goal status` shows process health**: Include PID, whether the process is alive, elapsed time, last agent log line, and last event timestamp. Flag goals where the process is dead but state is still `running`.
 25. [ ] **`ta goal gc` detects zombies**: Extend `goal gc` to find goals in `running` state whose agent process is no longer alive. Offer to transition them to `failed` with a "process exited without updating state" reason.
@@ -3909,8 +3973,8 @@ The trust model stays the same: daemon detects and diagnoses, agent proposes cor
 **Key insight**: Instead of 15 diagnostic commands the user memorizes, there's one intelligent layer that says "Goal X is stuck — the agent process crashed 10 minutes ago. I can transition it to failed and clean up staging. Approve?"
 
 #### Continuous Health Monitor
-1. [ ] **Daemon watchdog loop**: Background task that runs every 30s (configurable). Checks: goal process liveness, disk space, plugin health, event system, pending questions aging out. Emits `health.check` events with findings.
-2. [ ] **Goal process liveness integration**: Absorb v0.12.1 item 22 (goal process liveness monitor). When a `running` goal's process has exited, the daemon detects it within one watchdog cycle and creates a corrective action proposal.
+1. [ ] **Daemon watchdog loop**: *(Foundation built in v0.11.2.4)* Extend the watchdog with corrective action proposals instead of direct state transitions. Add disk space monitoring, plugin health checks, and event system verification.
+2. [ ] **Goal process liveness integration**: *(Foundation built in v0.11.2.4)* Extend liveness detection to create corrective action proposals (approve/deny) instead of auto-transitioning. Add configurable auto-heal policy for low-risk transitions.
 3. [ ] **Disk space monitoring**: When available disk drops below threshold (configurable, default 2GB), daemon identifies largest staging directories and proposes cleanup. Absorbs v0.12.3 item 28 (disk pre-flight) into continuous monitoring.
 4. [ ] **Plugin health monitoring**: Periodic health check on channel plugins (Discord listener alive?), submit plugins (git reachable?). Restart crashed plugins automatically (low-risk auto-heal) or propose restart for user approval.
 5. [ ] **Stale question detection**: Agent questions pending >1h (configurable) get escalated — re-notify via all configured channels, flag in `ta status`.
