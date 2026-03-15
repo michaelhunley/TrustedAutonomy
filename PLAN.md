@@ -3390,6 +3390,8 @@ When the agent process fails to start, crashes, or exits with an error, the outp
 10. [ ] **Draft apply branch safety**: `ta draft apply` must verify it's on the expected base branch before creating the feature branch. If the user (or another process) switched branches, draft apply should either refuse with a clear error or save/restore branch state per Constitution rule 2.2. Currently it silently applies on whatever branch is checked out.
 11. [ ] **Multi-line paste protection**: Detect multi-line paste events in TUI input (e.g., drag-and-drop or terminal paste) and confirm before dispatching. Currently each pasted line is interpreted as a separate command, potentially spawning many agents simultaneously.
 
+12. [ ] **QA agent project context injection**: The daemon-spawned QA agent (`ask_agent()`) currently runs stateless with no project context. Prepend project memory, CLAUDE.md context, and current plan phase to the prompt (or use `--system-prompt`) so the agent can answer project-aware questions. Reuse `build_memory_context_section_for_inject()` from `run.rs`.
+
 #### Version: `0.11.2-alpha.2`
 
 ---
