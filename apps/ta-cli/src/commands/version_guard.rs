@@ -40,6 +40,7 @@ pub fn check_daemon_version(
     rt: &tokio::runtime::Runtime,
 ) -> VersionGuardResult {
     let cli_version = env!("CARGO_PKG_VERSION");
+    let cli_build_sha = env!("TA_GIT_HASH");
 
     // Fetch daemon status.
     let status = rt.block_on(super::shell::fetch_status(client, base_url));
@@ -48,15 +49,29 @@ pub fn check_daemon_version(
         return VersionGuardResult::Unreachable;
     }
 
-    if status.version == cli_version {
+    // Compare build SHA first (catches rebuilds within the same semver).
+    // Fall back to version string comparison if daemon doesn't report build_sha.
+    let sha_match = !status.build_sha.is_empty()
+        && status.build_sha != "?"
+        && status.build_sha == cli_build_sha;
+    let version_match = status.version == cli_version;
+
+    if sha_match || (version_match && (status.build_sha.is_empty() || status.build_sha == "?")) {
         return VersionGuardResult::Match;
     }
 
-    // Version mismatch detected.
-    eprintln!(
-        "Daemon version mismatch: daemon v{}, CLI v{}",
-        status.version, cli_version
-    );
+    // Mismatch detected — either different version or same version with different build SHA.
+    if !version_match {
+        eprintln!(
+            "Daemon version mismatch: daemon v{}, CLI v{}",
+            status.version, cli_version
+        );
+    } else {
+        eprintln!(
+            "Daemon build mismatch: daemon {} (v{}), CLI {} (v{})",
+            status.build_sha, status.version, cli_build_sha, cli_version
+        );
+    }
 
     if !interactive {
         eprintln!("  Proceeding with mismatched daemon (--no-version-check).");

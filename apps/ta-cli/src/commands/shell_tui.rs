@@ -549,12 +549,16 @@ async fn run_tui(
         }
     }
 
-    // Version mismatch — auto-restart the daemon to match CLI version.
+    // Build SHA mismatch — auto-restart daemon (catches rebuilds within same version).
     let cli_version = env!("CARGO_PKG_VERSION");
-    if initial_status.version != cli_version {
+    let cli_build_sha = env!("TA_GIT_HASH");
+    let daemon_sha = &initial_status.build_sha;
+    let sha_mismatch = !daemon_sha.is_empty() && daemon_sha != "?" && daemon_sha != cli_build_sha;
+    let version_mismatch = initial_status.version != cli_version;
+    if sha_mismatch || version_mismatch {
         eprintln!(
-            "Daemon is v{} but CLI is v{} — restarting daemon...",
-            initial_status.version, cli_version
+            "Daemon build mismatch ({} vs {}) — restarting daemon...",
+            daemon_sha, cli_build_sha
         );
         match super::daemon::restart(&project_root, None) {
             Ok(_pid) => {
@@ -1538,22 +1542,41 @@ fn draw_input(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
+    let cli_build_sha = env!("TA_GIT_HASH");
     let cli_version = env!("CARGO_PKG_VERSION");
+
+    // Stale if build SHA differs (catches rebuilds within same version),
+    // or if version differs and daemon doesn't report build_sha.
+    let sha_match = !app.status.build_sha.is_empty()
+        && app.status.build_sha != "?"
+        && app.status.build_sha == cli_build_sha;
+    let version_match = app.status.version == cli_version;
     let is_stale = app.daemon_connected
         && !app.status.version.is_empty()
         && app.status.version != "?"
-        && app.status.version != cli_version;
+        && !sha_match
+        && !version_match;
+
+    // Short SHA for display (first 7 chars).
+    let display_sha = if app.status.build_sha.len() > 7 {
+        &app.status.build_sha[..7]
+    } else {
+        &app.status.build_sha
+    };
 
     let daemon_indicator = if !app.daemon_connected {
         Span::styled(" ◉ daemon ", Style::default().fg(Color::Red))
     } else if is_stale {
         Span::styled(
-            format!(" ◉ daemon {} (stale) ", app.status.daemon_version),
+            format!(
+                " ◉ daemon {} ({}) (stale) ",
+                app.status.daemon_version, display_sha
+            ),
             Style::default().fg(Color::Yellow),
         )
     } else {
         Span::styled(
-            format!(" ◉ daemon {} ", app.status.daemon_version),
+            format!(" ◉ daemon {} ({}) ", app.status.daemon_version, display_sha),
             Style::default().fg(Color::Green),
         )
     };
@@ -1789,6 +1812,7 @@ async fn background_health(
                         project: json["project"].as_str().unwrap_or("unknown").to_string(),
                         version: json["version"].as_str().unwrap_or("?").to_string(),
                         daemon_version: json["daemon_version"].as_str().unwrap_or("?").to_string(),
+                        build_sha: json["build_sha"].as_str().unwrap_or("?").to_string(),
                         next_phase: json["current_phase"]["id"].as_str().map(|id| {
                             let title = json["current_phase"]["title"].as_str().unwrap_or("");
                             format!("{} -- {}", id, title)

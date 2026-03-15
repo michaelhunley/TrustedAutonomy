@@ -22,6 +22,9 @@ pub struct ProjectStatus {
     /// Explicit daemon version field for version guard checks.
     /// Always matches `version` but provides a stable API contract.
     pub daemon_version: String,
+    /// Build SHA (VCS revision at compile time) for same-version rebuild detection.
+    /// The version guard compares this to detect rebuilds within the same semver.
+    pub build_sha: String,
     /// The default agent binary for shell Q&A (e.g., "claude-code").
     pub default_agent: String,
     pub current_phase: Option<PhaseInfo>,
@@ -135,6 +138,7 @@ pub async fn project_status(State(state): State<Arc<AppState>>) -> impl IntoResp
         project: project_name,
         version: version.clone(),
         daemon_version: version,
+        build_sha: env!("TA_GIT_HASH").to_string(),
         default_agent: state.daemon_config.agent.default_agent.clone(),
         current_phase,
         active_agents,

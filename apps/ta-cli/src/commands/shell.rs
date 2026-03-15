@@ -124,12 +124,16 @@ async fn run_shell(
         }
     }
 
-    // Version mismatch — auto-restart the daemon to match CLI version.
+    // Build SHA mismatch — auto-restart daemon (catches rebuilds within same version).
     let cli_version = env!("CARGO_PKG_VERSION");
-    if status.version != cli_version {
+    let cli_build_sha = env!("TA_GIT_HASH");
+    let daemon_sha = &status.build_sha;
+    let sha_mismatch = !daemon_sha.is_empty() && daemon_sha != "?" && daemon_sha != cli_build_sha;
+    let version_mismatch = status.version != cli_version;
+    if sha_mismatch || version_mismatch {
         eprintln!(
-            "Daemon is v{} but CLI is v{} — restarting daemon...",
-            status.version, cli_version
+            "Daemon build mismatch ({} vs {}) — restarting daemon...",
+            daemon_sha, cli_build_sha
         );
         match super::daemon::restart(project_root, None) {
             Ok(_pid) => {
@@ -283,6 +287,8 @@ pub(crate) struct StatusInfo {
     pub(crate) project: String,
     pub(crate) version: String,
     pub(crate) daemon_version: String,
+    /// Build SHA reported by the daemon (for same-version rebuild detection).
+    pub(crate) build_sha: String,
     pub(crate) next_phase: Option<String>,
     pub(crate) pending_drafts: usize,
     pub(crate) active_agents: usize,
@@ -306,6 +312,7 @@ pub(crate) async fn fetch_status(client: &reqwest::Client, base_url: &str) -> St
         project: json["project"].as_str().unwrap_or("unknown").to_string(),
         version: json["version"].as_str().unwrap_or("?").to_string(),
         daemon_version: json["daemon_version"].as_str().unwrap_or("?").to_string(),
+        build_sha: json["build_sha"].as_str().unwrap_or("?").to_string(),
         next_phase: json["current_phase"]["id"].as_str().map(|id| {
             let title = json["current_phase"]["title"].as_str().unwrap_or("");
             format!("{} -- {}", id, title)
