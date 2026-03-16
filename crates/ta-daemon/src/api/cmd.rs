@@ -1511,4 +1511,113 @@ mod tests {
 
         let _ = child.kill().await;
     }
+
+    // ── Prompt detection tests ────────────────────────────────────
+
+    #[test]
+    fn prompt_detects_yes_no_confirmations() {
+        assert!(is_interactive_prompt("Continue? [y/N]"));
+        assert!(is_interactive_prompt("Overwrite file? [Y/n]"));
+        assert!(is_interactive_prompt("Are you sure? [yes/no]"));
+        assert!(is_interactive_prompt("Proceed? [Y/N]"));
+    }
+
+    #[test]
+    fn prompt_detects_numbered_choices() {
+        assert!(is_interactive_prompt("[1] mesh  [2] hierarchical"));
+    }
+
+    #[test]
+    fn prompt_detects_questions() {
+        assert!(is_interactive_prompt("What branch should I use?"));
+        assert!(is_interactive_prompt("Ready to deploy?"));
+    }
+
+    #[test]
+    fn prompt_detects_colon_input_lines() {
+        assert!(is_interactive_prompt("Enter your name:"));
+        assert!(is_interactive_prompt("Password: "));
+    }
+
+    #[test]
+    fn prompt_rejects_markdown_bold() {
+        // Agent status lines like "**API** (crates/ta-daemon/src/api/status.rs):"
+        // must NOT trigger prompt detection.
+        assert!(!is_interactive_prompt(
+            "**API** (crates/ta-daemon/src/api/status.rs):"
+        ));
+        assert!(!is_interactive_prompt("**Summary**: the changes look good"));
+    }
+
+    #[test]
+    fn prompt_rejects_code_backticks() {
+        assert!(!is_interactive_prompt(
+            "Updated `config.toml` with new settings:"
+        ));
+        assert!(!is_interactive_prompt(
+            "The `is_interactive_prompt` function:"
+        ));
+    }
+
+    #[test]
+    fn prompt_rejects_file_paths() {
+        assert!(!is_interactive_prompt(
+            "Modified apps/ta-cli/src/commands/run.rs:"
+        ));
+        assert!(!is_interactive_prompt("Check src/lib.ts for the issue:"));
+        assert!(!is_interactive_prompt("Updated main.py:"));
+    }
+
+    #[test]
+    fn prompt_rejects_bracket_prefixed_progress() {
+        // Agent progress lines like "[agent] Working..." or "[tool] Edit".
+        assert!(!is_interactive_prompt("[agent] Reading file..."));
+        assert!(!is_interactive_prompt("[tool] Edit"));
+        assert!(!is_interactive_prompt("[apply] Copying artifacts:"));
+    }
+
+    #[test]
+    fn prompt_rejects_code_references_with_parens() {
+        assert!(!is_interactive_prompt("fn launch_agent_headless(config):"));
+        assert!(!is_interactive_prompt(
+            "Method signature changed (old → new):"
+        ));
+    }
+
+    #[test]
+    fn prompt_rejects_long_lines() {
+        let long = format!("This is a very long agent output line that should not be detected as a prompt because it exceeds the length threshold for conversational prompts ending with a colon: {}", "x".repeat(50));
+        assert!(!is_interactive_prompt(&long));
+    }
+
+    // ── End-to-end: stream-json → schema → prompt classification ──
+
+    #[test]
+    fn stream_json_text_not_misclassified_as_prompt() {
+        // When stream-json output is properly parsed by the schema,
+        // the extracted text should not trigger false prompt detection.
+        let parsed_texts = vec![
+            "Hello world",                           // assistant text
+            "Working on it...",                      // progress text
+            "[result] Changes applied successfully", // result
+            "[init] model: claude-opus-4-6",         // system init
+        ];
+
+        for text in parsed_texts {
+            assert!(
+                !is_interactive_prompt(text),
+                "Schema-parsed text should not be a prompt: {:?}",
+                text
+            );
+        }
+    }
+
+    #[test]
+    fn tool_use_label_not_misclassified_as_prompt() {
+        // The daemon renders tool use as "[tool] Read" — this should not
+        // trigger prompt detection because of the bracket-prefix rejection.
+        assert!(!is_interactive_prompt("[tool] Read"));
+        assert!(!is_interactive_prompt("[tool] Edit"));
+        assert!(!is_interactive_prompt("[tool] Bash"));
+    }
 }
