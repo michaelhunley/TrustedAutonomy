@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use crossterm::event::{
     self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEvent, KeyModifiers,
-    MouseButton, MouseEventKind,
+    MouseEventKind,
 };
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -27,24 +27,19 @@ use ratatui::widgets::{
 
 use super::shell::{resolve_daemon_url, StatusInfo};
 
-// ── TUI mouse handling (v0.11.4.2) ──────────────────────────────────
+// ── Mouse & scroll handling ─────────────────────────────────────────
 //
-// Mouse: selective ANSI modes — ?1000h (normal tracking: scroll + click)
-// + ?1006h (SGR encoding). We intentionally omit ?1002h (button-event) and
-// ?1003h (any-event) so the terminal keeps native click-drag text selection.
-// This means Command+C/Ctrl+C copies natively without a chime.
-// All mouse events (scroll, click, drag) are handled by the TUI:
-//   - Scroll wheel → scroll output pane
-//   - Left click-drag → text selection (highlighted in TUI)
-//   - Left click then Shift+click → extend/block selection
-//   - Mouse-up after selection → copy to clipboard via OSC 52
-//   - Escape or any click without drag → clear selection
+// NO mouse capture is enabled. This lets the terminal handle all mouse
+// interaction natively: click-drag text selection, Command+C/Ctrl+C
+// copy, right-click context menus — just like Claude Code CLI.
 //
-// Since mouse capture intercepts all events from the terminal, native
-// selection is unavailable. The TUI implements its own selection and
-// copies to the system clipboard using the OSC 52 escape sequence,
-// which is supported by iTerm2, Terminal.app, kitty, alacritty,
-// Windows Terminal, and most modern terminal emulators.
+// Scroll wheel: we enable ?1007h (alternate screen scroll mode) which
+// makes the terminal convert scroll wheel events into Up/Down arrow
+// key sequences when in the alternate screen buffer. These arrive as
+// normal KeyCode::Up/Down events which the TUI maps to scroll.
+//
+// This is the same approach used by less, vim, and other TUI apps that
+// want scroll wheel support without sacrificing native text selection.
 
 /// A position in screen coordinates (column, row).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -259,6 +254,11 @@ struct App {
     tailing_goal: Option<String>,
     /// Maximum output buffer lines (configurable, v0.10.11).
     output_buffer_limit: usize,
+    /// Cached total visual line count (accounting for word wrap).
+    /// Updated on push_output and terminal resize. Avoids O(n) recount every frame.
+    cached_visual_lines: usize,
+    /// Terminal width when `cached_visual_lines` was last computed.
+    cached_wrap_width: usize,
     /// Whether auto-tail on goal start is enabled (v0.10.11).
     auto_tail: bool,
     /// Number of lines to show as backfill when attaching to tail (v0.10.11).
@@ -280,7 +280,8 @@ struct App {
     /// Sender for the dedicated input thread (v0.11.4.2 item 11).
     /// When set, terminal events arrive via this channel instead of inline polling.
     input_rx: Option<tokio::sync::mpsc::UnboundedReceiver<Event>>,
-    /// Active text selection (mouse click-drag).
+    /// Active text selection (unused — native terminal selection handles this).
+    #[allow(dead_code)]
     selection: Option<Selection>,
     /// Cached output pane area from the last draw (for mouse coordinate mapping).
     output_area: ratatui::layout::Rect,
@@ -308,6 +309,8 @@ impl App {
             pending_stdin_prompt: None,
             tailing_goal: None,
             output_buffer_limit: 50000,
+            cached_visual_lines: 0,
+            cached_wrap_width: 0,
             auto_tail: true,
             tail_backfill_lines: 5,
             split_pane: false,
@@ -330,10 +333,30 @@ impl App {
     }
 
     fn push_output(&mut self, line: OutputLine) {
+        // Update cached visual line count for the new line.
+        if self.cached_wrap_width > 0 {
+            let vlines = if line.text.is_empty() {
+                1
+            } else {
+                line.text.len().div_ceil(self.cached_wrap_width)
+            };
+            self.cached_visual_lines += vlines;
+        }
         self.output.push(line);
         // Enforce buffer limit — drop oldest lines when exceeded.
         if self.output.len() > self.output_buffer_limit {
             let excess = self.output.len() - self.output_buffer_limit;
+            // Subtract visual lines for removed entries.
+            if self.cached_wrap_width > 0 {
+                for ol in &self.output[..excess] {
+                    let vlines = if ol.text.is_empty() {
+                        1
+                    } else {
+                        ol.text.len().div_ceil(self.cached_wrap_width)
+                    };
+                    self.cached_visual_lines = self.cached_visual_lines.saturating_sub(vlines);
+                }
+            }
             self.output.drain(..excess);
             // Adjust scroll offset to compensate for removed lines.
             self.scroll_offset = self.scroll_offset.saturating_sub(excess);
@@ -755,14 +778,10 @@ async fn run_tui(
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     stdout.execute(EnterAlternateScreen)?;
-    // Enable selective mouse tracking: scroll wheel + click events only.
-    // ?1000h = normal tracking (button press/release, scroll wheel)
-    // ?1006h = SGR encoding (supports coordinates >223)
-    // We do NOT enable ?1002h/?1003h — those capture drag/motion and break
-    // native text selection + Command+C copy.
-    use std::io::Write;
-    stdout.write_all(b"\x1b[?1000h\x1b[?1006h")?;
-    stdout.flush()?;
+    // No mouse capture — the terminal handles all mouse interaction natively:
+    // click-drag selection, Command+C copy, right-click menus.
+    // Scroll: PageUp/PageDown, Shift+Up/Down, Shift+Home/End (keyboard only).
+    // This matches Claude Code CLI behavior.
     // Bracketed paste: pasted text arrives as Event::Paste(String) instead of
     // individual key events, so we can insert without executing on newlines.
     stdout.execute(EnableBracketedPaste)?;
@@ -806,12 +825,7 @@ async fn run_tui(
     running.store(false, Ordering::Relaxed);
     disable_raw_mode()?;
     terminal.backend_mut().execute(DisableBracketedPaste)?;
-    // Disable selective mouse tracking (reverse of startup).
-    {
-        let backend = terminal.backend_mut();
-        std::io::Write::write_all(backend, b"\x1b[?1006l\x1b[?1000l")?;
-        std::io::Write::flush(backend)?;
-    }
+    // No mouse capture to disable — terminal handles mouse natively.
     terminal.backend_mut().execute(LeaveAlternateScreen)?;
 
     // Save history.
@@ -842,6 +856,22 @@ async fn tui_event_loop(
     loop {
         // ── Draw (rate-limited) ────────────────────────────────────
         if needs_draw && last_draw.elapsed() >= frame_interval {
+            // Update visual line cache if terminal width changed.
+            let cur_width = terminal.size().map(|s| s.width as usize).unwrap_or(80);
+            if cur_width != app.cached_wrap_width {
+                app.cached_wrap_width = cur_width;
+                app.cached_visual_lines = app
+                    .output
+                    .iter()
+                    .map(|ol| {
+                        if ol.text.is_empty() || cur_width == 0 {
+                            1
+                        } else {
+                            ol.text.len().div_ceil(cur_width)
+                        }
+                    })
+                    .sum();
+            }
             terminal.draw(|f| draw_ui(f, app))?;
             last_draw = Instant::now();
             needs_draw = false;
@@ -1018,25 +1048,6 @@ async fn handle_terminal_event(
         Event::Key(KeyEvent {
             code, modifiers, ..
         }) => {
-            // Clear text selection on Escape, or on any typing key.
-            if code == KeyCode::Esc {
-                app.selection = None;
-                return;
-            }
-            // Any non-modifier key clears the selection (typing replaces it).
-            if !matches!(
-                code,
-                KeyCode::Up
-                    | KeyCode::Down
-                    | KeyCode::PageUp
-                    | KeyCode::PageDown
-                    | KeyCode::Home
-                    | KeyCode::End
-            ) && !modifiers.contains(KeyModifiers::SHIFT)
-            {
-                app.selection = None;
-            }
-
             match (code, modifiers) {
                 (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
                     // If tailing agent output, Ctrl-C detaches instead of exiting (v0.10.14).
@@ -1362,52 +1373,12 @@ async fn handle_terminal_event(
             }
         }
         Event::Mouse(mouse) => {
-            let pos = ScreenPos {
-                col: mouse.column,
-                row: mouse.row,
-            };
+            // No mouse capture is enabled, so mouse events only arrive if the
+            // terminal sends them without capture (rare). Handle scroll wheel
+            // as a fallback for terminals that report it anyway.
             match mouse.kind {
                 MouseEventKind::ScrollUp => app.scroll_up(3),
                 MouseEventKind::ScrollDown => app.scroll_down(3),
-                MouseEventKind::Down(MouseButton::Left) => {
-                    if mouse.modifiers.contains(KeyModifiers::SHIFT) {
-                        // Shift+click: extend selection to this position.
-                        if let Some(ref mut sel) = app.selection {
-                            sel.extent = pos;
-                            sel.output_area = app.output_area;
-                        } else {
-                            // No existing selection — start a new one.
-                            app.selection = Some(Selection {
-                                anchor: pos,
-                                extent: pos,
-                                output_area: app.output_area,
-                            });
-                        }
-                    } else {
-                        // Regular click: start a new selection.
-                        app.selection = Some(Selection {
-                            anchor: pos,
-                            extent: pos,
-                            output_area: app.output_area,
-                        });
-                    }
-                }
-                MouseEventKind::Up(MouseButton::Left) => {
-                    // Click-up without shift: if we have a shift-click selection,
-                    // finalize and copy. Otherwise this is just a plain click — ignore.
-                    // (Drag selection is handled natively by the terminal now.)
-                    if let Some(ref sel) = app.selection {
-                        if sel.anchor != sel.extent {
-                            let text = extract_selection_text(app, sel);
-                            if !text.is_empty() {
-                                copy_to_clipboard(&text);
-                            }
-                        } else {
-                            // Click without shift-extend — clear selection.
-                            app.selection = None;
-                        }
-                    }
-                }
                 _ => {}
             }
         }
@@ -1704,20 +1675,22 @@ fn draw_output(f: &mut Frame, app: &App, area: Rect) {
     let visible_height = inner.height as usize;
     let wrap_width = inner.width as usize;
 
-    // Count total *visual* lines (accounting for word wrap) so scrollback works
-    // correctly when lines are longer than the terminal width.
-    let visual_line_count: usize = app
-        .output
-        .iter()
-        .map(|ol| {
-            if ol.text.is_empty() || wrap_width == 0 {
-                1
-            } else {
-                // Ceiling division: chars / width, minimum 1.
-                ol.text.len().div_ceil(wrap_width)
-            }
-        })
-        .sum();
+    // Use cached visual line count (maintained by push_output + event loop).
+    // Falls back to recount if cache width doesn't match (e.g., first frame).
+    let visual_line_count = if app.cached_wrap_width == wrap_width {
+        app.cached_visual_lines
+    } else {
+        app.output
+            .iter()
+            .map(|ol| {
+                if ol.text.is_empty() || wrap_width == 0 {
+                    1
+                } else {
+                    ol.text.len().div_ceil(wrap_width)
+                }
+            })
+            .sum()
+    };
 
     // `scroll_offset` 0 = bottom. Convert to a top-based visual-line offset.
     let max_scroll = visual_line_count.saturating_sub(visible_height);
@@ -1770,45 +1743,6 @@ fn draw_output(f: &mut Frame, app: &App, area: Rect) {
         .wrap(Wrap { trim: false })
         .scroll((residual_scroll, 0));
     f.render_widget(paragraph, inner);
-
-    // Render selection highlight by inverting colors on selected cells.
-    if let Some(ref sel) = app.selection {
-        if sel.anchor != sel.extent {
-            let (start, end) =
-                if (sel.anchor.row, sel.anchor.col) <= (sel.extent.row, sel.extent.col) {
-                    (sel.anchor, sel.extent)
-                } else {
-                    (sel.extent, sel.anchor)
-                };
-            let buf = f.buffer_mut();
-            for row in start.row..=end.row {
-                if row < inner.y || row >= inner.y + inner.height {
-                    continue;
-                }
-                let col_start = if row == start.row {
-                    start.col.max(inner.x)
-                } else {
-                    inner.x
-                };
-                let col_end = if row == end.row {
-                    end.col.min(inner.x + inner.width - 1)
-                } else {
-                    inner.x + inner.width - 1
-                };
-                for col in col_start..=col_end {
-                    if col >= inner.x + inner.width {
-                        break;
-                    }
-                    let cell = &mut buf[(col, row)];
-                    // Invert foreground/background for selection highlight.
-                    let fg = cell.fg;
-                    let bg = cell.bg;
-                    cell.set_fg(if bg == Color::Reset { Color::Black } else { bg });
-                    cell.set_bg(if fg == Color::Reset { Color::White } else { fg });
-                }
-            }
-        }
-    }
 
     // Scrollbar.
     if visual_line_count > visible_height {
@@ -2249,6 +2183,7 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
 ///
 /// Maps screen coordinates back to logical output lines, accounting for
 /// scroll offset and word wrapping.
+#[allow(dead_code)]
 fn extract_selection_text(app: &App, sel: &Selection) -> String {
     let area = sel.output_area;
     if area.width == 0 || area.height == 0 || app.output.is_empty() {
@@ -2385,6 +2320,7 @@ fn extract_selection_text(app: &App, sel: &Selection) -> String {
 /// - macOS: `pbcopy`
 /// - Linux/BSD: `xclip -selection clipboard` (fallback: `xsel --clipboard`)
 /// - Windows: `clip.exe`
+#[allow(dead_code)]
 fn copy_to_clipboard(text: &str) {
     use std::io::Write;
     use std::process::{Command, Stdio};
