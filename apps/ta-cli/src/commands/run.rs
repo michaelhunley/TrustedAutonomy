@@ -453,7 +453,7 @@ pub fn execute(
     // goal. This prevents the agent from running without output streaming
     // (the daemon relays stdout to ta shell via SSE).
     // In headless mode the daemon already spawned us, so skip the check.
-    if !headless {
+    if !headless && !no_launch {
         super::daemon::ensure_running(&config.workspace_root)?;
     }
 
