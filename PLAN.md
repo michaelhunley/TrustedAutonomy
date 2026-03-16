@@ -3915,6 +3915,62 @@ The output pipeline is: user types command → `send_input()` POST to daemon `/a
 
 ---
 
+### v0.11.4.3 — Smart Input Routing & Intent Disambiguation
+<!-- status: pending -->
+**Goal**: Stop mis-routing natural language as commands when the first word happens to match a keyword. Add intent-aware disambiguation so the shell either routes correctly or presents "Did you mean..." options.
+
+**Problem**: The current router matches greedily on the first word:
+- "apply the ta-constitution.md to the codebase" → shortcut "apply" → `ta draft apply the ta-constitution.md...` → command error. User meant to ask the agent.
+- "Draft a note to my friend" → subcommand "draft" → `ta draft a note to my friend` → command error. User wanted the agent.
+- "draft aply 124235234" → subcommand "draft" → `ta draft aply 124235234` → fails. User made a typo — should suggest "draft apply 124235234".
+
+**Solution**: After keyword/shortcut match, validate that the expanded command looks syntactically plausible before routing as Command. Add a new `RouteDecision::Ambiguous` for cases that need user confirmation.
+
+#### Items
+
+1. [ ] **Known sub-subcommands map**: Define valid sub-subcommands for each ta subcommand (e.g., `draft` → `list|view|apply|approve|deny|build|close|gc`). Store in `ShellConfig` with sensible defaults. Used for syntactic validation after keyword match.
+
+2. [ ] **Edit distance function**: Simple Levenshtein distance (no external crate needed — ~20 lines). Used to detect typos: "aply" ≈ "apply" (distance 1), "deniy" ≈ "deny" (distance 1).
+
+3. [ ] **Natural language detection heuristic**: After keyword match, check if the remainder looks like NL rather than command args:
+   - Second word is a common English stopword ("the", "a", "an", "my", "to", "is", "for", "in", "on")
+   - Input contains >4 words with no flags (`--`) or ID-like tokens (hex, numeric)
+   - Input ends with `?` or starts with a question word after the keyword
+   If NL detected → route to Agent, ignoring the keyword match.
+
+4. [ ] **`RouteDecision::Ambiguous` variant**: New routing outcome with:
+   - `suggestions: Vec<String>` — corrected command forms
+   - `original_text: String` — what the user typed
+   - `agent_fallback: bool` — whether "Ask the agent" should be an option
+
+5. [ ] **Disambiguation in `handle_input()`**: When `route_input` returns `Ambiguous`, return a JSON response with `routed_to: "ambiguous"` and the suggestions list. Do NOT execute any command.
+
+6. [ ] **TUI "Did you mean..." UI**: When the shell receives an ambiguous response, display numbered options:
+   ```
+   Did you mean:
+     1. draft apply 124235234
+     2. Ask the agent: "draft aply 124235234"
+   Enter 1 or 2 (or press Escape to cancel):
+   ```
+   User picks a number → re-dispatch. Escape cancels.
+
+7. [ ] **Shortcut disambiguation**: Apply the same NL detection to shortcut expansions. "apply the constitution" should not expand via the "apply" shortcut — the word after "apply" is "the" (stopword), not a draft ID.
+
+8. [ ] **Tests**: Cover the key scenarios:
+   - `"apply the ta-constitution.md to the codebase"` → Agent (NL detected)
+   - `"Draft a note to my friend"` → Agent (NL detected, case-insensitive)
+   - `"draft aply 124235234"` → Ambiguous (typo, suggest "draft apply 124235234")
+   - `"draft apply abc123"` → Command (valid syntax)
+   - `"draft list"` → Command (valid syntax)
+   - `"run the tests please"` → Agent (NL after keyword)
+   - `"run v0.11.5 — Some Title"` → Command (valid `ta run` syntax)
+
+**Files**: `crates/ta-daemon/src/api/input.rs` (routing logic), `crates/ta-daemon/src/config.rs` (sub-subcommands map), `apps/ta-cli/src/commands/shell_tui.rs` (disambiguation UI)
+
+#### Version: `0.11.4-alpha.3`
+
+---
+
 ### v0.12.0 — Template Projects & Bootstrap Flow
 <!-- status: pending -->
 **Goal**: `ta new` generates projects with `project.toml` plugin declarations so downstream users get a complete, working setup from `ta setup` alone. Template projects in the Trusted-Autonomy org serve as reference implementations. Also: replace the quick-fix Discord command listener with a proper slash-command-based bidirectional integration.
