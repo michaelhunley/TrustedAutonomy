@@ -12,7 +12,10 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseEventKind};
+use crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
+    MouseButton, MouseEventKind,
+};
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
@@ -24,51 +27,38 @@ use ratatui::widgets::{
 
 use super::shell::{resolve_daemon_url, StatusInfo};
 
-// ── Selective mouse capture (v0.11.4.2 item 1) ─────────────────────
+// ── TUI mouse handling (v0.11.4.2) ──────────────────────────────────
 //
-// Use raw ANSI escapes for scroll-only mouse capture instead of crossterm's
-// all-or-nothing `EnableMouseCapture` which enables `?1003h` (any-event
-// tracking) and breaks native text selection.
+// Mouse capture is enabled via crossterm's `EnableMouseCapture`.
+// All mouse events (scroll, click, drag) are handled by the TUI:
+//   - Scroll wheel → scroll output pane
+//   - Left click-drag → text selection (highlighted in TUI)
+//   - Left click then Shift+click → extend/block selection
+//   - Mouse-up after selection → copy to clipboard via OSC 52
+//   - Escape or any click without drag → clear selection
 //
-// `?1000h` (normal tracking) captures button press/release including scroll
-// wheel (buttons 4/5) but does NOT capture click-drag, so native text
-// selection works in all terminals.
-// `?1006h` (SGR extended coordinates) handles column values >223.
+// Since mouse capture intercepts all events from the terminal, native
+// selection is unavailable. The TUI implements its own selection and
+// copies to the system clipboard using the OSC 52 escape sequence,
+// which is supported by iTerm2, Terminal.app, kitty, alacritty,
+// Windows Terminal, and most modern terminal emulators.
 
-/// Enable scroll-only mouse capture. Native text selection remains functional.
-fn enable_scroll_capture(stdout: &mut Stdout) -> io::Result<()> {
-    #[cfg(not(windows))]
-    {
-        use std::io::Write;
-        // Normal tracking + SGR coordinates. No button-event (?1002h) or
-        // any-event (?1003h) — those intercept click-drag and break selection.
-        stdout.write_all(b"\x1b[?1000h\x1b[?1006h")?;
-        stdout.flush()?;
-    }
-    #[cfg(windows)]
-    {
-        // Windows Terminal supports ANSI escapes, but the classic Windows
-        // Console does not. Delegate to crossterm's native API as fallback.
-        use crossterm::event::EnableMouseCapture;
-        stdout.execute(EnableMouseCapture)?;
-    }
-    Ok(())
+/// A position in screen coordinates (column, row).
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ScreenPos {
+    col: u16,
+    row: u16,
 }
 
-/// Disable scroll capture — restores default terminal mouse behavior.
-fn disable_scroll_capture(stdout: &mut Stdout) -> io::Result<()> {
-    #[cfg(not(windows))]
-    {
-        use std::io::Write;
-        stdout.write_all(b"\x1b[?1006l\x1b[?1000l")?;
-        stdout.flush()?;
-    }
-    #[cfg(windows)]
-    {
-        use crossterm::event::DisableMouseCapture;
-        stdout.execute(DisableMouseCapture)?;
-    }
-    Ok(())
+/// Active text selection state.
+#[derive(Debug, Clone)]
+struct Selection {
+    /// Where the selection started (anchor point).
+    anchor: ScreenPos,
+    /// Where the selection currently extends to (moves with drag).
+    extent: ScreenPos,
+    /// The output pane area at the time selection started, for coordinate mapping.
+    output_area: ratatui::layout::Rect,
 }
 
 /// Messages sent from background tasks to the TUI event loop.
@@ -287,6 +277,10 @@ struct App {
     /// Sender for the dedicated input thread (v0.11.4.2 item 11).
     /// When set, terminal events arrive via this channel instead of inline polling.
     input_rx: Option<tokio::sync::mpsc::UnboundedReceiver<Event>>,
+    /// Active text selection (mouse click-drag).
+    selection: Option<Selection>,
+    /// Cached output pane area from the last draw (for mouse coordinate mapping).
+    output_area: ratatui::layout::Rect,
 }
 
 impl App {
@@ -327,6 +321,8 @@ impl App {
             prompt_dismiss_after_output_secs: 5,
             prompt_verify_timeout_secs: 10,
             input_rx: None,
+            selection: None,
+            output_area: ratatui::layout::Rect::default(),
         }
     }
 
@@ -756,9 +752,9 @@ async fn run_tui(
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     stdout.execute(EnterAlternateScreen)?;
-    // Selective scroll capture (v0.11.4.2): enable only ?1000h (normal tracking)
-    // + ?1006h (SGR coords) — scroll works, native text selection is unbroken.
-    enable_scroll_capture(&mut stdout)?;
+    // Enable mouse capture — TUI handles scroll, selection, and clipboard
+    // copy internally. Native selection is replaced by TUI selection.
+    stdout.execute(EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -798,10 +794,7 @@ async fn run_tui(
     // Cleanup.
     running.store(false, Ordering::Relaxed);
     disable_raw_mode()?;
-    {
-        let mut stdout = io::stdout();
-        disable_scroll_capture(&mut stdout)?;
-    }
+    terminal.backend_mut().execute(DisableMouseCapture)?;
     terminal.backend_mut().execute(LeaveAlternateScreen)?;
 
     // Save history.
@@ -824,6 +817,27 @@ async fn tui_event_loop(
     loop {
         // Draw UI.
         terminal.draw(|f| draw_ui(f, app))?;
+
+        // Cache the output pane area for mouse coordinate mapping.
+        {
+            let size = terminal.size()?;
+            let prompt = app.prompt_str();
+            let display_len = prompt.len() + app.input.chars().count();
+            let inner_width = size.width as usize;
+            let content_lines = if inner_width == 0 {
+                1
+            } else {
+                display_len.div_ceil(inner_width).max(1)
+            };
+            let input_height = (content_lines as u16 + 2).min(size.height / 2).max(3);
+            let output_height = size.height.saturating_sub(input_height + 1);
+            app.output_area = ratatui::layout::Rect {
+                x: 0,
+                y: 0,
+                width: size.width,
+                height: output_height,
+            };
+        }
 
         if !app.running {
             break;
@@ -900,6 +914,38 @@ async fn handle_terminal_event(
         Event::Key(KeyEvent {
             code, modifiers, ..
         }) => {
+            // Clear text selection on Escape, or on any typing key.
+            if code == KeyCode::Esc {
+                app.selection = None;
+                return;
+            }
+            // Ctrl+C with active selection → copy and clear, don't exit.
+            if code == KeyCode::Char('c') && modifiers == KeyModifiers::CONTROL {
+                if let Some(ref sel) = app.selection {
+                    if sel.anchor != sel.extent {
+                        let text = extract_selection_text(app, sel);
+                        if !text.is_empty() {
+                            copy_to_clipboard_osc52(&text);
+                        }
+                        app.selection = None;
+                        return;
+                    }
+                }
+            }
+            // Any non-modifier key clears the selection (typing replaces it).
+            if !matches!(
+                code,
+                KeyCode::Up
+                    | KeyCode::Down
+                    | KeyCode::PageUp
+                    | KeyCode::PageDown
+                    | KeyCode::Home
+                    | KeyCode::End
+            ) && !modifiers.contains(KeyModifiers::SHIFT)
+            {
+                app.selection = None;
+            }
+
             match (code, modifiers) {
                 (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
                     // If tailing agent output, Ctrl-C detaches instead of exiting (v0.10.14).
@@ -950,9 +996,8 @@ async fn handle_terminal_event(
                     app.scroll_offset = 0;
                     app.unread_events = 0;
                 }
-                // Ctrl+M toggle removed in v0.11.4.2 — selective ANSI escapes
-                // (?1000h only, no ?1002h/?1003h) enable scroll + native text
-                // selection simultaneously. No toggle needed.
+                // Ctrl+M mouse toggle removed — no mouse capture enabled.
+                // Native text selection always works. Scroll via keyboard.
                 (KeyCode::Enter, _) => {
                     if let Some(text) = app.submit() {
                         // Echo the command.
@@ -1215,11 +1260,60 @@ async fn handle_terminal_event(
                 _ => {}
             }
         }
-        Event::Mouse(mouse) => match mouse.kind {
-            MouseEventKind::ScrollUp => app.scroll_up(3),
-            MouseEventKind::ScrollDown => app.scroll_down(3),
-            _ => {} // Click/drag ignored — Shift+click-drag for text selection.
-        },
+        Event::Mouse(mouse) => {
+            let pos = ScreenPos {
+                col: mouse.column,
+                row: mouse.row,
+            };
+            match mouse.kind {
+                MouseEventKind::ScrollUp => app.scroll_up(3),
+                MouseEventKind::ScrollDown => app.scroll_down(3),
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if mouse.modifiers.contains(KeyModifiers::SHIFT) {
+                        // Shift+click: extend selection to this position.
+                        if let Some(ref mut sel) = app.selection {
+                            sel.extent = pos;
+                            sel.output_area = app.output_area;
+                        } else {
+                            // No existing selection — start a new one.
+                            app.selection = Some(Selection {
+                                anchor: pos,
+                                extent: pos,
+                                output_area: app.output_area,
+                            });
+                        }
+                    } else {
+                        // Regular click: start a new selection.
+                        app.selection = Some(Selection {
+                            anchor: pos,
+                            extent: pos,
+                            output_area: app.output_area,
+                        });
+                    }
+                }
+                MouseEventKind::Drag(MouseButton::Left) => {
+                    // Extend selection as user drags.
+                    if let Some(ref mut sel) = app.selection {
+                        sel.extent = pos;
+                    }
+                }
+                MouseEventKind::Up(MouseButton::Left) => {
+                    // Finalize selection — copy to clipboard if non-empty.
+                    if let Some(ref sel) = app.selection {
+                        if sel.anchor != sel.extent {
+                            let text = extract_selection_text(app, sel);
+                            if !text.is_empty() {
+                                copy_to_clipboard_osc52(&text);
+                            }
+                        } else {
+                            // Click without drag — clear selection.
+                            app.selection = None;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
         Event::Resize(_, _) => {
             // Terminal will re-draw on next loop iteration.
         }
@@ -1554,6 +1648,45 @@ fn draw_output(f: &mut Frame, app: &App, area: Rect) {
         .wrap(Wrap { trim: false })
         .scroll((residual_scroll, 0));
     f.render_widget(paragraph, inner);
+
+    // Render selection highlight by inverting colors on selected cells.
+    if let Some(ref sel) = app.selection {
+        if sel.anchor != sel.extent {
+            let (start, end) =
+                if (sel.anchor.row, sel.anchor.col) <= (sel.extent.row, sel.extent.col) {
+                    (sel.anchor, sel.extent)
+                } else {
+                    (sel.extent, sel.anchor)
+                };
+            let buf = f.buffer_mut();
+            for row in start.row..=end.row {
+                if row < inner.y || row >= inner.y + inner.height {
+                    continue;
+                }
+                let col_start = if row == start.row {
+                    start.col.max(inner.x)
+                } else {
+                    inner.x
+                };
+                let col_end = if row == end.row {
+                    end.col.min(inner.x + inner.width - 1)
+                } else {
+                    inner.x + inner.width - 1
+                };
+                for col in col_start..=col_end {
+                    if col >= inner.x + inner.width {
+                        break;
+                    }
+                    let cell = &mut buf[(col, row)];
+                    // Invert foreground/background for selection highlight.
+                    let fg = cell.fg;
+                    let bg = cell.bg;
+                    cell.set_fg(if bg == Color::Reset { Color::Black } else { bg });
+                    cell.set_bg(if fg == Color::Reset { Color::White } else { fg });
+                }
+            }
+        }
+    }
 
     // Scrollbar.
     if visual_line_count > visible_height {
@@ -1937,8 +2070,7 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
         ));
     }
 
-    // Mouse capture indicator removed in v0.11.4.2 — selective ANSI escapes
-    // enable both scroll and text selection simultaneously.
+    // No mouse capture — native text selection always works.
 
     // Workflow stage indicator.
     if let Some(ref stage) = app.workflow_prompt {
@@ -1970,6 +2102,184 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
         let right = Paragraph::new(right_text).style(Style::default().fg(Color::DarkGray));
         f.render_widget(right, right_area);
     }
+}
+
+// -- Mouse selection helpers --------------------------------------------------
+
+/// Extract the text covered by the current selection from the output buffer.
+///
+/// Maps screen coordinates back to logical output lines, accounting for
+/// scroll offset and word wrapping.
+fn extract_selection_text(app: &App, sel: &Selection) -> String {
+    let area = sel.output_area;
+    if area.width == 0 || area.height == 0 || app.output.is_empty() {
+        return String::new();
+    }
+
+    // Normalize anchor/extent so `start` is before `end` (top-left to bottom-right).
+    let (start, end) = if (sel.anchor.row, sel.anchor.col) <= (sel.extent.row, sel.extent.col) {
+        (sel.anchor, sel.extent)
+    } else {
+        (sel.extent, sel.anchor)
+    };
+
+    // Only handle selections within the output pane area.
+    let pane_top = area.y;
+    let pane_bottom = area.y + area.height;
+    let wrap_width = area.width as usize;
+    if wrap_width == 0 {
+        return String::new();
+    }
+
+    // Clamp to output pane.
+    let sel_start_row = start.row.max(pane_top).saturating_sub(pane_top) as usize;
+    let sel_end_row = end
+        .row
+        .min(pane_bottom.saturating_sub(1))
+        .saturating_sub(pane_top) as usize;
+    let sel_start_col = start.col.saturating_sub(area.x) as usize;
+    let sel_end_col = end.col.saturating_sub(area.x) as usize;
+
+    // Build a map of visual rows → text content by replaying the same
+    // pre-slicing logic used by draw_output().
+    let visual_line_count: usize = app
+        .output
+        .iter()
+        .map(|ol| {
+            if ol.text.is_empty() || wrap_width == 0 {
+                1
+            } else {
+                ol.text.len().div_ceil(wrap_width)
+            }
+        })
+        .sum();
+
+    let visible_height = area.height as usize;
+    let max_scroll = visual_line_count.saturating_sub(visible_height);
+    let scroll_y = max_scroll.saturating_sub(app.scroll_offset);
+
+    // Find start_idx and residual scroll (same as draw_output).
+    let mut cumulative: usize = 0;
+    let mut start_idx: usize = 0;
+    let mut residual: usize = 0;
+    for (i, ol) in app.output.iter().enumerate() {
+        let vlines = if ol.text.is_empty() || wrap_width == 0 {
+            1
+        } else {
+            ol.text.len().div_ceil(wrap_width)
+        };
+        if cumulative + vlines > scroll_y {
+            start_idx = i;
+            residual = scroll_y - cumulative;
+            break;
+        }
+        cumulative += vlines;
+        start_idx = i + 1;
+    }
+
+    // Build visual rows: for each logical line starting from start_idx,
+    // break into wrapped segments, skip `residual` rows, collect up to
+    // visible_height rows.
+    struct VisualRow {
+        text: String,
+    }
+    let mut rows: Vec<VisualRow> = Vec::with_capacity(visible_height);
+    let mut skipped = 0usize;
+
+    for ol in app.output.iter().skip(start_idx) {
+        let segments = if ol.text.is_empty() {
+            vec![String::new()]
+        } else {
+            ol.text
+                .chars()
+                .collect::<Vec<_>>()
+                .chunks(wrap_width)
+                .map(|chunk| chunk.iter().collect::<String>())
+                .collect()
+        };
+        for seg in segments {
+            if skipped < residual {
+                skipped += 1;
+                continue;
+            }
+            rows.push(VisualRow { text: seg });
+            if rows.len() >= visible_height {
+                break;
+            }
+        }
+        if rows.len() >= visible_height {
+            break;
+        }
+    }
+
+    // Extract text from the selected visual rows.
+    let mut result = String::new();
+    for (row_idx, vr) in rows.iter().enumerate() {
+        if row_idx < sel_start_row || row_idx > sel_end_row {
+            continue;
+        }
+        let chars: Vec<char> = vr.text.chars().collect();
+        let col_start = if row_idx == sel_start_row {
+            sel_start_col
+        } else {
+            0
+        };
+        let col_end = if row_idx == sel_end_row {
+            (sel_end_col + 1).min(chars.len())
+        } else {
+            chars.len()
+        };
+        if col_start < chars.len() {
+            let selected: String = chars[col_start..col_end.min(chars.len())].iter().collect();
+            result.push_str(&selected);
+        }
+        if row_idx < sel_end_row {
+            result.push('\n');
+        }
+    }
+
+    result
+}
+
+/// Copy text to the system clipboard using the OSC 52 escape sequence.
+///
+/// This works across platforms and terminals: iTerm2, Terminal.app, kitty,
+/// alacritty, Windows Terminal, xterm, GNOME Terminal, and most modern
+/// terminal emulators that support OSC 52.
+fn copy_to_clipboard_osc52(text: &str) {
+    use std::io::Write;
+
+    let encoded = base64_encode(text.as_bytes());
+    // OSC 52: Set clipboard. 'c' = system clipboard.
+    let osc = format!("\x1b]52;c;{}\x07", encoded);
+    let mut stdout = io::stdout();
+    let _ = stdout.write_all(osc.as_bytes());
+    let _ = stdout.flush();
+}
+
+/// Minimal base64 encoder (no external dependency needed).
+fn base64_encode(data: &[u8]) -> String {
+    const CHARS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut result = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = chunk.get(1).copied().unwrap_or(0) as u32;
+        let b2 = chunk.get(2).copied().unwrap_or(0) as u32;
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+        result.push(CHARS[((triple >> 18) & 0x3F) as usize] as char);
+        result.push(CHARS[((triple >> 12) & 0x3F) as usize] as char);
+        if chunk.len() > 1 {
+            result.push(CHARS[((triple >> 6) & 0x3F) as usize] as char);
+        } else {
+            result.push('=');
+        }
+        if chunk.len() > 2 {
+            result.push(CHARS[(triple & 0x3F) as usize] as char);
+        } else {
+            result.push('=');
+        }
+    }
+    result
 }
 
 // -- Background tasks --------------------------------------------------------
@@ -2772,10 +3082,13 @@ Shell commands:
   clear              Clear the output pane
   Ctrl-L             Clear the output pane
   Scroll (trackpad)  Scroll output 3 lines per tick
-  PgUp / PgDn        Scroll output one full page
   Shift+Up / Down    Scroll output 1 line
+  PgUp / PgDn        Scroll output one full page
   Shift+Home / End   Scroll to top / bottom of output
-  Click-drag         Select text for copy (native selection always works)
+  Click-drag         Select text (highlighted, auto-copied to clipboard)
+  Shift+Click        Extend selection to click position
+  Ctrl-C (w/ sel)    Copy selection to clipboard
+  Escape             Clear selection
   Tab                Auto-complete commands
   Ctrl-W             Toggle split pane (shell | agent side-by-side)
   Ctrl-C / exit      Exit the shell (Ctrl-C detaches when tailing)
@@ -4168,17 +4481,15 @@ mod tests {
     }
 
     #[test]
-    fn selective_scroll_capture_helpers() {
-        // v0.11.4.2 item 1: Verify enable/disable_scroll_capture don't panic.
-        // We can't actually test terminal escape output in a unit test, but
-        // we verify the functions are callable and the App no longer has
-        // a mouse_capture_enabled field (removed — both work simultaneously).
+    fn mouse_selection_initial_state() {
+        // TUI mouse selection: starts with no selection, output_area default.
         let app = App::new(
             "http://localhost".into(),
             None,
             std::path::PathBuf::from("/tmp"),
         );
-        // input_rx starts as None (set during run_tui).
+        assert!(app.selection.is_none());
+        assert_eq!(app.output_area, ratatui::layout::Rect::default());
         assert!(app.input_rx.is_none());
     }
 
@@ -4194,5 +4505,84 @@ mod tests {
         tx.send(ev).unwrap();
         // Should be immediately receivable.
         assert!(rx.try_recv().is_ok());
+    }
+
+    #[test]
+    fn base64_encode_known_values() {
+        assert_eq!(base64_encode(b"hello"), "aGVsbG8=");
+        assert_eq!(base64_encode(b"Hello, World!"), "SGVsbG8sIFdvcmxkIQ==");
+        assert_eq!(base64_encode(b"ab"), "YWI=");
+        assert_eq!(base64_encode(b"abc"), "YWJj");
+        assert_eq!(base64_encode(b""), "");
+    }
+
+    #[test]
+    fn extract_selection_empty_output() {
+        let app = App::new(
+            "http://localhost".into(),
+            None,
+            std::path::PathBuf::from("/tmp"),
+        );
+        let sel = Selection {
+            anchor: ScreenPos { col: 0, row: 0 },
+            extent: ScreenPos { col: 5, row: 0 },
+            output_area: ratatui::layout::Rect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        };
+        // No output lines → empty result.
+        assert_eq!(extract_selection_text(&app, &sel), "");
+    }
+
+    #[test]
+    fn extract_selection_single_line() {
+        let mut app = App::new(
+            "http://localhost".into(),
+            None,
+            std::path::PathBuf::from("/tmp"),
+        );
+        app.push_output(OutputLine::info("Hello, World!".to_string()));
+        let area = ratatui::layout::Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let sel = Selection {
+            anchor: ScreenPos { col: 0, row: 0 },
+            extent: ScreenPos { col: 4, row: 0 },
+            output_area: area,
+        };
+        let text = extract_selection_text(&app, &sel);
+        assert_eq!(text, "Hello");
+    }
+
+    #[test]
+    fn extract_selection_multi_line() {
+        let mut app = App::new(
+            "http://localhost".into(),
+            None,
+            std::path::PathBuf::from("/tmp"),
+        );
+        app.push_output(OutputLine::info("Line one".to_string()));
+        app.push_output(OutputLine::info("Line two".to_string()));
+        app.push_output(OutputLine::info("Line three".to_string()));
+        let area = ratatui::layout::Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let sel = Selection {
+            anchor: ScreenPos { col: 5, row: 0 },
+            extent: ScreenPos { col: 3, row: 1 },
+            output_area: area,
+        };
+        let text = extract_selection_text(&app, &sel);
+        // Row 0 col 5..end = "one", Row 1 col 0..3 = "Line"
+        assert_eq!(text, "one\nLine");
     }
 }
