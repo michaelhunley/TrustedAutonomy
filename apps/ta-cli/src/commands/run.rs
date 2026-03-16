@@ -184,7 +184,7 @@ fn builtin_agent_config(agent_id: &str) -> AgentLaunchConfig {
             description: Some("Anthropic's Claude Code CLI".to_string()),
             interactive: None,
             alignment: Some(ta_policy::AlignmentProfile::default_developer()),
-            headless_args: Vec::new(),
+            headless_args: vec!["--print".to_string()],
             non_interactive_env: Default::default(),
             auto_answers: Vec::new(),
         },
@@ -1541,11 +1541,13 @@ fn launch_agent_headless(
         cb(child.id());
     }
 
-    // Stream stdout lines to the parent's stdout with a [agent] prefix.
+    // Stream stdout lines to the parent's stdout verbatim.
+    // No prefix — the daemon's output schema parser expects raw stream-json lines
+    // starting with '{' so it can extract human-readable text from JSON events.
     if let Some(stdout) = child.stdout.take() {
         let reader = BufReader::new(stdout);
         for line in reader.lines().map_while(Result::ok) {
-            println!("[agent] {}", line);
+            println!("{}", line);
         }
     }
 
