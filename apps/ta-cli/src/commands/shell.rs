@@ -754,7 +754,7 @@ pub(crate) fn render_sse_event(frame: &str) -> Option<String> {
     let event_type = event_type?;
     let data = data?;
 
-    // Internal diagnostic events — suppress from user-facing output.
+    // Internal diagnostic events — not useful for the user.
     if event_type == "health_check" {
         return None;
     }
