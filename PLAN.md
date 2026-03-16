@@ -3841,6 +3841,69 @@ The output pipeline is: user types command → `send_input()` POST to daemon `/a
 
 ---
 
+### v0.11.4.2 — Shell Mouse & Agent Session Fix
+<!-- status: pending -->
+**Goal**: Fix two critical `ta shell` usability issues: (1) mouse scroll and text selection must both work simultaneously (like Claude Code), and (2) agent Q&A must reuse a persistent session instead of spawning a new subprocess per question.
+
+#### 1. Mouse: Scroll + Text Selection (both active, no toggle)
+
+**Problem**: Crossterm's `EnableMouseCapture` enables ALL mouse modes (`?1000h` normal tracking, `?1002h` button-event, `?1003h` any-event, `?1006h` SGR). This captures clicks/drags and breaks native text selection. The current Ctrl+M toggle is a workaround, not a fix.
+
+**Root cause**: `?1003h` (any-event tracking) and `?1000h` (normal tracking) capture button-down/up/drag events. Scroll-wheel events are reported through normal tracking (`?1000h`). There is no ANSI mode that captures only scroll.
+
+**Solution**: Use raw ANSI escape sequences instead of crossterm's all-or-nothing `EnableMouseCapture`:
+
+1. [ ] **Replace `EnableMouseCapture` with selective ANSI escapes**: On startup, write `\x1b[?1000h` (normal tracking — captures scroll wheel button 4/5 presses) + `\x1b[?1006h` (SGR coordinate encoding for values >223). Do NOT enable `?1002h` (button-event) or `?1003h` (any-event) — these are what break native selection. On cleanup, write `\x1b[?1006l\x1b[?1000l`.
+2. [ ] **Test across terminals**: Verify scroll + native text selection works in:
+   - macOS Terminal.app
+   - iTerm2
+   - VS Code integrated terminal
+   - Linux xterm / GNOME Terminal (via CI or manual test notes)
+   - Windows Terminal (crossterm handles Windows separately — may need platform-specific path)
+3. [ ] **Remove Ctrl+M toggle**: No longer needed since both behaviors coexist. Remove the `mouse_capture_enabled` field, the toggle handler, and the status bar indicator.
+4. [ ] **Fallback**: If a terminal doesn't report scroll via `?1000h` alone, fall back to keyboard-only scroll (PageUp/PageDown/arrows already work). Detect via `$TERM` or first scroll event.
+5. [ ] **Platform abstraction**: Wrap the ANSI escape output in a helper (`fn enable_scroll_capture(stdout)` / `fn disable_scroll_capture(stdout)`) that handles platform differences. On Windows, delegate to crossterm's native API if raw ANSI doesn't work.
+
+**Key insight**: Claude Code's terminal (which works correctly) likely uses `?1000h` + `?1006h` without `?1002h`/`?1003h`. Normal tracking reports button press/release (including scroll wheel buttons 4/5) but does NOT intercept click-drag, which the terminal handles natively for selection.
+
+**Files**: `apps/ta-cli/src/commands/shell_tui.rs` (mouse setup, event loop, cleanup)
+
+#### 2. Persistent Agent Session for Q&A
+
+**Problem**: Every question typed in `ta shell` spawns a new `claude-code` subprocess (`ask_agent()` → `tokio::process::Command::new(binary)` in `agent.rs:269`). Each cold start takes seconds. Users see "Starting claude-code agent..." and experience long delays + laggy keyboard input during startup.
+
+**Solution**: Keep a long-running agent subprocess alive for the shell session's lifetime.
+
+6. [ ] **Persistent QA agent process**: On shell startup (or on first question, configurable), spawn a single `claude-code` subprocess with `--print` mode (or equivalent non-interactive flag) and keep its stdin/stdout pipes open. Route all `RouteDecision::Agent` prompts to this process's stdin instead of spawning new subprocesses. Parse responses from stdout.
+7. [ ] **Memory context injection**: When starting the persistent QA agent, inject the project's memory context (from `build_memory_context_section_for_inject()` in `run.rs`) as the system prompt or initial context. This gives the agent project awareness without needing per-question context loading.
+8. [ ] **Configuration**: Add `[shell.qa_agent]` section to `daemon.toml`:
+   ```toml
+   [shell.qa_agent]
+   auto_start = true          # Start agent on shell launch (default: true)
+   agent = "claude-code"      # Which agent binary to use
+   idle_timeout_secs = 300    # Kill after 5min idle, restart on next question
+   inject_memory = true       # Inject project memory context on start
+   ```
+   Users can set `auto_start = false` to disable the persistent agent.
+9. [ ] **Graceful lifecycle**: On shell exit, send EOF to the agent's stdin and wait up to 5s for clean shutdown, then SIGTERM. On agent crash, show error in shell and auto-restart on next question. Track restart count to avoid crash loops (max 3 restarts per session).
+10. [ ] **Session reuse in daemon**: Modify `get_or_create_default()` in `agent.rs` to return the persistent process's session instead of creating new ones. The daemon tracks the long-running process and its stdin/stdout handles.
+
+**Files**: `crates/ta-daemon/src/api/agent.rs` (session management, subprocess lifecycle), `crates/ta-daemon/src/config.rs` (config struct), `apps/ta-cli/src/commands/shell_tui.rs` (startup trigger)
+
+#### 3. Non-Blocking Keyboard Input
+
+**Problem**: During agent subprocess startup or heavy processing, keyboard input becomes laggy. The TUI event loop uses `tokio::select!` with a 50ms poll timeout, but `spawn_blocking(|| event::poll(...))` can contend with other blocking work.
+
+11. [ ] **Dedicated input thread**: Move terminal event reading to a dedicated OS thread (not a tokio blocking task). Use `std::thread::spawn` with a `crossbeam` or `tokio::sync::mpsc` channel to send `Event` values to the async event loop. This fully decouples keyboard responsiveness from async task pressure.
+12. [ ] **Immediate event drain**: The input thread should use `event::poll(Duration::from_millis(16))` (~60fps) and `event::read()` in a tight loop, sending events immediately over the channel. The main async loop receives from this channel via `tokio::select!` alongside background messages.
+13. [ ] **Test**: Verify that typing remains responsive during agent startup by adding a timing assertion: keystroke-to-echo latency must be <50ms even when agent subprocess is spawning.
+
+**Files**: `apps/ta-cli/src/commands/shell_tui.rs` (event loop refactor)
+
+#### Version: `0.11.4-alpha.2`
+
+---
+
 ### v0.12.0 — Template Projects & Bootstrap Flow
 <!-- status: pending -->
 **Goal**: `ta new` generates projects with `project.toml` plugin declarations so downstream users get a complete, working setup from `ta setup` alone. Template projects in the Trusted-Autonomy org serve as reference implementations. Also: replace the quick-fix Discord command listener with a proper slash-command-based bidirectional integration.
