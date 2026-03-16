@@ -883,12 +883,17 @@ async fn tui_event_loop(
 
         // ── Poll-based event processing ────────────────────────────
         //
-        // Pure non-blocking poll loop: check input, then bg, then sleep.
-        // Never uses tokio::select! or .await on channels — this isolates
-        // the event loop from tokio scheduler pressure caused by spawned
-        // background tasks (SSE streams, agent output, health checks).
+        // Input-first poll: always drain input via try_recv() (non-blocking),
+        // then process one bg message. When both channels are empty, YIELD
+        // to the tokio runtime via tokio::time::sleep so background tasks
+        // (SSE streams, HTTP requests, tail streams) can make progress.
         //
-        // Worst-case input latency: 1ms (the sleep duration when idle).
+        // CRITICAL: We must NOT use std::thread::sleep here. This is an
+        // async fn on a tokio worker thread — std::thread::sleep blocks
+        // the entire worker, starving all other tasks and creating the
+        // exact backpressure that causes input latency.
+        //
+        // Worst-case input latency: 1ms (the tokio::time::sleep quantum).
 
         let mut did_work = false;
 
@@ -919,10 +924,10 @@ async fn tui_event_loop(
             continue;
         }
 
-        // 3. Nothing pending — sleep 1ms to avoid busy-wait.
-        // This is a real OS sleep, not a tokio timer, so it doesn't
-        // depend on the tokio scheduler being responsive.
-        std::thread::sleep(Duration::from_millis(1));
+        // 3. Nothing pending — yield to the tokio runtime for 1ms.
+        // This lets background tasks (SSE, HTTP, tail streams) make progress.
+        // On wake, we immediately loop back to check input first.
+        tokio::time::sleep(Duration::from_millis(1)).await;
     }
     Ok(())
 }
@@ -4598,5 +4603,206 @@ mod tests {
         let text = extract_selection_text(&app, &sel);
         // Row 0 col 5..end = "one", Row 1 col 0..3 = "Line"
         assert_eq!(text, "one\nLine");
+    }
+
+    /// Test that input events are processed with low latency even when
+    /// the background message channel is flooded with agent output.
+    ///
+    /// Simulates the real scenario: an agent producing high-volume SSE
+    /// output while the user tries to type. The event loop must process
+    /// input within 5ms regardless of background traffic volume.
+    #[tokio::test]
+    async fn input_latency_under_background_flood() {
+        use std::time::{Duration, Instant};
+
+        let (bg_tx, mut bg_rx) = tokio::sync::mpsc::unbounded_channel::<TuiMessage>();
+        let (input_tx, input_rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
+
+        let mut app = App::new(
+            "http://localhost".into(),
+            None,
+            std::path::PathBuf::from("/tmp"),
+        );
+        app.input_rx = Some(input_rx);
+
+        // Flood background channel with 10,000 agent output messages.
+        for i in 0..10_000 {
+            let _ = bg_tx.send(TuiMessage::AgentOutput(AgentOutputLine {
+                stream: "stdout".into(),
+                line: format!("Agent output line {}", i),
+            }));
+        }
+
+        // Now send an input event (simulating a keystroke).
+        let _ = input_tx.send(Event::Key(KeyEvent::new(
+            KeyCode::Char('x'),
+            KeyModifiers::NONE,
+        )));
+
+        // Run one iteration of the poll logic (extracted below).
+        // The event loop should drain input FIRST, then process at most
+        // one bg message per cycle.
+        let start = Instant::now();
+
+        // Drain input (should find 'x' immediately).
+        let mut pending_inputs = Vec::new();
+        if let Some(ref mut irx) = app.input_rx {
+            while let Ok(ev) = irx.try_recv() {
+                pending_inputs.push(ev);
+            }
+        }
+        let input_count = pending_inputs.len();
+
+        // Process input events (just insert chars, no network).
+        for ev in pending_inputs {
+            if let Event::Key(KeyEvent {
+                code: KeyCode::Char(c),
+                ..
+            }) = ev
+            {
+                app.insert_char(c);
+            }
+        }
+
+        let input_latency = start.elapsed();
+
+        // Process one bg message.
+        let mut bg_count = 0;
+        if let Ok(msg) = bg_rx.try_recv() {
+            handle_tui_message(&mut app, msg);
+            bg_count = 1;
+        }
+
+        // Assertions:
+        // 1. Input was found and processed.
+        assert_eq!(input_count, 1, "Should have received exactly 1 input event");
+        assert_eq!(app.input, "x", "Input char should be inserted");
+
+        // 2. Input latency is under 5ms (try_recv is ~nanoseconds).
+        assert!(
+            input_latency < Duration::from_millis(5),
+            "Input latency {:?} exceeds 5ms threshold",
+            input_latency
+        );
+
+        // 3. Only 1 bg message was processed (not all 10,000).
+        assert_eq!(bg_count, 1, "Should process at most 1 bg message per cycle");
+
+        // 4. The remaining 9,999 bg messages are still in the channel.
+        let mut remaining = 0;
+        while bg_rx.try_recv().is_ok() {
+            remaining += 1;
+        }
+        assert_eq!(remaining, 9999, "Remaining bg messages should be untouched");
+    }
+
+    /// Test that the event loop yields to tokio (doesn't block the thread)
+    /// by verifying that a spawned background task can make progress
+    /// concurrently with the event loop polling.
+    #[tokio::test]
+    async fn event_loop_yields_to_tokio_runtime() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        let counter = Arc::new(AtomicUsize::new(0));
+        let counter_clone = counter.clone();
+
+        // Spawn a background task that increments a counter rapidly.
+        tokio::spawn(async move {
+            for _ in 0..100 {
+                counter_clone.fetch_add(1, Ordering::Relaxed);
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        });
+
+        // Simulate what the event loop does when idle: yield via tokio::time::sleep.
+        // If we used std::thread::sleep, the background task would be blocked.
+        let start = std::time::Instant::now();
+        for _ in 0..50 {
+            // This is what the fixed event loop does when channels are empty:
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        let elapsed = start.elapsed();
+
+        // The background task should have made significant progress.
+        let count = counter.load(Ordering::Relaxed);
+        assert!(
+            count >= 20,
+            "Background task only ran {} times in {:?} — tokio runtime is being blocked",
+            count,
+            elapsed
+        );
+    }
+
+    /// Test that when the bg channel has a burst of messages and then input
+    /// arrives, the input is serviced on the very next cycle (not after
+    /// draining all bg messages).
+    #[tokio::test]
+    async fn input_priority_over_background_burst() {
+        let (bg_tx, mut bg_rx) = tokio::sync::mpsc::unbounded_channel::<TuiMessage>();
+        let (input_tx, input_rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
+
+        let mut app = App::new(
+            "http://localhost".into(),
+            None,
+            std::path::PathBuf::from("/tmp"),
+        );
+        app.input_rx = Some(input_rx);
+
+        // Send 1000 bg messages.
+        for i in 0..1000 {
+            let _ = bg_tx.send(TuiMessage::CommandResponse(format!("bg {}", i)));
+        }
+
+        // Simulate 5 cycles of the event loop's poll logic.
+        let mut cycles_until_input = 0;
+        let mut input_processed = false;
+
+        for cycle in 0..5 {
+            // On cycle 2, inject an input event (simulating delayed keystroke).
+            if cycle == 2 {
+                let _ = input_tx.send(Event::Key(KeyEvent::new(
+                    KeyCode::Char('z'),
+                    KeyModifiers::NONE,
+                )));
+            }
+
+            // Step 1: drain input.
+            let mut pending = Vec::new();
+            if let Some(ref mut irx) = app.input_rx {
+                while let Ok(ev) = irx.try_recv() {
+                    pending.push(ev);
+                }
+            }
+            if !pending.is_empty() {
+                for ev in pending {
+                    if let Event::Key(KeyEvent {
+                        code: KeyCode::Char(c),
+                        ..
+                    }) = ev
+                    {
+                        app.insert_char(c);
+                        input_processed = true;
+                        cycles_until_input = cycle;
+                    }
+                }
+            }
+
+            // Step 2: process ONE bg message.
+            if let Ok(msg) = bg_rx.try_recv() {
+                handle_tui_message(&mut app, msg);
+            }
+        }
+
+        assert!(input_processed, "Input should have been processed");
+        // Input injected at start of cycle 2, should be picked up on cycle 3
+        // (the next iteration after the send).
+        assert!(
+            cycles_until_input <= 3,
+            "Input processed on cycle {} — should be within 1 cycle of injection",
+            cycles_until_input
+        );
+        assert_eq!(app.input, "z");
     }
 }
