@@ -933,15 +933,13 @@ async fn tui_event_loop(
             input_count += 1;
         }
 
-        // Step 2: Process a small batch of background messages (non-blocking).
-        // Cap at 5 per cycle to keep latency low — we'll get more next frame.
+        // Step 2: Process ONE background message (non-blocking).
+        // Only one per cycle ensures input is never starved by heavy SSE traffic.
+        // With 60fps draw rate, this still processes ~60 bg messages/second.
         let mut bg_count = 0;
-        while let Ok(msg) = rx.try_recv() {
+        if let Ok(msg) = rx.try_recv() {
             process_background_message(app, msg, client, &tx).await;
-            bg_count += 1;
-            if bg_count >= 5 {
-                break;
-            }
+            bg_count = 1;
         }
 
         if input_count > 0 || bg_count > 0 {
