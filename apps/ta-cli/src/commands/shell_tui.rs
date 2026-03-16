@@ -847,65 +847,115 @@ async fn tui_event_loop(
             break;
         }
 
-        // Receive events from the dedicated input thread or background tasks.
-        // The input thread (v0.11.4.2 item 11) sends terminal events via a
-        // channel, fully decoupling keyboard responsiveness from async pressure.
-        let input_rx = app
-            .input_rx
-            .as_mut()
-            .expect("input_rx must be set before event loop");
-        tokio::select! {
-            // Terminal events from dedicated input thread.
-            ev = input_rx.recv() => {
-                if let Some(ev) = ev {
-                    // Collect the first event + drain any queued events.
-                    let mut events = vec![ev];
-                    let input_rx = app.input_rx.as_mut().unwrap();
-                    while let Ok(ev) = input_rx.try_recv() {
-                        events.push(ev);
-                    }
-                    for ev in events {
-                        handle_terminal_event(app, ev, client, &tx).await;
-                    }
+        // ── Input-first event processing ─────────────────────────────
+        //
+        // Always drain ALL pending input events before processing background
+        // messages. This ensures keyboard/mouse responsiveness even when the
+        // background message channel is saturated (agent output, SSE events).
+        //
+        // If no input is available, wait for either input or a background
+        // message (whichever comes first), but always re-drain input after.
+        // 1. Drain any already-queued input events (non-blocking).
+        //    Take the receiver out of app to avoid borrow conflicts.
+        let mut pending_inputs = Vec::new();
+        if let Some(ref mut input_rx) = app.input_rx {
+            while let Ok(ev) = input_rx.try_recv() {
+                pending_inputs.push(ev);
+            }
+        }
+        for ev in pending_inputs {
+            handle_terminal_event(app, ev, client, &tx).await;
+        }
+        let had_input = !app.input.is_empty(); // proxy: we processed something
+
+        // 2. If we processed input, also drain background messages (non-blocking)
+        //    to keep the UI current, then loop back to draw immediately.
+        if had_input {
+            let mut bg_count = 0;
+            while let Ok(msg) = rx.try_recv() {
+                process_background_message(app, msg, client, &tx).await;
+                bg_count += 1;
+                // Cap at 50 background messages per frame to keep draw responsive.
+                if bg_count >= 50 {
+                    break;
                 }
             }
-            // Background messages.
-            msg = rx.recv() => {
-                if let Some(msg) = msg {
-                    // Check if this is a GoalStarted that needs auto-tail.
-                    let auto_tail_goal = if let TuiMessage::GoalStarted { ref goal_id, .. } = msg {
-                        if app.auto_tail && app.tailing_goal.is_none() {
-                            Some(goal_id.clone())
-                        } else {
-                            None
+        } else {
+            // 3. No input pending — wait for either input or background message.
+            //    Use biased select so input is always checked first.
+            let wait_input = async {
+                if let Some(ref mut input_rx) = app.input_rx {
+                    input_rx.recv().await
+                } else {
+                    std::future::pending().await
+                }
+            };
+            tokio::select! {
+                biased;  // Check input first.
+                ev = wait_input => {
+                    if let Some(ev) = ev {
+                        handle_terminal_event(app, ev, client, &tx).await;
+                        // Drain any additional queued input.
+                        let mut more = Vec::new();
+                        if let Some(ref mut input_rx) = app.input_rx {
+                            while let Ok(ev) = input_rx.try_recv() {
+                                more.push(ev);
+                            }
                         }
-                    } else {
-                        None
-                    };
-
-                    handle_tui_message(app, msg);
-
-                    // Spawn auto-tail if triggered.
-                    if let Some(goal_id) = auto_tail_goal {
-                        let tail_client = client.clone();
-                        let tail_base = app.base_url.clone();
-                        let tail_tx = tx.clone();
-                        let backfill = app.tail_backfill_lines;
-                        tokio::spawn(async move {
-                            start_tail_stream(
-                                tail_client,
-                                &tail_base,
-                                Some(&goal_id),
-                                tail_tx,
-                                backfill,
-                            ).await;
-                        });
+                        for ev in more {
+                            handle_terminal_event(app, ev, client, &tx).await;
+                        }
+                    }
+                }
+                msg = rx.recv() => {
+                    if let Some(msg) = msg {
+                        process_background_message(app, msg, client, &tx).await;
+                        // Drain up to 50 more background messages.
+                        let mut bg_count = 0;
+                        while let Ok(msg) = rx.try_recv() {
+                            process_background_message(app, msg, client, &tx).await;
+                            bg_count += 1;
+                            if bg_count >= 50 {
+                                break;
+                            }
+                        }
                     }
                 }
             }
         }
     }
     Ok(())
+}
+
+/// Process a single background message (SSE event, status update, etc.)
+/// and spawn auto-tail if triggered by a GoalStarted event.
+async fn process_background_message(
+    app: &mut App,
+    msg: TuiMessage,
+    client: &reqwest::Client,
+    tx: &tokio::sync::mpsc::UnboundedSender<TuiMessage>,
+) {
+    let auto_tail_goal = if let TuiMessage::GoalStarted { ref goal_id, .. } = msg {
+        if app.auto_tail && app.tailing_goal.is_none() {
+            Some(goal_id.clone())
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    handle_tui_message(app, msg);
+
+    if let Some(goal_id) = auto_tail_goal {
+        let tail_client = client.clone();
+        let tail_base = app.base_url.clone();
+        let tail_tx = tx.clone();
+        let backfill = app.tail_backfill_lines;
+        tokio::spawn(async move {
+            start_tail_stream(tail_client, &tail_base, Some(&goal_id), tail_tx, backfill).await;
+        });
+    }
 }
 
 async fn handle_terminal_event(
@@ -989,6 +1039,10 @@ async fn handle_terminal_event(
                 }
                 // Ctrl+M mouse toggle removed — no mouse capture enabled.
                 // Native text selection always works. Scroll via keyboard.
+                (KeyCode::Enter, m) if m.contains(KeyModifiers::SHIFT) => {
+                    // Shift+Enter inserts a newline without submitting.
+                    app.insert_char('\n');
+                }
                 (KeyCode::Enter, _) => {
                     if let Some(text) = app.submit() {
                         // Echo the command.
@@ -1307,9 +1361,13 @@ async fn handle_terminal_event(
         }
         Event::Paste(data) => {
             // Bracketed paste: insert text into input without executing.
-            // Replace newlines/CR with spaces so pasting multi-line text
-            // doesn't accidentally submit commands.
-            let safe = data.replace(['\r', '\n'], " ").replace('\t', "    ");
+            // Normalize CRLF → LF, standalone CR → LF, tabs → spaces.
+            // Newlines are preserved so multi-line pastes stay readable;
+            // only Enter (KeyCode::Enter) submits.
+            let safe = data
+                .replace("\r\n", "\n")
+                .replace('\r', "\n")
+                .replace('\t', "    ");
             for ch in safe.chars() {
                 app.insert_char(ch);
             }
@@ -1909,13 +1967,30 @@ fn draw_input(f: &mut Frame, app: &App, area: Rect) {
         .block(block);
     f.render_widget(paragraph, area);
 
-    // Position cursor accounting for line wrap (v0.10.14).
-    let cursor_chars = prompt.len() + app.input[..app.cursor].chars().count();
+    // Position cursor accounting for line wrap and embedded newlines.
+    // Walk the display string up to the cursor position, tracking row/col
+    // with both explicit newlines and word-wrap boundaries.
+    let cursor_byte = prompt.len() + app.cursor;
     let wrap_width = inner.width.max(1) as usize;
-    let cursor_y = (cursor_chars / wrap_width) as u16;
-    let cursor_x = (cursor_chars % wrap_width) as u16;
-    let x = inner.x + cursor_x.min(inner.width.saturating_sub(1));
-    let y = inner.y + cursor_y.min(inner.height.saturating_sub(1));
+    let mut row: u16 = 0;
+    let mut col: usize = 0;
+    for (i, ch) in display.char_indices() {
+        if i >= cursor_byte {
+            break;
+        }
+        if ch == '\n' {
+            row += 1;
+            col = 0;
+        } else {
+            col += 1;
+            if col >= wrap_width {
+                row += 1;
+                col = 0;
+            }
+        }
+    }
+    let x = inner.x + (col as u16).min(inner.width.saturating_sub(1));
+    let y = inner.y + row.min(inner.height.saturating_sub(1));
     f.set_cursor_position((x, y));
 }
 
