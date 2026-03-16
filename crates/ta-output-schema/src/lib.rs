@@ -187,4 +187,97 @@ mod tests {
             ParseResult::Text("Codex says hello".into())
         );
     }
+
+    // ── Regression tests for headless output pipeline ──────────────
+
+    #[test]
+    fn prefixed_stream_json_breaks_parsing() {
+        // If launch_agent_headless adds an "[agent] " prefix, the line no longer
+        // starts with '{' and the schema parser can't extract structured content.
+        // This is the regression that caused missing output in the shell.
+        let loader = SchemaLoader::embedded_only();
+        let schema = loader.load("claude-code").unwrap();
+
+        let raw = r#"{"type":"assistant","message":{"model":"claude-opus-4-6","content":[{"type":"text","text":"Hello"}]}}"#;
+        let prefixed = format!("[agent] {}", raw);
+
+        // Raw line parses correctly.
+        assert_eq!(parse_line(&schema, raw), ParseResult::Text("Hello".into()));
+        // Prefixed line falls through as NotJson — output schema can't help.
+        assert_eq!(parse_line(&schema, &prefixed), ParseResult::NotJson);
+    }
+
+    #[test]
+    fn stream_json_assistant_text_extracted_as_readable() {
+        // Verify the full chain: stream-json → schema parser → human-readable text.
+        // This is what the shell user sees when --output-format stream-json is active.
+        let loader = SchemaLoader::embedded_only();
+        let schema = loader.load("claude-code").unwrap();
+
+        // Simulate a typical stream-json session.
+        let events = vec![
+            // init event → readable
+            (
+                r#"{"type":"system","subtype":"init","model":"claude-opus-4-6"}"#,
+                Some("[init] model: claude-opus-4-6"),
+            ),
+            // message_start → suppressed (internal protocol)
+            (
+                r#"{"type":"message_start","message":{"model":"claude-opus-4-6"}}"#,
+                None,
+            ),
+            // ping → suppressed
+            (r#"{"type":"ping"}"#, None),
+            // content_block_delta → readable text chunk
+            (
+                r#"{"type":"content_block_delta","delta":{"type":"text_delta","text":"Working on it..."}}"#,
+                Some("Working on it..."),
+            ),
+            // tool_use → tool name
+            (
+                r#"{"type":"tool_use","name":"Edit"}"#,
+                None, // ToolUse, not Text
+            ),
+            // result → readable
+            (
+                r#"{"type":"result","result":"Changes applied successfully"}"#,
+                Some("[result] Changes applied successfully"),
+            ),
+        ];
+
+        for (json_line, expected_text) in events {
+            let result = parse_line(&schema, json_line);
+            match expected_text {
+                Some(text) => {
+                    assert_eq!(result, ParseResult::Text(text.into()), "for: {}", json_line)
+                }
+                None => assert_ne!(
+                    result,
+                    ParseResult::NotJson,
+                    "JSON should be recognized: {}",
+                    json_line
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn stream_json_tool_use_events_detected() {
+        let loader = SchemaLoader::embedded_only();
+        let schema = loader.load("claude-code").unwrap();
+
+        // Direct tool_use event.
+        assert_eq!(
+            parse_line(&schema, r#"{"type":"tool_use","name":"Bash"}"#),
+            ParseResult::ToolUse("Bash".into())
+        );
+        // content_block_start wrapping tool_use.
+        assert_eq!(
+            parse_line(
+                &schema,
+                r#"{"type":"content_block_start","content_block":{"type":"tool_use","name":"Write"}}"#
+            ),
+            ParseResult::ToolUse("Write".into())
+        );
+    }
 }

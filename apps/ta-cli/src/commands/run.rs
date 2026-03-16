@@ -184,7 +184,11 @@ fn builtin_agent_config(agent_id: &str) -> AgentLaunchConfig {
             description: Some("Anthropic's Claude Code CLI".to_string()),
             interactive: None,
             alignment: Some(ta_policy::AlignmentProfile::default_developer()),
-            headless_args: vec!["--print".to_string()],
+            headless_args: vec![
+                "--verbose".to_string(),
+                "--output-format".to_string(),
+                "stream-json".to_string(),
+            ],
             non_interactive_env: Default::default(),
             auto_answers: Vec::new(),
         },
@@ -3381,5 +3385,64 @@ non_interactive_env:
             config.non_interactive_env.get("MY_FLAG"),
             Some(&"true".to_string())
         );
+    }
+
+    // ── Headless args tests ───────────────────────────────────────
+
+    #[test]
+    fn claude_code_headless_args_include_stream_json() {
+        let config = builtin_agent_config("claude-code");
+        assert!(
+            config.headless_args.contains(&"--verbose".to_string()),
+            "claude-code headless_args must include --verbose for stream-json to work"
+        );
+        assert!(
+            config
+                .headless_args
+                .contains(&"--output-format".to_string()),
+            "claude-code headless_args must include --output-format"
+        );
+        assert!(
+            config.headless_args.contains(&"stream-json".to_string()),
+            "claude-code headless_args must include stream-json"
+        );
+    }
+
+    #[test]
+    fn claude_code_headless_args_order() {
+        // The args must appear in the right order for the CLI to parse them.
+        let config = builtin_agent_config("claude-code");
+        let args = &config.headless_args;
+        let verbose_pos = args.iter().position(|a| a == "--verbose");
+        let format_pos = args.iter().position(|a| a == "--output-format");
+        let json_pos = args.iter().position(|a| a == "stream-json");
+
+        assert!(verbose_pos.is_some(), "--verbose must be present");
+        assert!(format_pos.is_some(), "--output-format must be present");
+        assert!(json_pos.is_some(), "stream-json must be present");
+
+        // --output-format must come before stream-json (it's the value).
+        assert!(
+            format_pos.unwrap() < json_pos.unwrap(),
+            "--output-format must precede stream-json"
+        );
+    }
+
+    #[test]
+    fn other_agents_have_no_headless_args() {
+        // Codex and generic agents don't need special headless flags.
+        assert!(builtin_agent_config("codex").headless_args.is_empty());
+        assert!(builtin_agent_config("unknown-agent")
+            .headless_args
+            .is_empty());
+    }
+
+    #[test]
+    fn claude_flow_has_non_interactive_env() {
+        let config = builtin_agent_config("claude-flow");
+        assert!(config.headless_args.is_empty());
+        assert!(config
+            .non_interactive_env
+            .contains_key("CLAUDE_FLOW_NON_INTERACTIVE"));
     }
 }
