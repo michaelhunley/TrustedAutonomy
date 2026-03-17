@@ -4040,47 +4040,55 @@ The output pipeline is: user types command → `send_input()` POST to daemon `/a
 <!-- status: pending -->
 **Goal**: Make goal/agent output clearly visible in the web shell, surface intermediate agent progress in real time, and support parallel agent conversations.
 
-**Problem 1 — No goal feedback**: The web shell shows zero feedback when goals make progress or complete. Users discover completion through external editor notifications or polling `ta goal list`. Events like `goal_started`, `goal_completed`, `draft_built` must be surfaced clearly with actionable next steps.
+**Problem 1 — No goal feedback**: The web shell shows zero feedback when goals make progress or complete. Users discover completion through external editor notifications or polling `ta goal list`. Events like `goal_started`, `goal_completed`, `draft_built` must be surfaced clearly.
 
-**Problem 2 — Broken `:tail`**: The daemon outputs "Stream output with: :tail <id>" but the web shell has no `:tail` handler. The command gets sent to the QA agent as a prompt. Auto-tail on goal start needs to be clear and visible, and manual `:tail` must work.
+**Problem 2 — Broken `:tail`**: The daemon outputs "Stream output with: :tail <id>" but the web shell has no `:tail` handler — the command is sent to the QA agent as a prompt.
 
-**Problem 3 — Silent processing**: When a user asks the QA agent a question, the web shell shows "processing..." for 30-60 seconds. Claude Code writes tool-use progress to stderr, but it isn't surfaced. Users should see intermediate steps.
+**Problem 3 — `.git/` in draft diffs**: The overlay copies `.git/` into staging because `goal.rs` only loads `ExcludePatterns::load()` (build artifacts) but never merges `adapter.exclude_patterns()` (which returns `[".git/"]`). When staging's git state is modified (e.g., creating a branch in staging or any git op), the diff captures `.git/index`, `.git/HEAD`, etc. as changed artifacts. When `ta draft apply --git-commit` runs, it copies those `.git/` files back, overwriting the real repo's git state — resetting HEAD to main and deleting local branches.
 
-**Problem 4 — Single conversation**: The daemon chains all requests to one agent via `--continue`. No way to fork parallel sessions.
+**Problem 4 — Silent processing**: Claude Code writes tool-use progress to stderr but the web shell doesn't surface it.
+
+**Problem 5 — Single conversation**: No way to fork parallel agent sessions.
+
+#### Critical Bug Fix — `.git/` in Overlay Diff
+
+1. [ ] **Merge adapter excludes into overlay**: In `goal.rs`, after selecting the VCS adapter, call `adapter.exclude_patterns()` and merge the result into `ExcludePatterns` before calling `OverlayWorkspace::create()`. For the Git adapter this adds `".git/"`, preventing staging from capturing VCS metadata. Without this, `ta draft apply --git-commit` can overwrite `.git/HEAD`, `.git/index`, and delete local branches by restoring staging's git state.
+   - `goal.rs:490`: `let mut excludes = ExcludePatterns::load(&source_dir); excludes.merge(&adapter.exclude_patterns());`
+   - Add test: create overlay on a git repo, run a git op in staging, confirm `.git/**` not in `diff_all()`.
 
 #### Goal Progress & Tail UX
 
-1. [ ] **Goal lifecycle events in web shell**: Ensure the daemon emits structured events for all goal state transitions (`goal_started`, `goal_completed`, `goal_failed`, `draft_built`). The web shell must render them as notify-class lines with actionable next steps (e.g., "[goal completed] — draft ready, run: draft view <id>").
+2. [ ] **Goal lifecycle events in web shell**: Ensure the daemon emits structured events for all goal state transitions (`goal_started`, `goal_completed`, `goal_failed`, `draft_built`). The web shell must render them as notify-class lines with actionable next steps (e.g., "[goal completed] — draft ready, run: draft view <id>").
 
-2. [ ] **Goal completion notification**: When a goal finishes (agent exits), show a clear "[goal completed]" banner with elapsed time, draft ID if built, and next action. Currently the user gets no signal in the web shell.
+3. [ ] **Goal completion notification**: When a goal finishes (agent exits), show a clear "[goal completed]" banner with elapsed time, draft ID if built, and next action. Currently the user gets no signal in the web shell.
 
-3. [ ] **Client-side `:tail <id>` command**: Handle `:tail <id>` in the web shell client — opens SSE stream to `/api/goals/{id}/output` directly, no server round-trip. Also `:untail [id]`, `:tails` (list active), `:help`.
+4. [ ] **Client-side `:tail <id>` command**: Handle `:tail <id>` in the web shell client — opens SSE stream to `/api/goals/{id}/output` directly, no server round-trip. Also `:untail [id]`, `:tails` (list active), `:help`.
 
-4. [ ] **Status bar tail indicator**: Show "tailing <label>" or "tailing N streams" in the status bar when actively following goal/agent output.
+5. [ ] **Status bar tail indicator**: Show "tailing <label>" or "tailing N streams" in the status bar when actively following goal/agent output.
 
-5. [ ] **Clear auto-tail messaging**: When auto-tailing starts (on goal start or agent request), show "auto-tailing goal output..." or "agent working — tailing output (id)..." with distinct styling instead of bare "processing...".
+6. [ ] **Clear auto-tail messaging**: When auto-tailing starts (on goal start or agent request), show "auto-tailing goal output..." or "agent working — tailing output (id)..." with distinct styling instead of bare "processing...".
 
-6. [ ] **Daemon `:tail` output fix**: Update background command output message from "Stream output with: :tail <id>" to concise "Tail output: :tail <id>" (matches the working client command).
+7. [ ] **Daemon `:tail` output fix**: Update background command output message to "Tail output: :tail <id>" (matches the working client command).
 
 #### Agent Transparency (streaming intermediate output)
 
-7. [ ] **Surface agent stderr as progress**: Ensure all stderr lines from the agent subprocess appear in the web shell as dimmed progress indicators. The `ask()` method already streams stderr lines to the broadcast channel.
+8. [ ] **Surface agent stderr as progress**: Ensure all stderr lines from the agent subprocess appear in the web shell as dimmed progress indicators.
 
-8. [ ] **Structured progress parsing**: Parse stderr for known patterns (`Reading `, `Searching `, `Running `, `Writing `) and render them as distinct "thinking" lines in the web shell with a spinner or activity indicator.
+9. [ ] **Structured progress parsing**: Parse stderr for known patterns (`Reading `, `Searching `, `Running `, `Writing `) and render them as distinct "thinking" lines with a spinner or activity indicator.
 
-9. [ ] **Web shell thinking indicator**: When a request is pending and no stdout has arrived yet, show an animated indicator ("Agent is working...") that updates with the latest stderr progress line.
+10. [ ] **Web shell thinking indicator**: When a request is pending and no stdout has arrived yet, show an animated indicator ("Agent is working...") that updates with the latest stderr progress line.
 
-10. [ ] **Collapse progress on completion**: When the agent's stdout response arrives, collapse/dim the intermediate progress lines so the final answer is prominent.
+11. [ ] **Collapse progress on completion**: When the agent's stdout response arrives, collapse/dim the intermediate progress lines so the final answer is prominent.
 
 #### Parallel Agent Sessions
 
-11. [ ] **`/parallel` shell command**: New web shell command that spawns an independent agent conversation (no `--continue`). Returns a session tag the user can address follow-ups to.
+12. [ ] **`/parallel` shell command**: New web shell command that spawns an independent agent conversation (no `--continue`). Returns a session tag the user can address follow-ups to.
 
-12. [ ] **`POST /api/agent/ask` with `parallel: true`**: API flag that skips conversation chaining and creates a fresh agent subprocess.
+13. [ ] **`POST /api/agent/ask` with `parallel: true`**: API flag that skips conversation chaining and creates a fresh agent subprocess.
 
-13. [ ] **Session switching in web shell**: Status bar shows active parallel sessions. User can prefix input with a session tag to direct it to a specific agent: `@research what did you find?`
+14. [ ] **Session switching in web shell**: Status bar shows active parallel sessions. User can prefix input with a session tag to direct it to a specific agent: `@research what did you find?`
 
-14. [ ] **Session lifecycle**: Parallel sessions auto-close after idle timeout. User can `/close <tag>` to end a session explicitly. Max concurrent sessions configurable in `daemon.toml`.
+15. [ ] **Session lifecycle**: Parallel sessions auto-close after idle timeout. User can `/close <tag>` to end a session explicitly. Max concurrent sessions configurable in `daemon.toml`.
 
 #### Version: `0.11.5-alpha`
 
