@@ -29,17 +29,28 @@ use super::shell::{resolve_daemon_url, StatusInfo};
 
 // ── Mouse & scroll handling ─────────────────────────────────────────
 //
-// NO mouse capture is enabled. This lets the terminal handle all mouse
-// interaction natively: click-drag text selection, Command+C/Ctrl+C
-// copy, right-click context menus — just like Claude Code CLI.
+// NO mouse capture (`?1000h`/`?1002h`/`?1003h`) is enabled — those modes
+// intercept clicks, breaking native text selection and copy/paste.
 //
-// Scroll wheel: we enable ?1007h (alternate screen scroll mode) which
-// makes the terminal convert scroll wheel events into Up/Down arrow
-// key sequences when in the alternate screen buffer. These arrive as
-// normal KeyCode::Up/Down events which the TUI maps to scroll.
+// Instead we enable `?1007h` (alternate screen mouse mode), which makes
+// the terminal convert scroll wheel events into Up/Down arrow key
+// sequences when in the alternate screen buffer. These arrive as normal
+// KeyCode::Up/Down events which we route to output scrolling.
 //
 // This is the same approach used by less, vim, and other TUI apps that
 // want scroll wheel support without sacrificing native text selection.
+//
+// When `?1007h` is active:
+//   - Scroll wheel → Up/Down key events (scroll output)
+//   - Click, drag, Cmd+C → handled by terminal natively (no capture)
+//   - Right-click menus → work normally
+//
+// Key bindings (since wheel-generated Up/Down are indistinguishable
+// from real arrow keys):
+//   Up/Down          → scroll output (1 line)
+//   Option+Up/Down   → command history
+//   PageUp/PageDown  → scroll output (1 page)
+//   Shift+Home/End   → scroll to top/bottom
 
 // ── Latency diagnostics ─────────────────────────────────────────
 //
@@ -121,12 +132,25 @@ impl LatencyDiag {
     }
 
     /// Generate a report string and reset counters. Called every 5s.
+    /// If `force` is false, only reports when enabled and 5s have elapsed.
     fn report(&mut self) -> Option<String> {
-        if !self.enabled || self.cycles == 0 {
+        self.report_inner(false)
+    }
+
+    /// Force a report regardless of enabled/timing state.
+    fn report_forced(&mut self) -> Option<String> {
+        self.report_inner(true)
+    }
+
+    fn report_inner(&mut self, force: bool) -> Option<String> {
+        if !force && !self.enabled {
+            return None;
+        }
+        if self.cycles == 0 && self.samples.is_empty() {
             return None;
         }
         let elapsed = self.last_report.elapsed();
-        if elapsed.as_secs() < 5 {
+        if !force && elapsed.as_secs() < 5 {
             return None;
         }
 
@@ -915,10 +939,15 @@ async fn run_tui(
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     stdout.execute(EnterAlternateScreen)?;
-    // No mouse capture — the terminal handles all mouse interaction natively:
-    // click-drag selection, Command+C copy, right-click menus.
-    // Scroll: PageUp/PageDown, Shift+Up/Down, Shift+Home/End (keyboard only).
-    // This matches Claude Code CLI behavior.
+    // Enable alternate screen mouse mode (?1007h): converts scroll wheel
+    // events into Up/Down arrow key sequences. Does NOT capture clicks,
+    // so native text selection, Command+C copy, and right-click menus
+    // all work normally. We write the raw escape because crossterm's
+    // EnableMouseCapture enables ?1000h/?1002h/?1003h which DO capture
+    // clicks and break native selection.
+    use std::io::Write as _;
+    write!(stdout, "\x1b[?1007h")?;
+    stdout.flush()?;
     // Bracketed paste: pasted text arrives as Event::Paste(String) instead of
     // individual key events, so we can insert without executing on newlines.
     stdout.execute(EnableBracketedPaste)?;
@@ -967,7 +996,13 @@ async fn run_tui(
     running.store(false, Ordering::Relaxed);
     disable_raw_mode()?;
     terminal.backend_mut().execute(DisableBracketedPaste)?;
-    // No mouse capture to disable — terminal handles mouse natively.
+    // Disable alternate screen mouse mode (?1007h → ?1007l).
+    {
+        use std::io::Write as _;
+        let backend = terminal.backend_mut();
+        write!(backend, "\x1b[?1007l")?;
+        std::io::Write::flush(backend)?;
+    }
     terminal.backend_mut().execute(LeaveAlternateScreen)?;
 
     // Save history.
@@ -1405,14 +1440,10 @@ async fn handle_terminal_event(
                                     ));
                                 }
                                 "dump" => {
-                                    // Force an immediate report.
-                                    let saved = app.latency_diag.last_report;
-                                    app.latency_diag.last_report = std::time::Instant::now()
-                                        - std::time::Duration::from_secs(10);
-                                    if let Some(report) = app.latency_diag.report() {
+                                    // Force an immediate report even if disabled.
+                                    if let Some(report) = app.latency_diag.report_forced() {
                                         app.push_output(OutputLine::info(report));
                                     } else {
-                                        app.latency_diag.last_report = saved;
                                         app.push_output(OutputLine::info(
                                             "[latency] No data collected yet.".into(),
                                         ));
@@ -1550,15 +1581,17 @@ async fn handle_terminal_event(
                 }
                 (KeyCode::Home, _) => app.home(),
                 (KeyCode::End, _) => app.end(),
-                // Shift+Up/Down scroll output 1 line; plain Up/Down navigate history (v0.10.18.2).
-                (KeyCode::Up, m) if m.contains(KeyModifiers::SHIFT) => {
-                    app.scroll_up(1);
+                // Up/Down scroll output 1 line. This also handles scroll wheel
+                // via ?1007h which converts wheel events into Up/Down arrows.
+                // Alt/Option+Up/Down navigate command history.
+                (KeyCode::Up, m) if m.contains(KeyModifiers::ALT) => {
+                    app.history_up();
                 }
-                (KeyCode::Down, m) if m.contains(KeyModifiers::SHIFT) => {
-                    app.scroll_down(1);
+                (KeyCode::Down, m) if m.contains(KeyModifiers::ALT) => {
+                    app.history_down();
                 }
-                (KeyCode::Up, _) => app.history_up(),
-                (KeyCode::Down, _) => app.history_down(),
+                (KeyCode::Up, _) => app.scroll_up(1),
+                (KeyCode::Down, _) => app.scroll_down(1),
                 (KeyCode::Tab, _) => app.tab_complete(),
                 (KeyCode::PageUp, _) => {
                     let page = crossterm::terminal::size()
@@ -3372,16 +3405,23 @@ Interactive mode:
 
 Shell commands:
   :status            Refresh the status bar
+  :latency on|off    Toggle input latency diagnostics (log: .ta/latency.log)
+  :latency dump      Show latency report now
   clear              Clear the output pane
   Ctrl-L             Clear the output pane
-  Scroll (trackpad)  Scroll output 3 lines per tick
-  Shift+Up / Down    Scroll output 1 line
+
+Scrolling:
+  Up / Down          Scroll output 1 line (also: mouse scroll wheel)
   PgUp / PgDn        Scroll output one full page
   Shift+Home / End   Scroll to top / bottom of output
-  Click-drag         Select text (highlighted, copied on release via Cmd+V)
-  Shift+Click        Extend selection to click position
-  Escape             Clear selection
-  Cmd+V / Ctrl+V     Paste (newlines stripped, won't execute commands)
+
+History:
+  Option+Up / Down   Navigate command history (Alt+Up/Down on Linux)
+
+Text:
+  Click-drag         Select text (native terminal selection)
+  Cmd+C              Copy selection (native)
+  Paste              Preserves newlines; Shift+Enter for manual newline
   Tab                Auto-complete commands
   Ctrl-W             Toggle split pane (shell | agent side-by-side)
   Ctrl-C / exit      Exit the shell (Ctrl-C detaches when tailing)
