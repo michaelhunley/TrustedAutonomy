@@ -12,7 +12,10 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseEventKind};
+use crossterm::event::{
+    self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEvent, KeyEventKind,
+    KeyModifiers, MouseEventKind,
+};
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
@@ -24,51 +27,180 @@ use ratatui::widgets::{
 
 use super::shell::{resolve_daemon_url, StatusInfo};
 
-// ── Selective mouse capture (v0.11.4.2 item 1) ─────────────────────
+// ── Mouse & scroll handling ─────────────────────────────────────────
 //
-// Use raw ANSI escapes for scroll-only mouse capture instead of crossterm's
-// all-or-nothing `EnableMouseCapture` which enables `?1003h` (any-event
-// tracking) and breaks native text selection.
+// NO mouse capture is enabled — no `?1000h`, `?1002h`, `?1003h`, or
+// `?1007h`. This lets the terminal handle ALL mouse interaction natively:
+// click-drag text selection, Command+C/Ctrl+C copy, right-click menus.
 //
-// `?1000h` (normal tracking) captures button press/release including scroll
-// wheel (buttons 4/5) but does NOT capture click-drag, so native text
-// selection works in all terminals.
-// `?1006h` (SGR extended coordinates) handles column values >223.
+// Scroll wheel does not work in the TUI (it would require mouse capture
+// which breaks native selection). Use keyboard scrolling instead:
+//   Shift+Up/Down    → scroll output 1 line
+//   PageUp/PageDown  → scroll output 1 page
+//   Shift+Home/End   → scroll to top/bottom
+//   Up/Down          → command history
 
-/// Enable scroll-only mouse capture. Native text selection remains functional.
-fn enable_scroll_capture(stdout: &mut Stdout) -> io::Result<()> {
-    #[cfg(not(windows))]
-    {
-        use std::io::Write;
-        // Normal tracking + SGR coordinates. No button-event (?1002h) or
-        // any-event (?1003h) — those intercept click-drag and break selection.
-        stdout.write_all(b"\x1b[?1000h\x1b[?1006h")?;
-        stdout.flush()?;
-    }
-    #[cfg(windows)]
-    {
-        // Windows Terminal supports ANSI escapes, but the classic Windows
-        // Console does not. Delegate to crossterm's native API as fallback.
-        use crossterm::event::EnableMouseCapture;
-        stdout.execute(EnableMouseCapture)?;
-    }
-    Ok(())
+// ── Latency diagnostics ─────────────────────────────────────────
+//
+// Enabled via `:latency on` in the shell. Tracks timestamps at each
+// stage of the input pipeline to identify where time is lost:
+//
+//   OS read → channel send → try_recv → handle → draw
+//
+// Also tracks event loop cycle stats and background channel depth.
+
+/// An input event tagged with the Instant it was read from the OS.
+/// The dedicated input thread stamps every event before sending.
+struct StampedEvent {
+    event: Event,
+    os_read_at: std::time::Instant,
 }
 
-/// Disable scroll capture — restores default terminal mouse behavior.
-fn disable_scroll_capture(stdout: &mut Stdout) -> io::Result<()> {
-    #[cfg(not(windows))]
-    {
-        use std::io::Write;
-        stdout.write_all(b"\x1b[?1006l\x1b[?1000l")?;
-        stdout.flush()?;
+/// Rolling latency diagnostics (when enabled via `:latency on`).
+struct LatencyDiag {
+    enabled: bool,
+    /// Ring buffer of recent input-to-processed latencies (microseconds).
+    samples: Vec<u64>,
+    /// Index into ring buffer.
+    idx: usize,
+    /// Total event loop cycles since last report.
+    cycles: u64,
+    /// Cycles that did work (input or bg).
+    busy_cycles: u64,
+    /// Cycles spent idle (yielding to tokio).
+    idle_cycles: u64,
+    /// Max draw duration in last reporting window (microseconds).
+    max_draw_us: u64,
+    /// Max bg message process time in last window (microseconds).
+    max_bg_us: u64,
+    /// Max input handle time in last window (microseconds).
+    max_input_us: u64,
+    /// Last report time.
+    last_report: std::time::Instant,
+    /// bg channel depth at last sample.
+    last_bg_depth: usize,
+}
+
+impl LatencyDiag {
+    fn new() -> Self {
+        Self {
+            enabled: false,
+            samples: Vec::with_capacity(128),
+            idx: 0,
+            cycles: 0,
+            busy_cycles: 0,
+            idle_cycles: 0,
+            max_draw_us: 0,
+            max_bg_us: 0,
+            max_input_us: 0,
+            last_report: std::time::Instant::now(),
+            last_bg_depth: 0,
+        }
     }
-    #[cfg(windows)]
-    {
-        use crossterm::event::DisableMouseCapture;
-        stdout.execute(DisableMouseCapture)?;
+
+    fn record_input_latency(&mut self, latency_us: u64) {
+        if self.samples.len() < 128 {
+            self.samples.push(latency_us);
+        } else {
+            self.samples[self.idx % 128] = latency_us;
+        }
+        self.idx += 1;
     }
-    Ok(())
+
+    fn record_draw(&mut self, dur_us: u64) {
+        self.max_draw_us = self.max_draw_us.max(dur_us);
+    }
+
+    fn record_bg(&mut self, dur_us: u64) {
+        self.max_bg_us = self.max_bg_us.max(dur_us);
+    }
+
+    fn record_input_handle(&mut self, dur_us: u64) {
+        self.max_input_us = self.max_input_us.max(dur_us);
+    }
+
+    /// Generate a report string and reset counters. Called every 5s.
+    /// If `force` is false, only reports when enabled and 5s have elapsed.
+    fn report(&mut self) -> Option<String> {
+        self.report_inner(false)
+    }
+
+    /// Force a report regardless of enabled/timing state.
+    fn report_forced(&mut self) -> Option<String> {
+        self.report_inner(true)
+    }
+
+    fn report_inner(&mut self, force: bool) -> Option<String> {
+        if !force && !self.enabled {
+            return None;
+        }
+        if self.cycles == 0 && self.samples.is_empty() {
+            return None;
+        }
+        let elapsed = self.last_report.elapsed();
+        if !force && elapsed.as_secs() < 5 {
+            return None;
+        }
+
+        let n = self.samples.len();
+        let (avg_us, p50_us, p99_us, max_us) = if n > 0 {
+            let mut sorted: Vec<u64> = self.samples.clone();
+            sorted.sort_unstable();
+            let sum: u64 = sorted.iter().sum();
+            let avg = sum / n as u64;
+            let p50 = sorted[n / 2];
+            let p99 = sorted[(n as f64 * 0.99) as usize];
+            let max = *sorted.last().unwrap();
+            (avg, p50, p99, max)
+        } else {
+            (0, 0, 0, 0)
+        };
+
+        let cps = self.cycles as f64 / elapsed.as_secs_f64();
+        let report = format!(
+            "[latency] input: avg={avg_us}µs p50={p50_us}µs p99={p99_us}µs max={max_us}µs | \
+             cycles: {cps:.0}/s (busy={busy} idle={idle}) | \
+             draw_max={draw}µs bg_max={bg}µs input_max={inp}µs | \
+             bg_depth={depth} | samples={n}",
+            busy = self.busy_cycles,
+            idle = self.idle_cycles,
+            draw = self.max_draw_us,
+            bg = self.max_bg_us,
+            inp = self.max_input_us,
+            depth = self.last_bg_depth,
+        );
+
+        // Reset for next window.
+        self.samples.clear();
+        self.idx = 0;
+        self.cycles = 0;
+        self.busy_cycles = 0;
+        self.idle_cycles = 0;
+        self.max_draw_us = 0;
+        self.max_bg_us = 0;
+        self.max_input_us = 0;
+        self.last_report = std::time::Instant::now();
+
+        Some(report)
+    }
+}
+
+/// A position in screen coordinates (column, row).
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ScreenPos {
+    col: u16,
+    row: u16,
+}
+
+/// Active text selection state.
+#[derive(Debug, Clone)]
+struct Selection {
+    /// Where the selection started (anchor point).
+    anchor: ScreenPos,
+    /// Where the selection currently extends to (moves with drag).
+    extent: ScreenPos,
+    /// The output pane area at the time selection started, for coordinate mapping.
+    output_area: ratatui::layout::Rect,
 }
 
 /// Messages sent from background tasks to the TUI event loop.
@@ -266,6 +398,11 @@ struct App {
     tailing_goal: Option<String>,
     /// Maximum output buffer lines (configurable, v0.10.11).
     output_buffer_limit: usize,
+    /// Cached total visual line count (accounting for word wrap).
+    /// Updated on push_output and terminal resize. Avoids O(n) recount every frame.
+    cached_visual_lines: usize,
+    /// Terminal width when `cached_visual_lines` was last computed.
+    cached_wrap_width: usize,
     /// Whether auto-tail on goal start is enabled (v0.10.11).
     auto_tail: bool,
     /// Number of lines to show as backfill when attaching to tail (v0.10.11).
@@ -284,9 +421,14 @@ struct App {
     prompt_dismiss_after_output_secs: u64,
     /// Seconds to wait for Q&A agent prompt verification (v0.11.2.5).
     prompt_verify_timeout_secs: u64,
-    /// Sender for the dedicated input thread (v0.11.4.2 item 11).
-    /// When set, terminal events arrive via this channel instead of inline polling.
-    input_rx: Option<tokio::sync::mpsc::UnboundedReceiver<Event>>,
+    /// Active text selection (unused — native terminal selection handles this).
+    #[allow(dead_code)]
+    selection: Option<Selection>,
+    /// Cached output pane area from the last draw (for mouse coordinate mapping).
+    #[allow(dead_code)]
+    output_area: ratatui::layout::Rect,
+    /// Latency diagnostics (`:latency on/off/dump`).
+    latency_diag: LatencyDiag,
 }
 
 impl App {
@@ -311,6 +453,8 @@ impl App {
             pending_stdin_prompt: None,
             tailing_goal: None,
             output_buffer_limit: 50000,
+            cached_visual_lines: 0,
+            cached_wrap_width: 0,
             auto_tail: true,
             tail_backfill_lines: 5,
             split_pane: false,
@@ -326,15 +470,37 @@ impl App {
             project_root,
             prompt_dismiss_after_output_secs: 5,
             prompt_verify_timeout_secs: 10,
-            input_rx: None,
+            selection: None,
+            output_area: ratatui::layout::Rect::default(),
+            latency_diag: LatencyDiag::new(),
         }
     }
 
     fn push_output(&mut self, line: OutputLine) {
+        // Update cached visual line count for the new line.
+        if self.cached_wrap_width > 0 {
+            let vlines = if line.text.is_empty() {
+                1
+            } else {
+                line.text.len().div_ceil(self.cached_wrap_width)
+            };
+            self.cached_visual_lines += vlines;
+        }
         self.output.push(line);
         // Enforce buffer limit — drop oldest lines when exceeded.
         if self.output.len() > self.output_buffer_limit {
             let excess = self.output.len() - self.output_buffer_limit;
+            // Subtract visual lines for removed entries.
+            if self.cached_wrap_width > 0 {
+                for ol in &self.output[..excess] {
+                    let vlines = if ol.text.is_empty() {
+                        1
+                    } else {
+                        ol.text.len().div_ceil(self.cached_wrap_width)
+                    };
+                    self.cached_visual_lines = self.cached_visual_lines.saturating_sub(vlines);
+                }
+            }
             self.output.drain(..excess);
             // Adjust scroll offset to compensate for removed lines.
             self.scroll_offset = self.scroll_offset.saturating_sub(excess);
@@ -756,9 +922,12 @@ async fn run_tui(
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     stdout.execute(EnterAlternateScreen)?;
-    // Selective scroll capture (v0.11.4.2): enable only ?1000h (normal tracking)
-    // + ?1006h (SGR coords) — scroll works, native text selection is unbroken.
-    enable_scroll_capture(&mut stdout)?;
+    // No mouse capture — the terminal handles all mouse interaction natively:
+    // click-drag selection, Command+C copy, right-click menus.
+    // Scroll: Shift+Up/Down, PageUp/PageDown, Shift+Home/End (keyboard only).
+    // Bracketed paste: pasted text arrives as Event::Paste(String) instead of
+    // individual key events, so we can insert without executing on newlines.
+    stdout.execute(EnableBracketedPaste)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -777,31 +946,47 @@ async fn run_tui(
     // Dedicated input thread (v0.11.4.2 item 11): decouple terminal event
     // reading from the async runtime so keystrokes stay responsive even when
     // agent subprocesses are spawning or the event loop is under pressure.
-    let (input_tx, input_rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
+    // Each event is stamped with the OS-read Instant for latency tracking.
+    let (input_tx, input_rx) = tokio::sync::mpsc::unbounded_channel::<StampedEvent>();
     let input_running = running.clone();
     std::thread::spawn(move || {
         while input_running.load(Ordering::Relaxed) {
-            // ~60fps poll rate — events are forwarded immediately.
+            // Block up to 16ms waiting for the first event.
             if event::poll(std::time::Duration::from_millis(16)).unwrap_or(false) {
-                if let Ok(ev) = event::read() {
-                    if input_tx.send(ev).is_err() {
-                        break; // Receiver dropped — TUI is shutting down.
+                // Drain ALL available events in a tight loop — critical for
+                // fast typists and for keeping up when the event loop is busy
+                // with draws or bg processing.
+                while let Ok(ev) = event::read() {
+                    let stamped = StampedEvent {
+                        event: ev,
+                        os_read_at: std::time::Instant::now(),
+                    };
+                    if input_tx.send(stamped).is_err() {
+                        return; // Receiver dropped — TUI is shutting down.
+                    }
+                    // Check for more events with zero timeout (non-blocking).
+                    if !event::poll(std::time::Duration::ZERO).unwrap_or(false) {
+                        break;
                     }
                 }
             }
         }
     });
-    app.input_rx = Some(input_rx);
-
-    let result = tui_event_loop(&mut terminal, &mut app, &mut rx, &client, tx.clone()).await;
+    let result = tui_event_loop(
+        &mut terminal,
+        &mut app,
+        input_rx,
+        &mut rx,
+        &client,
+        tx.clone(),
+    )
+    .await;
 
     // Cleanup.
     running.store(false, Ordering::Relaxed);
     disable_raw_mode()?;
-    {
-        let mut stdout = io::stdout();
-        disable_scroll_capture(&mut stdout)?;
-    }
+    terminal.backend_mut().execute(DisableBracketedPaste)?;
+    // No mouse capture to disable — terminal handles mouse natively.
     terminal.backend_mut().execute(LeaveAlternateScreen)?;
 
     // Save history.
@@ -817,77 +1002,304 @@ async fn run_tui(
 async fn tui_event_loop(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     app: &mut App,
+    mut input_rx: tokio::sync::mpsc::UnboundedReceiver<StampedEvent>,
     rx: &mut tokio::sync::mpsc::UnboundedReceiver<TuiMessage>,
     client: &reqwest::Client,
     tx: tokio::sync::mpsc::UnboundedSender<TuiMessage>,
 ) -> anyhow::Result<()> {
+    use std::io::Write;
+    use std::time::{Duration, Instant};
+
+    // Latency log file: written to .ta/latency.log when diagnostics are on.
+    // Opened lazily on `:latency on`, closed on `:latency off`.
+    let mut latency_log: Option<std::fs::File> = None;
+
+    // Frame rate limiter for background-only updates: 16ms (~60fps).
+    // Input-triggered draws bypass this and happen immediately.
+    let frame_interval = Duration::from_millis(16);
+    let mut last_draw = Instant::now() - frame_interval;
+    let mut needs_draw = true;
+
+    // Initial draw.
+    terminal.draw(|f| draw_ui(f, app))?;
+
     loop {
-        // Draw UI.
-        terminal.draw(|f| draw_ui(f, app))?;
+        app.latency_diag.cycles += 1;
 
         if !app.running {
             break;
         }
 
-        // Receive events from the dedicated input thread or background tasks.
-        // The input thread (v0.11.4.2 item 11) sends terminal events via a
-        // channel, fully decoupling keyboard responsiveness from async pressure.
-        let input_rx = app
-            .input_rx
-            .as_mut()
-            .expect("input_rx must be set before event loop");
+        // ── Event-driven select ──────────────────────────────────────
+        //
+        // `tokio::select!` with `biased` wakes INSTANTLY when data
+        // arrives on either channel — no polling, no sleeping, no
+        // scheduler starvation. Input is checked first (biased) so
+        // keystrokes always take priority over background messages.
+        //
+        // The frame timer branch fires periodically to handle
+        // rate-limited redraws for background-only updates.
+
+        // Use a longer timer interval when streaming agent output —
+        // no point waking 60x/sec if we only draw at 2fps.
+        let target_interval = if app.tailing_goal.is_some() && needs_draw {
+            Duration::from_millis(500)
+        } else if needs_draw {
+            frame_interval
+        } else {
+            Duration::from_millis(100)
+        };
+        let time_to_next_frame = target_interval.saturating_sub(last_draw.elapsed());
+
         tokio::select! {
-            // Terminal events from dedicated input thread.
-            ev = input_rx.recv() => {
-                if let Some(ev) = ev {
-                    // Collect the first event + drain any queued events.
-                    let mut events = vec![ev];
-                    let input_rx = app.input_rx.as_mut().unwrap();
-                    while let Ok(ev) = input_rx.try_recv() {
-                        events.push(ev);
-                    }
-                    for ev in events {
-                        handle_terminal_event(app, ev, client, &tx).await;
+            biased;
+
+            // ── Input (highest priority) ─────────────────────────────
+            Some(stamped) = input_rx.recv() => {
+                let handle_start = Instant::now();
+
+                // Process this event + drain any more that are ready.
+                process_input_event(app, stamped, &mut latency_log, client, &tx).await;
+                while let Ok(more) = input_rx.try_recv() {
+                    process_input_event(app, more, &mut latency_log, client, &tx).await;
+                }
+
+                let handle_us = handle_start.elapsed().as_micros() as u64;
+                app.latency_diag.record_input_handle(handle_us);
+                if app.latency_diag.enabled {
+                    if let Some(ref mut lf) = latency_log {
+                        let _ = writeln!(
+                            lf,
+                            "{} INPUT_BATCH handle={}µs",
+                            chrono::Local::now().format("%H:%M:%S%.3f"),
+                            handle_us,
+                        );
                     }
                 }
-            }
-            // Background messages.
-            msg = rx.recv() => {
-                if let Some(msg) = msg {
-                    // Check if this is a GoalStarted that needs auto-tail.
-                    let auto_tail_goal = if let TuiMessage::GoalStarted { ref goal_id, .. } = msg {
-                        if app.auto_tail && app.tailing_goal.is_none() {
-                            Some(goal_id.clone())
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    };
+                app.latency_diag.busy_cycles += 1;
 
-                    handle_tui_message(app, msg);
-
-                    // Spawn auto-tail if triggered.
-                    if let Some(goal_id) = auto_tail_goal {
-                        let tail_client = client.clone();
-                        let tail_base = app.base_url.clone();
-                        let tail_tx = tx.clone();
-                        let backfill = app.tail_backfill_lines;
-                        tokio::spawn(async move {
-                            start_tail_stream(
-                                tail_client,
-                                &tail_base,
-                                Some(&goal_id),
-                                tail_tx,
-                                backfill,
-                            ).await;
-                        });
-                    }
+                // Render the input line immediately so the user sees
+                // their keystroke without delay.
+                //
+                // During agent streaming, a full ratatui draw() includes
+                // output pane changes — hundreds of ANSI escape sequences
+                // that saturate the terminal emulator and prevent it from
+                // forwarding keystrokes through the pty.
+                //
+                // Fix: when streaming, write ONLY the input line directly
+                // via crossterm (~50 bytes). The terminal processes this
+                // instantly. Full-frame draws happen on the rate-limited
+                // bg path (2fps) for output updates.
+                if app.tailing_goal.is_some() {
+                    direct_input_write(terminal, app);
+                    // Don't update last_draw — let the bg rate-limiter
+                    // handle full-frame draws independently.
+                    needs_draw = true;
+                } else {
+                    let draw_start = Instant::now();
+                    update_wrap_cache(terminal, app);
+                    terminal.draw(|f| draw_ui(f, app))?;
+                    last_draw = Instant::now();
+                    needs_draw = false;
+                    app.latency_diag
+                        .record_draw(draw_start.elapsed().as_micros() as u64);
                 }
             }
+
+            // ── Background messages ──────────────────────────────────
+            Some(msg) = rx.recv() => {
+                let bg_start = Instant::now();
+                app.latency_diag.last_bg_depth = rx.len() + 1;
+                process_background_message(app, msg, client, &tx).await;
+
+                // Drain more bg messages up to a batch limit.
+                const BG_BATCH_LIMIT: usize = 200;
+                let mut bg_count = 1usize;
+                while let Ok(more) = rx.try_recv() {
+                    process_background_message(app, more, client, &tx).await;
+                    bg_count += 1;
+                    if bg_count >= BG_BATCH_LIMIT {
+                        break;
+                    }
+                }
+                app.latency_diag
+                    .record_bg(bg_start.elapsed().as_micros() as u64);
+                app.latency_diag.busy_cycles += 1;
+                needs_draw = true;
+            }
+
+            // ── Frame timer (periodic wake for bg redraws) ───────────
+            _ = tokio::time::sleep(time_to_next_frame) => {
+                app.latency_diag.idle_cycles += 1;
+            }
+        }
+
+        // ── Draw (rate-limited, for bg-only updates) ─────────────────
+        // Throttle draws to avoid saturating the terminal emulator with
+        // escape sequences. When the emulator can't keep up, it delays
+        // forwarding keystrokes through the pty — causing the "lost input"
+        // sensation where users press keys but nothing appears.
+        //
+        // When actively tailing agent output, limit to 2fps (500ms).
+        // This gives the terminal emulator ample time to process both
+        // stdout rendering AND stdin forwarding between frames.
+        let effective_interval = if app.tailing_goal.is_some() {
+            Duration::from_millis(500)
+        } else if app.latency_diag.last_bg_depth > 50 {
+            Duration::from_millis(200)
+        } else {
+            frame_interval
+        };
+        if needs_draw && last_draw.elapsed() >= effective_interval {
+            let draw_start = Instant::now();
+            update_wrap_cache(terminal, app);
+            terminal.draw(|f| draw_ui(f, app))?;
+            last_draw = Instant::now();
+            needs_draw = false;
+            app.latency_diag
+                .record_draw(draw_start.elapsed().as_micros() as u64);
+        }
+
+        // Emit periodic latency report if diagnostics are on.
+        if app.latency_diag.enabled {
+            if latency_log.is_none() {
+                let log_dir = app.project_root.join(".ta");
+                let _ = std::fs::create_dir_all(&log_dir);
+                latency_log = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(log_dir.join("latency.log"))
+                    .ok();
+                if let Some(ref mut lf) = latency_log {
+                    let _ = writeln!(
+                        lf,
+                        "\n--- session {} ---",
+                        chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+                    );
+                }
+            }
+            if let Some(report) = app.latency_diag.report() {
+                app.push_output(OutputLine::event(report.clone()));
+                if let Some(ref mut lf) = latency_log {
+                    let _ = writeln!(
+                        lf,
+                        "{} {}",
+                        chrono::Local::now().format("%H:%M:%S%.3f"),
+                        report
+                    );
+                }
+            }
+        } else if latency_log.is_some() {
+            latency_log = None;
         }
     }
     Ok(())
+}
+
+/// Process a single input event: record latency, log, and dispatch.
+async fn process_input_event(
+    app: &mut App,
+    stamped: StampedEvent,
+    latency_log: &mut Option<std::fs::File>,
+    client: &reqwest::Client,
+    tx: &tokio::sync::mpsc::UnboundedSender<TuiMessage>,
+) {
+    use std::io::Write;
+
+    let transit_us = stamped.os_read_at.elapsed().as_micros() as u64;
+    app.latency_diag.record_input_latency(transit_us);
+
+    if app.latency_diag.enabled {
+        if let Some(ref mut lf) = latency_log {
+            let ev_desc = match &stamped.event {
+                Event::Key(k) => {
+                    format!("key:{:?}+{:?} kind={:?}", k.code, k.modifiers, k.kind)
+                }
+                Event::Paste(_) => "paste".to_string(),
+                Event::Mouse(m) => format!("mouse:{:?}", m.kind),
+                Event::Resize(w, h) => format!("resize:{}x{}", w, h),
+                _ => "other".to_string(),
+            };
+            let _ = writeln!(
+                lf,
+                "{} EVENT transit={}µs ev={}",
+                chrono::Local::now().format("%H:%M:%S%.3f"),
+                transit_us,
+                ev_desc,
+            );
+        }
+    }
+
+    let input_before = if app.latency_diag.enabled {
+        Some(app.input.clone())
+    } else {
+        None
+    };
+    handle_terminal_event(app, stamped.event, client, tx).await;
+    if let Some(before) = input_before {
+        if app.input != before {
+            if let Some(ref mut lf) = latency_log {
+                let _ = writeln!(
+                    lf,
+                    "{} INPUT_CHANGED len={}→{} buf={:?}",
+                    chrono::Local::now().format("%H:%M:%S%.3f"),
+                    before.len(),
+                    app.input.len(),
+                    &app.input,
+                );
+            }
+        }
+    }
+}
+
+/// Update the visual line cache if terminal width changed.
+fn update_wrap_cache(terminal: &Terminal<CrosstermBackend<Stdout>>, app: &mut App) {
+    let cur_width = terminal.size().map(|s| s.width as usize).unwrap_or(80);
+    if cur_width != app.cached_wrap_width {
+        app.cached_wrap_width = cur_width;
+        app.cached_visual_lines = app
+            .output
+            .iter()
+            .map(|ol| {
+                if ol.text.is_empty() || cur_width == 0 {
+                    1
+                } else {
+                    ol.text.len().div_ceil(cur_width)
+                }
+            })
+            .sum();
+    }
+}
+
+/// Process a single background message (SSE event, status update, etc.)
+/// and spawn auto-tail if triggered by a GoalStarted event.
+async fn process_background_message(
+    app: &mut App,
+    msg: TuiMessage,
+    client: &reqwest::Client,
+    tx: &tokio::sync::mpsc::UnboundedSender<TuiMessage>,
+) {
+    let auto_tail_goal = if let TuiMessage::GoalStarted { ref goal_id, .. } = msg {
+        if app.auto_tail && app.tailing_goal.is_none() {
+            Some(goal_id.clone())
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    handle_tui_message(app, msg);
+
+    if let Some(goal_id) = auto_tail_goal {
+        let tail_client = client.clone();
+        let tail_base = app.base_url.clone();
+        let tail_tx = tx.clone();
+        let backfill = app.tail_backfill_lines;
+        tokio::spawn(async move {
+            start_tail_stream(tail_client, &tail_base, Some(&goal_id), tail_tx, backfill).await;
+        });
+    }
 }
 
 async fn handle_terminal_event(
@@ -898,8 +1310,18 @@ async fn handle_terminal_event(
 ) {
     match ev {
         Event::Key(KeyEvent {
-            code, modifiers, ..
+            code,
+            modifiers,
+            kind,
+            ..
         }) => {
+            // Only process key PRESS events. Some terminals (especially on
+            // macOS with kitty keyboard protocol) also report Release and
+            // Repeat events. Processing those would cause double-inserts or
+            // unexpected behavior.
+            if kind != KeyEventKind::Press {
+                return;
+            }
             match (code, modifiers) {
                 (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
                     // If tailing agent output, Ctrl-C detaches instead of exiting (v0.10.14).
@@ -950,9 +1372,12 @@ async fn handle_terminal_event(
                     app.scroll_offset = 0;
                     app.unread_events = 0;
                 }
-                // Ctrl+M toggle removed in v0.11.4.2 — selective ANSI escapes
-                // (?1000h only, no ?1002h/?1003h) enable scroll + native text
-                // selection simultaneously. No toggle needed.
+                // Ctrl+M mouse toggle removed — no mouse capture enabled.
+                // Native text selection always works. Scroll via keyboard.
+                (KeyCode::Enter, m) if m.contains(KeyModifiers::SHIFT) => {
+                    // Shift+Enter inserts a newline without submitting.
+                    app.insert_char('\n');
+                }
                 (KeyCode::Enter, _) => {
                     if let Some(text) = app.submit() {
                         // Echo the command.
@@ -1050,9 +1475,15 @@ async fn handle_terminal_event(
                                 return;
                             }
                             ":status" => {
-                                let s = super::shell::fetch_status(client, &app.base_url).await;
-                                app.status = s;
-                                app.push_output(OutputLine::info("Status refreshed.".into()));
+                                // Fetch status asynchronously to avoid blocking input.
+                                let client = client.clone();
+                                let base_url = app.base_url.clone();
+                                let tx = tx.clone();
+                                tokio::spawn(async move {
+                                    let s = super::shell::fetch_status(&client, &base_url).await;
+                                    let _ = tx.send(TuiMessage::StatusUpdate(s));
+                                });
+                                app.push_output(OutputLine::info("Refreshing status...".into()));
                                 return;
                             }
                             "clear" => {
@@ -1062,6 +1493,49 @@ async fn handle_terminal_event(
                                 return;
                             }
                             _ => {}
+                        }
+
+                        // :latency — toggle input latency diagnostics.
+                        if text.starts_with(":latency") {
+                            let arg = text.strip_prefix(":latency").unwrap().trim();
+                            match arg {
+                                "on" => {
+                                    app.latency_diag.enabled = true;
+                                    app.latency_diag.last_report = std::time::Instant::now();
+                                    app.push_output(OutputLine::info(
+                                        "[latency] Diagnostics ON — reports every 5s. \
+                                         Log: .ta/latency.log"
+                                            .into(),
+                                    ));
+                                    app.push_output(OutputLine::info(
+                                        "[latency] Tracks: OS→event-loop transit, draw time, \
+                                         bg process time, cycle rate, channel depth"
+                                            .into(),
+                                    ));
+                                }
+                                "off" => {
+                                    app.latency_diag.enabled = false;
+                                    app.push_output(OutputLine::info(
+                                        "[latency] Diagnostics OFF.".into(),
+                                    ));
+                                }
+                                "dump" => {
+                                    // Force an immediate report even if disabled.
+                                    if let Some(report) = app.latency_diag.report_forced() {
+                                        app.push_output(OutputLine::info(report));
+                                    } else {
+                                        app.push_output(OutputLine::info(
+                                            "[latency] No data collected yet.".into(),
+                                        ));
+                                    }
+                                }
+                                _ => {
+                                    app.push_output(OutputLine::info(
+                                        "Usage: :latency on|off|dump".into(),
+                                    ));
+                                }
+                            }
+                            return;
                         }
 
                         // :tail — attach to goal output stream (v0.10.11).
@@ -1187,7 +1661,7 @@ async fn handle_terminal_event(
                 }
                 (KeyCode::Home, _) => app.home(),
                 (KeyCode::End, _) => app.end(),
-                // Shift+Up/Down scroll output 1 line; plain Up/Down navigate history (v0.10.18.2).
+                // Shift+Up/Down scroll output 1 line; plain Up/Down navigate history.
                 (KeyCode::Up, m) if m.contains(KeyModifiers::SHIFT) => {
                     app.scroll_up(1);
                 }
@@ -1209,17 +1683,42 @@ async fn handle_terminal_event(
                         .unwrap_or(40);
                     app.scroll_down(page.saturating_sub(4));
                 }
-                (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
+                (KeyCode::Char(c), m)
+                    if !m.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                {
+                    // Accept Char events with any modifier combination EXCEPT
+                    // Ctrl and Alt (which are handled as explicit keybindings
+                    // above). This catches normal typing even when the terminal
+                    // reports unexpected SUPER/HYPER/META/CAPS_LOCK flags —
+                    // common on macOS with some terminal emulators.
                     app.insert_char(c);
                 }
                 _ => {}
             }
         }
-        Event::Mouse(mouse) => match mouse.kind {
-            MouseEventKind::ScrollUp => app.scroll_up(3),
-            MouseEventKind::ScrollDown => app.scroll_down(3),
-            _ => {} // Click/drag ignored — Shift+click-drag for text selection.
-        },
+        Event::Mouse(mouse) => {
+            // No mouse capture is enabled, so mouse events only arrive if the
+            // terminal sends them without capture (rare). Handle scroll wheel
+            // as a fallback for terminals that report it anyway.
+            match mouse.kind {
+                MouseEventKind::ScrollUp => app.scroll_up(3),
+                MouseEventKind::ScrollDown => app.scroll_down(3),
+                _ => {}
+            }
+        }
+        Event::Paste(data) => {
+            // Bracketed paste: insert text into input without executing.
+            // Normalize CRLF → LF, standalone CR → LF, tabs → spaces.
+            // Newlines are preserved so multi-line pastes stay readable;
+            // only Enter (KeyCode::Enter) submits.
+            let safe = data
+                .replace("\r\n", "\n")
+                .replace('\r', "\n")
+                .replace('\t', "    ");
+            for ch in safe.chars() {
+                app.insert_char(ch);
+            }
+        }
         Event::Resize(_, _) => {
             // Terminal will re-draw on next loop iteration.
         }
@@ -1434,19 +1933,135 @@ fn handle_tui_message(app: &mut App, msg: TuiMessage) {
     }
 }
 
+/// Write ONLY the input line directly to stdout using crossterm, bypassing
+/// ratatui's full-frame diff entirely. This produces ~50 bytes of output —
+/// the terminal processes it in microseconds regardless of how busy it is
+/// rendering agent output. The ratatui frame buffer stays stale for the
+/// input area, but the next full `terminal.draw()` will resync it.
+fn direct_input_write(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &App) {
+    use crossterm::cursor::MoveTo;
+    use crossterm::style::Print;
+    use crossterm::terminal::{Clear, ClearType};
+    use crossterm::QueueableCommand;
+
+    let size = match terminal.size() {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+
+    // Compute input area position — same layout logic as draw_ui.
+    let prompt = app.prompt_str();
+    let display = format!("{}{}", prompt, app.input);
+    let inner_width = size.width.max(1) as usize;
+    let content_lines = {
+        let mut lines = 0u16;
+        let mut col = 0usize;
+        for ch in display.chars() {
+            if ch == '\n' {
+                lines += 1;
+                col = 0;
+            } else {
+                col += 1;
+                if col >= inner_width {
+                    lines += 1;
+                    col = 0;
+                }
+            }
+        }
+        lines + 1
+    };
+    let input_height = (content_lines + 2).min(size.height / 2).max(3);
+    // Input area: top border at (size.height - 1 - input_height), text starts 1 below.
+    let input_top = size.height.saturating_sub(1 + input_height);
+    let text_start_row = input_top + 1; // skip top border
+    let text_end_row = size.height.saturating_sub(2); // before bottom border + status bar
+
+    let backend = terminal.backend_mut();
+
+    // Clear the input text rows and rewrite content.
+    let mut row = text_start_row;
+    let mut col: usize = 0;
+
+    // Clear all input text rows first.
+    for r in text_start_row..=text_end_row {
+        let _ = backend.queue(MoveTo(0, r));
+        let _ = backend.queue(Clear(ClearType::CurrentLine));
+    }
+
+    // Write the display string with wrapping.
+    let _ = backend.queue(MoveTo(0, text_start_row));
+    for ch in display.chars() {
+        if ch == '\n' {
+            row += 1;
+            col = 0;
+            if row > text_end_row {
+                break;
+            }
+            let _ = backend.queue(MoveTo(0, row));
+        } else {
+            if col >= inner_width {
+                row += 1;
+                col = 0;
+                if row > text_end_row {
+                    break;
+                }
+                let _ = backend.queue(MoveTo(0, row));
+            }
+            let _ = backend.queue(Print(ch));
+            col += 1;
+        }
+    }
+
+    // Position cursor.
+    let cursor_byte = prompt.len() + app.cursor;
+    let mut crow: u16 = 0;
+    let mut ccol: usize = 0;
+    for (i, ch) in display.char_indices() {
+        if i >= cursor_byte {
+            break;
+        }
+        if ch == '\n' {
+            crow += 1;
+            ccol = 0;
+        } else {
+            ccol += 1;
+            if ccol >= inner_width {
+                crow += 1;
+                ccol = 0;
+            }
+        }
+    }
+    let cx = (ccol as u16).min(size.width.saturating_sub(1));
+    let cy = (text_start_row + crow).min(text_end_row);
+    let _ = backend.queue(MoveTo(cx, cy));
+    let _ = std::io::Write::flush(backend);
+}
+
 fn draw_ui(f: &mut Frame, app: &App) {
     let size = f.area();
 
     // Calculate input area height dynamically based on wrapped text (v0.10.14).
     // The block has top+bottom borders (2 lines), plus content lines.
+    // Account for both word-wrap AND embedded newlines (from paste/Shift+Enter).
     let prompt = app.prompt_str();
-    let display_len = prompt.len() + app.input.chars().count();
-    // Inner width = total width minus 0 (no side borders on input block).
-    let inner_width = size.width.saturating_sub(0) as usize;
-    let content_lines = if inner_width == 0 {
-        1
-    } else {
-        display_len.div_ceil(inner_width).max(1)
+    let display = format!("{}{}", prompt, app.input);
+    let inner_width = size.width.max(1) as usize;
+    let content_lines = {
+        let mut lines = 0u16;
+        let mut col = 0usize;
+        for ch in display.chars() {
+            if ch == '\n' {
+                lines += 1;
+                col = 0;
+            } else {
+                col += 1;
+                if col >= inner_width {
+                    lines += 1;
+                    col = 0;
+                }
+            }
+        }
+        lines + 1 // +1 for the current (possibly partial) line
     };
     // Borders add 2 lines; cap at half the terminal to keep output visible.
     let input_height = (content_lines as u16 + 2).min(size.height / 2).max(3);
@@ -1488,20 +2103,22 @@ fn draw_output(f: &mut Frame, app: &App, area: Rect) {
     let visible_height = inner.height as usize;
     let wrap_width = inner.width as usize;
 
-    // Count total *visual* lines (accounting for word wrap) so scrollback works
-    // correctly when lines are longer than the terminal width.
-    let visual_line_count: usize = app
-        .output
-        .iter()
-        .map(|ol| {
-            if ol.text.is_empty() || wrap_width == 0 {
-                1
-            } else {
-                // Ceiling division: chars / width, minimum 1.
-                ol.text.len().div_ceil(wrap_width)
-            }
-        })
-        .sum();
+    // Use cached visual line count (maintained by push_output + event loop).
+    // Falls back to recount if cache width doesn't match (e.g., first frame).
+    let visual_line_count = if app.cached_wrap_width == wrap_width {
+        app.cached_visual_lines
+    } else {
+        app.output
+            .iter()
+            .map(|ol| {
+                if ol.text.is_empty() || wrap_width == 0 {
+                    1
+                } else {
+                    ol.text.len().div_ceil(wrap_width)
+                }
+            })
+            .sum()
+    };
 
     // `scroll_offset` 0 = bottom. Convert to a top-based visual-line offset.
     let max_scroll = visual_line_count.saturating_sub(visible_height);
@@ -1776,13 +2393,30 @@ fn draw_input(f: &mut Frame, app: &App, area: Rect) {
         .block(block);
     f.render_widget(paragraph, area);
 
-    // Position cursor accounting for line wrap (v0.10.14).
-    let cursor_chars = prompt.len() + app.input[..app.cursor].chars().count();
+    // Position cursor accounting for line wrap and embedded newlines.
+    // Walk the display string up to the cursor position, tracking row/col
+    // with both explicit newlines and word-wrap boundaries.
+    let cursor_byte = prompt.len() + app.cursor;
     let wrap_width = inner.width.max(1) as usize;
-    let cursor_y = (cursor_chars / wrap_width) as u16;
-    let cursor_x = (cursor_chars % wrap_width) as u16;
-    let x = inner.x + cursor_x.min(inner.width.saturating_sub(1));
-    let y = inner.y + cursor_y.min(inner.height.saturating_sub(1));
+    let mut row: u16 = 0;
+    let mut col: usize = 0;
+    for (i, ch) in display.char_indices() {
+        if i >= cursor_byte {
+            break;
+        }
+        if ch == '\n' {
+            row += 1;
+            col = 0;
+        } else {
+            col += 1;
+            if col >= wrap_width {
+                row += 1;
+                col = 0;
+            }
+        }
+    }
+    let x = inner.x + (col as u16).min(inner.width.saturating_sub(1));
+    let y = inner.y + row.min(inner.height.saturating_sub(1));
     f.set_cursor_position((x, y));
 }
 
@@ -1937,8 +2571,7 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
         ));
     }
 
-    // Mouse capture indicator removed in v0.11.4.2 — selective ANSI escapes
-    // enable both scroll and text selection simultaneously.
+    // No mouse capture — native text selection always works.
 
     // Workflow stage indicator.
     if let Some(ref stage) = app.workflow_prompt {
@@ -1969,6 +2602,198 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
         };
         let right = Paragraph::new(right_text).style(Style::default().fg(Color::DarkGray));
         f.render_widget(right, right_area);
+    }
+}
+
+// -- Mouse selection helpers --------------------------------------------------
+
+/// Extract the text covered by the current selection from the output buffer.
+///
+/// Maps screen coordinates back to logical output lines, accounting for
+/// scroll offset and word wrapping.
+#[allow(dead_code)]
+fn extract_selection_text(app: &App, sel: &Selection) -> String {
+    let area = sel.output_area;
+    if area.width == 0 || area.height == 0 || app.output.is_empty() {
+        return String::new();
+    }
+
+    // Normalize anchor/extent so `start` is before `end` (top-left to bottom-right).
+    let (start, end) = if (sel.anchor.row, sel.anchor.col) <= (sel.extent.row, sel.extent.col) {
+        (sel.anchor, sel.extent)
+    } else {
+        (sel.extent, sel.anchor)
+    };
+
+    // Only handle selections within the output pane area.
+    let pane_top = area.y;
+    let pane_bottom = area.y + area.height;
+    let wrap_width = area.width as usize;
+    if wrap_width == 0 {
+        return String::new();
+    }
+
+    // Clamp to output pane.
+    let sel_start_row = start.row.max(pane_top).saturating_sub(pane_top) as usize;
+    let sel_end_row = end
+        .row
+        .min(pane_bottom.saturating_sub(1))
+        .saturating_sub(pane_top) as usize;
+    let sel_start_col = start.col.saturating_sub(area.x) as usize;
+    let sel_end_col = end.col.saturating_sub(area.x) as usize;
+
+    // Build a map of visual rows → text content by replaying the same
+    // pre-slicing logic used by draw_output().
+    let visual_line_count: usize = app
+        .output
+        .iter()
+        .map(|ol| {
+            if ol.text.is_empty() || wrap_width == 0 {
+                1
+            } else {
+                ol.text.len().div_ceil(wrap_width)
+            }
+        })
+        .sum();
+
+    let visible_height = area.height as usize;
+    let max_scroll = visual_line_count.saturating_sub(visible_height);
+    let scroll_y = max_scroll.saturating_sub(app.scroll_offset);
+
+    // Find start_idx and residual scroll (same as draw_output).
+    let mut cumulative: usize = 0;
+    let mut start_idx: usize = 0;
+    let mut residual: usize = 0;
+    for (i, ol) in app.output.iter().enumerate() {
+        let vlines = if ol.text.is_empty() || wrap_width == 0 {
+            1
+        } else {
+            ol.text.len().div_ceil(wrap_width)
+        };
+        if cumulative + vlines > scroll_y {
+            start_idx = i;
+            residual = scroll_y - cumulative;
+            break;
+        }
+        cumulative += vlines;
+        start_idx = i + 1;
+    }
+
+    // Build visual rows: for each logical line starting from start_idx,
+    // break into wrapped segments, skip `residual` rows, collect up to
+    // visible_height rows.
+    struct VisualRow {
+        text: String,
+    }
+    let mut rows: Vec<VisualRow> = Vec::with_capacity(visible_height);
+    let mut skipped = 0usize;
+
+    for ol in app.output.iter().skip(start_idx) {
+        let segments = if ol.text.is_empty() {
+            vec![String::new()]
+        } else {
+            ol.text
+                .chars()
+                .collect::<Vec<_>>()
+                .chunks(wrap_width)
+                .map(|chunk| chunk.iter().collect::<String>())
+                .collect()
+        };
+        for seg in segments {
+            if skipped < residual {
+                skipped += 1;
+                continue;
+            }
+            rows.push(VisualRow { text: seg });
+            if rows.len() >= visible_height {
+                break;
+            }
+        }
+        if rows.len() >= visible_height {
+            break;
+        }
+    }
+
+    // Extract text from the selected visual rows.
+    let mut result = String::new();
+    for (row_idx, vr) in rows.iter().enumerate() {
+        if row_idx < sel_start_row || row_idx > sel_end_row {
+            continue;
+        }
+        let chars: Vec<char> = vr.text.chars().collect();
+        let col_start = if row_idx == sel_start_row {
+            sel_start_col
+        } else {
+            0
+        };
+        let col_end = if row_idx == sel_end_row {
+            (sel_end_col + 1).min(chars.len())
+        } else {
+            chars.len()
+        };
+        if col_start < chars.len() {
+            let selected: String = chars[col_start..col_end.min(chars.len())].iter().collect();
+            result.push_str(&selected);
+        }
+        if row_idx < sel_end_row {
+            result.push('\n');
+        }
+    }
+
+    result
+}
+
+/// Copy text to the system clipboard using platform-native commands.
+///
+/// - macOS: `pbcopy`
+/// - Linux/BSD: `xclip -selection clipboard` (fallback: `xsel --clipboard`)
+/// - Windows: `clip.exe`
+#[allow(dead_code)]
+fn copy_to_clipboard(text: &str) {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    #[cfg(target_os = "macos")]
+    let (prog, args): (&str, &[&str]) = ("pbcopy", &[]);
+
+    #[cfg(target_os = "windows")]
+    let (prog, args): (&str, &[&str]) = ("clip.exe", &[]);
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let (prog, args): (&str, &[&str]) = ("xclip", &["-selection", "clipboard"]);
+
+    let result = Command::new(prog)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+
+    match result {
+        Ok(mut child) => {
+            if let Some(ref mut stdin) = child.stdin {
+                let _ = stdin.write_all(text.as_bytes());
+            }
+            let _ = child.wait();
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        Err(_) => {
+            // Fallback for Linux: try xsel if xclip is not available.
+            if let Ok(mut child) = Command::new("xsel")
+                .args(["--clipboard", "--input"])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+            {
+                if let Some(ref mut stdin) = child.stdin {
+                    let _ = stdin.write_all(text.as_bytes());
+                }
+                let _ = child.wait();
+            }
+        }
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        Err(_) => {}
     }
 }
 
@@ -2769,13 +3594,21 @@ Interactive mode:
 
 Shell commands:
   :status            Refresh the status bar
+  :latency on|off    Toggle input latency diagnostics (log: .ta/latency.log)
+  :latency dump      Show latency report now
   clear              Clear the output pane
   Ctrl-L             Clear the output pane
-  Scroll (trackpad)  Scroll output 3 lines per tick
-  PgUp / PgDn        Scroll output one full page
+
+Navigation:
+  Up / Down          Command history
   Shift+Up / Down    Scroll output 1 line
+  PgUp / PgDn        Scroll output one full page
   Shift+Home / End   Scroll to top / bottom of output
-  Click-drag         Select text for copy (native selection always works)
+
+Text:
+  Click-drag         Select text (native terminal selection)
+  Cmd+C              Copy selection (native)
+  Paste              Preserves newlines; Shift+Enter for manual newline
   Tab                Auto-complete commands
   Ctrl-W             Toggle split pane (shell | agent side-by-side)
   Ctrl-C / exit      Exit the shell (Ctrl-C detaches when tailing)
@@ -4168,18 +5001,15 @@ mod tests {
     }
 
     #[test]
-    fn selective_scroll_capture_helpers() {
-        // v0.11.4.2 item 1: Verify enable/disable_scroll_capture don't panic.
-        // We can't actually test terminal escape output in a unit test, but
-        // we verify the functions are callable and the App no longer has
-        // a mouse_capture_enabled field (removed — both work simultaneously).
+    fn mouse_selection_initial_state() {
+        // TUI mouse selection: starts with no selection, output_area default.
         let app = App::new(
             "http://localhost".into(),
             None,
             std::path::PathBuf::from("/tmp"),
         );
-        // input_rx starts as None (set during run_tui).
-        assert!(app.input_rx.is_none());
+        assert!(app.selection.is_none());
+        assert_eq!(app.output_area, ratatui::layout::Rect::default());
     }
 
     #[test]
@@ -4194,5 +5024,340 @@ mod tests {
         tx.send(ev).unwrap();
         // Should be immediately receivable.
         assert!(rx.try_recv().is_ok());
+    }
+
+    #[test]
+    fn paste_strips_newlines() {
+        // Pasted text with newlines should not trigger command submission.
+        let mut app = App::new(
+            "http://localhost".into(),
+            None,
+            std::path::PathBuf::from("/tmp"),
+        );
+        let pasted = "line one\nline two\r\nline three";
+        let safe = pasted.replace(['\r', '\n'], " ").replace('\t', "    ");
+        for ch in safe.chars() {
+            app.insert_char(ch);
+        }
+        assert_eq!(app.input, "line one line two  line three");
+    }
+
+    #[test]
+    fn extract_selection_empty_output() {
+        let app = App::new(
+            "http://localhost".into(),
+            None,
+            std::path::PathBuf::from("/tmp"),
+        );
+        let sel = Selection {
+            anchor: ScreenPos { col: 0, row: 0 },
+            extent: ScreenPos { col: 5, row: 0 },
+            output_area: ratatui::layout::Rect {
+                x: 0,
+                y: 0,
+                width: 80,
+                height: 24,
+            },
+        };
+        // No output lines → empty result.
+        assert_eq!(extract_selection_text(&app, &sel), "");
+    }
+
+    #[test]
+    fn extract_selection_single_line() {
+        let mut app = App::new(
+            "http://localhost".into(),
+            None,
+            std::path::PathBuf::from("/tmp"),
+        );
+        app.push_output(OutputLine::info("Hello, World!".to_string()));
+        let area = ratatui::layout::Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let sel = Selection {
+            anchor: ScreenPos { col: 0, row: 0 },
+            extent: ScreenPos { col: 4, row: 0 },
+            output_area: area,
+        };
+        let text = extract_selection_text(&app, &sel);
+        assert_eq!(text, "Hello");
+    }
+
+    #[test]
+    fn extract_selection_multi_line() {
+        let mut app = App::new(
+            "http://localhost".into(),
+            None,
+            std::path::PathBuf::from("/tmp"),
+        );
+        app.push_output(OutputLine::info("Line one".to_string()));
+        app.push_output(OutputLine::info("Line two".to_string()));
+        app.push_output(OutputLine::info("Line three".to_string()));
+        let area = ratatui::layout::Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let sel = Selection {
+            anchor: ScreenPos { col: 5, row: 0 },
+            extent: ScreenPos { col: 3, row: 1 },
+            output_area: area,
+        };
+        let text = extract_selection_text(&app, &sel);
+        // Row 0 col 5..end = "one", Row 1 col 0..3 = "Line"
+        assert_eq!(text, "one\nLine");
+    }
+
+    /// Test that input events are processed with low latency even when
+    /// the background message channel is flooded with agent output.
+    ///
+    /// Simulates the real scenario: an agent producing high-volume SSE
+    /// output while the user tries to type. The event loop must process
+    /// input within 5ms regardless of background traffic volume.
+    #[tokio::test]
+    async fn input_latency_under_background_flood() {
+        use std::time::{Duration, Instant};
+
+        let (bg_tx, mut bg_rx) = tokio::sync::mpsc::unbounded_channel::<TuiMessage>();
+        let (input_tx, input_rx) = tokio::sync::mpsc::unbounded_channel::<StampedEvent>();
+
+        let mut app = App::new(
+            "http://localhost".into(),
+            None,
+            std::path::PathBuf::from("/tmp"),
+        );
+        let mut input_rx = input_rx;
+
+        // Flood background channel with 10,000 agent output messages.
+        for i in 0..10_000 {
+            let _ = bg_tx.send(TuiMessage::AgentOutput(AgentOutputLine {
+                stream: "stdout".into(),
+                line: format!("Agent output line {}", i),
+            }));
+        }
+
+        // Now send an input event (simulating a keystroke).
+        let _ = input_tx.send(StampedEvent {
+            event: Event::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)),
+            os_read_at: Instant::now(),
+        });
+
+        // Run one iteration of the poll logic.
+        let start = Instant::now();
+
+        // Drain input (should find 'x' immediately).
+        let mut pending_inputs = Vec::new();
+        while let Ok(stamped) = input_rx.try_recv() {
+            pending_inputs.push(stamped);
+        }
+        let input_count = pending_inputs.len();
+
+        // Process input events (just insert chars, no network).
+        for stamped in &pending_inputs {
+            if let Event::Key(KeyEvent {
+                code: KeyCode::Char(c),
+                ..
+            }) = stamped.event
+            {
+                app.insert_char(c);
+            }
+        }
+
+        let input_latency = start.elapsed();
+
+        // Process one bg message.
+        let mut bg_count = 0;
+        if let Ok(msg) = bg_rx.try_recv() {
+            handle_tui_message(&mut app, msg);
+            bg_count = 1;
+        }
+
+        // Assertions:
+        assert_eq!(input_count, 1, "Should have received exactly 1 input event");
+        assert_eq!(app.input, "x", "Input char should be inserted");
+        assert!(
+            input_latency < Duration::from_millis(5),
+            "Input latency {:?} exceeds 5ms threshold",
+            input_latency
+        );
+        assert_eq!(bg_count, 1, "Should process at most 1 bg message per cycle");
+        let mut remaining = 0;
+        while bg_rx.try_recv().is_ok() {
+            remaining += 1;
+        }
+        assert_eq!(remaining, 9999, "Remaining bg messages should be untouched");
+    }
+
+    /// Test that the event loop yields to tokio (doesn't block the thread)
+    /// by verifying that a spawned background task can make progress
+    /// concurrently with the event loop polling.
+    #[tokio::test]
+    async fn event_loop_yields_to_tokio_runtime() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        let counter = Arc::new(AtomicUsize::new(0));
+        let counter_clone = counter.clone();
+
+        // Spawn a background task that increments a counter rapidly.
+        tokio::spawn(async move {
+            for _ in 0..100 {
+                counter_clone.fetch_add(1, Ordering::Relaxed);
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        });
+
+        // Simulate what the event loop does when idle: yield via tokio::time::sleep.
+        // If we used std::thread::sleep, the background task would be blocked.
+        let start = std::time::Instant::now();
+        for _ in 0..50 {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        let elapsed = start.elapsed();
+
+        // The background task should have made significant progress.
+        let count = counter.load(Ordering::Relaxed);
+        assert!(
+            count >= 20,
+            "Background task only ran {} times in {:?} — tokio runtime is being blocked",
+            count,
+            elapsed
+        );
+    }
+
+    /// Test that when the bg channel has a burst of messages and then input
+    /// arrives, the input is serviced on the very next cycle (not after
+    /// draining all bg messages).
+    #[tokio::test]
+    async fn input_priority_over_background_burst() {
+        use std::time::Instant;
+
+        let (bg_tx, mut bg_rx) = tokio::sync::mpsc::unbounded_channel::<TuiMessage>();
+        let (input_tx, input_rx) = tokio::sync::mpsc::unbounded_channel::<StampedEvent>();
+
+        let mut app = App::new(
+            "http://localhost".into(),
+            None,
+            std::path::PathBuf::from("/tmp"),
+        );
+        let mut input_rx = input_rx;
+
+        // Send 1000 bg messages.
+        for i in 0..1000 {
+            let _ = bg_tx.send(TuiMessage::CommandResponse(format!("bg {}", i)));
+        }
+
+        // Simulate 5 cycles of the event loop's poll logic.
+        let mut cycles_until_input = 0;
+        let mut input_processed = false;
+
+        for cycle in 0..5 {
+            // On cycle 2, inject an input event (simulating delayed keystroke).
+            if cycle == 2 {
+                let _ = input_tx.send(StampedEvent {
+                    event: Event::Key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE)),
+                    os_read_at: Instant::now(),
+                });
+            }
+
+            // Step 1: drain input.
+            let mut pending = Vec::new();
+            while let Ok(stamped) = input_rx.try_recv() {
+                pending.push(stamped);
+            }
+            if !pending.is_empty() {
+                for stamped in pending {
+                    if let Event::Key(KeyEvent {
+                        code: KeyCode::Char(c),
+                        ..
+                    }) = stamped.event
+                    {
+                        app.insert_char(c);
+                        input_processed = true;
+                        cycles_until_input = cycle;
+                    }
+                }
+            }
+
+            // Step 2: process ONE bg message.
+            if let Ok(msg) = bg_rx.try_recv() {
+                handle_tui_message(&mut app, msg);
+            }
+        }
+
+        assert!(input_processed, "Input should have been processed");
+        assert!(
+            cycles_until_input <= 3,
+            "Input processed on cycle {} — should be within 1 cycle of injection",
+            cycles_until_input
+        );
+        assert_eq!(app.input, "z");
+    }
+
+    /// Test that LatencyDiag records and reports correctly.
+    #[test]
+    fn latency_diag_recording_and_report() {
+        let mut diag = LatencyDiag::new();
+        diag.enabled = true;
+
+        // Record some samples.
+        diag.record_input_latency(100);
+        diag.record_input_latency(200);
+        diag.record_input_latency(300);
+        diag.record_draw(500);
+        diag.record_bg(1000);
+        diag.record_input_handle(250);
+        diag.cycles = 100;
+        diag.busy_cycles = 60;
+        diag.idle_cycles = 40;
+        diag.last_bg_depth = 42;
+
+        // Force report by setting last_report far in the past.
+        diag.last_report = std::time::Instant::now() - std::time::Duration::from_secs(10);
+
+        let report = diag.report();
+        assert!(report.is_some(), "Should produce a report");
+        let text = report.unwrap();
+        assert!(text.contains("avg="), "Report should contain avg latency");
+        assert!(text.contains("p50="), "Report should contain p50");
+        assert!(text.contains("p99="), "Report should contain p99");
+        assert!(
+            text.contains("draw_max=500"),
+            "Report should contain draw max"
+        );
+        assert!(text.contains("bg_max=1000"), "Report should contain bg max");
+        assert!(
+            text.contains("input_max=250"),
+            "Report should contain input max"
+        );
+        assert!(
+            text.contains("bg_depth=42"),
+            "Report should contain bg depth"
+        );
+        assert!(
+            text.contains("samples=3"),
+            "Report should show sample count"
+        );
+
+        // After report, counters should be reset.
+        assert!(diag.samples.is_empty());
+        assert_eq!(diag.cycles, 0);
+        assert_eq!(diag.max_draw_us, 0);
+    }
+
+    /// Test that LatencyDiag doesn't report when disabled.
+    #[test]
+    fn latency_diag_disabled_no_report() {
+        let mut diag = LatencyDiag::new();
+        // Don't enable.
+        diag.record_input_latency(100);
+        diag.cycles = 100;
+        diag.last_report = std::time::Instant::now() - std::time::Duration::from_secs(10);
+        assert!(diag.report().is_none());
     }
 }

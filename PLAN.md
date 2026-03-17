@@ -3915,6 +3915,151 @@ The output pipeline is: user types command → `send_input()` POST to daemon `/a
 
 ---
 
+### v0.11.4.3 — Smart Input Routing & Intent Disambiguation
+<!-- status: pending -->
+**Goal**: Stop mis-routing natural language as commands when the first word happens to match a keyword. Add intent-aware disambiguation so the shell either routes correctly or presents "Did you mean..." options.
+
+**Problem**: The current router matches greedily on the first word:
+- "apply the ta-constitution.md to the codebase" → shortcut "apply" → `ta draft apply the ta-constitution.md...` → command error. User meant to ask the agent.
+- "Draft a note to my friend" → subcommand "draft" → `ta draft a note to my friend` → command error. User wanted the agent.
+- "draft aply 124235234" → subcommand "draft" → `ta draft aply 124235234` → fails. User made a typo — should suggest "draft apply 124235234".
+
+**Solution**: After keyword/shortcut match, validate that the expanded command looks syntactically plausible before routing as Command. Add a new `RouteDecision::Ambiguous` for cases that need user confirmation.
+
+#### Items
+
+1. [ ] **Known sub-subcommands map**: Define valid sub-subcommands for each ta subcommand (e.g., `draft` → `list|view|apply|approve|deny|build|close|gc`). Store in `ShellConfig` with sensible defaults. Used for syntactic validation after keyword match.
+
+2. [ ] **Edit distance function**: Simple Levenshtein distance (no external crate needed — ~20 lines). Used to detect typos: "aply" ≈ "apply" (distance 1), "deniy" ≈ "deny" (distance 1).
+
+3. [ ] **Natural language detection heuristic**: After keyword match, check if the remainder looks like NL rather than command args:
+   - Second word is a common English stopword ("the", "a", "an", "my", "to", "is", "for", "in", "on")
+   - Input contains >4 words with no flags (`--`) or ID-like tokens (hex, numeric)
+   - Input ends with `?` or starts with a question word after the keyword
+   If NL detected → route to Agent, ignoring the keyword match.
+
+4. [ ] **`RouteDecision::Ambiguous` variant**: New routing outcome with:
+   - `suggestions: Vec<String>` — corrected command forms
+   - `original_text: String` — what the user typed
+   - `agent_fallback: bool` — whether "Ask the agent" should be an option
+
+5. [ ] **Disambiguation in `handle_input()`**: When `route_input` returns `Ambiguous`, return a JSON response with `routed_to: "ambiguous"` and the suggestions list. Do NOT execute any command.
+
+6. [ ] **TUI "Did you mean..." UI**: When the shell receives an ambiguous response, display numbered options:
+   ```
+   Did you mean:
+     1. draft apply 124235234
+     2. Ask the agent: "draft aply 124235234"
+   Enter 1 or 2 (or press Escape to cancel):
+   ```
+   User picks a number → re-dispatch. Escape cancels.
+
+7. [ ] **Shortcut disambiguation**: Apply the same NL detection to shortcut expansions. "apply the constitution" should not expand via the "apply" shortcut — the word after "apply" is "the" (stopword), not a draft ID.
+
+8. [ ] **Tests**: Cover the key scenarios:
+   - `"apply the ta-constitution.md to the codebase"` → Agent (NL detected)
+   - `"Draft a note to my friend"` → Agent (NL detected, case-insensitive)
+   - `"draft aply 124235234"` → Ambiguous (typo, suggest "draft apply 124235234")
+   - `"draft apply abc123"` → Command (valid syntax)
+   - `"draft list"` → Command (valid syntax)
+   - `"run the tests please"` → Agent (NL after keyword)
+   - `"run v0.11.5 — Some Title"` → Command (valid `ta run` syntax)
+
+**Files**: `crates/ta-daemon/src/api/input.rs` (routing logic), `crates/ta-daemon/src/config.rs` (sub-subcommands map), `apps/ta-cli/src/commands/shell_tui.rs` (disambiguation UI)
+
+#### Version: `0.11.4-alpha.3`
+
+---
+
+### v0.11.4.4 — Constitution Compliance Remediation
+<!-- status: pending -->
+**Goal**: Fix all violations found by the 7-agent constitution compliance audit against `docs/TA-CONSTITUTION.md`. Prioritize High-severity items (data loss on error paths) before Medium-severity (stale injection on follow-up).
+
+**Audit source**: Constitution review run via `ta shell` QA agent (2026-03-16). Sections §2, §3, §9 passed. Violations in §4, §5, and potentially others (audit was cut short — re-run full audit at start of this phase to capture §6–§14).
+
+#### §4 — CLAUDE.md Injection & Cleanup (4 violations)
+
+1. [ ] **`inject_claude_settings()` backup-restore on follow-up**: Before re-injecting, restore from backup first (like `inject_claude_md()` does at `run.rs:2221-2230`). Currently overwrites backup with stale injected content. **Severity: Medium**
+
+2. [ ] **`inject_mcp_server_config()` same backup-restore issue**: Same pattern as item 1 — backup overwritten with already-injected content on `--follow-up`. **Severity: Medium**
+
+3. [ ] **Pre-launch command failure cleanup**: `run.rs:661-671` returns on pre-launch command failure without cleaning up injected files (CLAUDE.md, settings.local.json, MCP config). Add cleanup-on-error. **Severity: High**
+
+4. [ ] **General launch error cleanup**: `run.rs:854-858` — only `NotFound` error cleans up; other launch errors (permission denied, exec format error) leave injected files in staging. All error paths must clean up. **Severity: High**
+
+#### §5 — Goal Lifecycle State Machine (violations TBD)
+
+5. [ ] **Re-run full audit**: The initial audit was cut short. Re-run the full 14-section audit at the start of this phase to capture §5–§14 violations, particularly:
+   - §5: Goal state transitions — are all transitions validated?
+   - §6: Draft lifecycle — supersession rules enforced?
+   - §7: Policy enforcement — capability checks on all paths?
+   - §8: Audit trail — all state changes logged?
+   - §10-§14: Agent isolation, memory injection, event system, error handling, versioning
+
+6. [ ] **Fix all identified violations**: Address each finding, prioritized by severity (High → Medium → Low).
+
+7. [ ] **Add constitution regression tests**: For each fix, add a test that would catch the violation if it regressed. Tests should reference the constitution section they cover (e.g., `// §4.3: injected files must be cleaned up on all error paths`).
+
+8. [ ] **Audit sign-off**: Re-run the full audit after fixes to verify zero violations remain.
+
+**Files**: `apps/ta-cli/src/commands/run.rs` (injection/cleanup), `crates/ta-goal/src/goal_run.rs` (state machine), others TBD by audit.
+
+#### Version: `0.11.4-alpha.4`
+
+---
+
+### v0.11.4.5 — Shell Large-Paste Compaction
+<!-- status: pending -->
+**Goal**: When pasting large blocks of text into `ta shell`, compact the display instead of filling the input buffer with hundreds of lines.
+
+**Problem**: Pasting a large document (e.g., an audit report) into the shell input embeds all the text directly in the input buffer, making it unreadable and hard to edit. Claude Code CLI handles this by compacting large pastes into a summary/link.
+
+#### Items
+
+1. [ ] **Paste size threshold**: If pasted text exceeds a configurable limit (e.g., 500 chars or 10 lines), don't insert it verbatim into the input buffer.
+
+2. [ ] **Compacted display**: Show a compact representation in the input area, e.g.:
+   ```
+   ta> [Pasted 2,847 chars / 47 lines — press Enter to send, Escape to cancel]
+   ```
+   The full text is stored in a separate `pending_paste` field on `App`, not in `app.input`.
+
+3. [ ] **Send full content on Enter**: When submitted, send the full paste content (not the compact display) to the daemon/agent. Combine with any text the user typed before/after the paste indicator.
+
+4. [ ] **Preview on demand**: Allow the user to view the full paste (e.g., `Tab` to expand/collapse) before sending.
+
+5. [ ] **Cross-platform**: Same behavior on macOS, Linux, Windows since it's handled at the `Event::Paste` level.
+
+**Files**: `apps/ta-cli/src/commands/shell_tui.rs` (paste handler, App struct, input rendering)
+
+#### Version: `0.11.4-alpha.5`
+
+---
+
+### v0.11.5.0 — Shell Mouse Scroll & TUI-Managed Selection (revisit)
+<!-- status: pending -->
+**Goal**: Re-examine mouse scroll and TUI-managed text selection with a working, tested solution. v0.11.4.2 attempted mouse capture but it broke native selection and caused Command+C chime. The current solution (no mouse capture) sacrifices scroll wheel for native selection. This phase finds a way to have both.
+
+#### Research & approach
+
+1. [ ] **Survey Rust TUI apps**: Study how `helix`, `zellij`, `gitui`, `bottom`, `lazygit` handle mouse scroll + text selection simultaneously. Document which ANSI modes each uses and test native selection in each.
+
+2. [ ] **Test `?1000h` alone across terminals**: `?1000h` (normal tracking) captures button press/release including scroll wheel. Does it break native selection in Terminal.app, iTerm2, Windows Terminal, GNOME Terminal, Alacritty, Kitty, WezTerm? Document per-terminal behavior.
+
+3. [ ] **Test `?1007h` (alternate scroll mode)**: Does it reliably convert scroll wheel to Up/Down arrow keys in all target terminals? Can we distinguish scroll-generated arrows from real arrow presses (e.g., via timing heuristics)?
+
+4. [ ] **Evaluate hybrid approach**: Enable `?1000h` + `?1002h` (button-event tracking) for TUI-managed selection + scroll. Implement complete TUI selection with click-drag, shift+click extend, auto-copy on mouse-up via `pbcopy`/`xclip`/`clip.exe`. Test that this is a complete replacement for native selection (renders highlight, copies to system clipboard, works cross-platform).
+
+5. [ ] **Mouse mode toggle**: If no single mode works everywhere, implement a user-configurable toggle (e.g., `[shell] mouse_mode = "native" | "tui"`) with `native` as default. Status bar shows current mode.
+
+6. [ ] **Scroll wheel without capture**: Investigate whether SIGWINCH or terminal-specific protocols can report scroll without full mouse capture.
+
+**Files**: `apps/ta-cli/src/commands/shell_tui.rs`
+
+#### Version: `0.11.5-alpha.0`
+
+---
+
 ### v0.12.0 — Template Projects & Bootstrap Flow
 <!-- status: pending -->
 **Goal**: `ta new` generates projects with `project.toml` plugin declarations so downstream users get a complete, working setup from `ta setup` alone. Template projects in the Trusted-Autonomy org serve as reference implementations. Also: replace the quick-fix Discord command listener with a proper slash-command-based bidirectional integration.
