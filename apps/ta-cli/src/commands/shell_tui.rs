@@ -1057,6 +1057,7 @@ async fn tui_event_loop(
         //
         // Worst-case input latency: 1ms (the tokio::time::sleep quantum).
 
+        let mut had_input = false;
         let mut did_work = false;
 
         // 1. Drain ALL pending input events (always first priority).
@@ -1109,6 +1110,7 @@ async fn tui_event_loop(
                     );
                 }
             }
+            had_input = true;
             did_work = true;
         }
 
@@ -1128,8 +1130,34 @@ async fn tui_event_loop(
         if did_work {
             app.latency_diag.busy_cycles += 1;
             needs_draw = true;
-            // Loop immediately to check for more input before drawing.
-            // This ensures rapid keystrokes are batched into one frame.
+
+            // CRITICAL: If input was processed, draw IMMEDIATELY — don't
+            // wait for the 16ms frame interval. The user must see their
+            // keystroke reflected without perceptible delay. Only bg-only
+            // updates are rate-limited to 60fps.
+            if had_input {
+                let draw_start = Instant::now();
+                let cur_width = terminal.size().map(|s| s.width as usize).unwrap_or(80);
+                if cur_width != app.cached_wrap_width {
+                    app.cached_wrap_width = cur_width;
+                    app.cached_visual_lines = app
+                        .output
+                        .iter()
+                        .map(|ol| {
+                            if ol.text.is_empty() || cur_width == 0 {
+                                1
+                            } else {
+                                ol.text.len().div_ceil(cur_width)
+                            }
+                        })
+                        .sum();
+                }
+                terminal.draw(|f| draw_ui(f, app))?;
+                last_draw = Instant::now();
+                needs_draw = false;
+                app.latency_diag
+                    .record_draw(draw_start.elapsed().as_micros() as u64);
+            }
         } else {
             app.latency_diag.idle_cycles += 1;
             // Nothing pending — yield to the tokio runtime for 1ms.
