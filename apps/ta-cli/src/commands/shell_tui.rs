@@ -41,6 +41,138 @@ use super::shell::{resolve_daemon_url, StatusInfo};
 // This is the same approach used by less, vim, and other TUI apps that
 // want scroll wheel support without sacrificing native text selection.
 
+// ── Latency diagnostics ─────────────────────────────────────────
+//
+// Enabled via `:latency on` in the shell. Tracks timestamps at each
+// stage of the input pipeline to identify where time is lost:
+//
+//   OS read → channel send → try_recv → handle → draw
+//
+// Also tracks event loop cycle stats and background channel depth.
+
+/// An input event tagged with the Instant it was read from the OS.
+/// The dedicated input thread stamps every event before sending.
+struct StampedEvent {
+    event: Event,
+    os_read_at: std::time::Instant,
+}
+
+/// Rolling latency diagnostics (when enabled via `:latency on`).
+struct LatencyDiag {
+    enabled: bool,
+    /// Ring buffer of recent input-to-processed latencies (microseconds).
+    samples: Vec<u64>,
+    /// Index into ring buffer.
+    idx: usize,
+    /// Total event loop cycles since last report.
+    cycles: u64,
+    /// Cycles that did work (input or bg).
+    busy_cycles: u64,
+    /// Cycles spent idle (yielding to tokio).
+    idle_cycles: u64,
+    /// Max draw duration in last reporting window (microseconds).
+    max_draw_us: u64,
+    /// Max bg message process time in last window (microseconds).
+    max_bg_us: u64,
+    /// Max input handle time in last window (microseconds).
+    max_input_us: u64,
+    /// Last report time.
+    last_report: std::time::Instant,
+    /// bg channel depth at last sample.
+    last_bg_depth: usize,
+}
+
+impl LatencyDiag {
+    fn new() -> Self {
+        Self {
+            enabled: false,
+            samples: Vec::with_capacity(128),
+            idx: 0,
+            cycles: 0,
+            busy_cycles: 0,
+            idle_cycles: 0,
+            max_draw_us: 0,
+            max_bg_us: 0,
+            max_input_us: 0,
+            last_report: std::time::Instant::now(),
+            last_bg_depth: 0,
+        }
+    }
+
+    fn record_input_latency(&mut self, latency_us: u64) {
+        if self.samples.len() < 128 {
+            self.samples.push(latency_us);
+        } else {
+            self.samples[self.idx % 128] = latency_us;
+        }
+        self.idx += 1;
+    }
+
+    fn record_draw(&mut self, dur_us: u64) {
+        self.max_draw_us = self.max_draw_us.max(dur_us);
+    }
+
+    fn record_bg(&mut self, dur_us: u64) {
+        self.max_bg_us = self.max_bg_us.max(dur_us);
+    }
+
+    fn record_input_handle(&mut self, dur_us: u64) {
+        self.max_input_us = self.max_input_us.max(dur_us);
+    }
+
+    /// Generate a report string and reset counters. Called every 5s.
+    fn report(&mut self) -> Option<String> {
+        if !self.enabled || self.cycles == 0 {
+            return None;
+        }
+        let elapsed = self.last_report.elapsed();
+        if elapsed.as_secs() < 5 {
+            return None;
+        }
+
+        let n = self.samples.len();
+        let (avg_us, p50_us, p99_us, max_us) = if n > 0 {
+            let mut sorted: Vec<u64> = self.samples.clone();
+            sorted.sort_unstable();
+            let sum: u64 = sorted.iter().sum();
+            let avg = sum / n as u64;
+            let p50 = sorted[n / 2];
+            let p99 = sorted[(n as f64 * 0.99) as usize];
+            let max = *sorted.last().unwrap();
+            (avg, p50, p99, max)
+        } else {
+            (0, 0, 0, 0)
+        };
+
+        let cps = self.cycles as f64 / elapsed.as_secs_f64();
+        let report = format!(
+            "[latency] input: avg={avg_us}µs p50={p50_us}µs p99={p99_us}µs max={max_us}µs | \
+             cycles: {cps:.0}/s (busy={busy} idle={idle}) | \
+             draw_max={draw}µs bg_max={bg}µs input_max={inp}µs | \
+             bg_depth={depth} | samples={n}",
+            busy = self.busy_cycles,
+            idle = self.idle_cycles,
+            draw = self.max_draw_us,
+            bg = self.max_bg_us,
+            inp = self.max_input_us,
+            depth = self.last_bg_depth,
+        );
+
+        // Reset for next window.
+        self.samples.clear();
+        self.idx = 0;
+        self.cycles = 0;
+        self.busy_cycles = 0;
+        self.idle_cycles = 0;
+        self.max_draw_us = 0;
+        self.max_bg_us = 0;
+        self.max_input_us = 0;
+        self.last_report = std::time::Instant::now();
+
+        Some(report)
+    }
+}
+
 /// A position in screen coordinates (column, row).
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct ScreenPos {
@@ -279,13 +411,16 @@ struct App {
     prompt_verify_timeout_secs: u64,
     /// Sender for the dedicated input thread (v0.11.4.2 item 11).
     /// When set, terminal events arrive via this channel instead of inline polling.
-    input_rx: Option<tokio::sync::mpsc::UnboundedReceiver<Event>>,
+    /// Each event is stamped with the OS-read Instant for latency tracking.
+    input_rx: Option<tokio::sync::mpsc::UnboundedReceiver<StampedEvent>>,
     /// Active text selection (unused — native terminal selection handles this).
     #[allow(dead_code)]
     selection: Option<Selection>,
     /// Cached output pane area from the last draw (for mouse coordinate mapping).
     #[allow(dead_code)]
     output_area: ratatui::layout::Rect,
+    /// Latency diagnostics (`:latency on/off/dump`).
+    latency_diag: LatencyDiag,
 }
 
 impl App {
@@ -330,6 +465,7 @@ impl App {
             input_rx: None,
             selection: None,
             output_area: ratatui::layout::Rect::default(),
+            latency_diag: LatencyDiag::new(),
         }
     }
 
@@ -804,14 +940,19 @@ async fn run_tui(
     // Dedicated input thread (v0.11.4.2 item 11): decouple terminal event
     // reading from the async runtime so keystrokes stay responsive even when
     // agent subprocesses are spawning or the event loop is under pressure.
-    let (input_tx, input_rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
+    // Each event is stamped with the OS-read Instant for latency tracking.
+    let (input_tx, input_rx) = tokio::sync::mpsc::unbounded_channel::<StampedEvent>();
     let input_running = running.clone();
     std::thread::spawn(move || {
         while input_running.load(Ordering::Relaxed) {
             // ~60fps poll rate — events are forwarded immediately.
             if event::poll(std::time::Duration::from_millis(16)).unwrap_or(false) {
                 if let Ok(ev) = event::read() {
-                    if input_tx.send(ev).is_err() {
+                    let stamped = StampedEvent {
+                        event: ev,
+                        os_read_at: std::time::Instant::now(),
+                    };
+                    if input_tx.send(stamped).is_err() {
                         break; // Receiver dropped — TUI is shutting down.
                     }
                 }
@@ -846,7 +987,12 @@ async fn tui_event_loop(
     client: &reqwest::Client,
     tx: tokio::sync::mpsc::UnboundedSender<TuiMessage>,
 ) -> anyhow::Result<()> {
+    use std::io::Write;
     use std::time::{Duration, Instant};
+
+    // Latency log file: written to .ta/latency.log when diagnostics are on.
+    // Opened lazily on `:latency on`, closed on `:latency off`.
+    let mut latency_log: Option<std::fs::File> = None;
 
     // Frame rate limiter: draw at most every 16ms (~60fps).
     let frame_interval = Duration::from_millis(16);
@@ -854,8 +1000,11 @@ async fn tui_event_loop(
     let mut needs_draw = true;
 
     loop {
+        app.latency_diag.cycles += 1;
+
         // ── Draw (rate-limited) ────────────────────────────────────
         if needs_draw && last_draw.elapsed() >= frame_interval {
+            let draw_start = Instant::now();
             // Update visual line cache if terminal width changed.
             let cur_width = terminal.size().map(|s| s.width as usize).unwrap_or(80);
             if cur_width != app.cached_wrap_width {
@@ -875,6 +1024,8 @@ async fn tui_event_loop(
             terminal.draw(|f| draw_ui(f, app))?;
             last_draw = Instant::now();
             needs_draw = false;
+            app.latency_diag
+                .record_draw(draw_start.elapsed().as_micros() as u64);
         }
 
         if !app.running {
@@ -905,29 +1056,112 @@ async fn tui_event_loop(
             }
         }
         if !pending_inputs.is_empty() {
-            for ev in pending_inputs {
-                handle_terminal_event(app, ev, client, &tx).await;
+            let handle_start = Instant::now();
+            for stamped in pending_inputs {
+                // Record OS→event-loop latency.
+                let transit_us = stamped.os_read_at.elapsed().as_micros() as u64;
+                app.latency_diag.record_input_latency(transit_us);
+
+                // Per-event trace to log file (not TUI — too noisy).
+                if app.latency_diag.enabled {
+                    if let Some(ref mut lf) = latency_log {
+                        let ev_desc = match &stamped.event {
+                            Event::Key(k) => format!("key:{:?}+{:?}", k.code, k.modifiers),
+                            Event::Paste(_) => "paste".to_string(),
+                            Event::Mouse(m) => format!("mouse:{:?}", m.kind),
+                            Event::Resize(w, h) => format!("resize:{}x{}", w, h),
+                            _ => "other".to_string(),
+                        };
+                        let _ = writeln!(
+                            lf,
+                            "{} EVENT transit={}µs ev={}",
+                            chrono::Local::now().format("%H:%M:%S%.3f"),
+                            transit_us,
+                            ev_desc,
+                        );
+                    }
+                }
+
+                handle_terminal_event(app, stamped.event, client, &tx).await;
+            }
+            let handle_us = handle_start.elapsed().as_micros() as u64;
+            app.latency_diag.record_input_handle(handle_us);
+
+            // Log batch processing time.
+            if app.latency_diag.enabled {
+                if let Some(ref mut lf) = latency_log {
+                    let _ = writeln!(
+                        lf,
+                        "{} INPUT_BATCH handle={}µs",
+                        chrono::Local::now().format("%H:%M:%S%.3f"),
+                        handle_us,
+                    );
+                }
             }
             did_work = true;
         }
 
         // 2. Process ONE background message (non-blocking).
+        // Sample channel depth for diagnostics.
         if let Ok(msg) = rx.try_recv() {
+            let bg_start = Instant::now();
+            // Approximate bg channel depth: count what's available without consuming.
+            // (We just took one, so actual depth is what remains + 1.)
+            app.latency_diag.last_bg_depth = rx.len() + 1;
             process_background_message(app, msg, client, &tx).await;
+            app.latency_diag
+                .record_bg(bg_start.elapsed().as_micros() as u64);
             did_work = true;
         }
 
         if did_work {
+            app.latency_diag.busy_cycles += 1;
             needs_draw = true;
             // Loop immediately to check for more input before drawing.
             // This ensures rapid keystrokes are batched into one frame.
-            continue;
+        } else {
+            app.latency_diag.idle_cycles += 1;
+            // Nothing pending — yield to the tokio runtime for 1ms.
+            // This lets background tasks (SSE, HTTP, tail streams) make progress.
+            // On wake, we immediately loop back to check input first.
+            tokio::time::sleep(Duration::from_millis(1)).await;
         }
 
-        // 3. Nothing pending — yield to the tokio runtime for 1ms.
-        // This lets background tasks (SSE, HTTP, tail streams) make progress.
-        // On wake, we immediately loop back to check input first.
-        tokio::time::sleep(Duration::from_millis(1)).await;
+        // Emit periodic latency report if diagnostics are on.
+        if app.latency_diag.enabled {
+            // Lazily open the log file.
+            if latency_log.is_none() {
+                let log_dir = app.project_root.join(".ta");
+                let _ = std::fs::create_dir_all(&log_dir);
+                latency_log = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(log_dir.join("latency.log"))
+                    .ok();
+                if let Some(ref mut lf) = latency_log {
+                    let _ = writeln!(
+                        lf,
+                        "\n--- session {} ---",
+                        chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+                    );
+                }
+            }
+            if let Some(report) = app.latency_diag.report() {
+                app.push_output(OutputLine::event(report.clone()));
+                // Also write to the latency log file for external analysis.
+                if let Some(ref mut lf) = latency_log {
+                    let _ = writeln!(
+                        lf,
+                        "{} {}",
+                        chrono::Local::now().format("%H:%M:%S%.3f"),
+                        report
+                    );
+                }
+            }
+        } else if latency_log.is_some() {
+            // Close the log file when diagnostics are turned off.
+            latency_log = None;
+        }
     }
     Ok(())
 }
@@ -1144,6 +1378,53 @@ async fn handle_terminal_event(
                                 return;
                             }
                             _ => {}
+                        }
+
+                        // :latency — toggle input latency diagnostics.
+                        if text.starts_with(":latency") {
+                            let arg = text.strip_prefix(":latency").unwrap().trim();
+                            match arg {
+                                "on" => {
+                                    app.latency_diag.enabled = true;
+                                    app.latency_diag.last_report = std::time::Instant::now();
+                                    app.push_output(OutputLine::info(
+                                        "[latency] Diagnostics ON — reports every 5s. \
+                                         Log: .ta/latency.log"
+                                            .into(),
+                                    ));
+                                    app.push_output(OutputLine::info(
+                                        "[latency] Tracks: OS→event-loop transit, draw time, \
+                                         bg process time, cycle rate, channel depth"
+                                            .into(),
+                                    ));
+                                }
+                                "off" => {
+                                    app.latency_diag.enabled = false;
+                                    app.push_output(OutputLine::info(
+                                        "[latency] Diagnostics OFF.".into(),
+                                    ));
+                                }
+                                "dump" => {
+                                    // Force an immediate report.
+                                    let saved = app.latency_diag.last_report;
+                                    app.latency_diag.last_report = std::time::Instant::now()
+                                        - std::time::Duration::from_secs(10);
+                                    if let Some(report) = app.latency_diag.report() {
+                                        app.push_output(OutputLine::info(report));
+                                    } else {
+                                        app.latency_diag.last_report = saved;
+                                        app.push_output(OutputLine::info(
+                                            "[latency] No data collected yet.".into(),
+                                        ));
+                                    }
+                                }
+                                _ => {
+                                    app.push_output(OutputLine::info(
+                                        "Usage: :latency on|off|dump".into(),
+                                    ));
+                                }
+                            }
+                            return;
                         }
 
                         // :tail — attach to goal output stream (v0.10.11).
@@ -4616,7 +4897,7 @@ mod tests {
         use std::time::{Duration, Instant};
 
         let (bg_tx, mut bg_rx) = tokio::sync::mpsc::unbounded_channel::<TuiMessage>();
-        let (input_tx, input_rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
+        let (input_tx, input_rx) = tokio::sync::mpsc::unbounded_channel::<StampedEvent>();
 
         let mut app = App::new(
             "http://localhost".into(),
@@ -4634,31 +4915,29 @@ mod tests {
         }
 
         // Now send an input event (simulating a keystroke).
-        let _ = input_tx.send(Event::Key(KeyEvent::new(
-            KeyCode::Char('x'),
-            KeyModifiers::NONE,
-        )));
+        let _ = input_tx.send(StampedEvent {
+            event: Event::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)),
+            os_read_at: Instant::now(),
+        });
 
-        // Run one iteration of the poll logic (extracted below).
-        // The event loop should drain input FIRST, then process at most
-        // one bg message per cycle.
+        // Run one iteration of the poll logic.
         let start = Instant::now();
 
         // Drain input (should find 'x' immediately).
         let mut pending_inputs = Vec::new();
         if let Some(ref mut irx) = app.input_rx {
-            while let Ok(ev) = irx.try_recv() {
-                pending_inputs.push(ev);
+            while let Ok(stamped) = irx.try_recv() {
+                pending_inputs.push(stamped);
             }
         }
         let input_count = pending_inputs.len();
 
         // Process input events (just insert chars, no network).
-        for ev in pending_inputs {
+        for stamped in &pending_inputs {
             if let Event::Key(KeyEvent {
                 code: KeyCode::Char(c),
                 ..
-            }) = ev
+            }) = stamped.event
             {
                 app.insert_char(c);
             }
@@ -4674,21 +4953,14 @@ mod tests {
         }
 
         // Assertions:
-        // 1. Input was found and processed.
         assert_eq!(input_count, 1, "Should have received exactly 1 input event");
         assert_eq!(app.input, "x", "Input char should be inserted");
-
-        // 2. Input latency is under 5ms (try_recv is ~nanoseconds).
         assert!(
             input_latency < Duration::from_millis(5),
             "Input latency {:?} exceeds 5ms threshold",
             input_latency
         );
-
-        // 3. Only 1 bg message was processed (not all 10,000).
         assert_eq!(bg_count, 1, "Should process at most 1 bg message per cycle");
-
-        // 4. The remaining 9,999 bg messages are still in the channel.
         let mut remaining = 0;
         while bg_rx.try_recv().is_ok() {
             remaining += 1;
@@ -4720,7 +4992,6 @@ mod tests {
         // If we used std::thread::sleep, the background task would be blocked.
         let start = std::time::Instant::now();
         for _ in 0..50 {
-            // This is what the fixed event loop does when channels are empty:
             tokio::time::sleep(Duration::from_millis(1)).await;
         }
         let elapsed = start.elapsed();
@@ -4740,8 +5011,10 @@ mod tests {
     /// draining all bg messages).
     #[tokio::test]
     async fn input_priority_over_background_burst() {
+        use std::time::Instant;
+
         let (bg_tx, mut bg_rx) = tokio::sync::mpsc::unbounded_channel::<TuiMessage>();
-        let (input_tx, input_rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
+        let (input_tx, input_rx) = tokio::sync::mpsc::unbounded_channel::<StampedEvent>();
 
         let mut app = App::new(
             "http://localhost".into(),
@@ -4762,25 +5035,25 @@ mod tests {
         for cycle in 0..5 {
             // On cycle 2, inject an input event (simulating delayed keystroke).
             if cycle == 2 {
-                let _ = input_tx.send(Event::Key(KeyEvent::new(
-                    KeyCode::Char('z'),
-                    KeyModifiers::NONE,
-                )));
+                let _ = input_tx.send(StampedEvent {
+                    event: Event::Key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE)),
+                    os_read_at: Instant::now(),
+                });
             }
 
             // Step 1: drain input.
             let mut pending = Vec::new();
             if let Some(ref mut irx) = app.input_rx {
-                while let Ok(ev) = irx.try_recv() {
-                    pending.push(ev);
+                while let Ok(stamped) = irx.try_recv() {
+                    pending.push(stamped);
                 }
             }
             if !pending.is_empty() {
-                for ev in pending {
+                for stamped in pending {
                     if let Event::Key(KeyEvent {
                         code: KeyCode::Char(c),
                         ..
-                    }) = ev
+                    }) = stamped.event
                     {
                         app.insert_char(c);
                         input_processed = true;
@@ -4796,13 +5069,73 @@ mod tests {
         }
 
         assert!(input_processed, "Input should have been processed");
-        // Input injected at start of cycle 2, should be picked up on cycle 3
-        // (the next iteration after the send).
         assert!(
             cycles_until_input <= 3,
             "Input processed on cycle {} — should be within 1 cycle of injection",
             cycles_until_input
         );
         assert_eq!(app.input, "z");
+    }
+
+    /// Test that LatencyDiag records and reports correctly.
+    #[test]
+    fn latency_diag_recording_and_report() {
+        let mut diag = LatencyDiag::new();
+        diag.enabled = true;
+
+        // Record some samples.
+        diag.record_input_latency(100);
+        diag.record_input_latency(200);
+        diag.record_input_latency(300);
+        diag.record_draw(500);
+        diag.record_bg(1000);
+        diag.record_input_handle(250);
+        diag.cycles = 100;
+        diag.busy_cycles = 60;
+        diag.idle_cycles = 40;
+        diag.last_bg_depth = 42;
+
+        // Force report by setting last_report far in the past.
+        diag.last_report = std::time::Instant::now() - std::time::Duration::from_secs(10);
+
+        let report = diag.report();
+        assert!(report.is_some(), "Should produce a report");
+        let text = report.unwrap();
+        assert!(text.contains("avg="), "Report should contain avg latency");
+        assert!(text.contains("p50="), "Report should contain p50");
+        assert!(text.contains("p99="), "Report should contain p99");
+        assert!(
+            text.contains("draw_max=500"),
+            "Report should contain draw max"
+        );
+        assert!(text.contains("bg_max=1000"), "Report should contain bg max");
+        assert!(
+            text.contains("input_max=250"),
+            "Report should contain input max"
+        );
+        assert!(
+            text.contains("bg_depth=42"),
+            "Report should contain bg depth"
+        );
+        assert!(
+            text.contains("samples=3"),
+            "Report should show sample count"
+        );
+
+        // After report, counters should be reset.
+        assert!(diag.samples.is_empty());
+        assert_eq!(diag.cycles, 0);
+        assert_eq!(diag.max_draw_us, 0);
+    }
+
+    /// Test that LatencyDiag doesn't report when disabled.
+    #[test]
+    fn latency_diag_disabled_no_report() {
+        let mut diag = LatencyDiag::new();
+        // Don't enable.
+        diag.record_input_latency(100);
+        diag.cycles = 100;
+        diag.last_report = std::time::Instant::now() - std::time::Duration::from_secs(10);
+        assert!(diag.report().is_none());
     }
 }
