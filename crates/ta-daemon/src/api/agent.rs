@@ -169,6 +169,8 @@ pub struct PersistentQaAgent {
     project_root: std::path::PathBuf,
     /// Last activity timestamp for idle timeout.
     last_active: Mutex<std::time::Instant>,
+    /// Whether a first prompt has been sent (enables --continue for chaining).
+    has_conversation: Mutex<bool>,
 }
 
 #[allow(dead_code)] // Fields used when multi-turn stdin mode is enabled (future).
@@ -190,6 +192,7 @@ impl PersistentQaAgent {
             config,
             project_root,
             last_active: Mutex::new(std::time::Instant::now()),
+            has_conversation: Mutex::new(false),
         }
     }
 
@@ -284,10 +287,9 @@ impl PersistentQaAgent {
     ) -> Result<(), String> {
         *self.last_active.lock().await = std::time::Instant::now();
 
-        // For claude --print, each question is a separate invocation since
-        // --print mode doesn't support multi-turn stdin. We use the persistent
-        // wrapper to manage restart logic, crash recovery, and lifecycle.
-        let (binary, args) = resolve_agent_command(&self.agent, prompt)?;
+        // Check if we should chain to the previous conversation.
+        let continue_conversation = *self.has_conversation.lock().await;
+        let (binary, args) = resolve_agent_command(&self.agent, prompt, continue_conversation)?;
 
         let _ = tx.send(crate::api::goal_output::OutputLine {
             stream: "stderr",
@@ -391,8 +393,9 @@ impl PersistentQaAgent {
                         ));
                     }
                     _ => {
-                        // Success — reset restart counter.
+                        // Success — reset restart counter and mark conversation as active.
                         *self.restart_count.lock().await = 0;
+                        *self.has_conversation.lock().await = true;
                     }
                 }
             }
@@ -705,12 +708,21 @@ pub async fn ask_agent(
 /// bare prompts — these are designed for goal execution (`ta run`), not Q&A.
 /// Configure `qa_agent` in `[agent]` section of `daemon.toml` to route Q&A
 /// to a prompt-capable agent.
-fn resolve_agent_command(agent: &str, prompt: &str) -> Result<(String, Vec<String>), String> {
+fn resolve_agent_command(
+    agent: &str,
+    prompt: &str,
+    continue_conversation: bool,
+) -> Result<(String, Vec<String>), String> {
     match agent {
-        "claude-code" | "claude" => Ok((
-            "claude".to_string(),
-            vec!["--print".to_string(), "-p".to_string(), prompt.to_string()],
-        )),
+        "claude-code" | "claude" => {
+            let mut args = vec!["--print".to_string()];
+            if continue_conversation {
+                args.push("--continue".to_string());
+            }
+            args.push("-p".to_string());
+            args.push(prompt.to_string());
+            Ok(("claude".to_string(), args))
+        }
         "codex" => Ok((
             "codex".to_string(),
             vec![
@@ -837,27 +849,34 @@ mod tests {
 
     #[test]
     fn resolve_claude_code_agent() {
-        let (bin, args) = resolve_agent_command("claude-code", "hello").unwrap();
+        let (bin, args) = resolve_agent_command("claude-code", "hello", false).unwrap();
         assert_eq!(bin, "claude");
         assert_eq!(args, vec!["--print", "-p", "hello"]);
     }
 
     #[test]
+    fn resolve_claude_code_continue() {
+        let (bin, args) = resolve_agent_command("claude-code", "follow up", true).unwrap();
+        assert_eq!(bin, "claude");
+        assert_eq!(args, vec!["--print", "--continue", "-p", "follow up"]);
+    }
+
+    #[test]
     fn resolve_claude_alias() {
-        let (bin, _args) = resolve_agent_command("claude", "hi").unwrap();
+        let (bin, _args) = resolve_agent_command("claude", "hi", false).unwrap();
         assert_eq!(bin, "claude");
     }
 
     #[test]
     fn resolve_codex_agent() {
-        let (bin, args) = resolve_agent_command("codex", "fix bug").unwrap();
+        let (bin, args) = resolve_agent_command("codex", "fix bug", false).unwrap();
         assert_eq!(bin, "codex");
         assert_eq!(args, vec!["--quiet", "--prompt", "fix bug"]);
     }
 
     #[test]
     fn resolve_claude_flow_rejected() {
-        let result = resolve_agent_command("claude-flow", "What is this project?");
+        let result = resolve_agent_command("claude-flow", "What is this project?", false);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(
@@ -874,7 +893,7 @@ mod tests {
 
     #[test]
     fn resolve_unknown_agent() {
-        let (bin, args) = resolve_agent_command("my-agent", "test").unwrap();
+        let (bin, args) = resolve_agent_command("my-agent", "test", false).unwrap();
         assert_eq!(bin, "my-agent");
         assert_eq!(args, vec!["test"]);
     }
