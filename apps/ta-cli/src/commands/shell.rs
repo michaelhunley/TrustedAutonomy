@@ -84,8 +84,8 @@ pub fn execute(
 
 /// Open the web shell in the user's default browser.
 ///
-/// Resolves the daemon URL, builds the `/shell` URL, and opens it.
-/// If the daemon is not reachable, prints an error with instructions.
+/// Auto-starts the daemon if not running, handles version mismatches,
+/// then opens the browser to `/shell`.
 pub fn open_web_shell(project_root: &Path, daemon_url: Option<&str>) -> anyhow::Result<()> {
     let base_url = daemon_url
         .map(|u| u.to_string())
@@ -93,19 +93,52 @@ pub fn open_web_shell(project_root: &Path, daemon_url: Option<&str>) -> anyhow::
 
     let shell_url = format!("{}/shell", base_url.trim_end_matches('/'));
 
-    // Quick check: is the daemon reachable?
+    // Check if daemon is reachable; auto-start if not.
     let rt = tokio::runtime::Runtime::new()?;
-    let reachable = rt.block_on(async {
-        reqwest::Client::new()
-            .get(format!("{}/api/status", base_url.trim_end_matches('/')))
-            .timeout(std::time::Duration::from_secs(3))
-            .send()
-            .await
-            .is_ok()
-    });
+    let status = rt.block_on(async { fetch_status(&reqwest::Client::new(), &base_url).await });
 
-    if !reachable {
-        anyhow::bail!("Daemon not reachable at {base_url}. Start it with `ta daemon start` first.");
+    if status.version.is_empty() || status.version == "?" {
+        eprintln!("Daemon not running — starting...");
+        match super::daemon::ensure_running(project_root) {
+            Ok(()) => {
+                // Re-check after start.
+                let status =
+                    rt.block_on(async { fetch_status(&reqwest::Client::new(), &base_url).await });
+                if status.version.is_empty() || status.version == "?" {
+                    anyhow::bail!(
+                        "Daemon started but not reachable at {base_url}. Check logs: ta daemon log"
+                    );
+                }
+                eprintln!("Daemon started (v{}).", status.version);
+            }
+            Err(e) => {
+                anyhow::bail!("Cannot start daemon: {e}. Start manually: ta daemon start");
+            }
+        }
+    } else {
+        // Daemon is running — check for version/build mismatch and auto-restart.
+        let cli_build_sha = env!("TA_GIT_HASH");
+        let daemon_sha = &status.build_sha;
+        let sha_mismatch =
+            !daemon_sha.is_empty() && daemon_sha != "?" && daemon_sha != cli_build_sha;
+        let version_mismatch = status.version != env!("CARGO_PKG_VERSION");
+        if sha_mismatch || version_mismatch {
+            eprintln!(
+                "Daemon build mismatch ({} vs {}) — restarting...",
+                daemon_sha, cli_build_sha
+            );
+            match super::daemon::restart(project_root, None) {
+                Ok(_pid) => {
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                    let status = rt
+                        .block_on(async { fetch_status(&reqwest::Client::new(), &base_url).await });
+                    eprintln!("Daemon restarted (v{}).", status.version);
+                }
+                Err(e) => {
+                    eprintln!("Warning: daemon restart failed: {e}. Continuing anyway.");
+                }
+            }
+        }
     }
 
     println!("Opening web shell: {shell_url}");
