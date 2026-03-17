@@ -3916,50 +3916,26 @@ The output pipeline is: user types command → `send_input()` POST to daemon `/a
 ---
 
 ### v0.11.4.3 — Smart Input Routing & Intent Disambiguation
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Stop mis-routing natural language as commands when the first word happens to match a keyword. Add intent-aware disambiguation so the shell either routes correctly or presents "Did you mean..." options.
-
-**Problem**: The current router matches greedily on the first word:
-- "apply the ta-constitution.md to the codebase" → shortcut "apply" → `ta draft apply the ta-constitution.md...` → command error. User meant to ask the agent.
-- "Draft a note to my friend" → subcommand "draft" → `ta draft a note to my friend` → command error. User wanted the agent.
-- "draft aply 124235234" → subcommand "draft" → `ta draft aply 124235234` → fails. User made a typo — should suggest "draft apply 124235234".
-
-**Solution**: After keyword/shortcut match, validate that the expanded command looks syntactically plausible before routing as Command. Add a new `RouteDecision::Ambiguous` for cases that need user confirmation.
 
 #### Items
 
-1. [ ] **Known sub-subcommands map**: Define valid sub-subcommands for each ta subcommand (e.g., `draft` → `list|view|apply|approve|deny|build|close|gc`). Store in `ShellConfig` with sensible defaults. Used for syntactic validation after keyword match.
+1. [x] **Known sub-subcommands map**: `ShellConfig.sub_subcommands` HashMap with defaults for 18 subcommands (draft, goal, plan, agent, session, audit, plugin, release, workflow, adapter, office, config, policy, sync, verify, dev, gc, status). Loaded from `shell.toml` or defaults.
 
-2. [ ] **Edit distance function**: Simple Levenshtein distance (no external crate needed — ~20 lines). Used to detect typos: "aply" ≈ "apply" (distance 1), "deniy" ≈ "deny" (distance 1).
+2. [x] **Edit distance function**: Levenshtein distance using single-row DP (~25 lines). Detects typos within distance 2 for candidates ≥ 3 chars.
 
-3. [ ] **Natural language detection heuristic**: After keyword match, check if the remainder looks like NL rather than command args:
-   - Second word is a common English stopword ("the", "a", "an", "my", "to", "is", "for", "in", "on")
-   - Input contains >4 words with no flags (`--`) or ID-like tokens (hex, numeric)
-   - Input ends with `?` or starts with a question word after the keyword
-   If NL detected → route to Agent, ignoring the keyword match.
+3. [x] **Natural language detection heuristic**: `looks_like_natural_language()` checks 4 signals — stopword as first rest-word (30+ stopwords), question mark ending, question word after keyword (20+ question words), and >4 words without flags or ID-like tokens.
 
-4. [ ] **`RouteDecision::Ambiguous` variant**: New routing outcome with:
-   - `suggestions: Vec<String>` — corrected command forms
-   - `original_text: String` — what the user typed
-   - `agent_fallback: bool` — whether "Ask the agent" should be an option
+4. [x] **`RouteDecision::Ambiguous` variant**: New enum variant with `original: String`, `suggestions: Vec<RouteSuggestion>`. Each suggestion has `description`, `command`, and `is_agent` flag.
 
-5. [ ] **Disambiguation in `handle_input()`**: When `route_input` returns `Ambiguous`, return a JSON response with `routed_to: "ambiguous"` and the suggestions list. Do NOT execute any command.
+5. [x] **Disambiguation in `handle_input()`**: Returns `routed_to: "ambiguous"`, `ambiguous: true`, `message`, and `options` array with index/description/command/is_agent per option. No command executed.
 
-6. [ ] **TUI "Did you mean..." UI**: When the shell receives an ambiguous response, display numbered options:
-   ```
-   Did you mean:
-     1. draft apply 124235234
-     2. Ask the agent: "draft aply 124235234"
-   Enter 1 or 2 (or press Escape to cancel):
-   ```
-   User picks a number → re-dispatch. Escape cancels.
+6. [x] **TUI "Did you mean..." UI**: `PendingDisambiguation` state with numbered options. User enters a number to choose or Escape/Ctrl-C to cancel. Choice re-dispatches via `send_input` with the selected command or agent prompt.
 
-7. [ ] **Shortcut disambiguation**: Apply the same NL detection to shortcut expansions. "apply the constitution" should not expand via the "apply" shortcut — the word after "apply" is "the" (stopword), not a draft ID.
+7. [x] **Shortcut disambiguation**: `expand_shortcut_smart()` applies NL guard before shortcut expansion. "apply the constitution" → falls through to agent.
 
-8. [ ] **Tests**: Cover the key scenarios:
-   - `"apply the ta-constitution.md to the codebase"` → Agent (NL detected)
-   - `"Draft a note to my friend"` → Agent (NL detected, case-insensitive)
-   - `"draft aply 124235234"` → Ambiguous (typo, suggest "draft apply 124235234")
+8. [x] **Tests**: 20 new tests covering all 7 PLAN scenarios plus edge cases (36 total in input.rs).
    - `"draft apply abc123"` → Command (valid syntax)
    - `"draft list"` → Command (valid syntax)
    - `"run the tests please"` → Agent (NL after keyword)
