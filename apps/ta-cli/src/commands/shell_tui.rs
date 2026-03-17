@@ -1040,11 +1040,16 @@ async fn tui_event_loop(
         // The frame timer branch fires periodically to handle
         // rate-limited redraws for background-only updates.
 
-        let time_to_next_frame = if needs_draw {
-            frame_interval.saturating_sub(last_draw.elapsed())
+        // Use a longer timer interval when streaming agent output —
+        // no point waking 60x/sec if we only draw at 2fps.
+        let target_interval = if app.tailing_goal.is_some() && needs_draw {
+            Duration::from_millis(500)
+        } else if needs_draw {
+            frame_interval
         } else {
             Duration::from_millis(100)
         };
+        let time_to_next_frame = target_interval.saturating_sub(last_draw.elapsed());
 
         tokio::select! {
             biased;
@@ -1073,14 +1078,23 @@ async fn tui_event_loop(
                 }
                 app.latency_diag.busy_cycles += 1;
 
-                // Draw IMMEDIATELY after input so the user sees their
-                // keystroke without delay. However, when the bg channel
-                // is deeply backlogged (agent streaming), terminal.draw()
-                // blocks on stdout writes — the terminal emulator can't
-                // keep up, so write() blocks, starving the next select!
-                // cycle. In that case, defer to the rate-limited draw.
+                // Draw after input so the user sees their keystroke.
+                //
+                // When agent output is actively streaming, the terminal
+                // emulator is busy rendering escape sequences. Drawing
+                // on every keystroke floods it further, delaying its
+                // forwarding of keyboard input through the pty. To avoid
+                // this, rate-limit input draws to 20fps (50ms) while
+                // streaming — still fast enough for responsive typing,
+                // but gentle enough to let the terminal breathe.
+                let streaming = app.tailing_goal.is_some();
+                let min_input_draw = if streaming {
+                    Duration::from_millis(50)
+                } else {
+                    Duration::ZERO
+                };
                 let bg_backlog = rx.len();
-                if bg_backlog < 50 {
+                if bg_backlog < 50 && last_draw.elapsed() >= min_input_draw {
                     let draw_start = Instant::now();
                     update_wrap_cache(terminal, app);
                     terminal.draw(|f| draw_ui(f, app))?;
@@ -1122,10 +1136,17 @@ async fn tui_event_loop(
         }
 
         // ── Draw (rate-limited, for bg-only updates) ─────────────────
-        // When the bg channel is deeply backlogged, throttle draws to
-        // 5fps (200ms) instead of 60fps — drawing is the most expensive
-        // operation and each draw() can block on stdout writes.
-        let effective_interval = if app.latency_diag.last_bg_depth > 50 {
+        // Throttle draws to avoid saturating the terminal emulator with
+        // escape sequences. When the emulator can't keep up, it delays
+        // forwarding keystrokes through the pty — causing the "lost input"
+        // sensation where users press keys but nothing appears.
+        //
+        // When actively tailing agent output, limit to 2fps (500ms).
+        // This gives the terminal emulator ample time to process both
+        // stdout rendering AND stdin forwarding between frames.
+        let effective_interval = if app.tailing_goal.is_some() {
+            Duration::from_millis(500)
+        } else if app.latency_diag.last_bg_depth > 50 {
             Duration::from_millis(200)
         } else {
             frame_interval
