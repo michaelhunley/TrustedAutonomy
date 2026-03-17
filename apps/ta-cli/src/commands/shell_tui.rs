@@ -421,10 +421,6 @@ struct App {
     prompt_dismiss_after_output_secs: u64,
     /// Seconds to wait for Q&A agent prompt verification (v0.11.2.5).
     prompt_verify_timeout_secs: u64,
-    /// Sender for the dedicated input thread (v0.11.4.2 item 11).
-    /// When set, terminal events arrive via this channel instead of inline polling.
-    /// Each event is stamped with the OS-read Instant for latency tracking.
-    input_rx: Option<tokio::sync::mpsc::UnboundedReceiver<StampedEvent>>,
     /// Active text selection (unused — native terminal selection handles this).
     #[allow(dead_code)]
     selection: Option<Selection>,
@@ -474,7 +470,6 @@ impl App {
             project_root,
             prompt_dismiss_after_output_secs: 5,
             prompt_verify_timeout_secs: 10,
-            input_rx: None,
             selection: None,
             output_area: ratatui::layout::Rect::default(),
             latency_diag: LatencyDiag::new(),
@@ -977,9 +972,15 @@ async fn run_tui(
             }
         }
     });
-    app.input_rx = Some(input_rx);
-
-    let result = tui_event_loop(&mut terminal, &mut app, &mut rx, &client, tx.clone()).await;
+    let result = tui_event_loop(
+        &mut terminal,
+        &mut app,
+        input_rx,
+        &mut rx,
+        &client,
+        tx.clone(),
+    )
+    .await;
 
     // Cleanup.
     running.store(false, Ordering::Relaxed);
@@ -1001,6 +1002,7 @@ async fn run_tui(
 async fn tui_event_loop(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     app: &mut App,
+    mut input_rx: tokio::sync::mpsc::UnboundedReceiver<StampedEvent>,
     rx: &mut tokio::sync::mpsc::UnboundedReceiver<TuiMessage>,
     client: &reqwest::Client,
     tx: tokio::sync::mpsc::UnboundedSender<TuiMessage>,
@@ -1012,33 +1014,125 @@ async fn tui_event_loop(
     // Opened lazily on `:latency on`, closed on `:latency off`.
     let mut latency_log: Option<std::fs::File> = None;
 
-    // Frame rate limiter: draw at most every 16ms (~60fps).
+    // Frame rate limiter for background-only updates: 16ms (~60fps).
+    // Input-triggered draws bypass this and happen immediately.
     let frame_interval = Duration::from_millis(16);
     let mut last_draw = Instant::now() - frame_interval;
     let mut needs_draw = true;
 
+    // Initial draw.
+    terminal.draw(|f| draw_ui(f, app))?;
+
     loop {
         app.latency_diag.cycles += 1;
 
-        // ── Draw (rate-limited) ────────────────────────────────────
-        if needs_draw && last_draw.elapsed() >= frame_interval {
-            let draw_start = Instant::now();
-            // Update visual line cache if terminal width changed.
-            let cur_width = terminal.size().map(|s| s.width as usize).unwrap_or(80);
-            if cur_width != app.cached_wrap_width {
-                app.cached_wrap_width = cur_width;
-                app.cached_visual_lines = app
-                    .output
-                    .iter()
-                    .map(|ol| {
-                        if ol.text.is_empty() || cur_width == 0 {
-                            1
-                        } else {
-                            ol.text.len().div_ceil(cur_width)
-                        }
-                    })
-                    .sum();
+        if !app.running {
+            break;
+        }
+
+        // ── Event-driven select ──────────────────────────────────────
+        //
+        // `tokio::select!` with `biased` wakes INSTANTLY when data
+        // arrives on either channel — no polling, no sleeping, no
+        // scheduler starvation. Input is checked first (biased) so
+        // keystrokes always take priority over background messages.
+        //
+        // The frame timer branch fires periodically to handle
+        // rate-limited redraws for background-only updates.
+
+        let time_to_next_frame = if needs_draw {
+            frame_interval.saturating_sub(last_draw.elapsed())
+        } else {
+            Duration::from_millis(100)
+        };
+
+        tokio::select! {
+            biased;
+
+            // ── Input (highest priority) ─────────────────────────────
+            Some(stamped) = input_rx.recv() => {
+                let handle_start = Instant::now();
+
+                // Process this event + drain any more that are ready.
+                process_input_event(app, stamped, &mut latency_log, client, &tx).await;
+                while let Ok(more) = input_rx.try_recv() {
+                    process_input_event(app, more, &mut latency_log, client, &tx).await;
+                }
+
+                let handle_us = handle_start.elapsed().as_micros() as u64;
+                app.latency_diag.record_input_handle(handle_us);
+                if app.latency_diag.enabled {
+                    if let Some(ref mut lf) = latency_log {
+                        let _ = writeln!(
+                            lf,
+                            "{} INPUT_BATCH handle={}µs",
+                            chrono::Local::now().format("%H:%M:%S%.3f"),
+                            handle_us,
+                        );
+                    }
+                }
+                app.latency_diag.busy_cycles += 1;
+
+                // Draw IMMEDIATELY after input so the user sees their
+                // keystroke without delay. However, when the bg channel
+                // is deeply backlogged (agent streaming), terminal.draw()
+                // blocks on stdout writes — the terminal emulator can't
+                // keep up, so write() blocks, starving the next select!
+                // cycle. In that case, defer to the rate-limited draw.
+                let bg_backlog = rx.len();
+                if bg_backlog < 50 {
+                    let draw_start = Instant::now();
+                    update_wrap_cache(terminal, app);
+                    terminal.draw(|f| draw_ui(f, app))?;
+                    last_draw = Instant::now();
+                    needs_draw = false;
+                    app.latency_diag
+                        .record_draw(draw_start.elapsed().as_micros() as u64);
+                } else {
+                    needs_draw = true;
+                }
             }
+
+            // ── Background messages ──────────────────────────────────
+            Some(msg) = rx.recv() => {
+                let bg_start = Instant::now();
+                app.latency_diag.last_bg_depth = rx.len() + 1;
+                process_background_message(app, msg, client, &tx).await;
+
+                // Drain more bg messages up to a batch limit.
+                const BG_BATCH_LIMIT: usize = 200;
+                let mut bg_count = 1usize;
+                while let Ok(more) = rx.try_recv() {
+                    process_background_message(app, more, client, &tx).await;
+                    bg_count += 1;
+                    if bg_count >= BG_BATCH_LIMIT {
+                        break;
+                    }
+                }
+                app.latency_diag
+                    .record_bg(bg_start.elapsed().as_micros() as u64);
+                app.latency_diag.busy_cycles += 1;
+                needs_draw = true;
+            }
+
+            // ── Frame timer (periodic wake for bg redraws) ───────────
+            _ = tokio::time::sleep(time_to_next_frame) => {
+                app.latency_diag.idle_cycles += 1;
+            }
+        }
+
+        // ── Draw (rate-limited, for bg-only updates) ─────────────────
+        // When the bg channel is deeply backlogged, throttle draws to
+        // 5fps (200ms) instead of 60fps — drawing is the most expensive
+        // operation and each draw() can block on stdout writes.
+        let effective_interval = if app.latency_diag.last_bg_depth > 50 {
+            Duration::from_millis(200)
+        } else {
+            frame_interval
+        };
+        if needs_draw && last_draw.elapsed() >= effective_interval {
+            let draw_start = Instant::now();
+            update_wrap_cache(terminal, app);
             terminal.draw(|f| draw_ui(f, app))?;
             last_draw = Instant::now();
             needs_draw = false;
@@ -1046,158 +1140,8 @@ async fn tui_event_loop(
                 .record_draw(draw_start.elapsed().as_micros() as u64);
         }
 
-        if !app.running {
-            break;
-        }
-
-        // ── Poll-based event processing ────────────────────────────
-        //
-        // Input-first poll: always drain input via try_recv() (non-blocking),
-        // then process one bg message. When both channels are empty, YIELD
-        // to the tokio runtime via tokio::time::sleep so background tasks
-        // (SSE streams, HTTP requests, tail streams) can make progress.
-        //
-        // CRITICAL: We must NOT use std::thread::sleep here. This is an
-        // async fn on a tokio worker thread — std::thread::sleep blocks
-        // the entire worker, starving all other tasks and creating the
-        // exact backpressure that causes input latency.
-        //
-        // Worst-case input latency: 1ms (the tokio::time::sleep quantum).
-
-        let mut had_input = false;
-        let mut did_work = false;
-
-        // 1. Drain ALL pending input events (always first priority).
-        let mut pending_inputs = Vec::new();
-        if let Some(ref mut input_rx) = app.input_rx {
-            while let Ok(ev) = input_rx.try_recv() {
-                pending_inputs.push(ev);
-            }
-        }
-        if !pending_inputs.is_empty() {
-            let handle_start = Instant::now();
-            for stamped in pending_inputs {
-                // Record OS→event-loop latency.
-                let transit_us = stamped.os_read_at.elapsed().as_micros() as u64;
-                app.latency_diag.record_input_latency(transit_us);
-
-                // Per-event trace to log file (not TUI — too noisy).
-                if app.latency_diag.enabled {
-                    if let Some(ref mut lf) = latency_log {
-                        let ev_desc = match &stamped.event {
-                            Event::Key(k) => {
-                                format!("key:{:?}+{:?} kind={:?}", k.code, k.modifiers, k.kind)
-                            }
-                            Event::Paste(_) => "paste".to_string(),
-                            Event::Mouse(m) => format!("mouse:{:?}", m.kind),
-                            Event::Resize(w, h) => format!("resize:{}x{}", w, h),
-                            _ => "other".to_string(),
-                        };
-                        let _ = writeln!(
-                            lf,
-                            "{} EVENT transit={}µs ev={}",
-                            chrono::Local::now().format("%H:%M:%S%.3f"),
-                            transit_us,
-                            ev_desc,
-                        );
-                    }
-                }
-
-                let input_before = if app.latency_diag.enabled {
-                    Some(app.input.clone())
-                } else {
-                    None
-                };
-                handle_terminal_event(app, stamped.event, client, &tx).await;
-                // Log input buffer change after handling (traces char insertion).
-                if let Some(before) = input_before {
-                    if app.input != before {
-                        if let Some(ref mut lf) = latency_log {
-                            let _ = writeln!(
-                                lf,
-                                "{} INPUT_CHANGED len={}→{} buf={:?}",
-                                chrono::Local::now().format("%H:%M:%S%.3f"),
-                                before.len(),
-                                app.input.len(),
-                                &app.input,
-                            );
-                        }
-                    }
-                }
-            }
-            let handle_us = handle_start.elapsed().as_micros() as u64;
-            app.latency_diag.record_input_handle(handle_us);
-
-            // Log batch processing time.
-            if app.latency_diag.enabled {
-                if let Some(ref mut lf) = latency_log {
-                    let _ = writeln!(
-                        lf,
-                        "{} INPUT_BATCH handle={}µs",
-                        chrono::Local::now().format("%H:%M:%S%.3f"),
-                        handle_us,
-                    );
-                }
-            }
-            had_input = true;
-            did_work = true;
-        }
-
-        // 2. Process ONE background message (non-blocking).
-        // Sample channel depth for diagnostics.
-        if let Ok(msg) = rx.try_recv() {
-            let bg_start = Instant::now();
-            // Approximate bg channel depth: count what's available without consuming.
-            // (We just took one, so actual depth is what remains + 1.)
-            app.latency_diag.last_bg_depth = rx.len() + 1;
-            process_background_message(app, msg, client, &tx).await;
-            app.latency_diag
-                .record_bg(bg_start.elapsed().as_micros() as u64);
-            did_work = true;
-        }
-
-        if did_work {
-            app.latency_diag.busy_cycles += 1;
-            needs_draw = true;
-
-            // CRITICAL: If input was processed, draw IMMEDIATELY — don't
-            // wait for the 16ms frame interval. The user must see their
-            // keystroke reflected without perceptible delay. Only bg-only
-            // updates are rate-limited to 60fps.
-            if had_input {
-                let draw_start = Instant::now();
-                let cur_width = terminal.size().map(|s| s.width as usize).unwrap_or(80);
-                if cur_width != app.cached_wrap_width {
-                    app.cached_wrap_width = cur_width;
-                    app.cached_visual_lines = app
-                        .output
-                        .iter()
-                        .map(|ol| {
-                            if ol.text.is_empty() || cur_width == 0 {
-                                1
-                            } else {
-                                ol.text.len().div_ceil(cur_width)
-                            }
-                        })
-                        .sum();
-                }
-                terminal.draw(|f| draw_ui(f, app))?;
-                last_draw = Instant::now();
-                needs_draw = false;
-                app.latency_diag
-                    .record_draw(draw_start.elapsed().as_micros() as u64);
-            }
-        } else {
-            app.latency_diag.idle_cycles += 1;
-            // Nothing pending — yield to the tokio runtime for 1ms.
-            // This lets background tasks (SSE, HTTP, tail streams) make progress.
-            // On wake, we immediately loop back to check input first.
-            tokio::time::sleep(Duration::from_millis(1)).await;
-        }
-
         // Emit periodic latency report if diagnostics are on.
         if app.latency_diag.enabled {
-            // Lazily open the log file.
             if latency_log.is_none() {
                 let log_dir = app.project_root.join(".ta");
                 let _ = std::fs::create_dir_all(&log_dir);
@@ -1216,7 +1160,6 @@ async fn tui_event_loop(
             }
             if let Some(report) = app.latency_diag.report() {
                 app.push_output(OutputLine::event(report.clone()));
-                // Also write to the latency log file for external analysis.
                 if let Some(ref mut lf) = latency_log {
                     let _ = writeln!(
                         lf,
@@ -1227,11 +1170,85 @@ async fn tui_event_loop(
                 }
             }
         } else if latency_log.is_some() {
-            // Close the log file when diagnostics are turned off.
             latency_log = None;
         }
     }
     Ok(())
+}
+
+/// Process a single input event: record latency, log, and dispatch.
+async fn process_input_event(
+    app: &mut App,
+    stamped: StampedEvent,
+    latency_log: &mut Option<std::fs::File>,
+    client: &reqwest::Client,
+    tx: &tokio::sync::mpsc::UnboundedSender<TuiMessage>,
+) {
+    use std::io::Write;
+
+    let transit_us = stamped.os_read_at.elapsed().as_micros() as u64;
+    app.latency_diag.record_input_latency(transit_us);
+
+    if app.latency_diag.enabled {
+        if let Some(ref mut lf) = latency_log {
+            let ev_desc = match &stamped.event {
+                Event::Key(k) => {
+                    format!("key:{:?}+{:?} kind={:?}", k.code, k.modifiers, k.kind)
+                }
+                Event::Paste(_) => "paste".to_string(),
+                Event::Mouse(m) => format!("mouse:{:?}", m.kind),
+                Event::Resize(w, h) => format!("resize:{}x{}", w, h),
+                _ => "other".to_string(),
+            };
+            let _ = writeln!(
+                lf,
+                "{} EVENT transit={}µs ev={}",
+                chrono::Local::now().format("%H:%M:%S%.3f"),
+                transit_us,
+                ev_desc,
+            );
+        }
+    }
+
+    let input_before = if app.latency_diag.enabled {
+        Some(app.input.clone())
+    } else {
+        None
+    };
+    handle_terminal_event(app, stamped.event, client, tx).await;
+    if let Some(before) = input_before {
+        if app.input != before {
+            if let Some(ref mut lf) = latency_log {
+                let _ = writeln!(
+                    lf,
+                    "{} INPUT_CHANGED len={}→{} buf={:?}",
+                    chrono::Local::now().format("%H:%M:%S%.3f"),
+                    before.len(),
+                    app.input.len(),
+                    &app.input,
+                );
+            }
+        }
+    }
+}
+
+/// Update the visual line cache if terminal width changed.
+fn update_wrap_cache(terminal: &Terminal<CrosstermBackend<Stdout>>, app: &mut App) {
+    let cur_width = terminal.size().map(|s| s.width as usize).unwrap_or(80);
+    if cur_width != app.cached_wrap_width {
+        app.cached_wrap_width = cur_width;
+        app.cached_visual_lines = app
+            .output
+            .iter()
+            .map(|ol| {
+                if ol.text.is_empty() || cur_width == 0 {
+                    1
+                } else {
+                    ol.text.len().div_ceil(cur_width)
+                }
+            })
+            .sum();
+    }
 }
 
 /// Process a single background message (SSE event, status update, etc.)
@@ -4869,7 +4886,6 @@ mod tests {
         );
         assert!(app.selection.is_none());
         assert_eq!(app.output_area, ratatui::layout::Rect::default());
-        assert!(app.input_rx.is_none());
     }
 
     #[test]
@@ -4990,7 +5006,7 @@ mod tests {
             None,
             std::path::PathBuf::from("/tmp"),
         );
-        app.input_rx = Some(input_rx);
+        let mut input_rx = input_rx;
 
         // Flood background channel with 10,000 agent output messages.
         for i in 0..10_000 {
@@ -5011,10 +5027,8 @@ mod tests {
 
         // Drain input (should find 'x' immediately).
         let mut pending_inputs = Vec::new();
-        if let Some(ref mut irx) = app.input_rx {
-            while let Ok(stamped) = irx.try_recv() {
-                pending_inputs.push(stamped);
-            }
+        while let Ok(stamped) = input_rx.try_recv() {
+            pending_inputs.push(stamped);
         }
         let input_count = pending_inputs.len();
 
@@ -5107,7 +5121,7 @@ mod tests {
             None,
             std::path::PathBuf::from("/tmp"),
         );
-        app.input_rx = Some(input_rx);
+        let mut input_rx = input_rx;
 
         // Send 1000 bg messages.
         for i in 0..1000 {
@@ -5129,10 +5143,8 @@ mod tests {
 
             // Step 1: drain input.
             let mut pending = Vec::new();
-            if let Some(ref mut irx) = app.input_rx {
-                while let Ok(stamped) = irx.try_recv() {
-                    pending.push(stamped);
-                }
+            while let Ok(stamped) = input_rx.try_recv() {
+                pending.push(stamped);
             }
             if !pending.is_empty() {
                 for stamped in pending {
