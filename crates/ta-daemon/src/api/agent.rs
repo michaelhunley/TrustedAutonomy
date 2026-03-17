@@ -131,6 +131,15 @@ impl AgentSessionManager {
             session.prompt_count += 1;
         }
     }
+
+    /// Check if a session exists and is still running.
+    pub async fn session_exists(&self, session_id: &str) -> bool {
+        self.sessions
+            .lock()
+            .await
+            .get(session_id)
+            .is_some_and(|s| s.status == SessionStatus::Running)
+    }
 }
 
 // ── Persistent QA agent (v0.11.4.2 item 6-10) ──────────────────
@@ -160,6 +169,8 @@ pub struct PersistentQaAgent {
     project_root: std::path::PathBuf,
     /// Last activity timestamp for idle timeout.
     last_active: Mutex<std::time::Instant>,
+    /// Whether a first prompt has been sent (enables --continue for chaining).
+    has_conversation: Mutex<bool>,
 }
 
 #[allow(dead_code)] // Fields used when multi-turn stdin mode is enabled (future).
@@ -181,6 +192,7 @@ impl PersistentQaAgent {
             config,
             project_root,
             last_active: Mutex::new(std::time::Instant::now()),
+            has_conversation: Mutex::new(false),
         }
     }
 
@@ -275,10 +287,9 @@ impl PersistentQaAgent {
     ) -> Result<(), String> {
         *self.last_active.lock().await = std::time::Instant::now();
 
-        // For claude --print, each question is a separate invocation since
-        // --print mode doesn't support multi-turn stdin. We use the persistent
-        // wrapper to manage restart logic, crash recovery, and lifecycle.
-        let (binary, args) = resolve_agent_command(&self.agent, prompt)?;
+        // Check if we should chain to the previous conversation.
+        let continue_conversation = *self.has_conversation.lock().await;
+        let (binary, args) = resolve_agent_command(&self.agent, prompt, continue_conversation)?;
 
         let _ = tx.send(crate::api::goal_output::OutputLine {
             stream: "stderr",
@@ -286,6 +297,14 @@ impl PersistentQaAgent {
         });
 
         let timeout = std::time::Duration::from_secs(self.config.idle_timeout_secs.max(60));
+
+        tracing::info!(
+            binary = %binary,
+            args = ?args,
+            cwd = %self.project_root.display(),
+            timeout_secs = timeout.as_secs(),
+            "QA agent: spawning subprocess"
+        );
 
         let result = tokio::process::Command::new(&binary)
             .args(&args)
@@ -298,6 +317,9 @@ impl PersistentQaAgent {
 
         match result {
             Ok(mut child) => {
+                let pid = child.id().unwrap_or(0);
+                tracing::info!(pid, binary = %binary, "QA agent: subprocess started");
+
                 let stdout = child.stdout.take();
                 let stderr = child.stderr.take();
                 let tx2 = tx.clone();
@@ -305,12 +327,15 @@ impl PersistentQaAgent {
                 let stdout_task = tokio::spawn(async move {
                     if let Some(out) = stdout {
                         let mut reader = BufReader::new(out).lines();
+                        let mut count = 0u64;
                         while let Ok(Some(line)) = reader.next_line().await {
+                            count += 1;
                             let _ = tx.send(crate::api::goal_output::OutputLine {
                                 stream: "stdout",
                                 line,
                             });
                         }
+                        tracing::debug!(lines = count, "QA agent: stdout stream ended");
                     }
                 });
 
@@ -318,6 +343,7 @@ impl PersistentQaAgent {
                     if let Some(err) = stderr {
                         let mut reader = BufReader::new(err).lines();
                         while let Ok(Some(line)) = reader.next_line().await {
+                            tracing::debug!(line = %line, "QA agent stderr");
                             let _ = tx2.send(crate::api::goal_output::OutputLine {
                                 stream: "stderr",
                                 line,
@@ -326,9 +352,18 @@ impl PersistentQaAgent {
                     }
                 });
 
+                let started = std::time::Instant::now();
                 let status = tokio::time::timeout(timeout, child.wait()).await;
+                let elapsed = started.elapsed();
                 let _ = stdout_task.await;
                 let _ = stderr_task.await;
+
+                tracing::info!(
+                    pid,
+                    elapsed_secs = elapsed.as_secs_f64(),
+                    result = ?status.as_ref().map(|r| r.as_ref().map(|s| s.code())),
+                    "QA agent: subprocess finished"
+                );
 
                 match status {
                     Ok(Ok(s)) if !s.success() => {
@@ -358,8 +393,9 @@ impl PersistentQaAgent {
                         ));
                     }
                     _ => {
-                        // Success — reset restart counter.
+                        // Success — reset restart counter and mark conversation as active.
                         *self.restart_count.lock().await = 0;
+                        *self.has_conversation.lock().await = true;
                     }
                 }
             }
@@ -416,6 +452,97 @@ impl PersistentQaAgent {
     #[allow(dead_code)] // Used in tests and shell status display.
     pub async fn restart_count(&self) -> u32 {
         *self.restart_count.lock().await
+    }
+}
+
+/// Background supervisor that ensures a default agent session exists.
+///
+/// On daemon boot, creates a session record via `AgentSessionManager` so that
+/// the first `/api/input` or `/api/agent/ask` request doesn't have cold-start
+/// latency. If the session gets stopped, the supervisor recreates it (up to
+/// `max_restarts`). Configurable via `[shell.qa_agent]` in daemon.toml;
+/// set `auto_start = false` to disable.
+pub async fn auto_spawn_supervisor(
+    state: Arc<super::AppState>,
+    shutdown: Arc<tokio::sync::Notify>,
+) {
+    let config = state.persistent_qa.config.clone();
+    if !config.auto_start {
+        tracing::info!("Agent auto-start disabled (shell.qa_agent.auto_start = false)");
+        return;
+    }
+
+    let agent_name = config.agent.clone();
+    let max_restarts = config.max_restarts;
+    let mut restart_count: u32 = 0;
+
+    tracing::info!(
+        agent = %agent_name,
+        max_restarts,
+        "Auto-spawn supervisor starting"
+    );
+
+    // Brief delay to let the daemon fully initialize.
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+    loop {
+        // Create or reuse a session for the default agent.
+        let result = state
+            .agent_sessions
+            .get_or_create_default(&agent_name)
+            .await;
+
+        match result {
+            Ok(session) => {
+                tracing::info!(
+                    session_id = %session.session_id,
+                    agent = %agent_name,
+                    "Auto-spawn: agent session ready"
+                );
+                restart_count = 0;
+
+                // Monitor: check every 30s if session is still alive.
+                let sid = session.session_id.clone();
+                loop {
+                    tokio::select! {
+                        _ = shutdown.notified() => {
+                            tracing::info!("Auto-spawn: shutdown requested");
+                            state.agent_sessions.stop_session(&sid).await;
+                            return;
+                        }
+                        _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => {
+                            if !state.agent_sessions.session_exists(&sid).await {
+                                tracing::warn!(
+                                    session_id = %sid,
+                                    "Auto-spawn: session ended — will recreate"
+                                );
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Auto-spawn: failed to create session");
+            }
+        }
+
+        restart_count += 1;
+        if restart_count > max_restarts {
+            tracing::error!(
+                restart_count,
+                max_restarts,
+                "Auto-spawn: max restarts exceeded — supervisor stopping"
+            );
+            return;
+        }
+
+        let backoff = std::time::Duration::from_secs(5 * restart_count as u64);
+        tracing::info!(backoff_secs = backoff.as_secs(), "Auto-spawn: backoff");
+        tokio::select! {
+            _ = shutdown.notified() => return,
+            _ = tokio::time::sleep(backoff) => {}
+        }
     }
 }
 
@@ -530,10 +657,13 @@ pub async fn ask_agent(
                     prompt.len()
                 );
 
+                tracing::info!(request_id = %req_id, subscribers = tx.receiver_count(), "QA ask: starting");
                 match persistent_qa.ask(&prompt, tx.clone()).await {
-                    Ok(()) => {}
+                    Ok(()) => {
+                        tracing::info!(request_id = %req_id, "QA ask: completed successfully");
+                    }
                     Err(e) => {
-                        tracing::warn!("Persistent QA agent error: {}: request={}", e, req_id,);
+                        tracing::warn!(request_id = %req_id, error = %e, "QA ask: agent error");
                         let _ = tx.send(OutputLine {
                             stream: "stderr",
                             line: format!("[agent error] {}", e),
@@ -542,6 +672,7 @@ pub async fn ask_agent(
                 }
 
                 goal_output.remove_channel(&req_id).await;
+                tracing::debug!(request_id = %req_id, "QA ask: channel removed");
             });
 
             // Return immediate ack with the request ID for streaming.
@@ -577,12 +708,21 @@ pub async fn ask_agent(
 /// bare prompts — these are designed for goal execution (`ta run`), not Q&A.
 /// Configure `qa_agent` in `[agent]` section of `daemon.toml` to route Q&A
 /// to a prompt-capable agent.
-fn resolve_agent_command(agent: &str, prompt: &str) -> Result<(String, Vec<String>), String> {
+fn resolve_agent_command(
+    agent: &str,
+    prompt: &str,
+    continue_conversation: bool,
+) -> Result<(String, Vec<String>), String> {
     match agent {
-        "claude-code" | "claude" => Ok((
-            "claude".to_string(),
-            vec!["--print".to_string(), "-p".to_string(), prompt.to_string()],
-        )),
+        "claude-code" | "claude" => {
+            let mut args = vec!["--print".to_string()];
+            if continue_conversation {
+                args.push("--continue".to_string());
+            }
+            args.push("-p".to_string());
+            args.push(prompt.to_string());
+            Ok(("claude".to_string(), args))
+        }
         "codex" => Ok((
             "codex".to_string(),
             vec![
@@ -709,27 +849,34 @@ mod tests {
 
     #[test]
     fn resolve_claude_code_agent() {
-        let (bin, args) = resolve_agent_command("claude-code", "hello").unwrap();
+        let (bin, args) = resolve_agent_command("claude-code", "hello", false).unwrap();
         assert_eq!(bin, "claude");
         assert_eq!(args, vec!["--print", "-p", "hello"]);
     }
 
     #[test]
+    fn resolve_claude_code_continue() {
+        let (bin, args) = resolve_agent_command("claude-code", "follow up", true).unwrap();
+        assert_eq!(bin, "claude");
+        assert_eq!(args, vec!["--print", "--continue", "-p", "follow up"]);
+    }
+
+    #[test]
     fn resolve_claude_alias() {
-        let (bin, _args) = resolve_agent_command("claude", "hi").unwrap();
+        let (bin, _args) = resolve_agent_command("claude", "hi", false).unwrap();
         assert_eq!(bin, "claude");
     }
 
     #[test]
     fn resolve_codex_agent() {
-        let (bin, args) = resolve_agent_command("codex", "fix bug").unwrap();
+        let (bin, args) = resolve_agent_command("codex", "fix bug", false).unwrap();
         assert_eq!(bin, "codex");
         assert_eq!(args, vec!["--quiet", "--prompt", "fix bug"]);
     }
 
     #[test]
     fn resolve_claude_flow_rejected() {
-        let result = resolve_agent_command("claude-flow", "What is this project?");
+        let result = resolve_agent_command("claude-flow", "What is this project?", false);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(
@@ -746,7 +893,7 @@ mod tests {
 
     #[test]
     fn resolve_unknown_agent() {
-        let (bin, args) = resolve_agent_command("my-agent", "test").unwrap();
+        let (bin, args) = resolve_agent_command("my-agent", "test", false).unwrap();
         assert_eq!(bin, "my-agent");
         assert_eq!(args, vec!["test"]);
     }

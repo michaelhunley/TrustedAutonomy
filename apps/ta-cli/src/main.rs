@@ -198,15 +198,22 @@ enum Commands {
         #[command(subcommand)]
         command: commands::release::ReleaseCommands,
     },
-    /// Interactive TA Shell -- full TUI client for the daemon.
+    /// Interactive TA Shell — opens the web shell in your browser (default).
+    ///
+    /// Use --tui or TA_SHELL_TUI=1 for the terminal-based shell.
     Shell {
         /// Generate default .ta/shell.toml config and exit.
         #[arg(long)]
         init: bool,
+        /// Use terminal TUI shell instead of web UI.
+        /// Can also be enabled with TA_SHELL_TUI=1 env var.
+        #[arg(long)]
+        tui: bool,
         /// Use classic line-mode shell (rustyline) instead of TUI.
+        /// Implies --tui.
         #[arg(long)]
         classic: bool,
-        /// Attach to an existing agent session (ID or prefix).
+        /// Attach to an existing agent session (ID or prefix). Implies --tui.
         #[arg(long)]
         attach: Option<String>,
         /// Daemon URL override (default: from .ta/daemon.toml or http://127.0.0.1:7700).
@@ -532,17 +539,32 @@ fn main() -> anyhow::Result<()> {
         Commands::Release { command } => commands::release::execute(command, &config),
         Commands::Shell {
             init,
+            tui,
             classic,
             attach,
             url,
-        } => commands::shell::execute(
-            &project_root,
-            attach.as_deref(),
-            url.as_deref(),
-            *init,
-            *classic,
-            cli.no_version_check,
-        ),
+        } => {
+            // TUI mode if --tui, --classic, --attach, or TA_SHELL_TUI=1.
+            let use_tui = *tui
+                || *classic
+                || attach.is_some()
+                || std::env::var("TA_SHELL_TUI").is_ok_and(|v| v == "1");
+
+            if use_tui {
+                commands::shell::execute(
+                    &project_root,
+                    attach.as_deref(),
+                    url.as_deref(),
+                    *init,
+                    *classic,
+                    cli.no_version_check,
+                )
+            } else if *init {
+                commands::shell::init_config(&project_root)
+            } else {
+                commands::shell::open_web_shell(&project_root, url.as_deref())
+            }
+        }
         Commands::Daemon { command } => commands::daemon::execute(command, &project_root),
         Commands::Office { command } => commands::office::execute(command, &project_root),
         Commands::Plugin { command } => {

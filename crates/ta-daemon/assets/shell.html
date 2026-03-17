@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ta shell</title>
+<style>
+:root {
+  --bg: #1a1a2e;
+  --bg-input: #16213e;
+  --fg: #e0e0e0;
+  --fg-dim: #888;
+  --fg-cmd: #00d2ff;
+  --fg-agent: #f0f0f0;
+  --fg-stderr: #ff6b6b;
+  --fg-event: #ffd93d;
+  --fg-info: #6bcb77;
+  --fg-notify: #ff9f43;
+  --border: #333;
+  --accent: #4361ee;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; overflow: hidden; }
+body {
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 14px;
+  background: var(--bg);
+  color: var(--fg);
+  display: flex;
+  flex-direction: column;
+}
+#output {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 12px;
+  scroll-behavior: smooth;
+}
+#output .line { white-space: pre-wrap; word-break: break-all; line-height: 1.5; }
+#output .line.cmd { color: var(--fg-cmd); }
+#output .line.agent { color: var(--fg-agent); }
+#output .line.stderr { color: var(--fg-stderr); }
+#output .line.event { color: var(--fg-event); }
+#output .line.info { color: var(--fg-info); }
+#output .line.notify { color: var(--fg-notify); font-weight: bold; }
+#output .line.separator { color: var(--fg-dim); border-top: 1px solid var(--border); padding-top: 4px; margin-top: 4px; }
+#output .line .ts { color: var(--fg-dim); font-size: 12px; margin-right: 6px; user-select: none; }
+#input-bar {
+  display: flex;
+  border-top: 1px solid var(--border);
+  background: var(--bg-input);
+  padding: 8px 12px;
+  align-items: center;
+  gap: 8px;
+}
+#prompt { color: var(--fg-cmd); white-space: nowrap; user-select: none; }
+#input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--fg);
+  font-family: inherit;
+  font-size: inherit;
+  caret-color: var(--accent);
+}
+#status-bar {
+  display: flex;
+  gap: 12px;
+  padding: 4px 12px;
+  background: #0f0f23;
+  color: var(--fg-dim);
+  font-size: 12px;
+  border-top: 1px solid var(--border);
+  user-select: none;
+  align-items: center;
+}
+#status-bar .connected { color: var(--fg-info); }
+#status-bar .disconnected { color: var(--fg-stderr); }
+#status-bar .pending { color: var(--fg-notify); }
+.spinner { display: inline-block; animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div id="output"></div>
+<div id="input-bar">
+  <span id="prompt">ta&gt;</span>
+  <input id="input" type="text" autocomplete="off" autofocus placeholder="Type a command or message...">
+</div>
+<div id="status-bar">
+  <span id="conn-status" class="disconnected">connecting...</span>
+  <span id="project-info"></span>
+  <span id="agent-framework"></span>
+  <span id="agent-info"></span>
+  <span id="pending-info"></span>
+  <span style="flex:1"></span>
+  <span id="version-info"></span>
+</div>
+
+<script>
+(function() {
+  'use strict';
+
+  const output = document.getElementById('output');
+  const input = document.getElementById('input');
+  const connStatus = document.getElementById('conn-status');
+  const projectInfo = document.getElementById('project-info');
+  const agentFramework = document.getElementById('agent-framework');
+  const agentInfo = document.getElementById('agent-info');
+  const pendingInfo = document.getElementById('pending-info');
+  const versionInfo = document.getElementById('version-info');
+
+  const BASE = window.location.origin;
+  let history = [];
+  let historyIdx = -1;
+  let savedInput = '';
+  let autoScroll = true;
+  let sseEvents = null;
+  let sseGoals = {};  // Map of goalId -> EventSource (support multiple concurrent streams)
+  let statusPoll = null;
+  let pendingRequests = 0;
+
+  // ── Timestamp ────────────────────────────────────────────────
+
+  function ts() {
+    const d = new Date();
+    const h = String(d.getHours()).padStart(2, '0');
+    const m = String(d.getMinutes()).padStart(2, '0');
+    const s = String(d.getSeconds()).padStart(2, '0');
+    return h + ':' + m + ':' + s;
+  }
+
+  // ── Output ──────────────────────────────────────────────────
+
+  function appendLine(text, cls, showTimestamp) {
+    const div = document.createElement('div');
+    div.className = 'line ' + (cls || '');
+    if (showTimestamp !== false) {
+      const span = document.createElement('span');
+      span.className = 'ts';
+      span.textContent = ts();
+      div.appendChild(span);
+      div.appendChild(document.createTextNode(text));
+    } else {
+      div.textContent = text;
+    }
+    output.appendChild(div);
+    if (autoScroll) {
+      requestAnimationFrame(() => output.scrollTop = output.scrollHeight);
+    }
+  }
+
+  // Track scroll position for auto-scroll
+  output.addEventListener('scroll', () => {
+    const atBottom = output.scrollHeight - output.scrollTop - output.clientHeight < 40;
+    autoScroll = atBottom;
+  });
+
+  // ── Pending requests tracking ─────────────────────────────
+
+  function updatePending(delta) {
+    pendingRequests = Math.max(0, pendingRequests + delta);
+    if (pendingRequests > 0) {
+      pendingInfo.textContent = pendingRequests + ' pending';
+      pendingInfo.className = 'pending';
+    } else {
+      pendingInfo.textContent = '';
+      pendingInfo.className = '';
+    }
+  }
+
+  // ── Input ───────────────────────────────────────────────────
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      const text = input.value.trim();
+      if (!text) return;
+      input.value = '';
+      historyIdx = -1;
+
+      if (history[history.length - 1] !== text) {
+        history.push(text);
+      }
+
+      appendLine('ta> ' + text, 'cmd');
+      sendInput(text);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (historyIdx === -1) {
+        savedInput = input.value;
+        historyIdx = history.length - 1;
+      } else if (historyIdx > 0) {
+        historyIdx--;
+      }
+      if (historyIdx >= 0 && historyIdx < history.length) {
+        input.value = history[historyIdx];
+      }
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (historyIdx === -1) return;
+      historyIdx++;
+      if (historyIdx >= history.length) {
+        historyIdx = -1;
+        input.value = savedInput;
+      } else {
+        input.value = history[historyIdx];
+      }
+    } else if (e.key === 'l' && e.ctrlKey) {
+      e.preventDefault();
+      output.innerHTML = '';
+    }
+  });
+
+  // Keep input focused
+  document.addEventListener('click', () => {
+    if (window.getSelection().toString()) return;
+    input.focus();
+  });
+
+  // ── API ─────────────────────────────────────────────────────
+
+  async function sendInput(text) {
+    updatePending(+1);
+    try {
+      const resp = await fetch(BASE + '/api/input', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+      const data = await resp.json();
+
+      if (data.error) {
+        appendLine('Error: ' + data.error, 'stderr');
+        updatePending(-1);
+        return;
+      }
+
+      // Agent response: AskResponse shape {session_id, response, request_id, status}
+      if (data.request_id) {
+        appendLine('processing...', 'info');
+        tailGoalOutput(data.request_id);
+        return; // pending count decremented when stream ends
+      }
+
+      // Command response: CmdResponse shape {exit_code, stdout, stderr}
+      if (data.exit_code !== undefined) {
+        if (data.stdout) appendLine(data.stdout, 'agent');
+        if (data.stderr) appendLine(data.stderr, 'stderr');
+        if (data.exit_code !== 0) {
+          appendLine('[exit ' + data.exit_code + ']', 'info');
+        }
+        updatePending(-1);
+        return;
+      }
+
+      // Agent response with inline text (no streaming)
+      if (data.response) {
+        appendLine(data.response, 'agent');
+        updatePending(-1);
+        return;
+      }
+
+      // Fallback: show raw JSON
+      appendLine(JSON.stringify(data, null, 2), 'info');
+      updatePending(-1);
+    } catch (err) {
+      appendLine('Error: ' + err.message, 'stderr');
+      updatePending(-1);
+    }
+  }
+
+  // ── Goal Output SSE Stream ──────────────────────────────────
+
+  function tailGoalOutput(goalId) {
+    // Support multiple concurrent streams
+    if (sseGoals[goalId]) {
+      sseGoals[goalId].close();
+      delete sseGoals[goalId];
+    }
+
+    const url = BASE + '/api/goals/' + encodeURIComponent(goalId) + '/output';
+    const sse = new EventSource(url);
+    sseGoals[goalId] = sse;
+
+    sse.addEventListener('output', (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        const cls = data.stream === 'stderr' ? 'stderr' : 'agent';
+        if (data.line !== undefined) {
+          appendLine(data.line, cls);
+        }
+      } catch (err) {
+        appendLine(e.data, 'agent');
+      }
+    });
+
+    sse.addEventListener('done', () => {
+      appendLine('--- done ---', 'separator');
+      sse.close();
+      delete sseGoals[goalId];
+      updatePending(-1);
+    });
+
+    sse.addEventListener('lagged', () => {
+      appendLine('[some output lines skipped]', 'info');
+    });
+
+    sse.onerror = () => {
+      // SSE will auto-reconnect; don't spam errors
+    };
+  }
+
+  // ── Daemon Events SSE Stream ────────────────────────────────
+
+  function connectEventStream() {
+    if (sseEvents) sseEvents.close();
+
+    sseEvents = new EventSource(BASE + '/api/events');
+
+    sseEvents.onopen = () => {
+      connStatus.textContent = 'connected';
+      connStatus.className = 'connected';
+    };
+
+    sseEvents.onerror = () => {
+      connStatus.textContent = 'disconnected';
+      connStatus.className = 'disconnected';
+    };
+
+    sseEvents.onmessage = (e) => {
+      try {
+        const evt = JSON.parse(e.data);
+        const type = evt.event_type || '';
+
+        if (type === 'goal_started') {
+          const p = evt.payload || evt;
+          const title = p.title || '(untitled)';
+          const id = (p.goal_id || '').substring(0, 8);
+          appendLine('[goal started] "' + title + '" (' + id + ')', 'notify');
+          if (p.goal_id) tailGoalOutput(p.goal_id);
+        } else if (type === 'draft_built') {
+          const p = evt.payload || evt;
+          appendLine('[draft ready] "' + (p.title || '') + '" — run: draft view ' + (p.display_id || ''), 'notify');
+        } else if (type === 'agent_question') {
+          const p = evt.payload || evt;
+          appendLine('--- Agent Question ---', 'notify');
+          appendLine(p.question || JSON.stringify(p), 'info');
+          appendLine('Type your response and press Enter:', 'info');
+        }
+      } catch (err) {
+        if (e.data && e.data.trim()) {
+          appendLine(e.data, 'event');
+        }
+      }
+    };
+  }
+
+  // ── Status Polling ──────────────────────────────────────────
+
+  async function pollStatus() {
+    try {
+      const resp = await fetch(BASE + '/api/status');
+      const s = await resp.json();
+      projectInfo.textContent = s.project + ' v' + s.version;
+      versionInfo.textContent = 'daemon ' + (s.build_sha || '?').substring(0, 7);
+
+      // Show default agent framework
+      if (s.default_agent) {
+        agentFramework.textContent = s.default_agent;
+      }
+
+      // Show active agents count
+      const agentCount = s.active_agents ? s.active_agents.length : 0;
+      const draftCount = s.pending_drafts || 0;
+      let parts = [];
+      if (agentCount > 0) parts.push(agentCount + ' agent' + (agentCount > 1 ? 's' : ''));
+      if (draftCount > 0) parts.push(draftCount + ' draft' + (draftCount > 1 ? 's' : ''));
+      agentInfo.textContent = parts.length > 0 ? parts.join(' | ') : 'no agents';
+
+      connStatus.textContent = 'connected';
+      connStatus.className = 'connected';
+    } catch (err) {
+      connStatus.textContent = 'disconnected';
+      connStatus.className = 'disconnected';
+    }
+  }
+
+  // ── Init ────────────────────────────────────────────────────
+
+  appendLine('ta shell (web) — type a command or message. Ctrl+L to clear.', 'info');
+  connectEventStream();
+  pollStatus();
+  statusPoll = setInterval(pollStatus, 10000);
+  input.focus();
+})();
+</script>
+</body>
+</html>
