@@ -3978,7 +3978,9 @@ The output pipeline is: user types command → `send_input()` POST to daemon `/a
 
 8. [ ] **Audit sign-off**: Re-run the full audit after fixes to verify zero violations remain.
 
-**Files**: `apps/ta-cli/src/commands/run.rs` (injection/cleanup), `crates/ta-goal/src/goal_run.rs` (state machine), others TBD by audit.
+9. [ ] **Release pipeline checklist gate**: Add a `requires_approval` step to `DEFAULT_PIPELINE_YAML` between "Build & verify" and "Generate release notes". The step prints a short constitution compliance checklist (injection cleanup, error paths, state transitions) and pauses for human sign-off. Skippable with `--skip-approvals` for patch releases. Enabled by default — low cost, high value as a forcing function.
+
+**Files**: `apps/ta-cli/src/commands/run.rs` (injection/cleanup), `crates/ta-goal/src/goal_run.rs` (state machine), `apps/ta-cli/src/commands/release.rs` (pipeline step), others TBD by audit.
 
 #### Version: `0.11.4-alpha.4`
 
@@ -4044,25 +4046,29 @@ The output pipeline is: user types command → `send_input()` POST to daemon `/a
 
 7. [ ] **Daemon `:tail` output fix**: Update background command output message to "Tail output: :tail <id>" (matches the working client command).
 
+#### Constitution Compliance Scan at Draft Build
+
+8. [ ] **Draft-time constitution pattern scan**: When `ta draft build` runs, scan changed files for known §4 violation patterns (injection functions without cleanup on early-return paths, error arms that `return` without a preceding `restore_*` call). Emit findings as warnings in the draft summary — non-blocking by default, so review flow is unaffected. The scan is static/grep-based (no agent), runs in <1s. Example output: `[constitution] 2 potential §4 violations in run.rs — review before approving`. Configurable: `warn` (default), `block`, `off`.
+
 #### Agent Transparency (streaming intermediate output)
 
-8. [ ] **Surface agent stderr as progress**: Ensure all stderr lines from the agent subprocess appear in the web shell as dimmed progress indicators.
+9. [ ] **Surface agent stderr as progress**: Ensure all stderr lines from the agent subprocess appear in the web shell as dimmed progress indicators.
 
-9. [ ] **Structured progress parsing**: Parse stderr for known patterns (`Reading `, `Searching `, `Running `, `Writing `) and render them as distinct "thinking" lines with a spinner or activity indicator.
+10. [ ] **Structured progress parsing**: Parse stderr for known patterns (`Reading `, `Searching `, `Running `, `Writing `) and render them as distinct "thinking" lines with a spinner or activity indicator.
 
-10. [ ] **Web shell thinking indicator**: When a request is pending and no stdout has arrived yet, show an animated indicator ("Agent is working...") that updates with the latest stderr progress line.
+11. [ ] **Web shell thinking indicator**: When a request is pending and no stdout has arrived yet, show an animated indicator ("Agent is working...") that updates with the latest stderr progress line.
 
-11. [ ] **Collapse progress on completion**: When the agent's stdout response arrives, collapse/dim the intermediate progress lines so the final answer is prominent.
+12. [ ] **Collapse progress on completion**: When the agent's stdout response arrives, collapse/dim the intermediate progress lines so the final answer is prominent.
 
 #### Parallel Agent Sessions
 
-12. [ ] **`/parallel` shell command**: New web shell command that spawns an independent agent conversation (no `--continue`). Returns a session tag the user can address follow-ups to.
+13. [ ] **`/parallel` shell command**: New web shell command that spawns an independent agent conversation (no `--continue`). Returns a session tag the user can address follow-ups to.
 
-13. [ ] **`POST /api/agent/ask` with `parallel: true`**: API flag that skips conversation chaining and creates a fresh agent subprocess.
+14. [ ] **`POST /api/agent/ask` with `parallel: true`**: API flag that skips conversation chaining and creates a fresh agent subprocess.
 
-14. [ ] **Session switching in web shell**: Status bar shows active parallel sessions. User can prefix input with a session tag to direct it to a specific agent: `@research what did you find?`
+15. [ ] **Session switching in web shell**: Status bar shows active parallel sessions. User can prefix input with a session tag to direct it to a specific agent: `@research what did you find?`
 
-15. [ ] **Session lifecycle**: Parallel sessions auto-close after idle timeout. User can `/close <tag>` to end a session explicitly. Max concurrent sessions configurable in `daemon.toml`.
+16. [ ] **Session lifecycle**: Parallel sessions auto-close after idle timeout. User can `/close <tag>` to end a session explicitly. Max concurrent sessions configurable in `daemon.toml`.
 
 #### Version: `0.11.5-alpha`
 
@@ -4633,6 +4639,71 @@ Map departments, project types, or goal categories to default workflows.
 - **Cost/resource limits**: Parallel swarms can be expensive. Should there be concurrency limits per project/office?
 
 #### Version: `0.14.0-alpha`
+
+---
+
+### v0.14.1 — Product Constitution Framework
+<!-- status: pending -->
+**Goal**: Make the constitution a first-class, configurable artifact that downstream projects declare, extend, and enforce — not a TA-internal concept hard-wired to `docs/TA-CONSTITUTION.md`. A project using TA can define its own invariants (what functions inject, what functions restore, what the rules are), and TA's draft-build scan and release checklist gate read from that config.
+
+**Problem**: Currently the constitution is TA-specific. The §4 injection/cleanup rules, the pattern scanner, and the release checklist all reference TA's own codebase conventions. A downstream project using TA (e.g., a web service or a data pipeline) has different injection patterns, different error paths, and different invariants. They get no constitution enforcement at all.
+
+#### Architecture: `constitution.toml`
+
+A project-level constitution config in `.ta/constitution.toml`:
+
+```toml
+[rules.injection_cleanup]
+# Functions that inject context into the workspace (must be cleaned up on all error paths)
+inject_fns = ["inject_config", "inject_credentials"]
+restore_fns = ["restore_config", "restore_credentials"]
+severity = "high"
+
+[rules.error_paths]
+# Error return patterns that must be preceded by cleanup
+patterns = ["return Err(", "return Ok(()) # error"]
+severity = "medium"
+
+[scan]
+# Files/dirs to scan for constitution violations
+include = ["src/"]
+exclude = ["src/tests/"]
+on_violation = "warn"   # "warn" | "block" | "off"
+
+[release]
+# Whether to include a constitution compliance gate in the release pipeline
+checklist_gate = true
+# Whether to run parallel agent constitution review during release
+agent_review = false   # opt-in — spins up a lighter concurrent review agent
+
+[agent_review]
+# Prompt prefix for the constitution reviewer (lighter than full release notes agent)
+model_hint = "fast"    # hint to use a smaller/faster model
+max_tokens = 2000
+focus = "injection_cleanup,error_paths"
+```
+
+#### Items
+
+1. [ ] **`constitution.toml` schema**: Define and document the config format. Ship TA's own rules as the default template (generated by `ta init constitution`).
+
+2. [ ] **`ta init constitution`**: Scaffolding command. Writes `.ta/constitution.toml` with TA's default rules as a starting point. Users edit for their project's patterns.
+
+3. [ ] **Draft-time scanner reads `constitution.toml`**: Move the hardcoded §4 pattern scan (v0.11.5 item 8) to read inject/restore function names from `constitution.toml`. Projects with different conventions get correct scanning.
+
+4. [ ] **Release pipeline reads `checklist_gate`**: The release checklist gate step (v0.11.4.4 item 9) is enabled/disabled by `constitution.toml`. The checklist content is generated from the declared rules, not hardcoded.
+
+5. [ ] **Parallel agent review during release**: When `agent_review = true` in `constitution.toml`, the release pipeline fans out two agents concurrently: the existing release notes writer, and a lighter constitution reviewer. The reviewer gets the diff + the declared rules + a compact prompt. Its output is appended to the release draft as a "Constitution Review" section. Uses `model_hint = "fast"` to keep it cheap. Opt-in because it adds an LLM call per release.
+
+6. [ ] **`ta constitution check`**: CLI command to run the scan outside of draft build — useful for CI integration and pre-commit hooks. Exit code 0 = clean, 1 = violations found. Output is machine-readable JSON with `--json` flag.
+
+7. [ ] **Inheritance**: `constitution.toml` can `extends = "ta-default"` to inherit TA's rules and only override specific sections. TA ships a built-in `ta-default` profile.
+
+8. [ ] **Documentation**: "How to write a constitution for your project" guide in `docs/`. Includes worked example for a web service with DB migration injection patterns.
+
+**Files**: `.ta/constitution.toml` (new), `apps/ta-cli/src/commands/` (init, check, draft build scan, release step), `crates/ta-workspace/src/` (scanner crate or module).
+
+#### Version: `0.14.1-alpha`
 
 ---
 
