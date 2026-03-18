@@ -482,8 +482,13 @@ mod tests {
 
     #[test]
     fn streaming_output_captured_and_complete() {
-        // Spawn a child that produces 50+ lines over ~1 second.
+        // Spawn a child that produces 60 lines.
+        // Windows cmd does not support bash `for`/`seq` syntax — use for /L instead.
+        #[cfg(not(windows))]
         let script = r#"for i in $(seq 1 60); do echo "line $i"; done"#;
+        #[cfg(windows)]
+        let script = "for /L %i in (1,1,60) do @echo line %i";
+
         let config = simple_config(vec![script], 30);
         let dir = TempDir::new().unwrap();
         let result = run_verification(&config, dir.path());
@@ -548,9 +553,16 @@ mod tests {
         // We can't easily capture println! output in a test, so we verify the
         // heartbeat logic indirectly: run a command for >2s with 1s heartbeat
         // and verify it completes correctly (the heartbeat doesn't break anything).
+        // Windows cmd does not support bash loop syntax — use ping as a 1s delay.
+        #[cfg(not(windows))]
+        let script = "for i in 1 2 3; do echo tick$i; sleep 1; done";
+        #[cfg(windows)]
+        let script =
+            "echo tick1 & ping -n 2 -w 1000 127.0.0.1 & echo tick2 & ping -n 2 -w 1000 127.0.0.1 & echo tick3";
+
         let dir = TempDir::new().unwrap();
         let output = run_single_command(
-            "for i in 1 2 3; do echo tick$i; sleep 1; done",
+            script,
             dir.path(),
             Duration::from_secs(30),
             Duration::from_secs(1),
@@ -568,9 +580,16 @@ mod tests {
     #[test]
     fn timeout_error_includes_last_output_lines() {
         let dir = TempDir::new().unwrap();
-        // Produce some output then sleep forever.
+        // Produce some output then block until the timeout fires.
+        // Windows cmd does not support bash loop/seq syntax — use for /L + ping.
+        #[cfg(not(windows))]
+        let script = "for i in $(seq 1 5); do echo line$i; done; sleep 30";
+        // for /L prints line1..line5 quickly, then ping blocks for ~30 s.
+        #[cfg(windows)]
+        let script = "for /L %i in (1,1,5) do @echo line%i & ping -n 31 -w 1000 127.0.0.1";
+
         let result = run_single_command(
-            "for i in $(seq 1 5); do echo line$i; done; sleep 30",
+            script,
             dir.path(),
             Duration::from_secs(2),
             Duration::from_secs(30),

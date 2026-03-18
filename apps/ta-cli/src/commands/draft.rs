@@ -5829,24 +5829,34 @@ fn run() {
         // The command always exits 1 so verification will fail.
         std::fs::create_dir_all(project.path().join(".ta")).unwrap();
         {
-            // Write a tiny shell script that always fails.
-            let fail_script = project.path().join(".ta/fail_check.sh");
-            let mut f = std::fs::File::create(&fail_script).unwrap();
-            writeln!(f, "#!/bin/sh").unwrap();
-            writeln!(f, "echo 'check failed intentionally'").unwrap();
-            writeln!(f, "exit 1").unwrap();
-            drop(f);
-            // Make it executable on Unix.
-            #[cfg(unix)]
+            // On Unix: write a shell script (avoids inline shell differences).
+            // On Windows: use `exit 1` inline — Windows paths written via
+            // display() contain backslashes, which are TOML escape sequences
+            // and would corrupt the parsed command string.
+            #[cfg(not(windows))]
             {
-                use std::os::unix::fs::PermissionsExt;
-                let perms = std::fs::Permissions::from_mode(0o755);
-                std::fs::set_permissions(&fail_script, perms).unwrap();
+                let fail_script = project.path().join(".ta/fail_check.sh");
+                let mut f = std::fs::File::create(&fail_script).unwrap();
+                writeln!(f, "#!/bin/sh").unwrap();
+                writeln!(f, "echo 'check failed intentionally'").unwrap();
+                writeln!(f, "exit 1").unwrap();
+                drop(f);
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let perms = std::fs::Permissions::from_mode(0o755);
+                    std::fs::set_permissions(&fail_script, perms).unwrap();
+                }
+                std::fs::write(
+                    project.path().join(".ta/workflow.toml"),
+                    format!("[verify]\ncommands = [\"sh {}\"]\n", fail_script.display()),
+                )
+                .unwrap();
             }
-
+            #[cfg(windows)]
             std::fs::write(
                 project.path().join(".ta/workflow.toml"),
-                format!("[verify]\ncommands = [\"sh {}\"]\n", fail_script.display()),
+                "[verify]\ncommands = [\"exit 1\"]\n",
             )
             .unwrap();
         }
