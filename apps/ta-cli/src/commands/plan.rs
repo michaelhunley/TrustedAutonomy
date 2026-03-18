@@ -1462,6 +1462,7 @@ fn plan_add(
         None,  // resume = None
         false, // headless = false
         false, // skip_verify = false
+        false, // quiet = false
         None,  // existing_goal_id = None
     )
 }
@@ -1711,6 +1712,7 @@ fn plan_from(
         None,  // resume = None
         false, // headless = false
         false, // skip_verify = false
+        false, // quiet = false
         None,  // existing_goal_id = None
     )
 }

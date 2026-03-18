@@ -119,6 +119,11 @@ enum Commands {
         /// Skip pre-draft verification checks (from [verify] in workflow.toml).
         #[arg(long)]
         skip_verify: bool,
+        /// Suppress streaming agent output; still print completion/failure summary.
+        /// Default for daemon-dispatched and channel-dispatched goals.
+        /// Inverse: omit --quiet (current interactive default) shows full output.
+        #[arg(long)]
+        quiet: bool,
         /// Reuse an existing goal record instead of creating a new one.
         /// Used by the MCP orchestrator to avoid duplicate goal creation
         /// when `ta_goal_start` has already created the goal.
@@ -187,6 +192,14 @@ enum Commands {
     Agent {
         #[command(subcommand)]
         command: commands::agent::AgentCommands,
+    },
+    /// Manage the project behavioral constitution (.ta/constitution.md).
+    ///
+    /// `ta constitution init` asks an agent to draft a behavioral contract
+    /// from PLAN.md and CLAUDE.md. The output is a TA draft for review.
+    Constitution {
+        #[command(subcommand)]
+        command: commands::constitution::ConstitutionCommands,
     },
     /// Manage agent adapter integrations.
     Adapter {
@@ -489,6 +502,7 @@ fn main() -> anyhow::Result<()> {
             resume,
             headless,
             skip_verify,
+            quiet,
             goal_id,
         } => {
             // Phase-aware title resolution: if the positional title looks like
@@ -512,6 +526,7 @@ fn main() -> anyhow::Result<()> {
                 resume.as_deref(),
                 *headless,
                 *skip_verify,
+                *quiet,
                 goal_id.as_deref(),
             )
         }
@@ -532,6 +547,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Context { command } => commands::context::execute(command, &config),
         Commands::Credentials { command } => commands::credentials::execute(command, &config),
         Commands::Agent { command } => commands::agent::execute(command, &config),
+        Commands::Constitution { command } => commands::constitution::execute(command, &config),
         Commands::Adapter { command } => commands::adapter::execute(command, &project_root),
         Commands::Setup { command } => commands::setup::execute(command, &config),
         Commands::Init { command } => commands::init::execute(command, &config),

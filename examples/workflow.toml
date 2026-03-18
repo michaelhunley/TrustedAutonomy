@@ -20,6 +20,18 @@ remote = "origin"                  # Git remote name
 pr_template = ".ta/pr-template.md" # PR body template (see examples/pr-template.md)
 
 # ────────────────────────────────────────────────────────────────────
+# Constitution / Compliance Checker Configuration (v0.12.0)
+# ────────────────────────────────────────────────────────────────────
+# These options are project-specific and disabled by default.
+# External projects should leave this section unset.
+# The TA repo enables s4_scan to catch inject_*/restore_* imbalances.
+
+[constitution]
+# Scan changed .rs files for §4 inject_*/restore_* imbalance (TA project only).
+# Set to true in the TA repo's .ta/workflow.toml, leave false everywhere else.
+s4_scan = false
+
+# ────────────────────────────────────────────────────────────────────
 # Diff Viewing Configuration (v0.2.2)
 # ────────────────────────────────────────────────────────────────────
 

@@ -326,6 +326,11 @@ pub fn install_plugin(
     // Copy all files from source to target.
     copy_dir_contents(source, &target_dir)?;
 
+    // On macOS, ad-hoc sign any copied binaries so AppleSystemPolicy
+    // doesn't block execution of unsigned downloaded executables.
+    #[cfg(target_os = "macos")]
+    codesign_plugin_binaries(&target_dir);
+
     let plugin_source = if global {
         PluginSource::UserGlobal
     } else {
@@ -359,6 +364,67 @@ fn copy_dir_contents(src: &Path, dst: &Path) -> Result<(), PluginError> {
         }
     }
     Ok(())
+}
+
+/// macOS: ad-hoc sign all executable files in the plugin directory.
+///
+/// This prevents GateKeeper / AppleSystemPolicy from blocking execution of
+/// plugin binaries that were copied from an unsigned source directory.
+/// Uses `codesign --force --sign -` (ad-hoc, no certificate required).
+/// Failures are logged as warnings but do not abort the install.
+#[cfg(target_os = "macos")]
+fn codesign_plugin_binaries(plugin_dir: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let entries = match std::fs::read_dir(plugin_dir) {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::warn!(
+                dir = %plugin_dir.display(),
+                error = %e,
+                "macOS codesign: could not read plugin directory"
+            );
+            return;
+        }
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        // Only sign files with execute permission bits set.
+        let Ok(meta) = path.metadata() else { continue };
+        let mode = meta.permissions().mode();
+        if mode & 0o111 == 0 {
+            continue;
+        }
+
+        let status = std::process::Command::new("codesign")
+            .args(["--force", "--sign", "-", path.to_str().unwrap_or("")])
+            .status();
+
+        match status {
+            Ok(s) if s.success() => {
+                tracing::debug!(path = %path.display(), "macOS: ad-hoc signed plugin binary");
+            }
+            Ok(s) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    exit_code = ?s.code(),
+                    "macOS: codesign returned non-zero; plugin may be blocked by GateKeeper"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "macOS: codesign not available; plugin may be blocked by GateKeeper. \
+                     Install Xcode Command Line Tools: xcode-select --install"
+                );
+            }
+        }
+    }
 }
 
 /// Get the user's config directory (platform-appropriate).

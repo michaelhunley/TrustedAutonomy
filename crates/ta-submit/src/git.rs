@@ -93,10 +93,21 @@ impl GitAdapter {
         self.git_cmd(&["rev-parse", "--abbrev-ref", "HEAD"])
     }
 
-    /// Generate branch name from goal
+    /// Generate a safe git branch name from the goal title.
+    ///
+    /// Sanitization steps (item 28):
+    /// 1. Lowercase and map all non-alphanumeric chars to `-`
+    /// 2. Collapse consecutive dashes into a single `-`
+    /// 3. Trim leading and trailing dashes (fixes titles like `` `ta sync` ``)
+    /// 4. Truncate to 50 chars and trim any trailing dashes from truncation
+    ///
+    /// All characters are passed directly to git as command arguments, not
+    /// through shell interpolation, so no shell-escaping is needed.
     fn branch_name(&self, goal: &GoalRun, config: &SubmitConfig) -> String {
         let prefix = &config.git.branch_prefix;
-        let sanitized = goal
+
+        // Step 1: lowercase + replace non-alphanumeric/dash with dash.
+        let raw: String = goal
             .title
             .to_lowercase()
             .chars()
@@ -107,16 +118,37 @@ impl GitAdapter {
                     '-'
                 }
             })
-            .collect::<String>();
+            .collect();
 
-        // Truncate to reasonable length
-        let sanitized = if sanitized.len() > 50 {
-            &sanitized[..50]
+        // Step 2: collapse consecutive dashes.
+        let mut collapsed = String::with_capacity(raw.len());
+        let mut prev_dash = false;
+        for c in raw.chars() {
+            if c == '-' {
+                if !prev_dash {
+                    collapsed.push(c);
+                }
+                prev_dash = true;
+            } else {
+                collapsed.push(c);
+                prev_dash = false;
+            }
+        }
+
+        // Step 3: trim leading/trailing dashes.
+        let trimmed = collapsed.trim_matches('-');
+
+        // Fallback if trimming produced an empty string (e.g. title was "!!!").
+        let slug = if trimmed.is_empty() { "goal" } else { trimmed };
+
+        // Step 4: truncate to 50 chars, then trim any trailing dash from truncation.
+        let truncated = if slug.len() > 50 {
+            slug[..50].trim_end_matches('-')
         } else {
-            &sanitized
+            slug
         };
 
-        format!("{}{}", prefix, sanitized)
+        format!("{}{}", prefix, truncated)
     }
 
     /// Auto-detect whether this is a git repository.
@@ -784,6 +816,83 @@ mod tests {
 
         assert!(branch.starts_with("ta/"));
         assert!(branch.contains("add-new-feature"));
+    }
+
+    #[test]
+    fn test_branch_name_backtick_title() {
+        let dir = tempdir().unwrap();
+        init_git_repo(dir.path()).unwrap();
+        let adapter = GitAdapter::new(dir.path());
+        let config = SubmitConfig::default();
+
+        // "`ta sync`" → should become "ta/ta-sync" (no leading/trailing dashes)
+        let goal = GoalRun::new(
+            "`ta sync`",
+            "Test",
+            "test-agent",
+            dir.path().to_path_buf(),
+            dir.path().join("store"),
+        );
+        let branch = adapter.branch_name(&goal, &config);
+        assert!(
+            !branch.contains("--"),
+            "consecutive dashes should be collapsed: {}",
+            branch
+        );
+        assert!(
+            !branch.ends_with('-'),
+            "branch should not end with dash: {}",
+            branch
+        );
+        let slug = branch.strip_prefix("ta/").unwrap_or(&branch);
+        assert!(
+            !slug.starts_with('-'),
+            "slug should not start with dash: {}",
+            branch
+        );
+    }
+
+    #[test]
+    fn test_branch_name_all_special_chars() {
+        let dir = tempdir().unwrap();
+        init_git_repo(dir.path()).unwrap();
+        let adapter = GitAdapter::new(dir.path());
+        let config = SubmitConfig::default();
+
+        // All special chars → should fall back to "goal"
+        let goal = GoalRun::new(
+            "!!! ???",
+            "Test",
+            "test-agent",
+            dir.path().to_path_buf(),
+            dir.path().join("store"),
+        );
+        let branch = adapter.branch_name(&goal, &config);
+        assert!(
+            branch.ends_with("goal"),
+            "fallback should be 'goal': {}",
+            branch
+        );
+    }
+
+    #[test]
+    fn test_branch_name_single_quotes_and_spaces() {
+        let dir = tempdir().unwrap();
+        init_git_repo(dir.path()).unwrap();
+        let adapter = GitAdapter::new(dir.path());
+        let config = SubmitConfig::default();
+
+        // "Fix 'ta run' timeout" → "ta/fix-ta-run-timeout"
+        let goal = GoalRun::new(
+            "Fix 'ta run' timeout",
+            "Test",
+            "test-agent",
+            dir.path().to_path_buf(),
+            dir.path().join("store"),
+        );
+        let branch = adapter.branch_name(&goal, &config);
+        assert!(!branch.contains("--"), "no consecutive dashes: {}", branch);
+        assert!(branch.contains("fix"), "should contain 'fix': {}", branch);
     }
 
     #[test]

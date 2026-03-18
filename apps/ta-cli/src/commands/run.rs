@@ -416,6 +416,7 @@ pub fn execute(
     resume: Option<&str>,
     headless: bool,
     skip_verify: bool,
+    quiet: bool,
     existing_goal_id: Option<&str>,
 ) -> anyhow::Result<()> {
     // ── Resume an existing session ──────────────────────────────
@@ -720,20 +721,22 @@ pub fn execute(
     };
 
     // 5. Launch the agent in the staging directory.
-    println!(
-        "\nLaunching {} in staging workspace...",
-        agent_config.command
-    );
-    println!("  Working dir: {}", staging_path.display());
-    if headless {
-        println!("  Mode: headless (non-interactive, piped output)");
-    } else if interactive {
-        println!("  Mode: interactive (PTY capture + session orchestration)");
+    if !quiet {
+        println!(
+            "\nLaunching {} in staging workspace...",
+            agent_config.command
+        );
+        println!("  Working dir: {}", staging_path.display());
+        if headless {
+            println!("  Mode: headless (non-interactive, piped output)");
+        } else if interactive {
+            println!("  Mode: interactive (PTY capture + session orchestration)");
+        }
+        if macro_goal {
+            println!("  Mode: macro goal (inner-loop iteration enabled)");
+        }
+        println!();
     }
-    if macro_goal {
-        println!("  Mode: macro goal (inner-loop iteration enabled)");
-    }
-    println!();
 
     // Track the start time BEFORE agent launch to compute accurate duration (v0.9.5.1).
     let agent_start = std::time::Instant::now();
@@ -753,10 +756,13 @@ pub fn execute(
     };
 
     // Choose launch mode: headless (piped), PTY-interactive, or simple.
+    // quiet=true uses headless launch to suppress streaming output (item 21).
     // Type alias for the guidance log — on Unix this contains captured human inputs
     // from PTY sessions; on Windows the Vec is always empty.
     type GuidanceLog = Vec<(String, String)>;
-    let launch_result: std::io::Result<(std::process::ExitStatus, GuidanceLog)> = if headless {
+    let launch_result: std::io::Result<(std::process::ExitStatus, GuidanceLog)> = if headless
+        || quiet
+    {
         launch_agent_headless(&agent_config, &staging_path, &prompt, Some(&save_pid))
             .map(|exit| (exit, Vec::new()))
     } else if interactive {
@@ -1312,7 +1318,8 @@ pub fn execute(
     }
 
     // In headless mode, output structured JSON for orchestrator consumption.
-    if headless {
+    // In quiet mode, print a minimal human-readable summary (no JSON).
+    if headless && !quiet {
         let draft_id = if draft_built {
             // Find the most recent draft for this goal.
             find_latest_draft_id(config, &goal_id)
@@ -1327,6 +1334,26 @@ pub fn execute(
             "state": goal_current.state.to_string(),
         });
         println!("\n__TA_HEADLESS_RESULT__:{}", output);
+    } else if quiet {
+        // Quiet mode: always print completion/failure summary regardless of verbosity.
+        let draft_id = if draft_built {
+            find_latest_draft_id(config, &goal_id)
+        } else {
+            None
+        };
+        if draft_built {
+            println!(
+                "Goal {} completed — draft {} ready for review.",
+                &goal_id[..8.min(goal_id.len())],
+                draft_id.as_deref().unwrap_or("(see ta draft list)")
+            );
+        } else {
+            println!(
+                "Goal {} completed — state: {}.",
+                &goal_id[..8.min(goal_id.len())],
+                goal_current.state
+            );
+        }
     } else {
         if draft_built {
             println!("\nNext steps:");
@@ -2668,6 +2695,7 @@ mod tests {
             None,
             false, // not headless
             false, // skip_verify = false
+            false, // quiet = false
             None,  // no existing goal id
         )
         .unwrap();

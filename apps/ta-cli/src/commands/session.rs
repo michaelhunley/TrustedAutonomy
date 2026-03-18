@@ -85,6 +85,7 @@ pub fn execute(cmd: &SessionCommands, config: &GatewayConfig) -> anyhow::Result<
                 Some(id.as_str()),
                 false, // not headless
                 false, // skip_verify = false
+                false, // quiet = false
                 None,  // no existing goal id
             )
         }
