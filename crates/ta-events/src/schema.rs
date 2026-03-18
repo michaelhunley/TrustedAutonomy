@@ -767,6 +767,61 @@ mod tests {
         assert_eq!(completed.phase(), Some("v0.7.5"));
     }
 
+    // §8 regression tests: DraftApproved, DraftDenied, DraftApplied events must
+    // exist with structured goal_id/draft_id fields and correct event_type strings.
+    // If any variant is removed or renamed these tests will catch the regression.
+    #[test]
+    fn draft_approved_event_serializes_with_structured_fields() {
+        let goal_id = Uuid::new_v4();
+        let draft_id = Uuid::new_v4();
+        let event = SessionEvent::DraftApproved {
+            goal_id,
+            draft_id,
+            approved_by: "alice".to_string(),
+        };
+        assert_eq!(event.event_type(), "draft_approved");
+        assert_eq!(event.goal_id(), Some(goal_id));
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"draft_approved\""));
+        assert!(json.contains(&goal_id.to_string()));
+        assert!(json.contains(&draft_id.to_string()));
+        assert!(json.contains("\"alice\""));
+    }
+
+    #[test]
+    fn draft_denied_event_serializes_with_structured_fields() {
+        let goal_id = Uuid::new_v4();
+        let draft_id = Uuid::new_v4();
+        let event = SessionEvent::DraftDenied {
+            goal_id,
+            draft_id,
+            reason: "needs more tests".to_string(),
+            denied_by: "bob".to_string(),
+        };
+        assert_eq!(event.event_type(), "draft_denied");
+        assert_eq!(event.goal_id(), Some(goal_id));
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"draft_denied\""));
+        assert!(json.contains("\"needs more tests\""));
+        assert!(json.contains("\"bob\""));
+    }
+
+    #[test]
+    fn draft_applied_event_serializes_with_structured_fields() {
+        let goal_id = Uuid::new_v4();
+        let draft_id = Uuid::new_v4();
+        let event = SessionEvent::DraftApplied {
+            goal_id,
+            draft_id,
+            files_count: 7,
+        };
+        assert_eq!(event.event_type(), "draft_applied");
+        assert_eq!(event.goal_id(), Some(goal_id));
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"draft_applied\""));
+        assert!(json.contains("\"files_count\":7"));
+    }
+
     #[test]
     fn agent_needs_input_has_respond_action() {
         let interaction_id = Uuid::new_v4();

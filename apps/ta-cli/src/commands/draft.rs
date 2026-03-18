@@ -1758,6 +1758,26 @@ fn approve_package(config: &GatewayConfig, id: &str, reviewer: &str) -> anyhow::
         );
     }
 
+    // §8: emit DraftApproved event so all state changes are logged with structured fields.
+    {
+        use ta_events::{EventEnvelope, EventStore, FsEventStore, SessionEvent};
+        let events_dir = config.workspace_root.join(".ta").join("events");
+        let event_store = FsEventStore::new(&events_dir);
+        let goal_id = goals
+            .iter()
+            .find(|g| g.pr_package_id == Some(package_id))
+            .map(|g| g.goal_run_id)
+            .unwrap_or_else(uuid::Uuid::new_v4);
+        let event = SessionEvent::DraftApproved {
+            goal_id,
+            draft_id: package_id,
+            approved_by: reviewer.to_string(),
+        };
+        if let Err(e) = event_store.append(&EventEnvelope::new(event)) {
+            tracing::warn!("Failed to persist DraftApproved event: {}", e);
+        }
+    }
+
     println!("Approved draft package {} by {}", package_id, reviewer);
     Ok(())
 }
@@ -1782,7 +1802,35 @@ fn deny_package(
         reason: reason.to_string(),
         denied_by: reviewer.to_string(),
     };
+
+    // Capture goal_id before saving package (pkg will be consumed by save_package).
+    let package_goal_id = {
+        let goal_store = GoalRunStore::new(&config.goals_dir)?;
+        let goals = goal_store.list()?;
+        goals
+            .iter()
+            .find(|g| g.pr_package_id == Some(package_id))
+            .map(|g| g.goal_run_id)
+    };
+
     save_package(config, &pkg)?;
+
+    // §8: emit DraftDenied event so all state changes are logged with structured fields.
+    {
+        use ta_events::{EventEnvelope, EventStore, FsEventStore, SessionEvent};
+        let events_dir = config.workspace_root.join(".ta").join("events");
+        let event_store = FsEventStore::new(&events_dir);
+        let goal_id = package_goal_id.unwrap_or_else(uuid::Uuid::new_v4);
+        let event = SessionEvent::DraftDenied {
+            goal_id,
+            draft_id: package_id,
+            reason: reason.to_string(),
+            denied_by: reviewer.to_string(),
+        };
+        if let Err(e) = event_store.append(&EventEnvelope::new(event)) {
+            tracing::warn!("Failed to persist DraftDenied event: {}", e);
+        }
+    }
 
     println!("Denied draft package {}: {}", package_id, reason);
     Ok(())
@@ -2556,10 +2604,26 @@ fn apply_package(
             e
         );
     }
+    let files_applied = pkg.changes.artifacts.len();
     pkg.status = DraftStatus::Applied {
         applied_at: Utc::now(),
     };
     save_package(config, &pkg)?;
+
+    // §8: emit DraftApplied event so all state changes are logged with structured fields.
+    {
+        use ta_events::{EventEnvelope, EventStore, FsEventStore, SessionEvent};
+        let events_dir = config.workspace_root.join(".ta").join("events");
+        let event_store = FsEventStore::new(&events_dir);
+        let event = SessionEvent::DraftApplied {
+            goal_id: goal.goal_run_id,
+            draft_id: pkg.package_id,
+            files_count: files_applied,
+        };
+        if let Err(e) = event_store.append(&EventEnvelope::new(event)) {
+            tracing::warn!("Failed to persist DraftApplied event: {}", e);
+        }
+    }
 
     // Auto-close parent draft on follow-up apply (v0.3.6, refined v0.4.1.2).
     // v0.4.1.2: Only auto-close the parent draft when this goal shares the same

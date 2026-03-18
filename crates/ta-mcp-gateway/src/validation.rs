@@ -42,3 +42,55 @@ pub fn enforce_policy(decision: &PolicyDecision) -> Result<(), McpError> {
         }
     }
 }
+
+// §7 regression tests: enforce_policy must deny access when policy denies.
+// These tests ensure that any future refactor of enforce_policy() cannot
+// accidentally allow a Deny decision through.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn enforce_policy_allow_passes() {
+        // §7: Allow decision should succeed.
+        assert!(enforce_policy(&PolicyDecision::Allow).is_ok());
+    }
+
+    #[test]
+    fn enforce_policy_deny_returns_error() {
+        // §7: Deny decision MUST return an error — prevents policy bypass.
+        let result = enforce_policy(&PolicyDecision::Deny {
+            reason: "agent lacks read grant for this path".to_string(),
+        });
+        assert!(result.is_err(), "Deny decision must produce an MCP error");
+        let err = result.unwrap_err();
+        assert!(
+            err.message.contains("Policy denied"),
+            "error message must include 'Policy denied', got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn enforce_policy_require_approval_passes() {
+        // §7: RequireApproval is gated at the CLI review flow, not here.
+        let result = enforce_policy(&PolicyDecision::RequireApproval {
+            reason: "apply verb requires explicit approval".to_string(),
+        });
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn parse_uuid_valid() {
+        let id = uuid::Uuid::new_v4();
+        let parsed = parse_uuid(&id.to_string());
+        assert!(parsed.is_ok());
+        assert_eq!(parsed.unwrap(), id);
+    }
+
+    #[test]
+    fn parse_uuid_invalid_returns_error() {
+        let result = parse_uuid("not-a-uuid");
+        assert!(result.is_err());
+    }
+}

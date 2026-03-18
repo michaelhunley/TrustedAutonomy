@@ -134,6 +134,15 @@ pub fn handle_fs_diff(
         .map_err(|e| McpError::internal_error(format!("lock poisoned: {}", e), None))?;
     let goal_run_id = parse_uuid(&params.goal_run_id)?;
 
+    // §7: policy check — diff exposes source file content, requires read permission.
+    let agent_id = state
+        .agent_for_goal(goal_run_id)
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+    let decision = state
+        .check_policy(&agent_id, "read", &params.path)
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+    enforce_policy(&decision)?;
+
     let connector = state.connectors.get(&goal_run_id).ok_or_else(|| {
         McpError::invalid_params(
             format!("no active connector for goal: {}", goal_run_id),

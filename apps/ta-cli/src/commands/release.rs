@@ -1355,6 +1355,36 @@ steps:
       ./dev cargo fmt --all -- --check
       echo "All checks passed."
 
+  # Constitution compliance checklist gate (v0.11.6).
+  # Pauses for human sign-off that key constitution invariants are met before
+  # generating release notes. Skippable with --yes / --skip-approvals.
+  - name: Constitution compliance sign-off
+    requires_approval: true
+    run: |
+      echo "── Constitution Compliance Checklist ──"
+      echo ""
+      echo "Please confirm the following invariants hold for this release:"
+      echo ""
+      echo "  §4  Injection cleanup: every inject_* call in run.rs has a matching"
+      echo "      restore_* on all early-return paths (ok, err, and non-zero exit)."
+      echo ""
+      echo "  §5  Goal state machine: all GoalRunState transitions go through"
+      echo "      GoalRun::transition(), which enforces can_transition_to()."
+      echo "      No direct .state = assignment outside transition()."
+      echo ""
+      echo "  §7  Policy enforcement: every ta_fs_* tool handler calls check_policy()"
+      echo "      before accessing source content (read, write_patch, diff)."
+      echo ""
+      echo "  §8  Audit trail: DraftBuilt, DraftApproved, DraftDenied, DraftApplied,"
+      echo "      GoalStarted, GoalCompleted, and GoalFailed events are emitted to"
+      echo "      the FsEventStore at every corresponding state change."
+      echo ""
+      echo "  §13 Error observability: all error paths include what happened, what"
+      echo "      was being attempted, and what the user can do next. No bare 'Error'"
+      echo "      or 'failed' messages without context."
+      echo ""
+      echo "Review the diff and audit log before proceeding."
+
   - name: Generate release notes
     agent:
       id: releaser
@@ -1880,6 +1910,52 @@ steps:
         };
         // Should fail: tag v1.0.0-alpha already exists.
         assert!(validate_release_with_env("1.0.0-alpha", &pipeline, &env).is_err());
+    }
+
+    // §11.6 / Plan item #5 regression: the default pipeline MUST include a
+    // constitution compliance sign-off step between "Build & verify" and
+    // "Generate release notes". If this test fails the step was removed.
+    #[test]
+    fn default_pipeline_has_constitution_checklist_gate() {
+        let pipeline: ReleasePipeline = serde_yaml::from_str(DEFAULT_PIPELINE_YAML).unwrap();
+
+        // Find the step indices so we can verify ordering.
+        let build_idx = pipeline
+            .steps
+            .iter()
+            .position(|s| s.name == "Build & verify");
+        let checklist_idx = pipeline
+            .steps
+            .iter()
+            .position(|s| s.name == "Constitution compliance sign-off");
+        let notes_idx = pipeline
+            .steps
+            .iter()
+            .position(|s| s.name == "Generate release notes");
+
+        assert!(
+            checklist_idx.is_some(),
+            "default pipeline must include 'Constitution compliance sign-off' step"
+        );
+        let checklist_idx = checklist_idx.unwrap();
+
+        // The checklist step must require human approval.
+        assert!(
+            pipeline.steps[checklist_idx].requires_approval,
+            "constitution sign-off step must have requires_approval: true"
+        );
+
+        // Ordering: Build & verify < checklist < Generate release notes.
+        if let (Some(b), Some(n)) = (build_idx, notes_idx) {
+            assert!(
+                b < checklist_idx,
+                "constitution sign-off must come after 'Build & verify'"
+            );
+            assert!(
+                checklist_idx < n,
+                "constitution sign-off must come before 'Generate release notes'"
+            );
+        }
     }
 
     #[test]
