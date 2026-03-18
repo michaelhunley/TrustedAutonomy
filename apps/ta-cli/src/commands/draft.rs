@@ -5771,8 +5771,6 @@ fn run() {
     /// pre-apply state so the tree is clean and no manual recovery is needed.
     #[test]
     fn apply_rollback_on_verification_failure() {
-        use std::io::Write;
-
         // ── Set up a git repo project ──────────────────────────────────────
         let project = TempDir::new().unwrap();
 
@@ -5835,6 +5833,7 @@ fn run() {
             // and would corrupt the parsed command string.
             #[cfg(not(windows))]
             {
+                use std::io::Write;
                 let fail_script = project.path().join(".ta/fail_check.sh");
                 let mut f = std::fs::File::create(&fail_script).unwrap();
                 writeln!(f, "#!/bin/sh").unwrap();
