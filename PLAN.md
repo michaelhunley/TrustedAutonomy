@@ -4372,9 +4372,26 @@ Channel plugins proved this migration pattern works (Discord went from built-in 
 4. [x] **`ta draft apply` merges chains**: Add `ta draft apply --chain <child-id>` which applies parent + all unapplied children in order, with a single merged commit message summarizing the chain. Detect cycles and warn.
 5. [x] **`ta draft list` chain column**: Show `→ <parent-short-id>` in a new "Parent" column when a draft is a follow-up, so chains are visible at a glance.
 6. [x] **Tests**: Unit test for composited diff (parent applied, child staging, expect combined N files). Integration test for `apply --chain`.
-7. [ ] **`ta draft apply` transactional rollback on validation failure**: If pre-submit verification fails, `ta draft apply` must restore the working tree to its pre-apply state (git stash pop / reverse copy). Currently files are left in the working tree and the user must manually reset — this is a pre-alpha blocker for safe operation on `main`. *(Found: apply of v0.12.2.1 draft failed Nix env check, left 11 files modified in working tree.)*
+
+*Deferred item moved to v0.12.2.2: transactional rollback on validation failure.*
 
 #### Version: `0.12.2-alpha.1`
+
+---
+
+### v0.12.2.2 — Draft Apply: Transactional Rollback on Validation Failure
+<!-- status: pending -->
+**Goal**: Make `ta draft apply` safe to run on `main`. If pre-submit verification fails (fmt, clippy, tests), all files written to the working tree must be restored to their pre-apply state. Currently the apply is not atomic — files land on disk but the commit never happens, leaving the working tree dirty and requiring manual `git checkout HEAD -- <files>` to recover.
+
+**Found during**: v0.12.2.1 apply failed due to a corrupted Nix store entry (`glib-2.86.3-dev` reference invalid), leaving 11 files modified in working tree on `main`.
+
+1. [ ] **Snapshot working tree before copy**: Before writing any files, record the set of paths that will be modified. For tracked files, stash or snapshot current content via `git stash push -- <paths>`.
+2. [ ] **Rollback on verification failure**: If any verification step exits non-zero, reverse-copy all written files back from the pre-apply snapshot. Print `[rollback] Restored N file(s) to pre-apply state.`
+3. [ ] **Rollback on unexpected error**: Any panic or early return in the apply path must also trigger rollback (use a guard/drop pattern or explicit cleanup).
+4. [ ] **Test**: Write an integration test that injects a failing verification command and asserts the working tree is clean after the failed apply.
+5. [ ] **Distinguish env failures from code failures**: If the failure is in the Nix/build environment (not the code itself), print a clear message: `Verification failed — this may be a build environment issue, not a code problem. Re-run after fixing your environment.`
+
+#### Version: `0.12.2-alpha.2`
 
 ---
 
