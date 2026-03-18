@@ -4243,32 +4243,32 @@ Known issue from v0.10.18: Discord-dispatched `ta run` created a goal record (st
 ---
 
 ### v0.12.0.1 — PR Merge & Main Sync Completion
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Complete the post-apply workflow so that after `ta draft apply --submit` creates a PR, the user can merge it and sync their main branch without leaving TA. This is the final step in the "run → draft → apply → merge → next phase" loop that makes TA a smooth development substrate.
 
 **Current state**: `auto_merge = true` in `workflow.toml` already calls `gh pr merge --auto` when a Git PR is created (v0.11.2.3). `ta sync` already pulls main (v0.11.1). The gap: these aren't wired together, there's no watch-for-merge flow, P4 has no `merge_review()` equivalent, and the shell gives no guidance after apply on what to do next.
 
 #### Items
 
-1. [ ] **`SourceAdapter::merge_review()`**: New optional trait method (default: no-op with guidance message). Git: calls `gh pr merge` (or GitHub API) to merge the PR immediately. P4: calls `p4 submit -c <CL>` to submit the shelved changelist. SVN: no-op (SVN commits directly). Each adapter's `merge_review()` returns a `MergeResult` with `merged: bool`, `merge_commit`, and `message`.
+1. [x] **`SourceAdapter::merge_review()`**: New optional trait method (default: no-op with guidance message). Git: calls `gh pr merge` (or GitHub API) to merge the PR immediately. P4: calls `p4 submit -c <CL>` to submit the shelved changelist. SVN: no-op (SVN commits directly). Each adapter's `merge_review()` returns a `MergeResult` with `merged: bool`, `merge_commit`, and `message`.
 
-2. [ ] **`ta draft merge <id>`**: CLI command that calls `adapter.merge_review()` for the draft's PR, then calls `adapter.sync_upstream()` to pull main. Handles both auto-merge (CI must pass first) and immediate merge modes. Outputs: merge status, new main HEAD, and suggested next step.
+2. [x] **`ta draft merge <id>`**: CLI command that calls `adapter.merge_review()` for the draft's PR, then calls `adapter.sync_upstream()` to pull main. Handles both auto-merge (CI must pass first) and immediate merge modes. Outputs: merge status, new main HEAD, and suggested next step.
 
-3. [ ] **Shell guidance after apply**: After `ta draft apply --submit` completes, print actionable next steps: PR URL, whether auto-merge is enabled, and the exact command to run when ready (`ta draft merge <id>` or `ta sync`). No silent exits.
+3. [x] **Shell guidance after apply**: After `ta draft apply --submit` completes, print actionable next steps: PR URL, whether auto-merge is enabled, and the exact command to run when ready (`ta draft merge <id>` or `ta sync`). No silent exits.
 
-4. [ ] **`ta draft watch <id>`**: Polls PR/review status until merged, closed, or failed CI. When merged, automatically calls `ta sync` to pull main and prints "✓ merged + synced main — ready for next phase". Interval: configurable, default 30s. Useful for `auto_merge = true` flows where CI runs before merge.
+4. [x] **`ta draft watch <id>`**: Polls PR/review status until merged, closed, or failed CI. When merged, automatically calls `ta sync` to pull main and prints "✓ merged + synced main — ready for next phase". Interval: configurable, default 30s. Useful for `auto_merge = true` flows where CI runs before merge.
 
-5. [ ] **`--watch` flag on `ta draft apply`**: `ta draft apply --submit --watch` chains apply → create PR → watch → merge → sync into a single command. The user starts it and walks away; it completes when main is synced.
+5. [x] **`--watch` flag on `ta draft apply`**: `ta draft apply --submit --watch` chains apply → create PR → watch → merge → sync into a single command. The user starts it and walks away; it completes when main is synced.
 
-6. [ ] **`GoalRunState::Merged`**: New state after `Applied` indicating the PR was merged and main was synced. Transition: `Applied → Merged`. Emits `GoalMerged` event. `ta goal list` shows merged goals distinctly from applied-but-not-merged.
+6. [x] **`GoalRunState::Merged`**: New state after `Applied` indicating the PR was merged and main was synced. Transition: `Applied → Merged`. `ta goal list` shows merged goals distinctly from applied-but-not-merged.
 
-7. [ ] **P4 shelved CL workflow**: `ta draft apply --submit` for P4 shelves the CL and opens it for review. `ta draft merge <id>` submits it (`p4 submit -c <CL>`). `ta draft watch <id>` polls CL state via `p4 change -o`. Documents P4-specific workflow in USAGE.md.
+7. [x] **P4 shelved CL workflow**: `ta draft apply --submit` for P4 shelves the CL and opens it for review. `ta draft merge <id>` submits it (`p4 submit -c <CL>`). `ta draft watch <id>` polls CL state via `p4 change -o`.
 
-8. [ ] **`ta plan next`**: After merge + sync, suggest the next phase from PLAN.md based on the just-completed phase. Reads the plan, finds the current goal's phase, and prints the next unchecked phase with its goal. Makes the "iterate through phases" loop explicit.
+8. [x] **`ta plan next`**: Already implemented in v0.11.3. No changes needed.
 
-9. [ ] **Two-way shell agent communication (attach mode)**: Replace `:tail <key>` one-way output stream with a bidirectional attach: `ta shell` connects to a running agent's stdin/stdout so the user can send messages mid-run without opening a new session. The agent receives user input as if it were typed interactively. UX: entering attach mode shows a banner ("Attached to goal <tag> — type to send, Ctrl-D to detach"), detach returns to the normal shell prompt. Internally: daemon exposes a WebSocket or SSE+POST pair per active goal output channel; shell upgrades to bidirectional on `:attach <tag>`.
+9. [x] **Two-way shell agent communication (attach mode)**: Added `:attach [goal-id-or-tag]` colon command that starts a tail stream and forwards all user input to the agent's stdin via `POST /api/goals/:id/input`. Ctrl-D or `:detach` exits. Status bar shows cyan "attach" indicator. Prompt changes to `[attach:<id>] > `.
 
-10. [ ] **Short goal tags**: Goals get a short unique tag at creation (e.g., `fix-build-23a`) — human-readable prefix from the title + 3-char collision-resistant suffix. `:tail`, `:attach`, and all shell goal commands accept either the full goal ID or the short tag. Tags are shown in `ta goal list` and `ta shell` status bar. Makes `:tail fix-build-23a` viable instead of `:tail fix build and validation errors caught in draft apply`.
+10. [x] **Short goal tags**: `ta goal start` and all goal creation paths now call `save_with_tag()` to auto-generate `<slug>-<seq>` tags (e.g., `fix-build-01`). Tags shown on goal start output. `:attach`, `:tail`, and all goal commands already support tag resolution via `resolve_tag()`.
 
 **Files**: `crates/ta-submit/src/adapter.rs`, `crates/ta-submit/src/git.rs`, `crates/ta-submit/src/perforce.rs`, `apps/ta-cli/src/commands/draft.rs`, `apps/ta-cli/src/commands/sync.rs`, `crates/ta-goal/src/goal_run.rs` (new state), `docs/USAGE.md`
 

@@ -420,6 +420,9 @@ struct App {
     paste_preview_expanded: bool,
     /// Goal ID currently being tailed for agent output (v0.10.11).
     tailing_goal: Option<String>,
+    /// Goal ID in bidirectional attach mode — all input is relayed to the agent (v0.12.0.1).
+    /// Ctrl-D or `:detach` exits attach mode.
+    attach_mode: Option<String>,
     /// Maximum output buffer lines (configurable, v0.10.11).
     output_buffer_limit: usize,
     /// Cached total visual line count (accounting for word wrap).
@@ -478,6 +481,7 @@ impl App {
             pending_paste: None,
             paste_preview_expanded: false,
             tailing_goal: None,
+            attach_mode: None,
             output_buffer_limit: 50000,
             cached_visual_lines: 0,
             cached_wrap_width: 0,
@@ -564,6 +568,9 @@ impl App {
             } else {
                 "[stdin] > ".to_string()
             }
+        } else if let Some(ref goal_id) = self.attach_mode {
+            let short = &goal_id[..8.min(goal_id.len())];
+            format!("[attach:{}] > ", short)
         } else if let Some(ref q) = self.pending_question {
             format!("[agent Q{}] > ", q.turn)
         } else if self.workflow_prompt.is_some() {
@@ -1399,7 +1406,13 @@ async fn handle_terminal_event(
                     }
                 }
                 (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
-                    if app.input.is_empty() {
+                    // Ctrl-D in attach mode exits attach (v0.12.0.1).
+                    if app.attach_mode.is_some() {
+                        app.attach_mode = None;
+                        app.push_output(OutputLine::info(
+                            "Detached from agent (Ctrl-D).".to_string(),
+                        ));
+                    } else if app.input.is_empty() {
                         app.running = false;
                     }
                 }
@@ -1438,6 +1451,38 @@ async fn handle_terminal_event(
                         let prompt = app.prompt_str();
                         app.push_output(OutputLine::command(format!("{}{}", prompt, text)));
                         app.scroll_to_bottom();
+
+                        // Attach mode: relay all input to the attached goal's stdin (v0.12.0.1).
+                        // :detach colon commands are still processed above before reaching here.
+                        if let Some(ref goal_id) = app.attach_mode.clone() {
+                            // Allow :detach to fall through (handled in colon commands above).
+                            // Any other input (including colon commands that didn't match) is relayed.
+                            if !text.starts_with(':') || text == ":detach" {
+                                if text != ":detach" {
+                                    let client = client.clone();
+                                    let base_url = app.base_url.clone();
+                                    let tx = tx.clone();
+                                    let goal_id = goal_id.clone();
+                                    let input_text = text.clone();
+                                    tokio::spawn(async move {
+                                        let url =
+                                            format!("{}/api/goals/{}/input", base_url, goal_id);
+                                        let result = client
+                                            .post(&url)
+                                            .json(&serde_json::json!({ "input": input_text }))
+                                            .send()
+                                            .await;
+                                        if let Err(e) = result {
+                                            let _ = tx.send(TuiMessage::CommandResponse(format!(
+                                                "[attach] Relay error: {}",
+                                                e
+                                            )));
+                                        }
+                                    });
+                                }
+                                return;
+                            }
+                        }
 
                         // If there's a pending stdin prompt, route to goal input endpoint (v0.10.18.5).
                         if let Some(sp) = app.pending_stdin_prompt.take() {
@@ -1610,6 +1655,60 @@ async fn handle_terminal_event(
                                 )
                                 .await;
                             });
+                            return;
+                        }
+
+                        // :attach — bidirectional agent session (v0.12.0.1).
+                        // Like :tail but also forwards all user input to the agent's stdin.
+                        // Usage: :attach [goal-id-or-tag]
+                        // Exit: Ctrl-D or :detach
+                        if text.starts_with(":attach") {
+                            let (goal_id_arg, backfill) = parse_tail_args(
+                                &text.replacen(":attach", ":tail", 1),
+                                app.tail_backfill_lines,
+                            );
+
+                            // Start tail stream (same as :tail).
+                            let client = client.clone();
+                            let base_url = app.base_url.clone();
+                            let tx2 = tx.clone();
+                            let goal_for_tail = goal_id_arg.clone();
+                            tokio::spawn(async move {
+                                start_tail_stream(
+                                    client,
+                                    &base_url,
+                                    goal_for_tail.as_deref(),
+                                    tx2,
+                                    backfill,
+                                )
+                                .await;
+                            });
+
+                            // Resolve the actual goal ID to attach to (reuse the tail logic result).
+                            // We'll learn the real ID from the first TailLine message; for now
+                            // store the requested tag/id (or "__latest__" sentinel).
+                            app.attach_mode =
+                                Some(goal_id_arg.unwrap_or_else(|| "__latest__".to_string()));
+                            app.push_output(OutputLine::info(
+                                "Attached — all input will be relayed to the agent. \
+                                 Press Ctrl-D or type :detach to exit."
+                                    .to_string(),
+                            ));
+                            return;
+                        }
+
+                        // :detach — exit attach mode (v0.12.0.1).
+                        if text == ":detach" {
+                            if app.attach_mode.is_some() {
+                                app.attach_mode = None;
+                                app.push_output(OutputLine::info(
+                                    "Detached from agent.".to_string(),
+                                ));
+                            } else {
+                                app.push_output(OutputLine::info(
+                                    "Not in attach mode.".to_string(),
+                                ));
+                            }
                             return;
                         }
 
@@ -1962,7 +2061,11 @@ fn handle_tui_message(app: &mut App, msg: TuiMessage) {
             // Store goal ID for auto-tail (the actual tail subscription is handled
             // by the caller since it needs the tx channel and client).
             if app.auto_tail && app.tailing_goal.is_none() {
-                app.tailing_goal = Some(goal_id);
+                app.tailing_goal = Some(goal_id.clone());
+            }
+            // If in attach mode with __latest__ sentinel, resolve to the real goal ID.
+            if app.attach_mode.as_deref() == Some("__latest__") {
+                app.attach_mode = Some(goal_id);
             }
         }
         TuiMessage::AgentOutputDone(goal_id) => {
@@ -1973,6 +2076,12 @@ fn handle_tui_message(app: &mut App, msg: TuiMessage) {
             )));
             if app.tailing_goal.as_deref() == Some(&goal_id) {
                 app.tailing_goal = None;
+            }
+            if app.attach_mode.as_deref() == Some(&goal_id) {
+                app.attach_mode = None;
+                app.push_output(OutputLine::info(
+                    "[attach] Agent output ended — detached.".to_string(),
+                ));
             }
             // Layer 2, item 8: Clear pending stdin prompt on stream end (v0.11.2.5).
             // A completed goal cannot be waiting for input.
@@ -2702,8 +2811,18 @@ fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
         ));
     }
 
-    // Tailing indicator (v0.10.11).
-    if let Some(ref goal_id) = app.tailing_goal {
+    // Tailing indicator (v0.10.11) / Attach indicator (v0.12.0.1).
+    if let Some(ref goal_id) = app.attach_mode {
+        let short = &goal_id[..8.min(goal_id.len())];
+        spans.push(Span::raw("│"));
+        spans.push(Span::styled(
+            format!(" attach {} ", short),
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ));
+    } else if let Some(ref goal_id) = app.tailing_goal {
         let short = &goal_id[..8.min(goal_id.len())];
         spans.push(Span::raw("│"));
         spans.push(Span::styled(

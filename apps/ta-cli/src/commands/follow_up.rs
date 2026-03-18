@@ -607,6 +607,7 @@ fn goal_to_candidate(
         GoalRunState::Configured => ("configured (not started)".to_string(), None, vec![]),
         // Terminal states aren't follow-up candidates.
         GoalRunState::Applied
+        | GoalRunState::Merged
         | GoalRunState::Completed
         | GoalRunState::Approved { .. }
         | GoalRunState::Created => return None,

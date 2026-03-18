@@ -15,8 +15,8 @@ use ta_changeset::DraftPackage;
 use ta_goal::GoalRun;
 
 use crate::adapter::{
-    CommitResult, PushResult, Result, ReviewResult, SavedVcsState, SourceAdapter, SubmitError,
-    SyncResult,
+    CommitResult, MergeResult, PushResult, Result, ReviewResult, ReviewStatus, SavedVcsState,
+    SourceAdapter, SubmitError, SyncResult,
 };
 use crate::config::SubmitConfig;
 
@@ -313,6 +313,84 @@ impl SourceAdapter for PerforceAdapter {
                 );
                 Ok(()) // Degrade gracefully
             }
+        }
+    }
+
+    fn check_review(&self, review_id: &str) -> Result<Option<ReviewStatus>> {
+        // Extract the raw CL number (strip "cl:" or "@" prefix if present).
+        let cl = review_id
+            .strip_prefix("cl:")
+            .or_else(|| review_id.strip_prefix('@'))
+            .unwrap_or(review_id);
+
+        match self.p4_cmd(&["change", "-o", cl]) {
+            Ok(spec) => {
+                // Parse the Status field from the CL spec.
+                // Possible values: pending, shelved, submitted.
+                let state = spec
+                    .lines()
+                    .find(|l| l.starts_with("Status:"))
+                    .and_then(|l| l.split_whitespace().nth(1))
+                    .unwrap_or("unknown")
+                    .to_lowercase();
+
+                let mapped_state = match state.as_str() {
+                    "submitted" => "merged",
+                    "pending" | "shelved" => "open",
+                    other => other,
+                };
+
+                Ok(Some(ReviewStatus {
+                    state: mapped_state.to_string(),
+                    checks_passing: None,
+                }))
+            }
+            Err(_) => Ok(None),
+        }
+    }
+
+    fn merge_review(&self, review_id: &str) -> Result<MergeResult> {
+        // Extract raw CL number.
+        let cl = review_id
+            .strip_prefix("cl:")
+            .or_else(|| review_id.strip_prefix('@'))
+            .unwrap_or(review_id);
+
+        tracing::info!(cl = %cl, "PerforceAdapter: submitting shelved changelist");
+
+        match self.p4_cmd(&["submit", "-c", cl]) {
+            Ok(output) => {
+                // Extract submitted CL number from output ("Submitted as change N.")
+                let submitted_cl = output
+                    .lines()
+                    .find(|l| l.contains("Submitted as change"))
+                    .and_then(|l| l.split_whitespace().last())
+                    .map(|s| s.trim_end_matches('.').to_string());
+
+                Ok(MergeResult {
+                    merged: true,
+                    merge_commit: submitted_cl.clone(),
+                    message: format!(
+                        "Changelist {} submitted to depot{}.",
+                        cl,
+                        submitted_cl
+                            .as_ref()
+                            .map(|n| format!(" as change {}", n))
+                            .unwrap_or_default()
+                    ),
+                    metadata: [
+                        ("changelist".to_string(), cl.to_string()),
+                        ("submitted_cl".to_string(), submitted_cl.unwrap_or_default()),
+                    ]
+                    .into_iter()
+                    .collect(),
+                })
+            }
+            Err(e) => Err(SubmitError::ReviewError(format!(
+                "p4 submit -c {} failed: {}. \
+                 Resolve any conflicts, then re-run `ta draft merge <id>` or submit manually.",
+                cl, e
+            ))),
         }
     }
 }

@@ -6,8 +6,8 @@ use ta_changeset::DraftPackage;
 use ta_goal::GoalRun;
 
 use crate::adapter::{
-    CommitResult, PushResult, Result, ReviewResult, ReviewStatus, SavedVcsState, SourceAdapter,
-    SubmitError, SyncResult,
+    CommitResult, MergeResult, PushResult, Result, ReviewResult, ReviewStatus, SavedVcsState,
+    SourceAdapter, SubmitError, SyncResult,
 };
 use crate::config::SubmitConfig;
 use crate::config::SyncConfig;
@@ -571,6 +571,83 @@ impl SourceAdapter for GitAdapter {
                 }))
             }
             _ => Ok(None),
+        }
+    }
+
+    fn merge_review(&self, review_id: &str) -> Result<MergeResult> {
+        if !self.has_gh_cli() {
+            return Err(SubmitError::ReviewError(
+                "gh CLI not found — install GitHub CLI to merge PRs automatically. \
+                 Merge manually at the PR URL, then run `ta sync`."
+                    .to_string(),
+            ));
+        }
+
+        let merge_strategy = &self.config.git.merge_strategy;
+        let merge_flag = match merge_strategy.as_str() {
+            "rebase" => "--rebase",
+            "merge" => "--merge",
+            _ => "--squash",
+        };
+
+        tracing::info!(
+            review_id = %review_id,
+            strategy = %merge_strategy,
+            "GitAdapter: merging PR"
+        );
+
+        let output = Command::new("gh")
+            .args(["pr", "merge", review_id, "--auto", merge_flag])
+            .current_dir(&self.work_dir)
+            .output()?;
+
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            // Check if merged immediately or queued for auto-merge.
+            let merged =
+                !stdout.contains("auto-merge") && !stdout.is_empty() || stdout.contains("Merged");
+
+            Ok(MergeResult {
+                merged,
+                merge_commit: None,
+                message: if merged {
+                    format!("PR #{} merged ({}).", review_id, merge_strategy)
+                } else {
+                    format!(
+                        "Auto-merge enabled for PR #{} — will merge when CI passes.",
+                        review_id
+                    )
+                },
+                metadata: [
+                    ("review_id".to_string(), review_id.to_string()),
+                    ("strategy".to_string(), merge_strategy.clone()),
+                ]
+                .into_iter()
+                .collect(),
+            })
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            // "Pull request #N is not mergeable" — auto-merge may still be set.
+            if stderr.contains("not mergeable") || stderr.contains("auto-merge") {
+                Ok(MergeResult {
+                    merged: false,
+                    merge_commit: None,
+                    message: format!(
+                        "PR #{} is not yet mergeable (CI may be pending). \
+                         Auto-merge is set — it will merge when checks pass. \
+                         Run `ta draft watch <id>` to monitor.",
+                        review_id
+                    ),
+                    metadata: [("review_id".to_string(), review_id.to_string())]
+                        .into_iter()
+                        .collect(),
+                })
+            } else {
+                Err(SubmitError::ReviewError(format!(
+                    "gh pr merge failed for PR #{}: {}",
+                    review_id, stderr
+                )))
+            }
         }
     }
 }

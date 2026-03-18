@@ -145,7 +145,7 @@ pub fn start_goal_extending_parent(
     goal.transition(GoalRunState::Configured)?;
     goal.transition(GoalRunState::Running)?;
 
-    store.save(&goal)?;
+    store.save_with_tag(&mut goal)?;
     Ok(goal)
 }
 
@@ -509,9 +509,12 @@ fn start_goal(
         goal.transition(GoalRunState::Configured)?;
         goal.transition(GoalRunState::Running)?;
 
-        store.save(&goal)?;
+        store.save_with_tag(&mut goal)?;
 
         println!("Goal started: {}", goal.goal_run_id);
+        if let Some(ref tag) = goal.tag {
+            println!("  Tag:     {}", tag);
+        }
         println!("  Title:   {}", goal.title);
         println!("  Staging: {}", overlay.staging_dir().display());
         println!();

@@ -1066,6 +1066,27 @@ ta draft pr-status <draft-id>
 ta draft pr-list
 ```
 
+### Merging a PR and Syncing Main
+
+After `ta draft apply --submit` creates a PR, complete the loop with `ta draft merge` or `ta draft watch`:
+
+```bash
+# Merge the PR immediately and sync local main
+ta draft merge <draft-id>
+
+# Poll until the PR merges (useful with auto_merge + CI gates), then sync
+ta draft watch <draft-id>
+
+# Or combine apply + watch into one command:
+ta draft apply <draft-id> --submit --watch
+```
+
+`ta draft merge` calls `gh pr merge --auto` (or the configured merge strategy) then runs `ta sync` to fast-forward your local branch. `ta draft watch` polls every 30 seconds (configurable with `--interval`) until the PR state is `merged`, then syncs automatically.
+
+After a successful merge, the goal transitions to `Merged` state — visible in `ta goal list`.
+
+For Perforce, `ta draft merge` submits the shelved changelist (`p4 submit -c <CL>`) and `ta draft watch` polls the changelist state.
+
 ### Plan Intelligence
 
 Edit the plan directly from the CLI without manual PLAN.md editing:
@@ -3045,7 +3066,9 @@ Built-in shell commands:
 | Command | Description |
 |---------|-------------|
 | `help` / `?` | Show shell help and CLI command summary |
-| `:tail [id] [--lines N]` | Attach to goal output stream (`--lines` overrides backfill count) |
+| `:tail [id] [--lines N]` | Attach to goal output stream (read-only, `--lines` overrides backfill count) |
+| `:attach [id]` | Bidirectional attach — stream output AND relay typed input to the agent's stdin |
+| `:detach` | Exit attach mode (also exits on Ctrl-D) |
 | `:follow-up [filter]` | List follow-up candidates (failed goals, denied drafts); filter by keyword |
 | `:status` | Refresh the status bar |
 | `/parallel [tag]` | Spawn an independent agent conversation; optional custom tag |
@@ -3071,6 +3094,7 @@ When a goal starts, the shell automatically streams the agent's stdout/stderr in
 
 - **Auto-tail**: When a goal starts (detected via SSE `goal_started` event), the shell subscribes to `GET /api/goals/:id/output` and interleaves agent output with TA events. Stdout lines appear in white, stderr in yellow.
 - **Manual tail**: Use `:tail` to attach to a specific goal's output, or `:tail <id>` to target a specific goal when multiple are running. Use `--lines N` to override the backfill count.
+- **Bidirectional attach**: Use `:attach [id]` to both stream output and relay your input to the agent's stdin. Useful when an agent pauses for input mid-run. The prompt changes to `[attach:<id>] >` and the status bar shows a cyan badge. Press Ctrl-D or type `:detach` to exit attach mode.
 - **Draft-ready notification**: When a draft finishes building, a green notification appears: `[draft ready] "title" (display-id) — run: draft view <id>`.
 - **Tailing indicator**: The status bar shows a green badge while streaming agent output.
 - **Split pane**: Press `Ctrl-W` to toggle a side-by-side view with agent output in the right pane. Agent output is rendered with markdown styling — bold, inline code, headers, and fenced code blocks are syntax-highlighted.
