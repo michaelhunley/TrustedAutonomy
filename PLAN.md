@@ -88,6 +88,10 @@ External users (working on their own projects, not TA itself) need these phases 
 | **v0.13.5** | VCS Adapter Externalization — first users include Perforce shops; P4 must be external plugin |
 | ⬇ **PUBLIC ALPHA** | TA can be set up on a new project, plan built, goals run, drafts applied, PRs merged, main synced — in git or P4, from `ta shell` + Discord/Slack |
 
+### Pre-Alpha Bugs to Fix (must resolve before external release)
+
+- **Follow-up draft captures per-session delta, not full staging-vs-source diff**: When `ta run --follow-up` creates a child draft, `ta draft build` should diff the *full staging state* against current source — capturing all accumulated changes from the parent session + child session. Currently it appears to capture only what the child agent session wrote. Result: applying a child draft produces partial changes, and apply-time validation fails with compile errors that exist in source but not in staging. This confuses agents doing follow-up work ("the build is clean!") and requires multiple follow-up chains to complete simple fix tasks. Fix: ensure `ta draft build` always performs a full `diff(staging, source)` regardless of session depth.
+
 ### Post-Alpha: Near-Term
 
 | Phase | Notes |
