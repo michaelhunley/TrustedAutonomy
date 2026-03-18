@@ -3951,7 +3951,7 @@ The output pipeline is: user types command → `send_input()` POST to daemon `/a
 <!-- status: done -->
 **Goal**: Fix all violations found by the 7-agent constitution compliance audit against `docs/TA-CONSTITUTION.md`. Prioritize High-severity items (data loss on error paths) before Medium-severity (stale injection on follow-up).
 
-**Audit source**: Constitution review run via `ta shell` QA agent (2026-03-16). Sections §2, §3, §9 passed. Violations in §4 fixed. Full §5–§14 audit deferred → v0.11.6.
+**Audit source**: Constitution review run via `ta shell` QA agent (2026-03-16). Sections §2, §3, §9 passed. Violations in §4 fixed. Full §5–§14 audit → v0.11.6.
 
 #### §4 — CLAUDE.md Injection & Cleanup (4 violations — all fixed, PR #183)
 
@@ -3965,19 +3965,11 @@ The output pipeline is: user types command → `send_input()` POST to daemon `/a
 
 5. [x] **Fix-session relaunch Err paths**: Both interactive Block-mode and Agent-mode fix-session relaunch `Err` paths restore re-injected CLAUDE.md before returning. **§4.5, §4.6**
 
-#### Deferred items → v0.11.6
+#### Deferred items
 
-6. → v0.11.6 **Re-run full audit §5–§14**: State machine, draft lifecycle, policy enforcement, audit trail, agent isolation, memory injection, event system, error handling, versioning.
+6. → v0.11.6 Full §5–§14 audit, fixes, regression tests, sign-off, and release pipeline checklist gate. See v0.11.6 for details.
 
-7. → v0.11.6 **Fix all identified violations**: Address each finding from full audit.
-
-8. → v0.11.6 **Constitution regression tests**: Tests referencing constitution section for each fix.
-
-9. → v0.11.6 **Audit sign-off**: Full 14-section clean audit.
-
-10. → v0.11.4.4 (release step) **Release pipeline checklist gate**: Add a `requires_approval` step to `DEFAULT_PIPELINE_YAML` between "Build & verify" and "Generate release notes". The step prints a short constitution compliance checklist (injection cleanup, error paths, state transitions) and pauses for human sign-off. Skippable with `--skip-approvals` for patch releases. Enabled by default — low cost, high value as a forcing function.
-
-**Files**: `apps/ta-cli/src/commands/run.rs` (injection/cleanup), `crates/ta-goal/src/goal_run.rs` (state machine), `apps/ta-cli/src/commands/release.rs` (pipeline step), others TBD by audit.
+**Files**: `apps/ta-cli/src/commands/run.rs` (injection/cleanup).
 
 #### Version: `0.11.4-alpha.4`
 
@@ -4068,6 +4060,39 @@ The output pipeline is: user types command → `send_input()` POST to daemon `/a
 16. [ ] **Session lifecycle**: Parallel sessions auto-close after idle timeout. User can `/close <tag>` to end a session explicitly. Max concurrent sessions configurable in `daemon.toml`.
 
 #### Version: `0.11.5-alpha`
+
+---
+
+### v0.11.6 — Constitution Audit Completion (§5–§14)
+<!-- status: pending -->
+**Goal**: Complete the constitution compliance audit that was cut short in v0.11.4.4. That phase fixed all §4 violations. This phase runs the full 14-section audit, fixes any remaining violations, adds regression tests, and gets a clean sign-off.
+
+**Context**: The initial audit (2026-03-16) confirmed §2, §3, §9 pass and fixed §4. Sections §5–§14 were not reached before the audit was cut short.
+
+#### Items
+
+1. [ ] **Re-run full §5–§14 audit**: Run a structured review of each remaining section against the current codebase:
+   - §5: Goal lifecycle state machine — all transitions validated, no illegal jumps?
+   - §6: Draft lifecycle — supersession rules enforced, no orphaned drafts?
+   - §7: Policy enforcement — capability checks on all agent-invoked paths?
+   - §8: Audit trail — all state changes logged with structured fields?
+   - §10: Agent isolation — staging dirs never cross-contaminate?
+   - §11: Memory injection — context injection observes project boundaries?
+   - §12: Event system — all events reliably emitted, no silent drops?
+   - §13: Error handling — all errors include what/why/next-step per observability mandate?
+   - §14: Versioning — version guards enforced, daemon/CLI mismatch surfaced?
+
+2. [ ] **Fix all identified violations**: Address each finding, prioritized High → Medium → Low. Reference the section (e.g., `// §8.2: audit log must include goal_id`) in code comments.
+
+3. [ ] **Constitution regression tests**: For each fix, add a test that would catch the violation if it regressed. Tests should cite the section they cover.
+
+4. [ ] **Audit sign-off**: Re-run the full 14-section audit after fixes. Document clean pass in commit message.
+
+5. [ ] **Release pipeline checklist gate**: Add a `requires_approval` step to `DEFAULT_PIPELINE_YAML` between "Build & verify" and "Generate release notes". Prints a short constitution compliance checklist (injection cleanup, error paths, state transitions) and pauses for human sign-off. Skippable with `--skip-approvals`. Enabled by default.
+
+**Files**: TBD by audit findings. Likely `crates/ta-goal/src/goal_run.rs` (§5), `apps/ta-cli/src/commands/draft.rs` (§6), `crates/ta-policy/` (§7), audit logging (§8), `apps/ta-cli/src/commands/release.rs` (pipeline step).
+
+#### Version: `0.11.6-alpha`
 
 ---
 
