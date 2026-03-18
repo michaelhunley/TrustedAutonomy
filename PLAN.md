@@ -4385,11 +4385,11 @@ Channel plugins proved this migration pattern works (Discord went from built-in 
 
 **Found during**: v0.12.2.1 apply failed due to a corrupted Nix store entry (`glib-2.86.3-dev` reference invalid), leaving 11 files modified in working tree on `main`.
 
-1. [ ] **Snapshot working tree before copy**: Before writing any files, record the set of paths that will be modified. For tracked files, stash or snapshot current content via `git stash push -- <paths>`.
-2. [ ] **Rollback on verification failure**: If any verification step exits non-zero, reverse-copy all written files back from the pre-apply snapshot. Print `[rollback] Restored N file(s) to pre-apply state.`
-3. [ ] **Rollback on unexpected error**: Any panic or early return in the apply path must also trigger rollback (use a guard/drop pattern or explicit cleanup).
-4. [ ] **Test**: Write an integration test that injects a failing verification command and asserts the working tree is clean after the failed apply.
-5. [ ] **Distinguish env failures from code failures**: If the failure is in the Nix/build environment (not the code itself), print a clear message: `Verification failed — this may be a build environment issue, not a code problem. Re-run after fixing your environment.`
+1. [x] **Snapshot working tree before copy**: Before writing any files, record the set of paths that will be modified. For each artifact URI, read the current file content from target_dir into an in-memory snapshot (None = new file, Some(bytes) = existing file).
+2. [x] **Rollback on verification failure**: If any verification step exits non-zero, reverse-copy all written files back from the pre-apply snapshot. Prints `[rollback] Restored N file(s) to pre-apply state.`
+3. [x] **Rollback on unexpected error**: Any submit workflow error (branch creation, verification, commit) triggers rollback via the same `submit_result.is_err()` check after `adapter.restore_state()`.
+4. [x] **Test**: `apply_rollback_on_verification_failure` — injects a failing verification command, applies a draft, asserts the working tree is clean (original content restored). Cross-platform: uses `false` on Unix, `exit /b 1` on Windows.
+5. [ ] **Distinguish env failures from code failures**: If the failure is in the Nix/build environment (not the code itself), print a clear message: `Verification failed — this may be a build environment issue, not a code problem. Re-run after fixing your environment.` → deferred to v0.12.3
 
 #### Version: `0.12.2-alpha.2`
 

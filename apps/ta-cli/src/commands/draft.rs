@@ -2535,6 +2535,10 @@ fn apply_package(
             .unwrap_or_else(|| config.workspace_root.clone()),
     };
 
+    // Snapshot files that will be overwritten so we can roll back on verification failure.
+    // Populated for overlay-based goals; empty for legacy goals (no snapshot available).
+    let mut pre_apply_snapshot: Vec<(std::path::PathBuf, Option<Vec<u8>>)> = Vec::new();
+
     // Apply changes — use overlay path for overlay-based goals, legacy path otherwise.
     eprintln!("[apply] Applying changes to {}...", target_dir.display());
     let applied_files: Vec<String> = if let Some(ref source_dir) = goal.source_dir {
@@ -2618,6 +2622,16 @@ fn apply_package(
                 .map(|a| a.resource_uri.clone())
                 .collect()
         };
+
+        // Capture pre-apply snapshot: for each file about to be written, record its
+        // current content in target_dir so we can restore it if verification fails.
+        for uri in &artifact_uris {
+            if let Some(rel_path) = uri.strip_prefix("fs://workspace/") {
+                let target_file = target_dir.join(rel_path);
+                let content = std::fs::read(&target_file).ok(); // None = file doesn't exist yet
+                pre_apply_snapshot.push((target_file, content));
+            }
+        }
 
         eprintln!("[apply] Diffing staging vs source and copying changes...");
         let applied = overlay
@@ -2974,6 +2988,31 @@ fn apply_package(
             // regardless of whether the submit operations succeeded or failed.
             if let Err(e) = adapter.restore_state(saved_state) {
                 eprintln!("Warning: could not restore VCS state after apply: {}", e);
+            }
+
+            // If the submit workflow failed (e.g., verification, branch creation), roll back
+            // all file writes to leave the working tree clean.
+            if submit_result.is_err() && !pre_apply_snapshot.is_empty() {
+                let mut restored: usize = 0;
+                for (path, original) in &pre_apply_snapshot {
+                    match original {
+                        Some(bytes) => {
+                            if std::fs::write(path, bytes).is_ok() {
+                                restored += 1;
+                            }
+                        }
+                        None => {
+                            // File didn't exist before apply — remove it.
+                            if path.exists() && std::fs::remove_file(path).is_ok() {
+                                restored += 1;
+                            }
+                        }
+                    }
+                }
+                eprintln!(
+                    "[rollback] Restored {} file(s) to pre-apply state.",
+                    restored
+                );
             }
 
             // Now propagate any error from the submit operations.
@@ -7255,6 +7294,123 @@ fn run() {
         assert!(
             branch_list.trim().is_empty(),
             "Expected no ta/ branch with --no-submit"
+        );
+    }
+
+    #[test]
+    fn apply_rollback_on_verification_failure() {
+        // Verify that when pre-submit verification fails, all file writes are
+        // rolled back so the working tree is left clean.
+
+        // On Windows: cmd /c exit 1 exits non-zero via cmd shell.
+        // On Unix: false exits non-zero via sh.
+        #[cfg(windows)]
+        let fail_cmd = "exit /b 1";
+        #[cfg(not(windows))]
+        let fail_cmd = "false";
+
+        let project = TempDir::new().unwrap();
+
+        // Initialize git repo so the submit adapter is selected automatically.
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(project.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(project.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(project.path())
+            .output()
+            .unwrap();
+
+        std::fs::write(project.path().join("README.md"), "# Original\n").unwrap();
+
+        std::process::Command::new("git")
+            .args(["add", "-A"])
+            .current_dir(project.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(project.path())
+            .output()
+            .unwrap();
+
+        // Write a workflow.toml with a verify command that always fails.
+        let ta_dir = project.path().join(".ta");
+        std::fs::create_dir_all(&ta_dir).unwrap();
+        std::fs::write(
+            ta_dir.join("workflow.toml"),
+            format!(
+                "[verify]\ncommands = [\"{fail_cmd}\"]\n\n[submit]\nadapter = \"git\"\n",
+                fail_cmd = fail_cmd
+            ),
+        )
+        .unwrap();
+
+        let config = GatewayConfig::for_project(project.path());
+
+        // Start a goal and modify a file in staging.
+        super::super::goal::execute(
+            &super::super::goal::GoalCommands::Start {
+                title: "Rollback test".to_string(),
+                source: Some(project.path().to_path_buf()),
+                objective: "Test rollback".to_string(),
+                agent: "test-agent".to_string(),
+                phase: None,
+                follow_up: None,
+                objective_file: None,
+            },
+            &config,
+        )
+        .unwrap();
+
+        let goal_store = GoalRunStore::new(&config.goals_dir).unwrap();
+        let goals = goal_store.list().unwrap();
+        let goal = &goals[0];
+        let goal_id = goal.goal_run_id.to_string();
+
+        // Overwrite README.md in staging — this change should be rolled back.
+        std::fs::write(goal.workspace_path.join("README.md"), "# Modified\n").unwrap();
+
+        // Build + approve the draft.
+        build_package(&config, &goal_id, "Rollback test changes", false).unwrap();
+        let packages = load_all_packages(&config).unwrap();
+        let pkg_id = packages[0].package_id.to_string();
+        approve_package(&config, &pkg_id, "tester").unwrap();
+
+        // Apply with git_commit=true so verification runs.
+        // The failing verify command should trigger a rollback.
+        let result = apply_package(
+            &config,
+            &pkg_id,
+            None,
+            true,  // submit — triggers verification gate
+            false, // no push
+            false, // no review
+            false, // skip_verify = false — verification must run
+            false, // dry_run = false
+            ta_workspace::ConflictResolution::Abort,
+            SelectiveReviewPatterns::default(),
+            None,
+        );
+
+        // Apply must fail (verification failed).
+        assert!(
+            result.is_err(),
+            "Expected apply to fail due to verification failure"
+        );
+
+        // The source file must still contain the original content — rollback worked.
+        let readme = std::fs::read_to_string(project.path().join("README.md")).unwrap();
+        assert_eq!(
+            readme, "# Original\n",
+            "README.md should be restored to original after rollback"
         );
     }
 }
