@@ -85,39 +85,44 @@ External users (working on their own projects, not TA itself) need these phases 
 | **v0.11.7** | Shell stream UX + VCS trait generalization — foundational for next phases |
 | **v0.12.0** + §16.6 extraction | `ta new` / `setup.sh` onboarding + remove TA-specific scanner from generic pipeline |
 | **v0.12.0.1** | PR merge + main sync completion — the missing post-apply workflow step |
-| **v0.13.5** | VCS Adapter Externalization — first users include Perforce shops; P4 must be external plugin |
+| **v0.12.0.2** | VCS Adapter Externalization — first users include Perforce shops; P4 must be external plugin |
 | ⬇ **PUBLIC ALPHA** | TA can be set up on a new project, plan built, goals run, drafts applied, PRs merged, main synced — in git or P4, from `ta shell` + Discord/Slack |
+| **v0.12.1** | Discord Channel Polish — slash commands, rate limiting, goal progress streaming |
+| **v0.12.2** | Shell Paste-at-End UX fix |
+| ⬇ **PUBLIC BETA (v0.13.x)** | Runtime flexibility, enterprise governance, community ecosystem, goal workflow automation |
 
 ### Pre-Alpha Bugs to Fix (must resolve before external release)
 
 - **Follow-up draft captures per-session delta, not full staging-vs-source diff**: When `ta run --follow-up` creates a child draft, `ta draft build` should diff the *full staging state* against current source — capturing all accumulated changes from the parent session + child session. Currently it appears to capture only what the child agent session wrote. Result: applying a child draft produces partial changes, and apply-time validation fails with compile errors that exist in source but not in staging. This confuses agents doing follow-up work ("the build is clean!") and requires multiple follow-up chains to complete simple fix tasks. Fix: ensure `ta draft build` always performs a full `diff(staging, source)` regardless of session depth.
 
-### Post-Alpha: Near-Term
+### Post-Alpha: Near-Term (v0.13.x Beta)
 
 | Phase | Notes |
 |---|---|
-| v0.12.1 | Reflink/COW — perf optimization, not blocking |
-| v0.12.2 | Self-healing daemon — makes the loop more robust |
-| v0.13.3 | External Action Governance — needed when agents send emails/API calls/posts |
-| v0.13.4 | Database Proxy Plugins — depends on v0.13.3 |
-| v0.14.1 | Full Constitution Framework — §16.6 is pulled into v0.12.0 (scanner extraction); the remaining constitution tooling can be post-alpha |
+| v0.13.0 | Reflink/COW — perf optimization, not blocking |
+| v0.13.1 | Self-healing daemon — makes the loop more robust |
+| v0.13.4 | External Action Governance — needed when agents send emails/API calls/posts |
+| v0.13.5 | Database Proxy Plugins — depends on v0.13.4 |
+| v0.14.3 | Full Constitution Framework — §16.6 is pulled into v0.12.0 (scanner extraction); the remaining constitution tooling can be post-alpha |
 
-### Enterprise (Deferred)
+### Enterprise (Beta)
 
-Needed for compliance-focused or container-isolated deployments; not blocking for initial external release.
+Needed for compliance-focused or container-isolated deployments.
 
-- v0.13.0 — Compliance-Ready Audit Ledger
-- v0.13.1 — MCP Transport Abstraction (SecureTA/container enabler; runtime adapters depend on this)
-- v0.13.2 — Runtime Adapter Trait (SecureTA/OCI; depends on v0.13.1)
+- v0.13.2 — MCP Transport Abstraction (SecureTA/container enabler; runtime adapters depend on this)
+- v0.13.3 — Runtime Adapter Trait (SecureTA/OCI; depends on v0.13.2)
+- v0.13.6 — Community Knowledge Hub (post-launch community feature)
+- v0.13.9 — Compliance-Ready Audit Ledger
 
 ### Deferred / May Drop
 
-- v0.12.3 — Community Knowledge Hub (post-launch community feature)
-- v0.13.6 — Shell Mouse Scroll (TUI may be dropped; web shell is default)
+- Shell Mouse Scroll (TUI may be dropped; web shell is default) — see Future Work section
 
-### Advanced (Post-Alpha)
+### Advanced (Post-Beta)
 
-- v0.14.0 — Goal Workflows: Serial Chains, Parallel Swarms & Office Routing
+- v0.13.7 — Goal Workflows: Serial Chains, Parallel Swarms & Office Routing
+- v0.13.8 — Local Model Support
+- v0.14.x — Secure Autonomy (sandboxing, attestation, multi-party governance)
 
 ---
 
@@ -4198,26 +4203,26 @@ The output pipeline is: user types command → `send_input()` POST to daemon `/a
 2. [x] **`ta new --vcs` flag + interactive VCS prompt**: Set the VCS adapter explicitly via `--vcs git|svn|perforce|none`. When `--vcs` is omitted in interactive mode, `ta new` asks "Do you want version control?" with options derived from available adapters/plugins (e.g., `[git, svn, perforce, none]`). The selected adapter is written into `.ta/workflow.toml` `[submit].adapter`, and for Git, runs `git init` + initial commit automatically. `--vcs perforce` also adds `ta-submit-perforce` to the plugin requirements in `project.toml`.
 3. [x] **Template project generator**: `ta new` produces a project with `project.toml`, `README.md` with setup instructions, `.ta/` config pre-wired for the declared plugins, and a `setup.sh` fallback for users without TA installed.
 4. [x] **`setup.sh` bootstrap**: Standalone shell script (committed to the template repo) that installs TA if missing, runs `ta setup`, and prints next steps. Works on macOS/Linux. PowerShell equivalent for Windows.
-5. [ ] **Reference template: ta-discord-template**: Published to `Trusted-Autonomy/ta-discord-template`. Demonstrates Discord channel plugin integration with a local TA daemon. Includes project.toml, setup.sh, .env.example, test-connection script. *(external repo — deferred to v0.12.3)*
-6. [ ] **Reference template: ta-perforce-template**: Demonstrates Perforce VCS adapter for game studios / enterprise environments. *(external repo — deferred to v0.13.5)*
+5. [ ] **Reference template: ta-discord-template**: Published to `Trusted-Autonomy/ta-discord-template`. Demonstrates Discord channel plugin integration with a local TA daemon. Includes project.toml, setup.sh, .env.example, test-connection script. *(external repo — moved to v0.12.1)*
+6. [ ] **Reference template: ta-perforce-template**: Demonstrates Perforce VCS adapter for game studios / enterprise environments. *(external repo — moved to v0.13.6 Community Hub)*
 7. [x] **Template listing**: `ta new --list-templates` shows available templates from both built-in and registry sources.
 8. [x] **Test: end-to-end bootstrap flow**: Test that `ta new --plugins discord --vcs git` → `ta setup` → `ta-daemon` starts with the Discord plugin loaded and VCS configured.
 
 #### Discord command listener tech debt (from quick-fix in v0.10.18)
 The current `--listen` mode on `ta-channel-discord` is a quick integration that works but has several limitations. These should be addressed here alongside the Discord template project:
 
-9. [ ] **Discord slash commands**: Register `/ta` slash command via Discord Application Commands API instead of message-prefix matching. Benefits: auto-complete, built-in help, no MESSAGE_CONTENT intent required, works in servers with strict permissions.
-10. [ ] **Interaction callback handler**: Handle button clicks from `deliver_question` embeds. Currently button `custom_id` values (e.g., `ta_{interaction_id}_yes`) are sent to Discord but no handler receives them. Add an HTTP endpoint or Gateway handler that receives interaction callbacks and POSTs answers to the daemon's `/api/interactions/:id/respond`.
-11. [ ] **Gateway reconnect with resume**: Current listener reconnects from scratch on disconnect. Implement Discord's resume protocol (session_id + last sequence number) for seamless reconnection without missed events.
-12. [ ] **Daemon auto-launches listener**: The daemon should auto-start `ta-channel-discord --listen` when `default_channels` includes `"discord"` in `daemon.toml`, instead of requiring a separate manual process. Lifecycle: daemon starts → spawns listener → monitors health → restarts on crash.
-13. [ ] **Rate limiting**: Add rate limiting on command forwarding to prevent Discord abuse from flooding the daemon API.
-14. [ ] **Response threading**: Post command responses as thread replies to the original message instead of top-level messages, to keep the channel clean.
-15. [ ] **Long-running command status**: For commands that take >5s (e.g., `ta run`), post an initial "Running..." message, then edit it with the result when done. Use Discord message editing API.
-16. [ ] **Remove `--listen` flag**: Once the daemon manages the listener lifecycle (item 12), the standalone `--listen` mode becomes internal. The user-facing entry point is `ta daemon start` with Discord configured in `daemon.toml`.
-17. [ ] **Goal progress streaming**: Subscribe to daemon SSE events for active goals and post progress updates to the Discord channel (stage transitions, key milestones). Avoids flooding by batching/throttling updates.
-18. [ ] **Draft summary on completion**: When a goal finishes and produces a draft, post the AI summary + artifact list to Discord. Include approve/deny buttons that call the daemon API.
-19. [ ] **`ta plugin build <name|all>`**: Build channel/submit plugins from the main workspace. `ta plugin build discord` builds `plugins/ta-channel-discord`, `ta plugin build all` builds all plugins. Re-signs binaries on macOS after copy.
-20. [ ] **PID guard for listener**: (done in v0.10.18) Prevent duplicate listener instances via `.ta/discord-listener.pid`. Verify guard works correctly when daemon manages listener lifecycle.
+9. [ ] **Discord slash commands**: Register `/ta` slash command via Discord Application Commands API instead of message-prefix matching. Benefits: auto-complete, built-in help, no MESSAGE_CONTENT intent required, works in servers with strict permissions. *(moved to v0.12.1)*
+10. [ ] **Interaction callback handler**: Handle button clicks from `deliver_question` embeds. Currently button `custom_id` values (e.g., `ta_{interaction_id}_yes`) are sent to Discord but no handler receives them. Add an HTTP endpoint or Gateway handler that receives interaction callbacks and POSTs answers to the daemon's `/api/interactions/:id/respond`. *(moved to v0.12.1)*
+11. [ ] **Gateway reconnect with resume**: Current listener reconnects from scratch on disconnect. Implement Discord's resume protocol (session_id + last sequence number) for seamless reconnection without missed events. *(moved to v0.12.1)*
+12. [ ] **Daemon auto-launches listener**: The daemon should auto-start `ta-channel-discord --listen` when `default_channels` includes `"discord"` in `daemon.toml`, instead of requiring a separate manual process. Lifecycle: daemon starts → spawns listener → monitors health → restarts on crash. *(moved to v0.12.1)*
+13. [ ] **Rate limiting**: Add rate limiting on command forwarding to prevent Discord abuse from flooding the daemon API. *(moved to v0.12.1)*
+14. [ ] **Response threading**: Post command responses as thread replies to the original message instead of top-level messages, to keep the channel clean. *(moved to v0.12.1)*
+15. [ ] **Long-running command status**: For commands that take >5s (e.g., `ta run`), post an initial "Running..." message, then edit it with the result when done. Use Discord message editing API. *(moved to v0.12.1)*
+16. [ ] **Remove `--listen` flag**: Once the daemon manages the listener lifecycle (item 12), the standalone `--listen` mode becomes internal. The user-facing entry point is `ta daemon start` with Discord configured in `daemon.toml`. *(moved to v0.12.1)*
+17. [ ] **Goal progress streaming**: Subscribe to daemon SSE events for active goals and post progress updates to the Discord channel (stage transitions, key milestones). Avoids flooding by batching/throttling updates. *(moved to v0.12.1)*
+18. [ ] **Draft summary on completion**: When a goal finishes and produces a draft, post the AI summary + artifact list to Discord. Include approve/deny buttons that call the daemon API. *(moved to v0.12.1)*
+19. [ ] **`ta plugin build <name|all>`**: Build channel/submit plugins from the main workspace. `ta plugin build discord` builds `plugins/ta-channel-discord`, `ta plugin build all` builds all plugins. Re-signs binaries on macOS after copy. *(moved to v0.12.1)*
+20. [x] **PID guard for listener**: (done in v0.10.18) Prevent duplicate listener instances via `.ta/discord-listener.pid`. Verify guard works correctly when daemon manages listener lifecycle.
 21. [x] **`ta run --quiet`**: Suppress streaming agent output but still print completion/failure summary. Default for daemon-dispatched and channel-dispatched goals. Inverse: `ta run --verbose` (current default behavior when run interactively). Completion and failure messages always print regardless of verbosity.
 
 #### Goal process monitoring & diagnostics
@@ -4226,10 +4231,10 @@ Known issue from v0.10.18: Discord-dispatched `ta run` created a goal record (st
 - No heartbeat or liveness check: once a goal enters `running`, nothing verifies the agent process is still alive. A crashed or never-started agent leaves the goal stuck forever.
 - `ta goal list` shows `running` with no way to distinguish "actively working" from "zombie".
 
-22. [ ] **Goal process liveness monitor**: *(Moved to v0.11.2.4 items 1-3)* Daemon periodically checks that the agent PID for each `running` goal is still alive. If the process has exited, transition the goal to `completed` (exit 0) or `failed` (non-zero/missing) and emit the appropriate event. Check interval: configurable, default 30s.
-23. [ ] **Goal launch failure capture**: If `ta run` fails to start (spawn error, immediate crash, missing binary), update the goal state to `failed` with the error message before returning the HTTP response. The Discord listener (or any caller) should see the failure in the command output.
-24. [ ] **`ta goal status` shows process health**: Include PID, whether the process is alive, elapsed time, last agent log line, and last event timestamp. Flag goals where the process is dead but state is still `running`.
-25. [ ] **`ta goal gc` detects zombies**: Extend `goal gc` to find goals in `running` state whose agent process is no longer alive. Offer to transition them to `failed` with a "process exited without updating state" reason.
+22. [x] **Goal process liveness monitor**: *(Moved to v0.11.2.4 items 1-3)* Daemon periodically checks that the agent PID for each `running` goal is still alive. If the process has exited, transition the goal to `completed` (exit 0) or `failed` (non-zero/missing) and emit the appropriate event. Check interval: configurable, default 30s. *(completed in v0.11.2.4)*
+23. [x] **Goal launch failure capture**: If `ta run` fails to start (spawn error, immediate crash, missing binary), update the goal state to `failed` with the error message before returning the HTTP response. The Discord listener (or any caller) should see the failure in the command output. *(completed in v0.11.2.4)*
+24. [x] **`ta goal status` shows process health**: Include PID, whether the process is alive, elapsed time, last agent log line, and last event timestamp. Flag goals where the process is dead but state is still `running`. *(completed in v0.11.2.4)*
+25. [x] **`ta goal gc` detects zombies**: Extend `goal gc` to find goals in `running` state whose agent process is no longer alive. Offer to transition them to `failed` with a "process exited without updating state" reason. *(completed in v0.11.2.4)*
 26. [x] **Goal timeout**: Configurable maximum goal duration (default: none for interactive, 4h for daemon-dispatched). Goal transitions to `timed_out` if exceeded. Daemon kills the agent process if still alive.
 27. [x] **macOS code signing in plugin install**: When copying plugin binaries to `.ta/plugins/`, re-sign with `codesign --force --sign -` on macOS to prevent AppleSystemPolicy from blocking execution. This caused the v0.10.18 Discord listener to be SIGKILL'd immediately on launch from `.ta/plugins/`.
 28. [x] **Escape special characters in VCS commit/branch messages**: Goal titles containing backticks, single quotes, or other shell-special characters get truncated or mangled when passed to VCS commands (e.g., `` `ta sync` `` in a title becomes `&` in the git commit message). The submit adapter must properly escape or sanitize goal titles and draft summaries before passing them to shell commands. Use direct argument passing (not shell interpolation) where possible.
@@ -4276,12 +4281,88 @@ Known issue from v0.10.18: Discord-dispatched `ta run` created a goal record (st
 
 ---
 
-> **⬇ PUBLIC ALPHA** — After v0.13.5 (VCS Externalization) completes, TA is ready for external users: new project setup, plan + workflow generation, goals run via `ta shell` + Discord/Slack, drafts applied, PRs merged, main synced — in Git or Perforce.
+### v0.12.0.2 — VCS Adapter Externalization
+<!-- status: done -->
+**Goal**: Migrate VCS adapters from built-in compiled code to external plugins using the same JSON-over-stdio protocol as channel plugins. Git remains built-in as the zero-dependency fallback. Perforce, SVN, and any future VCS adapters become external plugins that users install when needed.
+
+#### Rationale
+Today git, perforce, and svn adapters are compiled into the `ta` binary. This means:
+- Every user ships code for VCS systems they don't use
+- Adding a new VCS (Plastic SCM, Fossil, Mercurial) requires modifying TA core
+- Corporate VCS teams can't ship adapters independently
+- The SubmitAdapter trait (v0.9.8.4) already abstracts VCS operations — the wire protocol just needs to cross a process boundary
+
+Channel plugins proved this migration pattern works (Discord went from built-in crate to external plugin in v0.10.2.1). VCS adapters follow the same path.
+
+#### Items
+1. [x] **`ta-submit-*` plugin protocol**: Define the JSON-over-stdio protocol for VCS plugins. Messages: `detect` (auto-detect from project), `exclude_patterns`, `save_state`, `restore_state`, `commit`, `push`, `open_review`, `revision_id`. Same request/response structure as channel plugins. → `crates/ta-submit/src/vcs_plugin_protocol.rs`
+2. [x] **Plugin discovery for VCS adapters**: When `submit.adapter = "perforce"`, TA checks built-in adapters first, then looks for `ta-submit-perforce` in `.ta/plugins/vcs/`, `~/.config/ta/plugins/vcs/`, and `$PATH`. → `crates/ta-submit/src/vcs_plugin_manifest.rs` + updated `registry.rs`
+3. [x] **Extract PerforceAdapter to external plugin**: Move `crates/ta-submit/src/perforce.rs` logic into `plugins/ta-submit-perforce/` as a standalone Rust binary. Communicates via JSON-over-stdio. Include `plugin.toml` manifest. → `plugins/ta-submit-perforce/`
+4. [x] **Extract SvnAdapter to external plugin**: Same treatment for `svn.rs` → `plugins/ta-submit-svn/`. → `plugins/ta-submit-svn/`
+5. [x] **GitAdapter stays built-in**: Git is the overwhelmingly common case. Keep it compiled in as the zero-configuration default. It also serves as the reference implementation for the protocol.
+6. [x] **VCS plugin manifest (`plugin.toml`)**: Same schema as channel plugins but with `type = "vcs"` and `capabilities = ["commit", "push", "review", ...]`. → `VcsPluginManifest` in `vcs_plugin_manifest.rs`
+7. [x] **Adapter version negotiation**: On first contact, TA sends `{"method": "handshake", "params": {"ta_version": "...", "protocol_version": 1}}`. Plugin responds with its version and supported protocol version. TA refuses plugins with incompatible protocol versions. → `ExternalVcsAdapter::new()` handshake
+8. [x] **Test: external VCS plugin lifecycle**: Integration test with a mock VCS plugin (shell script that speaks the protocol) verifying detect → save_state → commit → restore_state flow. → `crates/ta-submit/tests/vcs_plugin_lifecycle.rs` (12 integration tests)
+9. [x] **§15 compliance — carry forward to plugins**: The built-in Perforce and SVN adapters implement `protected_submit_targets()` and `verify_not_on_protected_target()` (added in v0.11.7). Ported to plugin binaries as `protected_targets` and `verify_target` messages.
+10. [x] **§15 compliance — plugin registry enforcement**: When loading any submit adapter plugin, `enforce_section15_plugin()` warns if `"protected_targets"` capability is absent. `plugin.toml` capabilities include `"protected_targets"` to signal §15 compliance.
+
+#### Version: `0.12.0-alpha.2`
+<!-- previously v0.13.5; renumbered to reflect logical implementation order -->
 
 ---
 
-### v0.12.1 — Reflink/COW Overlay Optimization
+> **⬇ PUBLIC ALPHA** — With v0.12.0.2 (VCS Externalization) complete, TA is ready for external users: new project setup, plan + workflow generation, goals run via `ta shell` + Discord/Slack, drafts applied, PRs merged, main synced — in Git or Perforce.
+
+---
+
+### v0.12.1 — Discord Channel Polish
 <!-- status: pending -->
+**Goal**: Complete the Discord channel integration started in v0.10.18. Replace the quick-fix message-prefix listener with a proper slash-command integration, give the daemon full control over listener lifecycle, and add user-facing features (progress streaming, draft notifications, response threading) that make Discord a first-class TA interaction surface.
+
+**Depends on**: v0.12.0 (Discord template context), v0.10.2.1 (Discord external plugin architecture)
+
+#### Items
+
+1. [ ] **Discord slash commands**: Register `/ta` slash command via Discord Application Commands API instead of message-prefix matching. Benefits: auto-complete, built-in help, no MESSAGE_CONTENT intent required, works in servers with strict permissions.
+2. [ ] **Interaction callback handler**: Handle button clicks from `deliver_question` embeds. Currently button `custom_id` values (e.g., `ta_{interaction_id}_yes`) are sent to Discord but no handler receives them. Add an HTTP endpoint or Gateway handler that receives interaction callbacks and POSTs answers to the daemon's `/api/interactions/:id/respond`.
+3. [ ] **Gateway reconnect with resume**: Current listener reconnects from scratch on disconnect. Implement Discord's resume protocol (session_id + last sequence number) for seamless reconnection without missed events.
+4. [ ] **Daemon auto-launches listener**: The daemon should auto-start `ta-channel-discord --listen` when `default_channels` includes `"discord"` in `daemon.toml`, instead of requiring a separate manual process. Lifecycle: daemon starts → spawns listener → monitors health → restarts on crash.
+5. [ ] **Rate limiting**: Add rate limiting on command forwarding to prevent Discord abuse from flooding the daemon API.
+6. [ ] **Response threading**: Post command responses as thread replies to the original message instead of top-level messages, to keep the channel clean.
+7. [ ] **Long-running command status**: For commands that take >5s (e.g., `ta run`), post an initial "Running..." message, then edit it with the result when done. Use Discord message editing API.
+8. [ ] **Remove `--listen` flag**: Once the daemon manages the listener lifecycle (item 4), the standalone `--listen` mode becomes internal. The user-facing entry point is `ta daemon start` with Discord configured in `daemon.toml`.
+9. [ ] **Goal progress streaming**: Subscribe to daemon SSE events for active goals and post progress updates to the Discord channel (stage transitions, key milestones). Avoids flooding by batching/throttling updates.
+10. [ ] **Draft summary on completion**: When a goal finishes and produces a draft, post the AI summary + artifact list to Discord. Include approve/deny buttons that call the daemon API.
+11. [ ] **`ta plugin build <name|all>`**: Build channel/submit plugins from the main workspace. `ta plugin build discord` builds `plugins/ta-channel-discord`, `ta plugin build all` builds all plugins. Re-signs binaries on macOS after copy.
+12. [ ] **Reference template: ta-discord-template**: Published to `Trusted-Autonomy/ta-discord-template`. Demonstrates Discord channel plugin integration with a local TA daemon. Includes project.toml, setup.sh, .env.example, test-connection script. *(external repo)*
+
+#### Version: `0.12.1-alpha`
+
+---
+
+### v0.12.2 — Shell Paste-at-End UX
+<!-- status: pending -->
+**Goal**: Fix the `ta shell` paste behavior so that pasting (⌘V / Ctrl+V / middle-click) always appends at the end of the current `ta>` prompt text, regardless of where the visual cursor is positioned. Users naturally click or scroll around while reading output and forget where the cursor is — paste should always go to the input buffer end, not a random insertion point.
+
+#### Items
+
+1. [ ] **Intercept paste event in TUI**: Detect paste sequences (OSC 52, bracketed paste `\e[200~`, or large clipboard burst) in the TUI shell input handler.
+2. [ ] **Force cursor to end before paste**: When a paste event is detected, move the cursor to `input_buffer.len()` before inserting characters.
+3. [ ] **Web shell**: Verify the web shell textarea already appends at end (standard browser behavior). Add a test if not.
+4. [ ] **Bracketed paste mode**: Enable terminal bracketed paste mode (`\e[?2004h`) so multi-line pastes arrive as a unit. Strip leading/trailing newlines to avoid accidental submission.
+5. [ ] **Manual test**: Paste with cursor at start, middle, and end of input; verify text always appears at end. Test in Terminal.app, iTerm2, and the web shell.
+
+#### Version: `0.12.2-alpha`
+
+---
+
+## v0.13 — Architecture Extensibility & Beta
+
+> Beta-quality features for enterprise users, team deployments, and extended runtime options. Core alpha workflow (v0.12.x) must be stable before starting. Ordered by dependency chain: transport → runtime → governance → proxy, with VCS externalization already done (v0.12.0.2), community hub and compliance audit as capstones.
+
+### v0.13.0 — Reflink/COW Overlay Optimization
+<!-- status: pending -->
+<!-- beta milestone start -->
 **Goal**: Replace full-copy staging with copy-on-write to eliminate filesystem bloat. Detect APFS/Btrfs and use native reflinks; fall back to FUSE overlay on unsupported filesystems.
 
 #### Items
@@ -4294,11 +4375,11 @@ Known issue from v0.10.18: Discord-dispatched `ta run` created a goal record (st
 6. [ ] Benchmark: measure staging creation time and disk usage before/after
 7. [ ] Update OverlayWorkspace to detect and select strategy automatically
 
-#### Version: `0.12.1-alpha`
+#### Version: `0.13.0-alpha`
 
 ---
 
-### v0.12.2 — Autonomous Operations & Self-Healing Daemon
+### v0.13.1 — Autonomous Operations & Self-Healing Daemon
 <!-- status: pending -->
 **Goal**: Shift from "user runs commands to inspect and fix problems" to "daemon detects, diagnoses, and proposes fixes — user approves." The v0.11.3 observability commands become the foundation, but instead of the user running `ta goal inspect` and `ta doctor` manually, the daemon runs them continuously and surfaces issues proactively. The user's primary interaction becomes reviewing and approving corrective actions, not discovering and diagnosing problems.
 
@@ -4356,11 +4437,116 @@ The trust model stays the same: daemon detects and diagnoses, agent proposes cor
 22. [ ] **Runbook triggers**: Runbooks can be triggered automatically by watchdog conditions or manually via `ta run-book <name>`. Each step is presented for approval unless auto-heal policy covers it.
 23. [ ] **Built-in runbooks**: Ship with default runbooks for common scenarios: disk pressure, zombie goals, crashed plugins, stale drafts, failed CI. Users can customize or add their own.
 
-#### Version: `0.12.2-alpha`
+#### Version: `0.13.1-alpha`
 
 ---
 
-### v0.12.3 — Community Knowledge Hub Plugin (Context Hub Integration)
+### v0.13.2 — MCP Transport Abstraction (TCP/Unix Socket)
+<!-- status: pending -->
+<!-- beta: yes — enables container isolation and remote agent execution for team deployments -->
+**Goal**: Abstract MCP transport so agents can communicate with TA over TCP or Unix sockets, not just stdio pipes. Critical enabler for container-based isolation (SecureTA) and remote agent execution.
+
+#### Items
+
+1. [ ] `TransportLayer` trait: `Stdio`, `UnixSocket`, `Tcp` variants
+2. [ ] TCP transport: MCP server listens on configurable port, agent connects over network
+3. [ ] Unix socket transport: MCP server creates socket file, agent connects locally (faster than TCP, works across container boundaries via mount)
+4. [ ] Transport selection in agent config: `transport = "stdio" | "unix" | "tcp"`
+5. [ ] TLS support for TCP transport (optional, for remote agents)
+6. [ ] Connection authentication: bearer token exchange on connect
+7. [ ] Update `ta run` to configure transport based on runtime adapter
+
+#### Version: `0.13.2-alpha`
+
+---
+
+### v0.13.3 — Runtime Adapter Trait
+<!-- status: pending -->
+<!-- beta: yes — prerequisite for local model support (v0.13.8) -->
+**Goal**: Abstract how TA spawns and manages agent processes. Today it's hardcoded as a bare child process. A `RuntimeAdapter` trait enables container, VM, and remote execution backends — TA provides BareProcess, SecureTA provides OCI/VM.
+
+**Depends on**: v0.13.2 (MCP Transport — runtime adapters need transport abstraction to connect agents over non-stdio channels)
+
+#### Items
+
+1. [ ] `RuntimeAdapter` trait with `spawn()`, `stop()`, `status()`, `attach_transport()` methods
+2. [ ] `BareProcessRuntime`: extract current process spawning into this adapter (no behavior change)
+3. [ ] Runtime selection in agent/workflow config: `runtime = "process" | "oci" | "vm"`
+4. [ ] Plugin-based runtime loading: SecureTA registers OCI/VM runtimes as plugins
+5. [ ] Runtime lifecycle events: `AgentSpawned`, `AgentExited`, `RuntimeError` fed into event system
+6. [ ] Credential injection API: `RuntimeAdapter::inject_credentials()` for scoped secret injection into runtime environment
+
+#### Version: `0.13.3-alpha`
+
+---
+
+### v0.13.4 — External Action Governance Framework
+<!-- status: pending -->
+**Goal**: Provide the governance framework for agents performing external actions — sending emails, posting on social media, making API calls, executing financial transactions. TA doesn't implement the actions; it provides the policy, approval, capture, and audit layer so projects like SecureTA or custom workflows can govern them.
+
+**Design**:
+- `ExternalAction` trait: defines an action type (email, social post, API call, DB query) with metadata schema
+- `ActionPolicy`: per-action-type rules — auto-approve, require human approval, block, rate-limit
+- `ActionCapture`: every attempted external action is logged with full payload before execution
+- `ActionReview`: captured actions go through the same draft review flow (approve/deny/modify before send)
+- Plugins register action types; TA provides the governance pipeline
+
+#### Items
+
+1. [ ] `ExternalAction` trait: `action_type()`, `payload_schema()`, `validate()`, `execute()` — plugins implement this
+2. [ ] `ActionPolicy` config in `.ta/workflow.toml`: per-action-type rules (auto, review, block, rate-limit)
+3. [ ] `ActionCapture` log: every attempted action logged with full payload, timestamp, goal context
+4. [ ] Review flow integration: captured actions surface in `ta draft view` as "pending external actions" alongside file changes
+5. [ ] MCP tool `ta_external_action`: agent calls this to request an external action; TA applies policy before execution
+6. [ ] Rate limiting: configurable per-action-type limits (e.g., max 5 emails per goal, max 1 social post per hour)
+7. [ ] Dry-run mode: capture and log actions without executing, for testing workflows
+8. [ ] Built-in action type stubs: `email`, `social_post`, `api_call`, `db_query` — schema only, no implementation (plugins provide the actual send/post/call logic)
+
+**Config example**:
+```toml
+[actions.email]
+policy = "review"          # require human approval before sending
+rate_limit = 10            # max 10 per goal
+
+[actions.social_post]
+policy = "review"
+rate_limit = 1
+
+[actions.api_call]
+policy = "auto"            # auto-approve known API calls
+allowed_domains = ["api.stripe.com", "api.github.com"]
+
+[actions.db_query]
+policy = "review"          # review all DB mutations
+auto_approve_reads = true  # SELECT is fine, INSERT/UPDATE/DELETE needs review
+```
+
+#### Version: `0.13.4-alpha`
+
+---
+
+### v0.13.5 — Database Proxy Plugins
+<!-- status: pending -->
+**Goal**: Plugin-based database proxies that intercept agent DB operations. The agent connects to a local proxy thinking it's a real database; TA captures every query, enforces read/write policies, and logs mutations for review. Plugins provide wire protocol implementations; TA provides the governance framework (v0.13.4).
+
+**Depends on**: v0.13.4 (External Action Governance — DB proxy extends the `ExternalAction` trait)
+
+#### Items
+
+1. [ ] `DbProxyPlugin` trait extending `ExternalAction`: `wire_protocol()`, `parse_query()`, `classify_mutation()`, `proxy_port()`
+2. [ ] Proxy lifecycle: TA starts proxy before agent, stops after agent exits
+3. [ ] Query classification: READ vs WRITE vs DDL vs ADMIN — policy applied per class
+4. [ ] Mutation capture: all write operations logged with full query + parameters in draft audit trail
+5. [ ] Replay support: captured mutations can replay against real DB on `ta draft apply`
+6. [ ] Reference plugin: `ta-db-proxy-sqlite` — SQLite VFS shim, simplest implementation
+7. [ ] Reference plugin: `ta-db-proxy-postgres` — Postgres wire protocol proxy
+8. [ ] Future plugins (community): MySQL, MongoDB, Redis
+
+#### Version: `0.13.5-alpha`
+
+---
+
+### v0.13.6 — Community Knowledge Hub Plugin (Context Hub Integration)
 <!-- status: pending -->
 <!-- priority: deferred — post-launch community feature; not required for public alpha -->
 **Goal**: Give every TA agent access to curated, community-maintained knowledge through a first-class plugin that integrates with [Context Hub](https://github.com/andrewyng/context-hub). Agents query community resources before making API calls, check threat intelligence before security decisions, and contribute discovered gaps back — all with clear attribution and human-reviewable updates captured in the draft.
@@ -4497,223 +4683,11 @@ The trust model stays the same: daemon detects and diagnoses, agent proposes cor
 26. [ ] Token budget enforcement and summary generation
 27. [ ] Freshness warning for stale documents
 
-#### Version: `0.12.3-alpha`
-
----
-
-## v0.13 — Architecture Extensibility
-
-> Internal architecture improvements that enable third-party extension, isolation backends, and governance frameworks. These don't change what TA does for users — they change how it's structured for integrators and downstream projects (SecureTA, Virtual Office). Ordered by dependency chain: compliance audit stands alone, then transport → runtime → governance → proxy, with VCS externalization independent.
-
-### v0.13.0 — Compliance-Ready Audit Ledger
-<!-- status: pending -->
-<!-- priority: enterprise — deferred; not required for public alpha -->
-**Goal**: Replace the lightweight goal history index with a compliance-ready audit ledger that captures full decision context, covers all goal lifecycle paths, and supports pluggable storage backends.
-
-#### Problem
-The current `.ta/goal-history.jsonl` is a compact index written only on the happy path (`ta draft apply`). It records *what* happened but not *why*. Multiple lifecycle paths produce no audit record at all:
-- `ta goal delete` — data vanishes with no trace
-- `ta goal gc` — transitions zombies to `failed` but writes no history entry
-- `ta draft deny` / `ta draft close` — no record of the denial or reason
-- Agent crash / timeout — goal silently moves to `failed` with a gc reason string
-
-Even on the happy path, the `GoalHistoryEntry` lacks:
-- **Intent**: What was the user trying to accomplish (objective, prompt)
-- **Summary**: AI-generated summary of what changed and why
-- **Decision rationale**: Why this approach was chosen over alternatives
-- **Reviewer identity**: Who approved/denied and when
-- **Denial reason**: Why a draft was rejected
-- **Artifact manifest**: Which files were created/modified/deleted (URIs)
-- **Policy evaluation**: Which policies were checked and their pass/fail status
-
-#### Items
-1. [ ] **`AuditEntry` data model**: Rich audit record capturing: goal ID, title, objective/intent, final state, phase, agent, timestamps, duration, draft ID, AI summary, reviewer/approver, denial reason, artifact URIs with change types, policy evaluation results, parent goal (for chained goals). Serialized as JSONL.
-2. [ ] **Emit audit entry on all terminal transitions**: Every path that ends a goal's lifecycle must write an `AuditEntry`: apply, deny, close, delete, gc, timeout, agent crash. No goal data should be removed without an audit record.
-3. [ ] **Separate ledger for deleted incomplete goals**: Goals deleted before producing a draft get a distinct `disposition: "abandoned"` entry with whatever context is available (objective, agent, duration, reason for deletion if provided).
-4. [ ] **`ta goal delete --reason`**: Require or prompt for a reason when manually deleting goals. Stored in the audit entry.
-5. [ ] **`ta goal gc` writes audit entries**: Before transitioning or removing any goal data, append an audit entry with `disposition: "gc"` and the gc reason.
-6. [ ] **Populate artifact count and lines changed**: The existing `GoalHistoryEntry` fields `artifact_count` and `lines_changed` are always 0. Wire them to the draft's actual artifact data.
-7. [ ] **`ta audit export`**: Export audit ledger in structured formats (JSONL, CSV, or compliance-specific formats). Filterable by date range, phase, agent, disposition.
-8. [ ] **Pluggable audit storage backend**: Use the existing data write plugin architecture to support configurable storage destinations. Config in `daemon.toml`:
-   ```toml
-   [audit]
-   backend = "file"  # default: .ta/audit-ledger.jsonl
-   # backend = "database"
-   # backend = "s3"
-   # connection = "postgres://..."
-   # bucket = "my-audit-bucket"
-   ```
-   Built-in: local JSONL file. Plugin interface for database, shared filesystem, cloud storage.
-9. [ ] **Audit ledger integrity**: Append-only with hash chaining (each entry includes hash of previous entry). `ta audit verify` validates the chain. Tampering is detectable.
-10. [ ] **Retention policy**: Configurable retention period for audit entries. `ta audit gc --older-than 1y` removes entries beyond retention while preserving chain integrity (tombstone markers).
-11. [ ] **Structured agent output logging for compliance**: Optional mode (`[agent].output_log = "structured"` in daemon.toml) that captures full JSON agent output to the audit ledger alongside the human-readable text shown in the shell. Default remains plain text stdout/stderr for the interactive shell; this mode adds a parallel structured log sink for compliance, reproducibility, and post-hoc analysis. The output schema engine (v0.11.2.2) already defines per-agent output formats — this item wires those schemas to the audit pipeline.
-12. [ ] **Migration**: Migrate existing `.ta/goal-history.jsonl` entries to the new audit ledger format on first run.
-
-#### Version: `0.13.0-alpha`
-
----
-
-### v0.13.1 — MCP Transport Abstraction (TCP/Unix Socket)
-<!-- status: pending -->
-<!-- priority: enterprise — SecureTA/container enabler; not required for public alpha; v0.13.2 depends on this -->
-**Goal**: Abstract MCP transport so agents can communicate with TA over TCP or Unix sockets, not just stdio pipes. Critical enabler for container-based isolation (SecureTA) and remote agent execution.
-
-#### Items
-
-1. [ ] `TransportLayer` trait: `Stdio`, `UnixSocket`, `Tcp` variants
-2. [ ] TCP transport: MCP server listens on configurable port, agent connects over network
-3. [ ] Unix socket transport: MCP server creates socket file, agent connects locally (faster than TCP, works across container boundaries via mount)
-4. [ ] Transport selection in agent config: `transport = "stdio" | "unix" | "tcp"`
-5. [ ] TLS support for TCP transport (optional, for remote agents)
-6. [ ] Connection authentication: bearer token exchange on connect
-7. [ ] Update `ta run` to configure transport based on runtime adapter
-
-#### Version: `0.13.1-alpha`
-
----
-
-### v0.13.2 — Runtime Adapter Trait
-<!-- status: pending -->
-<!-- priority: enterprise — SecureTA/OCI; depends on v0.13.1; not required for public alpha -->
-**Goal**: Abstract how TA spawns and manages agent processes. Today it's hardcoded as a bare child process. A `RuntimeAdapter` trait enables container, VM, and remote execution backends — TA provides BareProcess, SecureTA provides OCI/VM.
-
-**Depends on**: v0.13.1 (MCP Transport — runtime adapters need transport abstraction to connect agents over non-stdio channels)
-
-#### Items
-
-1. [ ] `RuntimeAdapter` trait with `spawn()`, `stop()`, `status()`, `attach_transport()` methods
-2. [ ] `BareProcessRuntime`: extract current process spawning into this adapter (no behavior change)
-3. [ ] Runtime selection in agent/workflow config: `runtime = "process" | "oci" | "vm"`
-4. [ ] Plugin-based runtime loading: SecureTA registers OCI/VM runtimes as plugins
-5. [ ] Runtime lifecycle events: `AgentSpawned`, `AgentExited`, `RuntimeError` fed into event system
-6. [ ] Credential injection API: `RuntimeAdapter::inject_credentials()` for scoped secret injection into runtime environment
-
-#### Version: `0.13.2-alpha`
-
----
-
-### v0.13.3 — External Action Governance Framework
-<!-- status: pending -->
-**Goal**: Provide the governance framework for agents performing external actions — sending emails, posting on social media, making API calls, executing financial transactions. TA doesn't implement the actions; it provides the policy, approval, capture, and audit layer so projects like SecureTA or custom workflows can govern them.
-
-**Design**:
-- `ExternalAction` trait: defines an action type (email, social post, API call, DB query) with metadata schema
-- `ActionPolicy`: per-action-type rules — auto-approve, require human approval, block, rate-limit
-- `ActionCapture`: every attempted external action is logged with full payload before execution
-- `ActionReview`: captured actions go through the same draft review flow (approve/deny/modify before send)
-- Plugins register action types; TA provides the governance pipeline
-
-#### Items
-
-1. [ ] `ExternalAction` trait: `action_type()`, `payload_schema()`, `validate()`, `execute()` — plugins implement this
-2. [ ] `ActionPolicy` config in `.ta/workflow.toml`: per-action-type rules (auto, review, block, rate-limit)
-3. [ ] `ActionCapture` log: every attempted action logged with full payload, timestamp, goal context
-4. [ ] Review flow integration: captured actions surface in `ta draft view` as "pending external actions" alongside file changes
-5. [ ] MCP tool `ta_external_action`: agent calls this to request an external action; TA applies policy before execution
-6. [ ] Rate limiting: configurable per-action-type limits (e.g., max 5 emails per goal, max 1 social post per hour)
-7. [ ] Dry-run mode: capture and log actions without executing, for testing workflows
-8. [ ] Built-in action type stubs: `email`, `social_post`, `api_call`, `db_query` — schema only, no implementation (plugins provide the actual send/post/call logic)
-
-**Config example**:
-```toml
-[actions.email]
-policy = "review"          # require human approval before sending
-rate_limit = 10            # max 10 per goal
-
-[actions.social_post]
-policy = "review"
-rate_limit = 1
-
-[actions.api_call]
-policy = "auto"            # auto-approve known API calls
-allowed_domains = ["api.stripe.com", "api.github.com"]
-
-[actions.db_query]
-policy = "review"          # review all DB mutations
-auto_approve_reads = true  # SELECT is fine, INSERT/UPDATE/DELETE needs review
-```
-
-#### Version: `0.13.3-alpha`
-
----
-
-### v0.13.4 — Database Proxy Plugins
-<!-- status: pending -->
-**Goal**: Plugin-based database proxies that intercept agent DB operations. The agent connects to a local proxy thinking it's a real database; TA captures every query, enforces read/write policies, and logs mutations for review. Plugins provide wire protocol implementations; TA provides the governance framework (v0.13.3).
-
-**Depends on**: v0.13.3 (External Action Governance — DB proxy extends the `ExternalAction` trait)
-
-#### Items
-
-1. [ ] `DbProxyPlugin` trait extending `ExternalAction`: `wire_protocol()`, `parse_query()`, `classify_mutation()`, `proxy_port()`
-2. [ ] Proxy lifecycle: TA starts proxy before agent, stops after agent exits
-3. [ ] Query classification: READ vs WRITE vs DDL vs ADMIN — policy applied per class
-4. [ ] Mutation capture: all write operations logged with full query + parameters in draft audit trail
-5. [ ] Replay support: captured mutations can replay against real DB on `ta draft apply`
-6. [ ] Reference plugin: `ta-db-proxy-sqlite` — SQLite VFS shim, simplest implementation
-7. [ ] Reference plugin: `ta-db-proxy-postgres` — Postgres wire protocol proxy
-8. [ ] Future plugins (community): MySQL, MongoDB, Redis
-
-#### Version: `0.13.4-alpha`
-
----
-
-### v0.13.5 — VCS Adapter Externalization
-<!-- status: done -->
-<!-- priority: pre-alpha — moved earlier; Perforce users need this before public alpha; no dependency on v0.13.1 or v0.13.2 (uses JSON-over-stdio protocol from v0.10.2) -->
-**Goal**: Migrate VCS adapters from built-in compiled code to external plugins using the same JSON-over-stdio protocol as channel plugins. Git remains built-in as the zero-dependency fallback. Perforce, SVN, and any future VCS adapters become external plugins that users install when needed.
-
-#### Rationale
-Today git, perforce, and svn adapters are compiled into the `ta` binary. This means:
-- Every user ships code for VCS systems they don't use
-- Adding a new VCS (Plastic SCM, Fossil, Mercurial) requires modifying TA core
-- Corporate VCS teams can't ship adapters independently
-- The SubmitAdapter trait (v0.9.8.4) already abstracts VCS operations — the wire protocol just needs to cross a process boundary
-
-Channel plugins proved this migration pattern works (Discord went from built-in crate to external plugin in v0.10.2.1). VCS adapters follow the same path.
-
-#### Items
-1. [x] **`ta-submit-*` plugin protocol**: Define the JSON-over-stdio protocol for VCS plugins. Messages: `detect` (auto-detect from project), `exclude_patterns`, `save_state`, `restore_state`, `commit`, `push`, `open_review`, `revision_id`. Same request/response structure as channel plugins. → `crates/ta-submit/src/vcs_plugin_protocol.rs`
-2. [x] **Plugin discovery for VCS adapters**: When `submit.adapter = "perforce"`, TA checks built-in adapters first, then looks for `ta-submit-perforce` in `.ta/plugins/vcs/`, `~/.config/ta/plugins/vcs/`, and `$PATH`. → `crates/ta-submit/src/vcs_plugin_manifest.rs` + updated `registry.rs`
-3. [x] **Extract PerforceAdapter to external plugin**: Move `crates/ta-submit/src/perforce.rs` logic into `plugins/ta-submit-perforce/` as a standalone Rust binary. Communicates via JSON-over-stdio. Include `plugin.toml` manifest. → `plugins/ta-submit-perforce/`
-4. [x] **Extract SvnAdapter to external plugin**: Same treatment for `svn.rs` → `plugins/ta-submit-svn/`. → `plugins/ta-submit-svn/`
-5. [x] **GitAdapter stays built-in**: Git is the overwhelmingly common case. Keep it compiled in as the zero-configuration default. It also serves as the reference implementation for the protocol.
-6. [x] **VCS plugin manifest (`plugin.toml`)**: Same schema as channel plugins but with `type = "vcs"` and `capabilities = ["commit", "push", "review", ...]`. → `VcsPluginManifest` in `vcs_plugin_manifest.rs`
-7. [x] **Adapter version negotiation**: On first contact, TA sends `{"method": "handshake", "params": {"ta_version": "...", "protocol_version": 1}}`. Plugin responds with its version and supported protocol version. TA refuses plugins with incompatible protocol versions. → `ExternalVcsAdapter::new()` handshake
-8. [x] **Test: external VCS plugin lifecycle**: Integration test with a mock VCS plugin (shell script that speaks the protocol) verifying detect → save_state → commit → restore_state flow. → `crates/ta-submit/tests/vcs_plugin_lifecycle.rs` (12 integration tests)
-9. [x] **§15 compliance — carry forward to plugins**: The built-in Perforce and SVN adapters implement `protected_submit_targets()` and `verify_not_on_protected_target()` (added in v0.11.7). Ported to plugin binaries as `protected_targets` and `verify_target` messages.
-10. [x] **§15 compliance — plugin registry enforcement**: When loading any submit adapter plugin, `enforce_section15_plugin()` warns if `"protected_targets"` capability is absent. `plugin.toml` capabilities include `"protected_targets"` to signal §15 compliance.
-
-#### Version: `0.13.5-alpha`
-
----
-
-### v0.13.6 — Shell Mouse Scroll & TUI-Managed Selection (revisit)
-<!-- status: pending -->
-<!-- priority: deferred — may drop TUI entirely; web shell is default; low user impact -->
-**Goal**: Re-examine mouse scroll and TUI-managed text selection in the terminal TUI shell (now opt-in via `ta shell --tui`). v0.11.4.2 attempted mouse capture but it broke native selection. The web shell is now the default, so this is lower priority — only matters for users who prefer the terminal TUI.
-
-#### Research & approach
-
-1. [ ] **Survey Rust TUI apps**: Study how `helix`, `zellij`, `gitui`, `bottom`, `lazygit` handle mouse scroll + text selection simultaneously. Document which ANSI modes each uses.
-
-2. [ ] **Test `?1000h` alone across terminals**: `?1000h` (normal tracking) captures scroll wheel. Does it break native selection in Terminal.app, iTerm2, Windows Terminal, GNOME Terminal, Alacritty, Kitty, WezTerm?
-
-3. [ ] **Test `?1007h` (alternate scroll mode)**: Does it reliably convert scroll wheel to Up/Down arrow keys?
-
-4. [ ] **Evaluate hybrid approach**: Enable `?1000h` + `?1002h` for TUI-managed selection + scroll. Implement click-drag selection with auto-copy via `pbcopy`/`xclip`/`clip.exe`.
-
-5. [ ] **Mouse mode toggle**: User-configurable `[shell] mouse_mode = "native" | "tui"` with `native` as default.
-
-6. [ ] **Scroll wheel without capture**: Investigate terminal-specific protocols for scroll-only capture.
-
-**Files**: `apps/ta-cli/src/commands/shell_tui.rs`
-
 #### Version: `0.13.6-alpha`
 
 ---
 
-### v0.14.0 — Goal Workflows: Serial Chains, Parallel Swarms & Office Routing
+### v0.13.7 — Goal Workflows: Serial Chains, Parallel Swarms & Office Routing
 <!-- status: pending -->
 **Goal**: Connect goals to workflows so that *how* a goal executes is configurable per-project, per-department, or per-invocation — not hardcoded into `ta run`. Today every goal is a single agent in a single staging directory. This phase introduces workflow-driven execution: serial phase chains, parallel agent swarms, and a routing layer that maps goals to the right workflow based on project config, department, or explicit flag.
 
@@ -4803,13 +4777,138 @@ Map departments, project types, or goal categories to default workflows.
 - **Cross-project workflows**: Can an office workflow span multiple projects (e.g., "update API + update client")?
 - **Cost/resource limits**: Parallel swarms can be expensive. Should there be concurrency limits per project/office?
 
+#### Version: `0.13.7-alpha`
+
+---
+
+### v0.13.8 — Local Model Support: Plan Phase
+<!-- status: pending -->
+<!-- beta: yes — architectural design phase; implementation in subsequent sub-phases -->
+**Goal**: Design and plan TA's support for locally-hosted LLMs as agent backends. The first version of local model support should be plannable and executable using TA itself as the development substrate. Step 1 is building a comprehensive plan.
+
+**Context**: Kimi K2.5 (MoE architecture, strong coding benchmark performance), Ollama (local model serving), llama.cpp, vLLM, and LMStudio represent different deployment patterns for local inference. TA's `RuntimeAdapter` trait (v0.13.3) and the planned agent config system provide natural extension points.
+
+#### Items
+
+1. [ ] **Research spike — model serving options**: Evaluate Ollama, llama.cpp server, vLLM, LMStudio, and LM Studio server for local model serving. Compare: API compatibility (OpenAI-compatible?), hardware requirements, model availability (Kimi K2.5, Llama 3.x, Qwen 2.5-Coder), macOS/Linux support, startup time. Document in `docs/local-model-options.md`.
+2. [ ] **Use TA to plan the implementation**: Run `ta run "Design local model support for TA agents" --phase v0.13.8` to have TA's agent draft the implementation plan. The output becomes the definitive design document and informs v0.13.8.1+.
+3. [ ] **Agent config extension point**: Define how `agents/claude-code.yaml` style configs reference a local model endpoint. Prototype: `model = "ollama/kimi-k2.5"`, `endpoint = "http://localhost:11434"`.
+4. [ ] **Ollama prototype**: Spike: can an Ollama-hosted Kimi K2.5 (or similar) successfully complete a simple `ta run` goal? What breaks? What works? Document findings.
+5. [ ] **Plan sub-phases**: Based on the research and TA-generated plan, break implementation into v0.13.8.1 (Ollama backend), v0.13.8.2 (model config UI), v0.13.8.3 (hardware requirements gate), etc.
+
+#### Version: `0.13.8-alpha` *(plan phase — implementation in v0.13.8.x sub-phases)*
+
+---
+
+### v0.13.9 — Compliance-Ready Audit Ledger
+<!-- status: pending -->
+<!-- beta: yes — enterprise compliance capstone -->
+**Goal**: Replace the lightweight goal history index with a compliance-ready audit ledger that captures full decision context, covers all goal lifecycle paths, and supports pluggable storage backends.
+
+#### Problem
+The current `.ta/goal-history.jsonl` is a compact index written only on the happy path (`ta draft apply`). It records *what* happened but not *why*. Multiple lifecycle paths produce no audit record at all:
+- `ta goal delete` — data vanishes with no trace
+- `ta goal gc` — transitions zombies to `failed` but writes no history entry
+- `ta draft deny` / `ta draft close` — no record of the denial or reason
+- Agent crash / timeout — goal silently moves to `failed` with a gc reason string
+
+Even on the happy path, the `GoalHistoryEntry` lacks:
+- **Intent**: What was the user trying to accomplish (objective, prompt)
+- **Summary**: AI-generated summary of what changed and why
+- **Decision rationale**: Why this approach was chosen over alternatives
+- **Reviewer identity**: Who approved/denied and when
+- **Denial reason**: Why a draft was rejected
+- **Artifact manifest**: Which files were created/modified/deleted (URIs)
+- **Policy evaluation**: Which policies were checked and their pass/fail status
+
+#### Items
+1. [ ] **`AuditEntry` data model**: Rich audit record capturing: goal ID, title, objective/intent, final state, phase, agent, timestamps, duration, draft ID, AI summary, reviewer/approver, denial reason, artifact URIs with change types, policy evaluation results, parent goal (for chained goals). Serialized as JSONL.
+2. [ ] **Emit audit entry on all terminal transitions**: Every path that ends a goal's lifecycle must write an `AuditEntry`: apply, deny, close, delete, gc, timeout, agent crash. No goal data should be removed without an audit record.
+3. [ ] **Separate ledger for deleted incomplete goals**: Goals deleted before producing a draft get a distinct `disposition: "abandoned"` entry with whatever context is available (objective, agent, duration, reason for deletion if provided).
+4. [ ] **`ta goal delete --reason`**: Require or prompt for a reason when manually deleting goals. Stored in the audit entry.
+5. [ ] **`ta goal gc` writes audit entries**: Before transitioning or removing any goal data, append an audit entry with `disposition: "gc"` and the gc reason.
+6. [ ] **Populate artifact count and lines changed**: The existing `GoalHistoryEntry` fields `artifact_count` and `lines_changed` are always 0. Wire them to the draft's actual artifact data.
+7. [ ] **`ta audit export`**: Export audit ledger in structured formats (JSONL, CSV, or compliance-specific formats). Filterable by date range, phase, agent, disposition.
+8. [ ] **Pluggable audit storage backend**: Use the existing data write plugin architecture to support configurable storage destinations. Config in `daemon.toml`:
+   ```toml
+   [audit]
+   backend = "file"  # default: .ta/audit-ledger.jsonl
+   # backend = "database"
+   # backend = "s3"
+   # connection = "postgres://..."
+   # bucket = "my-audit-bucket"
+   ```
+   Built-in: local JSONL file. Plugin interface for database, shared filesystem, cloud storage.
+9. [ ] **Audit ledger integrity**: Append-only with hash chaining (each entry includes hash of previous entry). `ta audit verify` validates the chain. Tampering is detectable.
+10. [ ] **Retention policy**: Configurable retention period for audit entries. `ta audit gc --older-than 1y` removes entries beyond retention while preserving chain integrity (tombstone markers).
+11. [ ] **Structured agent output logging for compliance**: Optional mode (`[agent].output_log = "structured"` in daemon.toml) that captures full JSON agent output to the audit ledger alongside the human-readable text shown in the shell. Default remains plain text stdout/stderr for the interactive shell; this mode adds a parallel structured log sink for compliance, reproducibility, and post-hoc analysis. The output schema engine (v0.11.2.2) already defines per-agent output formats — this item wires those schemas to the audit pipeline.
+12. [ ] **Migration**: Migrate existing `.ta/goal-history.jsonl` entries to the new audit ledger format on first run.
+
+#### Version: `0.13.9-alpha`
+
+---
+
+> **⬇ PUBLIC BETA** — v0.13.x complete: runtime flexibility (local models, containers), enterprise governance (audit ledger, action governance, compliance), community ecosystem, and goal workflow automation. TA is ready for team and enterprise deployments.
+
+---
+
+## v0.14 — Secure Autonomy
+
+> **Focus**: Hardened execution environments, verifiable agent behavior, and multi-party governance for high-stakes deployments.
+
+### v0.14.0 — Agent Sandboxing & Process Isolation
+<!-- status: pending -->
+**Goal**: Run agent processes in hardened sandboxes that limit filesystem access, network reach, and syscall surface. TA manages the sandbox lifecycle; agents work inside it transparently.
+
+#### Items
+
+1. [ ] **Sandbox policy DSL**: Per-goal or per-project sandbox config declaring allowed paths, blocked domains, and syscall allowlist.
+2. [ ] **macOS sandbox-exec integration**: Wrap agent process with `sandbox-exec` profile derived from the goal's allowed paths and declared resource URIs.
+3. [ ] **Linux seccomp/landlock integration**: Apply seccomp-bpf filter + landlock filesystem restrictions to agent process on Linux.
+4. [ ] **Container fallback**: When sandbox-exec/landlock unavailable, fall back to OCI container via the RuntimeAdapter (v0.13.3).
+5. [ ] **Sandbox violation audit events**: Any blocked syscall or filesystem access attempt is captured as an audit event and surfaced to the user.
+6. [ ] **Test harness**: Integration tests that verify blocked paths are actually blocked and allowed paths are accessible.
+
 #### Version: `0.14.0-alpha`
 
 ---
 
-### v0.14.1 — Product Constitution Framework
+### v0.14.1 — Hardware Attestation & Verifiable Audit Trails
 <!-- status: pending -->
-**Goal**: Make the constitution a first-class, configurable artifact that downstream projects declare, extend, and enforce — not a TA-internal concept hard-wired to `docs/TA-CONSTITUTION.md`. A project using TA can define its own invariants (what functions inject, what functions restore, what the rules are), and TA's draft-build scan and release checklist gate read from that config.
+**Goal**: Bind audit log entries to the hardware that produced them via TPM attestation or Apple Secure Enclave signing. Enables cryptographic proof that audit records were produced on the declared machine and not retroactively fabricated.
+
+#### Items
+
+1. [ ] **Attestation backend trait**: `AttestationBackend` with `sign(payload) → attestation`, `verify(payload, attestation) → bool`. Backends: TPM 2.0 (Linux/Windows), Apple Secure Enclave (macOS), software fallback (Ed25519 key in `.ta/keys/`).
+2. [ ] **TPM 2.0 integration**: Use `tss2-rs` or `tpm2-tools` to obtain PCR quote and sign audit entries on Linux/Windows.
+3. [ ] **Apple Secure Enclave integration**: macOS Keychain + CryptoKit `SecureEnclave.P256` to sign audit entries.
+4. [ ] **Attestation fields in AuditEntry**: `attestation: Option<AttestationRecord>` with backend, public key fingerprint, and signature.
+5. [ ] **`ta audit verify-attestation <id>`**: Verify the hardware signature on an audit entry. Useful for compliance review and post-incident investigation.
+
+#### Version: `0.14.1-alpha`
+
+---
+
+### v0.14.2 — Multi-Party Approval & Threshold Governance
+<!-- status: pending -->
+**Goal**: Require N-of-M human approvals before a draft can be applied. Configurable per-project and per-action-type. Prevents any single person (including the TA operator) from autonomously applying high-stakes changes.
+
+#### Items
+
+1. [ ] **`[governance]` section in `workflow.toml`**: `require_approvals = 2`, `approvers = ["alice", "bob", "carol"]`. Defaults: 1 approver (current behavior).
+2. [ ] **Multi-approver draft state machine**: `PendingReview` waits for N distinct approvals before transitioning to `Approved`. Each approval is timestamped and logged.
+3. [ ] **Approval request routing**: When a draft requires N approvals, notify all listed approvers via their configured channels (Discord DM, Slack, email).
+4. [ ] **`ta draft approve --as <identity>`**: Approve a draft as a named approver. Daemon validates identity against the approver list.
+5. [ ] **Threshold signatures (optional)**: For cryptographic enforcement, use Shamir's Secret Sharing to require N-of-M keyholders to co-sign the apply operation.
+6. [ ] **Override with audit trail**: Designated override identity can apply with 1 approval but the override is prominently logged and flagged in compliance reports.
+
+#### Version: `0.14.2-alpha`
+
+---
+
+### v0.14.3 — Product Constitution Framework
+<!-- status: pending -->
+**Goal**: Make the constitution a first-class, configurable artifact that downstream projects declare, extend, and enforce — not a TA-internal concept hard-wired to `docs/TA-CONSTITUTION.md`. A project using TA can define its own invariants (what functions inject, what functions restore, what the rules are), and TA's draft-build scan and release checklist gate read from that config. *(Previously v0.14.1 — moved to Secure Autonomy as the capstone governance phase.)*
 
 **Problem**: Currently the constitution is TA-specific. The §4 injection/cleanup rules, the pattern scanner, and the release checklist all reference TA's own codebase conventions. A downstream project using TA (e.g., a web service or a data pipeline) has different injection patterns, different error paths, and different invariants. They get no constitution enforcement at all.
 
@@ -4868,7 +4967,28 @@ focus = "injection_cleanup,error_paths"
 
 **Files**: `.ta/constitution.toml` (new), `apps/ta-cli/src/commands/` (init, check, draft build scan, release step), `crates/ta-workspace/src/` (scanner crate or module).
 
-#### Version: `0.14.1-alpha`
+#### Version: `0.14.3-alpha`
+<!-- previously v0.14.1 — moved to Secure Autonomy as the capstone governance phase -->
+
+---
+
+## Future Work — Potentially Deferred or Dropped
+
+> Items in this section are under active consideration for deferral, scoping reduction, or removal. Review before each release cycle.
+
+### Shell Mouse Scroll & TUI-Managed Selection
+<!-- status: deferred -->
+<!-- note: considering dropping the ratatui TUI shell entirely in favor of the web shell as the primary interface -->
+**Originally**: v0.13.6 — Re-examine mouse scroll and text selection in the terminal TUI shell.
+
+**Status**: The web shell (`ta shell` default since v0.11.5) provides a better UX for most users. The ratatui TUI (`ta shell --tui`) is now opt-in. The question is whether to invest further in TUI polish or drop it entirely.
+
+**Decision needed**:
+- Keep TUI as opt-in with basic mouse support
+- Drop TUI entirely (remove `--tui` flag, route all users to web shell)
+- Rebuild TUI from scratch with a different library
+
+If the decision is to keep TUI, the original v0.13.6 items (survey Rust TUI apps, test `?1000h`, evaluate hybrid approach, mouse mode toggle) should be re-promoted to a numbered phase.
 
 ---
 
