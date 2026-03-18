@@ -4380,18 +4380,33 @@ Channel plugins proved this migration pattern works (Discord went from built-in 
 ---
 
 ### v0.12.2.2 — Draft Apply: Transactional Rollback on Validation Failure
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Make `ta draft apply` safe to run on `main`. If pre-submit verification fails (fmt, clippy, tests), all files written to the working tree must be restored to their pre-apply state. Currently the apply is not atomic — files land on disk but the commit never happens, leaving the working tree dirty and requiring manual `git checkout HEAD -- <files>` to recover.
 
 **Found during**: v0.12.2.1 apply failed due to a corrupted Nix store entry (`glib-2.86.3-dev` reference invalid), leaving 11 files modified in working tree on `main`.
 
-1. [ ] **Snapshot working tree before copy**: Before writing any files, record the set of paths that will be modified. For tracked files, stash or snapshot current content via `git stash push -- <paths>`.
-2. [ ] **Rollback on verification failure**: If any verification step exits non-zero, reverse-copy all written files back from the pre-apply snapshot. Print `[rollback] Restored N file(s) to pre-apply state.`
-3. [ ] **Rollback on unexpected error**: Any panic or early return in the apply path must also trigger rollback (use a guard/drop pattern or explicit cleanup).
-4. [ ] **Test**: Write an integration test that injects a failing verification command and asserts the working tree is clean after the failed apply.
-5. [ ] **Distinguish env failures from code failures**: If the failure is in the Nix/build environment (not the code itself), print a clear message: `Verification failed — this may be a build environment issue, not a code problem. Re-run after fixing your environment.`
+1. [x] **Snapshot working tree before copy**: Before writing any files, record the set of paths that will be modified. `ApplyRollbackGuard` reads each file's current content (or None if it doesn't exist yet) before the overlay apply call.
+2. [x] **Rollback on verification failure**: If any verification step exits non-zero, anyhow::bail! propagates, the guard drops uncommitted, restoring all files. Prints `[rollback] Restored N file(s) to pre-apply state.`
+3. [x] **Rollback on unexpected error**: `ApplyRollbackGuard` uses a Drop-based guard pattern — any early return (bail!, `?`, or panic) that doesn't call `guard.commit()` triggers automatic restoration.
+4. [x] **Test**: `apply_rollback_on_verification_failure` integration test: injects a failing `sh fail_check.sh` verify command, confirms `apply_package` returns Err, README.md restored to original, NEW.md removed, and `git status --porcelain --untracked-files=no` is clean.
+5. [x] **Distinguish env failures from code failures**: Heuristic patterns (`/nix/store`, `glib-`, `hash mismatch`, etc.) trigger an additional eprintln! noting the failure may be a build-environment issue with guidance to re-run after fixing the environment.
 
 #### Version: `0.12.2-alpha.2`
+
+---
+
+### v0.12.2.3 — Follow-Up Draft Completeness & Injection Cleanup
+<!-- status: pending -->
+**Goal**: Fix two follow-up bugs exposed by v0.12.2.2: (1) follow-up drafts only capture per-session writes rather than the full staging-vs-source delta, silently dropping parent-session changes (version bumps, etc.) from the child PR; (2) a crashed/frozen session leaves CLAUDE.md with the TA injection still prepended, which then leaks into the diff and ends up in the GitHub PR.
+
+**Found during**: v0.12.2.2 — computer froze before agent exited, `restore_claude_md` never ran, injected CLAUDE.md appeared in PR 197. Follow-up PR 198 was missing `Cargo.toml`, `Cargo.lock`, `CLAUDE.md` version bumps because the follow-up session didn't re-write those files.
+
+1. [ ] **Follow-up draft uses full staging-vs-source diff**: When `ta draft build` runs for a follow-up goal that reuses the parent's staging directory, diff the full staging tree against the source (same as a non-follow-up build), not just the files written in the child session. This ensures all parent-session changes (version bumps, etc.) are included in the child draft. The child draft already supersedes the parent, so including all changes is correct.
+2. [ ] **`ta draft build` strips injected CLAUDE.md header**: Before capturing the staging diff, check if `CLAUDE.md` in staging starts with `# Trusted Autonomy — Mediated Goal`. If so, strip everything up to and including the `---` separator that precedes the real project instructions, and write the cleaned content back to staging before diffing. This protects against crash/freeze leaving the injection in place.
+3. [ ] **Auto-close parent GitHub PR on supersession (at build time)**: When `build_package` marks a parent draft as `DraftStatus::Superseded`, look up the parent's `vcs_info.review_url`. If it is a GitHub PR URL, run `gh pr close <url> --comment "Superseded by <child-pr-url>"`. This prevents the orphaned open-PR problem without waiting until the child is applied.
+4. [ ] **Test**: Add a regression test that builds a follow-up draft on a staging dir with parent-session changes in files the child session didn't touch — assert all parent-session files appear in the child draft's artifacts.
+
+#### Version: `0.12.2-alpha.3`
 
 ---
 
