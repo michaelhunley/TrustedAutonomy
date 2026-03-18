@@ -203,6 +203,7 @@ fn to_draft_command(cmd: &PrCommands) -> draft::DraftCommands {
             phase: None,
             require_review: false,
             watch: false,
+            chain: false,
         },
     }
 }

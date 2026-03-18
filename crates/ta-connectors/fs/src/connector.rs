@@ -305,6 +305,7 @@ impl<S: ChangeStore> FsConnector<S> {
             display_id: None,
             tag: None,
             vcs_status: None,
+            parent_draft_id: None,
         };
 
         Ok(package)
