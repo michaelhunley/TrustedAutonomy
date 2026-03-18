@@ -156,6 +156,18 @@ fn run_single_command(
 
     let label = command_label(cmd);
 
+    #[cfg(windows)]
+    let mut child = {
+        Command::new("cmd")
+            .arg("/c")
+            .arg(cmd)
+            .current_dir(working_dir)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| anyhow::anyhow!("Failed to spawn '{}': {}", cmd, e))?
+    };
+    #[cfg(not(windows))]
     let mut child = Command::new("sh")
         .arg("-c")
         .arg(cmd)
