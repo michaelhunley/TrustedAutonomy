@@ -202,6 +202,7 @@ fn to_draft_command(cmd: &PrCommands) -> draft::DraftCommands {
             skip_verify: false,
             phase: None,
             require_review: false,
+            watch: false,
         },
     }
 }

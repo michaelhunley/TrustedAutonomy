@@ -191,6 +191,10 @@ pub enum DraftCommands {
         /// Useful for high-risk changes that should always get a human look.
         #[arg(long)]
         require_review: bool,
+        /// After apply, poll until the PR is merged then auto-sync.
+        /// Equivalent to `ta draft apply … && ta draft watch <id>`.
+        #[arg(long)]
+        watch: bool,
     },
     /// Amend an artifact in a draft (replace content, apply patch, or drop).
     Amend {
@@ -279,6 +283,34 @@ pub enum DraftCommands {
     },
     /// List open PRs created by TA with their draft IDs and CI status.
     PrList,
+    /// Merge the PR/review for an applied draft and sync the local main branch.
+    ///
+    /// Calls `merge_review()` on the VCS adapter (e.g. `gh pr merge --auto`) then
+    /// runs `sync_upstream()` to fast-forward the local branch.
+    Merge {
+        /// Draft package ID (or prefix). Omit to auto-select if only one applied draft.
+        id: Option<String>,
+        /// Merge strategy: squash (default), merge, rebase.
+        #[arg(long, default_value = "squash")]
+        strategy: String,
+        /// Delete the feature branch after merging.
+        #[arg(long, default_value = "true")]
+        delete_branch: bool,
+    },
+    /// Poll PR/CI status until merged, then auto-sync the local branch.
+    ///
+    /// Equivalent to running `ta draft pr-status <id>` on a loop until the
+    /// PR state is "merged", then running `ta sync`.
+    Watch {
+        /// Draft package ID (or prefix). Omit to auto-select if only one applied draft.
+        id: Option<String>,
+        /// How often to poll in seconds (default: 30).
+        #[arg(long, default_value = "30")]
+        interval: u64,
+        /// Maximum number of polls before giving up (default: 120 = 1 hour at 30s).
+        #[arg(long, default_value = "120")]
+        max_polls: u32,
+    },
 }
 
 /// Review session subcommands for multi-turn artifact review.
@@ -446,6 +478,7 @@ pub fn execute(cmd: &DraftCommands, config: &GatewayConfig) -> anyhow::Result<()
             discuss_patterns,
             phase,
             require_review,
+            watch,
         } => {
             let resolved = resolve_draft_id_flexible(config, id.as_deref())?;
 
@@ -530,7 +563,15 @@ pub fn execute(cmd: &DraftCommands, config: &GatewayConfig) -> anyhow::Result<()
                     discuss: discuss_patterns,
                 },
                 phase.as_deref(),
-            )
+            )?;
+
+            // --watch: poll until merged, then auto-sync.
+            if *watch && !*dry_run {
+                println!("\n[watch] --watch flag set — monitoring PR until merged...");
+                watch_package(config, &resolved, 30, 120)?;
+            }
+
+            Ok(())
         }
         DraftCommands::Amend {
             id,
@@ -590,6 +631,22 @@ pub fn execute(cmd: &DraftCommands, config: &GatewayConfig) -> anyhow::Result<()
         ),
         DraftCommands::PrStatus { id } => draft_pr_status(config, id),
         DraftCommands::PrList => draft_pr_list(config),
+        DraftCommands::Merge {
+            id,
+            strategy,
+            delete_branch,
+        } => {
+            let resolved = resolve_draft_id_flexible(config, id.as_deref())?;
+            merge_package(config, &resolved, strategy, *delete_branch)
+        }
+        DraftCommands::Watch {
+            id,
+            interval,
+            max_polls,
+        } => {
+            let resolved = resolve_draft_id_flexible(config, id.as_deref())?;
+            watch_package(config, &resolved, *interval, *max_polls)
+        }
     }
 }
 
@@ -2766,6 +2823,30 @@ fn apply_package(
         }
     }
 
+    // Post-apply guidance: show PR URL and suggested next commands.
+    if !dry_run && git_commit {
+        // Reload the package to get the VCS tracking info saved during apply.
+        if let Ok(final_pkg) = load_package(config, package_id) {
+            if let Some(ref vcs) = final_pkg.vcs_status {
+                println!();
+                println!("-- Next Steps --");
+                if let Some(ref url) = vcs.review_url {
+                    println!("  PR:    {}", url);
+                }
+                let short_id = &package_id.to_string()[..8];
+                println!("  Check: ta draft pr-status {}", short_id);
+                println!(
+                    "  Merge: ta draft merge {}            # merge PR + sync main",
+                    short_id
+                );
+                println!(
+                    "  Watch: ta draft watch {}            # poll until merged + auto-sync",
+                    short_id
+                );
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -4454,6 +4535,266 @@ fn draft_pr_status(config: &GatewayConfig, id: &str) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+// ── ta draft merge (v0.12.0.1) ────────────────────────────────────────────────
+
+/// Merge the PR/review for an applied draft, then sync the local main branch.
+///
+/// Calls `merge_review()` on the VCS adapter (e.g., `gh pr merge --auto`),
+/// then runs `sync_upstream()` to fast-forward the local branch to main.
+/// Updates the goal state to `Merged` on success.
+fn merge_package(
+    config: &GatewayConfig,
+    id: &str,
+    strategy: &str,
+    _delete_branch: bool,
+) -> anyhow::Result<()> {
+    let package_id = resolve_draft_id(id, config)?;
+    let pkg = load_package(config, package_id)?;
+
+    // Must have VCS tracking info (from `ta draft apply --submit`).
+    let vcs = pkg.vcs_status.as_ref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "Draft {} has no VCS tracking info. Apply with --submit first (`ta draft apply --submit`).",
+            &package_id.to_string()[..8],
+        )
+    })?;
+
+    let review_id = vcs.review_id.as_deref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "Draft {} has no review ID. Create a PR first (`ta draft apply --submit --review`).",
+            &package_id.to_string()[..8],
+        )
+    })?;
+
+    println!(
+        "=== Merging PR for Draft {} ===\n",
+        &package_id.to_string()[..8]
+    );
+    if let Some(ref url) = vcs.review_url {
+        println!("  PR: {}", url);
+    }
+    println!("  Strategy: {}", strategy);
+
+    // Select the VCS adapter.
+    let wf_path = config.workspace_root.join(".ta/workflow.toml");
+    let wf_config = ta_submit::WorkflowConfig::load_or_default(&wf_path);
+    let adapter = ta_submit::select_adapter_with_sync(
+        &config.workspace_root,
+        &wf_config.submit,
+        &wf_config.source.sync,
+    );
+
+    // Merge the review.
+    println!("\n[merge] Calling merge_review({})...", review_id);
+    let result = adapter.merge_review(review_id)?;
+    if result.merged {
+        println!("[ok] Merged: {}", result.message);
+        if let Some(ref sha) = result.merge_commit {
+            println!("     Merge commit: {}", sha);
+        }
+    } else {
+        println!("[pending] {}", result.message);
+        println!("  Auto-merge enabled. The PR will merge when CI passes.");
+        println!(
+            "  Run `ta draft watch {}` to poll until merged.",
+            &package_id.to_string()[..8]
+        );
+        return Ok(());
+    }
+
+    // Sync upstream to fast-forward local main.
+    println!("\n[sync] Syncing upstream...");
+    match adapter.sync_upstream() {
+        Ok(sync) if sync.updated => {
+            println!(
+                "[ok] Synced {} new commit(s). Local branch is up to date.",
+                sync.new_commits
+            );
+        }
+        Ok(sync) if !sync.is_clean() => {
+            eprintln!(
+                "[warn] Sync found {} conflict(s). Resolve manually with `ta sync`.",
+                sync.conflicts.len()
+            );
+        }
+        Ok(_) => println!("[ok] Already up to date."),
+        Err(e) => eprintln!("[warn] Sync failed: {}. Run `ta sync` manually.", e),
+    }
+
+    // Transition goal state to Merged.
+    if let Ok(goal_store) = GoalRunStore::new(&config.goals_dir) {
+        if let Ok(goals) = goal_store.list() {
+            if let Some(goal) = goals
+                .iter()
+                .find(|g| g.goal_run_id.to_string() == pkg.goal.goal_id)
+            {
+                if matches!(goal.state, GoalRunState::Applied) {
+                    if let Err(e) = goal_store.transition(goal.goal_run_id, GoalRunState::Merged) {
+                        eprintln!("[warn] Could not update goal state to Merged: {}", e);
+                    } else {
+                        println!(
+                            "\n[ok] Goal {} → merged",
+                            &goal.goal_run_id.to_string()[..8]
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    println!(
+        "\n✓ Draft {} merged and synced.",
+        &package_id.to_string()[..8]
+    );
+    Ok(())
+}
+
+// ── ta draft watch (v0.12.0.1) ────────────────────────────────────────────────
+
+/// Poll PR/CI status until the PR is merged, then auto-sync the local branch.
+///
+/// Checks `check_review()` every `interval` seconds. When state == "merged",
+/// calls `sync_upstream()` and transitions the goal to `Merged`.
+fn watch_package(
+    config: &GatewayConfig,
+    id: &str,
+    interval: u64,
+    max_polls: u32,
+) -> anyhow::Result<()> {
+    let package_id = resolve_draft_id(id, config)?;
+    let pkg = load_package(config, package_id)?;
+
+    let vcs = pkg.vcs_status.as_ref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "Draft {} has no VCS tracking info. Apply with --submit first.",
+            &package_id.to_string()[..8],
+        )
+    })?;
+
+    let review_id = vcs.review_id.as_deref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "Draft {} has no review ID. Create a PR first (`ta draft apply --submit --review`).",
+            &package_id.to_string()[..8],
+        )
+    })?;
+
+    println!(
+        "=== Watching PR for Draft {} ===",
+        &package_id.to_string()[..8]
+    );
+    if let Some(ref url) = vcs.review_url {
+        println!("  PR: {}", url);
+    }
+    println!(
+        "  Polling every {}s (max {} polls = ~{}m). Ctrl-C to stop.\n",
+        interval,
+        max_polls,
+        interval as u32 * max_polls / 60,
+    );
+
+    let wf_path = config.workspace_root.join(".ta/workflow.toml");
+    let wf_config = ta_submit::WorkflowConfig::load_or_default(&wf_path);
+    let adapter = ta_submit::select_adapter_with_sync(
+        &config.workspace_root,
+        &wf_config.submit,
+        &wf_config.source.sync,
+    );
+
+    for poll in 1..=max_polls {
+        match adapter.check_review(review_id) {
+            Ok(Some(status)) => {
+                println!(
+                    "  [{}] Poll {}/{}: state = {}{}",
+                    chrono::Utc::now().format("%H:%M:%S"),
+                    poll,
+                    max_polls,
+                    status.state,
+                    match status.checks_passing {
+                        Some(true) => " (CI: passing)",
+                        Some(false) => " (CI: failing)",
+                        None => "",
+                    }
+                );
+
+                if status.state == "merged" {
+                    println!("\n[ok] PR merged!");
+
+                    // Sync upstream.
+                    println!("[sync] Syncing local branch...");
+                    match adapter.sync_upstream() {
+                        Ok(sync) if sync.updated => {
+                            println!("[ok] Synced {} new commit(s).", sync.new_commits);
+                        }
+                        Ok(sync) if !sync.is_clean() => {
+                            eprintln!(
+                                "[warn] {} conflict(s). Resolve manually with `ta sync`.",
+                                sync.conflicts.len()
+                            );
+                        }
+                        Ok(_) => println!("[ok] Already up to date."),
+                        Err(e) => eprintln!("[warn] Sync failed: {}. Run `ta sync`.", e),
+                    }
+
+                    // Transition goal to Merged.
+                    if let Ok(goal_store) = GoalRunStore::new(&config.goals_dir) {
+                        if let Ok(goals) = goal_store.list() {
+                            if let Some(goal) = goals
+                                .iter()
+                                .find(|g| g.goal_run_id.to_string() == pkg.goal.goal_id)
+                            {
+                                if matches!(goal.state, GoalRunState::Applied) {
+                                    let _ = goal_store
+                                        .transition(goal.goal_run_id, GoalRunState::Merged);
+                                }
+                            }
+                        }
+                    }
+
+                    println!(
+                        "\n✓ Draft {} merged and synced.",
+                        &package_id.to_string()[..8]
+                    );
+                    return Ok(());
+                } else if status.state == "closed" {
+                    anyhow::bail!(
+                        "PR was closed without merging. \
+                         Check the PR manually and re-open or create a new draft."
+                    );
+                }
+            }
+            Ok(None) => {
+                println!(
+                    "  [{}] Poll {}/{}: adapter does not support check_review. \
+                     Check PR status manually.",
+                    chrono::Utc::now().format("%H:%M:%S"),
+                    poll,
+                    max_polls,
+                );
+                anyhow::bail!(
+                    "Adapter '{}' does not support check_review. \
+                     Merge the PR manually, then run `ta sync`.",
+                    adapter.name()
+                );
+            }
+            Err(e) => {
+                eprintln!("  [warn] check_review failed: {}. Retrying...", e);
+            }
+        }
+
+        if poll < max_polls {
+            std::thread::sleep(std::time::Duration::from_secs(interval));
+        }
+    }
+
+    anyhow::bail!(
+        "Timed out after {} polls ({}s interval). \
+         PR has not merged yet. Run `ta draft watch {}` to resume polling.",
+        max_polls,
+        interval,
+        &package_id.to_string()[..8]
+    )
 }
 
 fn draft_pr_list(config: &GatewayConfig) -> anyhow::Result<()> {

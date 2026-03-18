@@ -233,6 +233,27 @@ pub trait SourceAdapter: Send + Sync {
         Ok(None)
     }
 
+    /// Merge a review/PR into the target branch and sync the local workspace.
+    ///
+    /// Git: calls `gh pr merge` to merge the PR immediately.
+    /// Perforce: calls `p4 submit -c <CL>` to submit the shelved changelist.
+    /// SVN: no-op (SVN commits directly; no separate merge step).
+    /// Default: no-op, returns a guidance message telling the user what to do.
+    ///
+    /// Returns a `MergeResult` describing what happened. `merged = true` means
+    /// the merge was completed immediately; `merged = false` means auto-merge is
+    /// pending (CI must pass first).
+    fn merge_review(&self, _review_id: &str) -> Result<MergeResult> {
+        Ok(MergeResult {
+            merged: false,
+            merge_commit: None,
+            message: "This adapter does not support automatic merging. \
+                      Merge the PR manually in your VCS platform, then run `ta sync`."
+                .to_string(),
+            metadata: HashMap::new(),
+        })
+    }
+
     /// Auto-detect whether this adapter applies to the given project root.
     ///
     /// Git: checks for .git/ directory
@@ -272,6 +293,20 @@ pub trait SourceAdapter: Send + Sync {
     fn verify_not_on_protected_target(&self) -> Result<()> {
         Ok(())
     }
+}
+
+/// Result of merging a review (PR, shelved CL, etc.) into the target branch.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MergeResult {
+    /// Whether the merge was completed (false = pending CI, auto-merge enabled).
+    pub merged: bool,
+    /// Merge commit SHA or changelist number (if available).
+    pub merge_commit: Option<String>,
+    /// Human-readable message about what happened.
+    pub message: String,
+    /// Adapter-specific metadata.
+    #[serde(default)]
+    pub metadata: HashMap<String, String>,
 }
 
 /// Status of a VCS review/PR (v0.11.2.3).

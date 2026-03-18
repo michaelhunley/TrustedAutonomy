@@ -8,7 +8,8 @@
 //
 // The state machine enforces a valid lifecycle:
 //   Created → Configured → Running → PrReady → UnderReview
-//     → Approved → Applied → Completed
+//     → Approved → Applied → Merged → Completed
+//   (Applied → Completed also valid, Merged is optional post-apply state)
 //   (or Failed from any state)
 
 use std::fmt;
@@ -49,6 +50,10 @@ pub enum GoalRunState {
     /// Approved changes have been applied to the target.
     Applied,
 
+    /// PR/review was merged and main branch was synced (v0.12.0.1).
+    /// The full run→draft→apply→merge→sync loop is complete.
+    Merged,
+
     /// Goal completed successfully.
     Completed,
 
@@ -72,6 +77,7 @@ impl fmt::Display for GoalRunState {
             GoalRunState::UnderReview => write!(f, "under_review"),
             GoalRunState::Approved { .. } => write!(f, "approved"),
             GoalRunState::Applied => write!(f, "applied"),
+            GoalRunState::Merged => write!(f, "merged"),
             GoalRunState::Completed => write!(f, "completed"),
             GoalRunState::AwaitingInput { .. } => write!(f, "awaiting_input"),
             GoalRunState::Failed { .. } => write!(f, "failed"),
@@ -105,6 +111,9 @@ impl GoalRunState {
                 | (GoalRunState::PrReady, GoalRunState::Applied)
                 | (GoalRunState::UnderReview, GoalRunState::Applied)
                 | (GoalRunState::Applied, GoalRunState::Completed)
+                // PR merged and main synced (v0.12.0.1)
+                | (GoalRunState::Applied, GoalRunState::Merged)
+                | (GoalRunState::Merged, GoalRunState::Completed)
                 // Allow going back from UnderReview to Running (denied PR, try again)
                 | (GoalRunState::UnderReview, GoalRunState::Running)
                 // Macro goals: allow PrReady → Running for inner-loop iteration.
@@ -571,6 +580,35 @@ mod tests {
         })
         .unwrap();
         gr.transition(GoalRunState::PrReady).unwrap();
+    }
+
+    #[test]
+    fn applied_to_merged_transition_valid() {
+        let mut gr = test_goal_run();
+        gr.transition(GoalRunState::Configured).unwrap();
+        gr.transition(GoalRunState::Running).unwrap();
+        gr.transition(GoalRunState::PrReady).unwrap();
+        gr.transition(GoalRunState::Applied).unwrap();
+        // PR merged and main synced.
+        gr.transition(GoalRunState::Merged).unwrap();
+        assert_eq!(gr.state, GoalRunState::Merged);
+    }
+
+    #[test]
+    fn merged_to_completed_transition_valid() {
+        let mut gr = test_goal_run();
+        gr.transition(GoalRunState::Configured).unwrap();
+        gr.transition(GoalRunState::Running).unwrap();
+        gr.transition(GoalRunState::PrReady).unwrap();
+        gr.transition(GoalRunState::Applied).unwrap();
+        gr.transition(GoalRunState::Merged).unwrap();
+        gr.transition(GoalRunState::Completed).unwrap();
+        assert_eq!(gr.state, GoalRunState::Completed);
+    }
+
+    #[test]
+    fn merged_state_display() {
+        assert_eq!(GoalRunState::Merged.to_string(), "merged");
     }
 
     #[test]
