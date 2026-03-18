@@ -3948,37 +3948,34 @@ The output pipeline is: user types command → `send_input()` POST to daemon `/a
 ---
 
 ### v0.11.4.4 — Constitution Compliance Remediation
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Fix all violations found by the 7-agent constitution compliance audit against `docs/TA-CONSTITUTION.md`. Prioritize High-severity items (data loss on error paths) before Medium-severity (stale injection on follow-up).
 
-**Audit source**: Constitution review run via `ta shell` QA agent (2026-03-16). Sections §2, §3, §9 passed. Violations in §4, §5, and potentially others (audit was cut short — re-run full audit at start of this phase to capture §6–§14).
+**Audit source**: Constitution review run via `ta shell` QA agent (2026-03-16). Sections §2, §3, §9 passed. Violations in §4 fixed. Full §5–§14 audit deferred → v0.11.6.
 
-#### §4 — CLAUDE.md Injection & Cleanup (4 violations)
+#### §4 — CLAUDE.md Injection & Cleanup (4 violations — all fixed, PR #183)
 
-1. [ ] **`inject_claude_settings()` backup-restore on follow-up**: Before re-injecting, restore from backup first (like `inject_claude_md()` does at `run.rs:2221-2230`). Currently overwrites backup with stale injected content. **Severity: Medium**
+1. [x] **`inject_claude_settings()` backup-restore on follow-up**: Restore from backup before re-injecting on `--follow-up`. Prevents stale/nested settings accumulation. **§4.1**
 
-2. [ ] **`inject_mcp_server_config()` same backup-restore issue**: Same pattern as item 1 — backup overwritten with already-injected content on `--follow-up`. **Severity: Medium**
+2. [x] **`inject_mcp_server_config()` same backup-restore issue**: Same pattern as item 1. **§4.2**
 
-3. [ ] **Pre-launch command failure cleanup**: `run.rs:661-671` returns on pre-launch command failure without cleaning up injected files (CLAUDE.md, settings.local.json, MCP config). Add cleanup-on-error. **Severity: High**
+3. [x] **Pre-launch command failure cleanup**: Cleanup CLAUDE.md + settings + MCP config in both `Ok(non-zero)` and `Err` arms. **§4.3**
 
-4. [ ] **General launch error cleanup**: `run.rs:854-858` — only `NotFound` error cleans up; other launch errors (permission denied, exec format error) leave injected files in staging. All error paths must clean up. **Severity: High**
+4. [x] **General launch error cleanup**: All non-NotFound launch errors now clean up injected files. **§4.4**
 
-#### §5 — Goal Lifecycle State Machine (violations TBD)
+5. [x] **Fix-session relaunch Err paths**: Both interactive Block-mode and Agent-mode fix-session relaunch `Err` paths restore re-injected CLAUDE.md before returning. **§4.5, §4.6**
 
-5. [ ] **Re-run full audit**: The initial audit was cut short. Re-run the full 14-section audit at the start of this phase to capture §5–§14 violations, particularly:
-   - §5: Goal state transitions — are all transitions validated?
-   - §6: Draft lifecycle — supersession rules enforced?
-   - §7: Policy enforcement — capability checks on all paths?
-   - §8: Audit trail — all state changes logged?
-   - §10-§14: Agent isolation, memory injection, event system, error handling, versioning
+#### Deferred items → v0.11.6
 
-6. [ ] **Fix all identified violations**: Address each finding, prioritized by severity (High → Medium → Low).
+6. → v0.11.6 **Re-run full audit §5–§14**: State machine, draft lifecycle, policy enforcement, audit trail, agent isolation, memory injection, event system, error handling, versioning.
 
-7. [ ] **Add constitution regression tests**: For each fix, add a test that would catch the violation if it regressed. Tests should reference the constitution section they cover (e.g., `// §4.3: injected files must be cleaned up on all error paths`).
+7. → v0.11.6 **Fix all identified violations**: Address each finding from full audit.
 
-8. [ ] **Audit sign-off**: Re-run the full audit after fixes to verify zero violations remain.
+8. → v0.11.6 **Constitution regression tests**: Tests referencing constitution section for each fix.
 
-9. [ ] **Release pipeline checklist gate**: Add a `requires_approval` step to `DEFAULT_PIPELINE_YAML` between "Build & verify" and "Generate release notes". The step prints a short constitution compliance checklist (injection cleanup, error paths, state transitions) and pauses for human sign-off. Skippable with `--skip-approvals` for patch releases. Enabled by default — low cost, high value as a forcing function.
+9. → v0.11.6 **Audit sign-off**: Full 14-section clean audit.
+
+10. → v0.11.4.4 (release step) **Release pipeline checklist gate**: Add a `requires_approval` step to `DEFAULT_PIPELINE_YAML` between "Build & verify" and "Generate release notes". The step prints a short constitution compliance checklist (injection cleanup, error paths, state transitions) and pauses for human sign-off. Skippable with `--skip-approvals` for patch releases. Enabled by default — low cost, high value as a forcing function.
 
 **Files**: `apps/ta-cli/src/commands/run.rs` (injection/cleanup), `crates/ta-goal/src/goal_run.rs` (state machine), `apps/ta-cli/src/commands/release.rs` (pipeline step), others TBD by audit.
 
@@ -4038,13 +4035,13 @@ The output pipeline is: user types command → `send_input()` POST to daemon `/a
 
 3. [ ] **Goal completion notification**: When a goal finishes (agent exits), show a clear "[goal completed]" banner with elapsed time, draft ID if built, and next action. Currently the user gets no signal in the web shell.
 
-4. [ ] **Client-side `:tail <id>` command**: Handle `:tail <id>` in the web shell client — opens SSE stream to `/api/goals/{id}/output` directly, no server round-trip. Also `:untail [id]`, `:tails` (list active), `:help`.
+4. [x] **Client-side `:tail <id>` command**: Handle `:tail <id>` in the web shell client — opens SSE stream to `/api/goals/{id}/output` directly, no server round-trip. Also `:untail [id]`, `:tails` (list active), `:help`. (PR #184)
 
-5. [ ] **Status bar tail indicator**: Show "tailing <label>" or "tailing N streams" in the status bar when actively following goal/agent output.
+5. [x] **Status bar tail indicator**: Show "tailing <label>" in the status bar when actively following goal/agent output. (PR #184)
 
-6. [ ] **Clear auto-tail messaging**: When auto-tailing starts (on goal start or agent request), show "auto-tailing goal output..." or "agent working — tailing output (id)..." with distinct styling instead of bare "processing...".
+6. [x] **Clear auto-tail messaging**: When auto-tailing starts, shows "auto-tailing goal output..." and "agent working — tailing output (id)..." instead of bare "processing...". (PR #184)
 
-7. [ ] **Daemon `:tail` output fix**: Update background command output message to "Tail output: :tail <id>" (matches the working client command).
+7. [x] **Daemon `:tail` output fix**: Updated to "Tail output: :tail <id>" in `cmd.rs`. (PR #184)
 
 #### Constitution Compliance Scan at Draft Build
 
