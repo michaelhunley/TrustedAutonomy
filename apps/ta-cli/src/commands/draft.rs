@@ -195,6 +195,11 @@ pub enum DraftCommands {
         /// Equivalent to `ta draft apply … && ta draft watch <id>`.
         #[arg(long)]
         watch: bool,
+        /// Apply the full draft chain: walk up to the root parent and apply
+        /// all unapplied drafts in order (root → leaf). Detects cycles.
+        /// Useful when a follow-up draft's parent was never applied.
+        #[arg(long)]
+        chain: bool,
     },
     /// Amend an artifact in a draft (replace content, apply patch, or drop).
     Amend {
@@ -479,8 +484,14 @@ pub fn execute(cmd: &DraftCommands, config: &GatewayConfig) -> anyhow::Result<()
             phase,
             require_review,
             watch,
+            chain,
         } => {
             let resolved = resolve_draft_id_flexible(config, id.as_deref())?;
+
+            // --chain: walk up to root parent and apply all unapplied drafts in order.
+            if *chain {
+                return apply_chain(config, &resolved, target.as_deref(), *skip_verify);
+            }
 
             // Warn on deprecated flags.
             if *git_commit || *git_push {
@@ -1176,7 +1187,75 @@ pub(crate) fn build_package(
         display_id: None, // Will be set below after counting existing drafts.
         tag: goal.tag.clone().or_else(|| Some(goal.display_tag())), // Inherit from goal (v0.11.2.3).
         vcs_status: None,
+        parent_draft_id: None, // Set below if this is a follow-up.
     };
+
+    // v0.12.2.1: Track parent_draft_id and compute composited diff for follow-up chains.
+    //
+    // When a follow-up goal extends the parent staging, the "child" diff only contains
+    // the new files added since the parent was applied. We also track the parent draft ID
+    // so chain summary and `--chain` apply work correctly.
+    if let Some(parent_goal_id) = goal.parent_goal_id {
+        if let Ok(Some(parent_goal)) = goal_store.get(parent_goal_id) {
+            if let Some(parent_draft_id) = parent_goal.pr_package_id {
+                pkg.parent_draft_id = Some(parent_draft_id);
+
+                // Composited diff: if parent is Applied, prepend parent artifacts/changesets
+                // so `ta draft view` shows the full chain impact.
+                if let Ok(parent_pkg) = load_package(config, parent_draft_id) {
+                    if matches!(parent_pkg.status, DraftStatus::Applied { .. }) {
+                        let child_artifact_count = pkg.changes.artifacts.len();
+                        let parent_artifact_count = parent_pkg.changes.artifacts.len();
+
+                        // Load parent changesets to prepend.
+                        let parent_changesets: Vec<_> =
+                            if let Ok(parent_store) = JsonFileStore::new(&parent_goal.store_path) {
+                                parent_store
+                                    .list(&parent_goal.goal_run_id.to_string())
+                                    .unwrap_or_default()
+                            } else {
+                                vec![]
+                            };
+
+                        // Offset child diff_refs by the number of parent changesets.
+                        let offset = parent_changesets.len();
+                        for artifact in &mut pkg.changes.artifacts {
+                            if let Some(idx_str) = artifact.diff_ref.strip_prefix("changeset:") {
+                                if let Ok(idx) = idx_str.parse::<usize>() {
+                                    artifact.diff_ref = format!("changeset:{}", idx + offset);
+                                }
+                            }
+                        }
+
+                        // Prepend parent artifacts (marked as from-parent context).
+                        let mut composited_artifacts = parent_pkg.changes.artifacts.clone();
+                        composited_artifacts.append(&mut pkg.changes.artifacts);
+                        pkg.changes.artifacts = composited_artifacts;
+
+                        // Persist the parent changesets at the start of the store.
+                        let mut child_store = JsonFileStore::new(goal.store_path.clone())?;
+                        for cs in parent_changesets {
+                            child_store.save(&goal_id, &cs)?;
+                        }
+
+                        pkg.summary.impact = format!(
+                            "{} file(s) changed (chain: {} from parent + {} new)",
+                            parent_artifact_count + child_artifact_count,
+                            parent_artifact_count,
+                            child_artifact_count
+                        );
+
+                        println!(
+                            "Composited diff: {} parent artifact(s) + {} new = {} total",
+                            parent_artifact_count,
+                            child_artifact_count,
+                            parent_artifact_count + child_artifact_count
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     // Handle PR supersession for follow-up goals.
     // v0.4.1.2: Only auto-supersede when this goal reuses the parent's staging directory
@@ -1283,6 +1362,146 @@ pub(crate) fn build_package(
     println!("Review with:  ta draft view {}", package_id);
     println!("Approve with: ta draft approve {}", package_id);
 
+    Ok(())
+}
+
+/// Compute the total file count for the full draft chain rooted at `pkg`.
+///
+/// Walks up the `parent_draft_id` chain and sums artifact counts. Returns the
+/// count of the deepest child only if no parent exists (no chain), otherwise
+/// returns the combined total.
+fn compute_chain_file_count(pkg: &DraftPackage, all_packages: &[DraftPackage]) -> usize {
+    // Walk up to root accumulating counts.
+    let mut visited = std::collections::HashSet::new();
+    let mut total = pkg.changes.artifacts.len();
+    let mut current_parent_id = pkg.parent_draft_id;
+
+    while let Some(parent_id) = current_parent_id {
+        if visited.contains(&parent_id) {
+            break; // cycle guard
+        }
+        visited.insert(parent_id);
+        if let Some(parent) = all_packages.iter().find(|p| p.package_id == parent_id) {
+            // Don't double-count if parent is Applied (its artifacts are already
+            // included in the composited child diff).
+            if !matches!(parent.status, DraftStatus::Applied { .. }) {
+                total += parent.changes.artifacts.len();
+            }
+            current_parent_id = parent.parent_draft_id;
+        } else {
+            break;
+        }
+    }
+    total
+}
+
+/// Apply the full draft chain: walk up from `child_id` to the root parent,
+/// then apply all unapplied drafts in order (root → leaf).
+///
+/// Detects cycles and stops with an error. Applied drafts are skipped silently.
+fn apply_chain(
+    config: &GatewayConfig,
+    child_id: &str,
+    target: Option<&str>,
+    skip_verify: bool,
+) -> anyhow::Result<()> {
+    let all_packages = load_all_packages(config)?;
+
+    // Resolve the starting draft.
+    let start_uuid = resolve_draft_id(child_id, config)?;
+
+    // Walk up the parent chain to find the root.
+    let mut chain: Vec<Uuid> = vec![start_uuid];
+    let mut visited = std::collections::HashSet::new();
+    visited.insert(start_uuid);
+
+    loop {
+        let current = *chain.last().unwrap();
+        let pkg = all_packages
+            .iter()
+            .find(|p| p.package_id == current)
+            .ok_or_else(|| anyhow::anyhow!("Draft {} not found in chain walk", current))?;
+
+        match pkg.parent_draft_id {
+            None => break, // reached the root
+            Some(parent_id) => {
+                if visited.contains(&parent_id) {
+                    anyhow::bail!(
+                        "Cycle detected in draft chain at {} — cannot apply chain",
+                        &parent_id.to_string()[..8]
+                    );
+                }
+                visited.insert(parent_id);
+                chain.push(parent_id);
+            }
+        }
+    }
+
+    // Reverse: root first, leaf last.
+    chain.reverse();
+
+    // Filter to unapplied drafts.
+    let to_apply: Vec<Uuid> = chain
+        .iter()
+        .filter(|&&id| {
+            all_packages
+                .iter()
+                .find(|p| p.package_id == id)
+                .map(|p| !matches!(p.status, DraftStatus::Applied { .. }))
+                .unwrap_or(false)
+        })
+        .copied()
+        .collect();
+
+    if to_apply.is_empty() {
+        println!("Chain apply: all {} draft(s) already applied.", chain.len());
+        return Ok(());
+    }
+
+    println!(
+        "Chain apply: {} draft(s) in chain, {} unapplied — applying in order...",
+        chain.len(),
+        to_apply.len()
+    );
+
+    for (i, draft_id) in to_apply.iter().enumerate() {
+        let short_id = &draft_id.to_string()[..8];
+        let pkg = all_packages
+            .iter()
+            .find(|p| p.package_id == *draft_id)
+            .unwrap();
+        println!(
+            "\n[{}/{}] Applying draft {} \"{}\"...",
+            i + 1,
+            to_apply.len(),
+            short_id,
+            pkg.goal.title
+        );
+
+        let draft_id_str = draft_id.to_string();
+        apply_package(
+            config,
+            &draft_id_str,
+            target,
+            false, // submit
+            false, // push
+            false, // review
+            skip_verify,
+            false, // dry_run
+            ta_workspace::ConflictResolution::Abort,
+            SelectiveReviewPatterns {
+                approve: &[],
+                reject: &[],
+                discuss: &[],
+            },
+            None, // phase_override
+        )?;
+    }
+
+    println!(
+        "\nChain apply complete: {} draft(s) applied.",
+        to_apply.len()
+    );
     Ok(())
 }
 
@@ -1428,11 +1647,22 @@ fn list_packages(
         );
     }
 
-    println!(
-        "{:<20} {:<16} {:<26} {:<16} {:<8} {:<14} AGE",
-        "TAG", "DRAFT ID", "GOAL", "STATUS", "FILES", "VCS"
-    );
-    println!("{}", "-".repeat(110));
+    // Check if any packages in the display set have a parent (to show chain column).
+    let show_chain_col = display.iter().any(|p| p.parent_draft_id.is_some());
+
+    if show_chain_col {
+        println!(
+            "{:<20} {:<16} {:<26} {:<16} {:<8} {:<10} {:<14} AGE",
+            "TAG", "DRAFT ID", "GOAL", "STATUS", "FILES", "PARENT", "VCS"
+        );
+        println!("{}", "-".repeat(122));
+    } else {
+        println!(
+            "{:<20} {:<16} {:<26} {:<16} {:<8} {:<14} AGE",
+            "TAG", "DRAFT ID", "GOAL", "STATUS", "FILES", "VCS"
+        );
+        println!("{}", "-".repeat(110));
+    }
 
     // Load goal store for macro goal context.
     let goal_store = GoalRunStore::new(&config.goals_dir).ok();
@@ -1495,16 +1725,34 @@ fn list_packages(
             None => "\u{2014}".to_string(),
         };
 
-        println!(
-            "{:<20} {:<16} {:<26} {:<16} {:<8} {:<14} {}",
-            truncate(&tag_display, 18),
-            draft_display_id(pkg),
-            goal_display,
-            status_display,
-            pkg.changes.artifacts.len(),
-            vcs_display,
-            age_str,
-        );
+        if show_chain_col {
+            let parent_display = pkg
+                .parent_draft_id
+                .map(|id| format!("→ {}", &id.to_string()[..8]))
+                .unwrap_or_else(|| "\u{2014}".to_string());
+            println!(
+                "{:<20} {:<16} {:<26} {:<16} {:<8} {:<10} {:<14} {}",
+                truncate(&tag_display, 18),
+                draft_display_id(pkg),
+                goal_display,
+                status_display,
+                pkg.changes.artifacts.len(),
+                parent_display,
+                vcs_display,
+                age_str,
+            );
+        } else {
+            println!(
+                "{:<20} {:<16} {:<26} {:<16} {:<8} {:<14} {}",
+                truncate(&tag_display, 18),
+                draft_display_id(pkg),
+                goal_display,
+                status_display,
+                pkg.changes.artifacts.len(),
+                vcs_display,
+                age_str,
+            );
+        }
     }
 
     let total_count = packages.len();
@@ -1647,6 +1895,54 @@ fn view_package(
 ) -> anyhow::Result<()> {
     let package_id = resolve_draft_id(id, config)?;
     let pkg = load_package(config, package_id)?;
+
+    // v0.12.2.1: Show chain summary header when this draft is part of a chain.
+    if let Some(parent_id) = pkg.parent_draft_id {
+        let parent_short = &parent_id.to_string()[..8];
+        // Count all drafts in this chain for combined impact.
+        let all_packages = load_all_packages(config).unwrap_or_default();
+        let combined = compute_chain_file_count(&pkg, &all_packages);
+        if combined > pkg.changes.artifacts.len() {
+            println!(
+                "Chain: follow-up to {} — combined impact: {} file(s)",
+                parent_short, combined
+            );
+        } else {
+            println!("Chain: follow-up to {}", parent_short);
+        }
+
+        // List any known children of THIS draft.
+        let children: Vec<_> = all_packages
+            .iter()
+            .filter(|p| p.parent_draft_id == Some(package_id))
+            .collect();
+        if !children.is_empty() {
+            let child_ids: Vec<String> = children
+                .iter()
+                .map(|c| format!("{} ({})", &c.package_id.to_string()[..8], c.status))
+                .collect();
+            println!("Children: {}", child_ids.join(", "));
+        }
+        println!();
+    } else {
+        // Check if this draft has any follow-ups.
+        let all_packages = load_all_packages(config).unwrap_or_default();
+        let children: Vec<_> = all_packages
+            .iter()
+            .filter(|p| p.parent_draft_id == Some(package_id))
+            .collect();
+        if !children.is_empty() {
+            let child_ids: Vec<String> = children
+                .iter()
+                .map(|c| format!("{} ({})", &c.package_id.to_string()[..8], c.status))
+                .collect();
+            println!(
+                "Chain: parent draft — follow-up(s): {}",
+                child_ids.join(", ")
+            );
+            println!();
+        }
+    }
 
     // Parse detail level and format.
     let detail_level = detail_str

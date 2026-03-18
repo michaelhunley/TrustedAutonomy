@@ -4361,19 +4361,37 @@ Channel plugins proved this migration pattern works (Discord went from built-in 
 ---
 
 ### v0.12.2.1 — Draft Compositing: Parent + Child Chain Merge
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Fix the architectural gap where follow-up (child) drafts only capture their own staged writes rather than computing a cumulative diff against the original source. Users see "2 files changed" on a follow-up when the real answer is "parent: 5 + child: 2 = 7 files changed", and `ta draft apply` reports "Applied 0 file(s)" because the rebase compares child-staging against current source (which already has the parent applied) and finds nothing new.
 
 **Root cause**: `draft build` snapshots only the delta since *this goal* started, not since the *root ancestor* of a follow-up chain. When the parent is applied to source before the child, the child's staging matches source and the diff is empty.
 
-1. [ ] **Track parent draft ID on follow-up goals**: When `ta run --follow-up <draft-id>` starts, record `parent_draft_id` on the `GoalRun`. Propagate through `DraftPackage` metadata.
-2. [ ] **Composited diff for child drafts**: In `draft build`, if `parent_draft_id` is set and the parent is Applied, compute the diff as `child-staging vs original-source-snapshot` (the snapshot taken *before* the parent was applied), not vs current source. This captures the full incremental change set.
-3. [ ] **`ta draft view` shows chain summary**: When viewing a child draft, show "Follow-up to `<parent-id>` — combined impact: N files". When viewing a parent with known children, list them.
-4. [ ] **`ta draft apply` merges chains**: Add `ta draft apply --chain <child-id>` which applies parent + all unapplied children in order, with a single merged commit message summarizing the chain. Detect cycles and warn.
-5. [ ] **`ta draft list` chain column**: Show `→ <parent-short-id>` in a new "Parent" column when a draft is a follow-up, so chains are visible at a glance.
-6. [ ] **Tests**: Unit test for composited diff (parent applied, child staging, expect combined N files). Integration test for `apply --chain`.
+1. [x] **Track parent draft ID on follow-up goals**: When `ta run --follow-up <draft-id>` starts, record `parent_draft_id` on the `GoalRun`. Propagate through `DraftPackage` metadata.
+2. [x] **Composited diff for child drafts**: In `draft build`, if `parent_draft_id` is set and the parent is Applied, compute the diff as `child-staging vs original-source-snapshot` (the snapshot taken *before* the parent was applied), not vs current source. This captures the full incremental change set.
+3. [x] **`ta draft view` shows chain summary**: When viewing a child draft, show "Follow-up to `<parent-id>` — combined impact: N files". When viewing a parent with known children, list them.
+4. [x] **`ta draft apply` merges chains**: Add `ta draft apply --chain <child-id>` which applies parent + all unapplied children in order, with a single merged commit message summarizing the chain. Detect cycles and warn.
+5. [x] **`ta draft list` chain column**: Show `→ <parent-short-id>` in a new "Parent" column when a draft is a follow-up, so chains are visible at a glance.
+6. [x] **Tests**: Unit test for composited diff (parent applied, child staging, expect combined N files). Integration test for `apply --chain`.
+
+*Deferred item moved to v0.12.2.2: transactional rollback on validation failure.*
 
 #### Version: `0.12.2-alpha.1`
+
+---
+
+### v0.12.2.2 — Draft Apply: Transactional Rollback on Validation Failure
+<!-- status: pending -->
+**Goal**: Make `ta draft apply` safe to run on `main`. If pre-submit verification fails (fmt, clippy, tests), all files written to the working tree must be restored to their pre-apply state. Currently the apply is not atomic — files land on disk but the commit never happens, leaving the working tree dirty and requiring manual `git checkout HEAD -- <files>` to recover.
+
+**Found during**: v0.12.2.1 apply failed due to a corrupted Nix store entry (`glib-2.86.3-dev` reference invalid), leaving 11 files modified in working tree on `main`.
+
+1. [ ] **Snapshot working tree before copy**: Before writing any files, record the set of paths that will be modified. For tracked files, stash or snapshot current content via `git stash push -- <paths>`.
+2. [ ] **Rollback on verification failure**: If any verification step exits non-zero, reverse-copy all written files back from the pre-apply snapshot. Print `[rollback] Restored N file(s) to pre-apply state.`
+3. [ ] **Rollback on unexpected error**: Any panic or early return in the apply path must also trigger rollback (use a guard/drop pattern or explicit cleanup).
+4. [ ] **Test**: Write an integration test that injects a failing verification command and asserts the working tree is clean after the failed apply.
+5. [ ] **Distinguish env failures from code failures**: If the failure is in the Nix/build environment (not the code itself), print a clear message: `Verification failed — this may be a build environment issue, not a code problem. Re-run after fixing your environment.`
+
+#### Version: `0.12.2-alpha.2`
 
 ---
 

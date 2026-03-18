@@ -486,6 +486,12 @@ pub struct DraftPackage {
     /// Tracks the PR lifecycle after apply.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vcs_status: Option<VcsTrackingInfo>,
+
+    /// Parent draft ID for follow-up goals (v0.12.2.1).
+    /// When set, this draft is a follow-up to the parent draft. Used for chain
+    /// display (`ta draft view` combined impact) and chain apply (`ta draft apply --chain`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_draft_id: Option<Uuid>,
 }
 
 /// VCS tracking information for post-apply lifecycle monitoring (v0.11.2.3).
@@ -681,6 +687,7 @@ mod tests {
             display_id: None,
             tag: None,
             vcs_status: None,
+            parent_draft_id: None,
         }
     }
 

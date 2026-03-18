@@ -109,6 +109,7 @@ mod tests {
             display_id: None,
             tag: None,
             vcs_status: None,
+            parent_draft_id: None,
         };
 
         let adapter = JsonAdapter::new();

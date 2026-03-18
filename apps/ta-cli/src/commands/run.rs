@@ -3209,6 +3209,7 @@ pre_launch:
             display_id: None,
             tag: None,
             vcs_status: None,
+            parent_draft_id: None,
         };
 
         // Save the draft package.
@@ -3363,6 +3364,7 @@ pre_launch:
             display_id: None,
             tag: None,
             vcs_status: None,
+            parent_draft_id: None,
         };
 
         super::super::draft::save_package(&config, &parent_draft).unwrap();
