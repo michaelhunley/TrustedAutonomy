@@ -4064,31 +4064,27 @@ The output pipeline is: user types command → `send_input()` POST to daemon `/a
 ---
 
 ### v0.11.6 — Constitution Audit Completion (§5–§14)
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Complete the constitution compliance audit that was cut short in v0.11.4.4. That phase fixed all §4 violations. This phase runs the full 14-section audit, fixes any remaining violations, adds regression tests, and gets a clean sign-off.
 
 **Context**: The initial audit (2026-03-16) confirmed §2, §3, §9 pass and fixed §4. Sections §5–§14 were not reached before the audit was cut short.
 
 #### Items
 
-1. [ ] **Re-run full §5–§14 audit**: Run a structured review of each remaining section against the current codebase:
-   - §5: Goal lifecycle state machine — all transitions validated, no illegal jumps?
-   - §6: Draft lifecycle — supersession rules enforced, no orphaned drafts?
-   - §7: Policy enforcement — capability checks on all agent-invoked paths?
-   - §8: Audit trail — all state changes logged with structured fields?
-   - §10: Agent isolation — staging dirs never cross-contaminate?
-   - §11: Memory injection — context injection observes project boundaries?
-   - §12: Event system — all events reliably emitted, no silent drops?
-   - §13: Error handling — all errors include what/why/next-step per observability mandate?
-   - §14: Versioning — version guards enforced, daemon/CLI mismatch surfaced?
+1. [x] **Re-run full §5–§14 audit**: §5, §6, §10, §11, §12, §13, §14 pass. §7 (policy enforcement) and §8 (audit trail) had violations — both fixed in this phase.
 
-2. [ ] **Fix all identified violations**: Address each finding, prioritized High → Medium → Low. Reference the section (e.g., `// §8.2: audit log must include goal_id`) in code comments.
+2. [x] **Fix all identified violations**:
+   - §7: Added `check_policy`/`enforce_policy` call in `ta-mcp-gateway/src/tools/fs.rs` before file diff access
+   - §8: Added `DraftApproved`, `DraftDenied`, `DraftApplied` event emission in `draft.rs` with §8 citation comments
 
-3. [ ] **Constitution regression tests**: For each fix, add a test that would catch the violation if it regressed. Tests should cite the section they cover.
+3. [x] **Constitution regression tests**: 8 new tests — 3 draft event serialization tests in `ta-events/src/schema.rs`, 5 policy enforcement tests in `ta-mcp-gateway/src/validation.rs`.
 
-4. [ ] **Audit sign-off**: Re-run the full 14-section audit after fixes. Document clean pass in commit message.
+4. [x] **Audit sign-off**: All tests pass (517 passed, 7 ignored). Clean audit pass documented in commit `084d4ea`.
 
-5. [ ] **Release pipeline checklist gate**: Add a `requires_approval` step to `DEFAULT_PIPELINE_YAML` between "Build & verify" and "Generate release notes". Prints a short constitution compliance checklist (injection cleanup, error paths, state transitions) and pauses for human sign-off. Skippable with `--skip-approvals`. Enabled by default.
+5. [x] **Release pipeline checklist gate**: Added `requires_approval: true` constitution compliance step to `DEFAULT_PIPELINE_YAML` in `release.rs`. Validated by `default_pipeline_has_constitution_checklist_gate` test.
+
+#### Deferred items moved/resolved
+- PLAN.md status marker update: lost when apply went to main directly (PR #188 hotfix addresses root cause). Marked done manually post-merge.
 
 **Files**: TBD by audit findings. Likely `crates/ta-goal/src/goal_run.rs` (§5), `apps/ta-cli/src/commands/draft.rs` (§6), `crates/ta-policy/` (§7), audit logging (§8), `apps/ta-cli/src/commands/release.rs` (pipeline step).
 
