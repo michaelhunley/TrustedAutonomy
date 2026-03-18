@@ -4131,6 +4131,38 @@ The output pipeline is: user types command → `send_input()` POST to daemon `/a
 
 ---
 
+### v0.11.8 — VCS Submit Invariant Generalization
+<!-- status: pending -->
+**Goal**: The protected-branch guard added in the PR #188 hotfix is git-specific (`adapter.name() == "git"`). The underlying invariant — *agent changes must never land directly on a protected target, all changes route through an isolation mechanism* — must apply equally to all VCS adapters (current and future plugins). This phase generalizes the enforcement and codifies the invariant in the constitution.
+
+#### Problem
+The current `SourceAdapter` trait has no way for an adapter to declare its protected targets or assert the post-`prepare()` invariant. The `draft.rs` guard is a git-specific `Command::new("git")` call — it cannot work for Perforce, SVN, or plugin adapters. SVN and Perforce currently have zero enforcement.
+
+#### Items
+
+1. [ ] **`SourceAdapter` trait extension**: Add two methods with default no-op implementations so existing adapters are not broken:
+   - `fn protected_submit_targets(&self) -> Vec<String>` — adapter declares its protected refs (e.g. `["main", "master", "trunk"]` for git, `["//depot/main/..."]` for Perforce). Default: `vec![]`.
+   - `fn verify_not_on_protected_target(&self) -> Result<()>` — default impl queries the adapter's current position and returns `Err` if it matches any protected target from `protected_submit_targets()`. Adapters may override for VCS-specific queries.
+
+2. [ ] **Git adapter**: Implement `protected_submit_targets()` returning the configured protected branches (from `SubmitConfig`, defaulting to `["main", "master", "trunk", "dev"]`). Implement `verify_not_on_protected_target()` using `git rev-parse --abbrev-ref HEAD`.
+
+3. [ ] **Perforce adapter**: Implement `protected_submit_targets()` returning configured protected depot paths. Implement `verify_not_on_protected_target()` checking the current CL's target stream/branch.
+
+4. [ ] **SVN adapter**: Implement `protected_submit_targets()` returning configured protected paths (e.g. `/trunk`). Implement `verify_not_on_protected_target()` checking the working copy URL.
+
+5. [ ] **Generic guard in `draft.rs`**: Replace the `adapter.name() == "git"` hardcoded block with a call to `adapter.verify_not_on_protected_target()`. All adapters get enforcement; the logic lives in the adapter, not in the apply command.
+
+6. [ ] **Constitution §15 — VCS Submit Invariant**: Add a new section to `docs/TA-CONSTITUTION.md`:
+   > **§15 VCS Submit Invariant**: All VCS adapters MUST route agent-produced changes through an isolation mechanism (branch, shelved changelist, patch queue) before any commit. `prepare()` is the mandatory enforcement point — a failure is always a hard abort. After `prepare()`, the adapter MUST NOT be positioned to commit directly to a protected target. Adapters MUST declare protected targets via `protected_submit_targets()`. This invariant applies to all current and plugin-supplied adapters. The plugin registration framework MUST reject adapters whose `verify_not_on_protected_target()` is not implemented (i.e., returns `Ok(())` unconditionally) when `protected_submit_targets()` is non-empty.
+
+7. [ ] **Plugin adapter compliance**: When the plugin registry loads a submit adapter, validate that `protected_submit_targets()` + `verify_not_on_protected_target()` are consistent (non-empty targets → non-trivial verify). Emit a `tracing::warn!` if an adapter declares protected targets but returns `Ok(())` from verify. Track for v0.14.1 `constitution.toml` integration.
+
+**Files**: `crates/ta-submit/src/adapter.rs`, `crates/ta-submit/src/git.rs`, `crates/ta-submit/src/perforce.rs`, `crates/ta-submit/src/svn.rs`, `apps/ta-cli/src/commands/draft.rs`, `docs/TA-CONSTITUTION.md`
+
+#### Version: `0.11.8-alpha`
+
+---
+
 ### v0.12.0 — Template Projects & Bootstrap Flow
 <!-- status: pending -->
 **Goal**: `ta new` generates projects with `project.toml` plugin declarations so downstream users get a complete, working setup from `ta setup` alone. Template projects in the Trusted-Autonomy org serve as reference implementations. Also: replace the quick-fix Discord command listener with a proper slash-command-based bidirectional integration.
