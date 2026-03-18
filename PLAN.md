@@ -4035,6 +4035,10 @@ The output pipeline is: user types command → `send_input()` POST to daemon `/a
 
 7. [x] **Daemon `:tail` output fix**: Updated to "Tail output: :tail <id>" in `cmd.rs`. (PR #184)
 
+#### Goal/Draft List ID Usability
+
+8. [ ] **Copy-paste-ready IDs in `ta goal list` and `ta draft list`**: The list output currently shows short tags like `implement-v0-11-4...` (truncated) as identifiers. Running `ta goal status implement-v0-11-4...` then returns "no goal found" because the truncated tag isn't a valid lookup key. Fix: display the minimal unambiguous ID (short UUID prefix or full tag, whichever `ta goal status` accepts) so users can copy-paste directly from list output into other commands. Also applies to `ta draft list` → `ta draft view/approve/deny`.
+
 #### Constitution Compliance Scan at Draft Build
 
 8. [ ] **Draft-time constitution pattern scan**: When `ta draft build` runs, scan changed files for known §4 violation patterns (injection functions without cleanup on early-return paths, error arms that `return` without a preceding `restore_*` call). Emit findings as warnings in the draft summary — non-blocking by default, so review flow is unaffected. The scan is static/grep-based (no agent), runs in <1s. Example output: `[constitution] 2 potential §4 violations in run.rs — review before approving`. Configurable: `warn` (default), `block`, `off`.
