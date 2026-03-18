@@ -4369,6 +4369,7 @@ Channel plugins proved this migration pattern works (Discord went from built-in 
 3. [ ] **Stream output includes short tag when multiple agents active**: Each line of agent stream output is prefixed with `[tag]` (e.g., `[v0.12.3]`) when more than one agent is streaming concurrently. Single-agent sessions remain untagged to reduce noise.
 4. [ ] **Auth failure surfaces as user interaction**: When the agent process receives a 401 / authentication error (API outage, expired key), ta shell displays a prompt: `Agent auth failed — [r]etry / [a]bort?`. If retry, re-attempt with a brief backoff; if abort, clean up the session.
 5. [ ] **Heartbeat / tail stream cleanup when agent exits**: After the agent process exits, the `tail` stream and heartbeat timers are torn down immediately. Shell prints a clean `[agent exited]` line rather than silently hanging or orphaning the tail task.
+6. [ ] **Auto-scroll to bottom during agent stream output**: When the user is at (or near) the bottom of the output pane and new agent output arrives, the shell automatically scrolls to keep the latest line visible — matching a `tail -f` experience. If the user has manually scrolled up to read history, auto-scroll is suspended. Once they scroll back to the bottom, auto-scroll resumes. Prevents output from running below the prompt bar and requiring manual scroll to catch up.
 
 #### Version: `0.12.3-alpha`
 
