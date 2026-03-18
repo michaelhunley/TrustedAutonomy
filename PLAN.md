@@ -74,6 +74,49 @@ TA's architecture maps to emerging AI governance standards. Rather than bolt-on 
 
 ---
 
+## Release Sequence & Phase Priority
+
+### Road to Public Alpha
+
+External users (working on their own projects, not TA itself) need these phases completed in order before TA is ready for public alpha. All other phases are post-alpha.
+
+| Phase | Why required |
+|---|---|
+| **v0.11.7** | Shell stream UX + VCS trait generalization — foundational for next phases |
+| **v0.12.0** + §16.6 extraction | `ta new` / `setup.sh` onboarding + remove TA-specific scanner from generic pipeline |
+| **v0.12.0.1** | PR merge + main sync completion — the missing post-apply workflow step |
+| **v0.13.5** | VCS Adapter Externalization — first users include Perforce shops; P4 must be external plugin |
+| ⬇ **PUBLIC ALPHA** | TA can be set up on a new project, plan built, goals run, drafts applied, PRs merged, main synced — in git or P4, from `ta shell` + Discord/Slack |
+
+### Post-Alpha: Near-Term
+
+| Phase | Notes |
+|---|---|
+| v0.12.1 | Reflink/COW — perf optimization, not blocking |
+| v0.12.2 | Self-healing daemon — makes the loop more robust |
+| v0.13.3 | External Action Governance — needed when agents send emails/API calls/posts |
+| v0.13.4 | Database Proxy Plugins — depends on v0.13.3 |
+| v0.14.1 | Full Constitution Framework — §16.6 is pulled into v0.12.0 (scanner extraction); the remaining constitution tooling can be post-alpha |
+
+### Enterprise (Deferred)
+
+Needed for compliance-focused or container-isolated deployments; not blocking for initial external release.
+
+- v0.13.0 — Compliance-Ready Audit Ledger
+- v0.13.1 — MCP Transport Abstraction (SecureTA/container enabler; runtime adapters depend on this)
+- v0.13.2 — Runtime Adapter Trait (SecureTA/OCI; depends on v0.13.1)
+
+### Deferred / May Drop
+
+- v0.12.3 — Community Knowledge Hub (post-launch community feature)
+- v0.13.6 — Shell Mouse Scroll (TUI may be dropped; web shell is default)
+
+### Advanced (Post-Alpha)
+
+- v0.14.0 — Goal Workflows: Serial Chains, Parallel Swarms & Office Routing
+
+---
+
 ## v0.9 — Distribution & Packaging *(release: tag v0.9.0-beta)*
 
 ### v0.9.0 — Distribution & Packaging
@@ -4093,47 +4136,47 @@ The output pipeline is: user types command → `send_input()` POST to daemon `/a
 ---
 
 ### v0.11.7 — Web Shell Stream UX Polish
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Clean up the tail/stream output UX in the web shell so live goal output is comfortable to read and the connection state is always clear.
 
 #### Items
 
-1. [ ] **Heartbeat into working indicator**: Move `[heartbeat] still running... Xs elapsed` out of the stream. Instead, update the existing "Agent is working…" line in-place: `Agent is working ⠿ (380s elapsed)` — animated spinner character cycles on each heartbeat, elapsed time updates. No separate status bar; no duplicate elapsed display.
+1. [x] **Heartbeat into working indicator**: Move `[heartbeat] still running... Xs elapsed` out of the stream. Instead, update the existing "Agent is working…" line in-place: `Agent is working ⠿ (380s elapsed)` — animated spinner character cycles on each heartbeat, elapsed time updates. No separate status bar; no duplicate elapsed display.
 
-2. [ ] **No-heartbeat alert**: If no heartbeat arrives within a configurable window (default 30 s), change the working indicator to a red alert: `Agent is working ⚠ (410s elapsed — no heartbeat)`. Clears back to spinner automatically when the next heartbeat arrives.
+2. [x] **No-heartbeat alert**: If no heartbeat arrives within a configurable window (default 30 s), change the working indicator to a red alert: `Agent is working ⚠ (410s elapsed — no heartbeat)`. Clears back to spinner automatically when the next heartbeat arrives.
 
-3. [ ] **Auto-tail on any background command**: Whenever the shell spawns a command in the background (e.g. `ta run`, `ta draft apply`, `ta build`, or any other backgrounded process), automatically begin tailing its output key immediately. Show a single line: "Auto-tailing output for \<key\>…" at the top of the stream. No manual `:tail` required for any background operation.
+3. [x] **Auto-tail on any background command**: Whenever the shell spawns a command in the background (e.g. `ta run`, `ta draft apply`, `ta build`, or any other backgrounded process), automatically begin tailing its output key immediately. Show a single line: "Auto-tailing output for \<key\>…" at the top of the stream. No manual `:tail` required for any background operation.
 
-4. [ ] **Tail stream close on completion** *(bug)*: The tail SSE stream is not closed when the background command finishes. The shell keeps tailing indefinitely, accumulating ghost tail subscriptions. When a second background command starts, the shell shows 2 active tails. Fix: daemon sends an explicit `event: done` (or closes the SSE connection) when the output channel is exhausted; client untails and stops tracking that key on receipt.
+4. [x] **Tail stream close on completion** *(bug)*: The tail SSE stream is not closed when the background command finishes. The shell keeps tailing indefinitely, accumulating ghost tail subscriptions. When a second background command starts, the shell shows 2 active tails. Fix: daemon sends an explicit `event: done` (or closes the SSE connection) when the output channel is exhausted; client untails and stops tracking that key on receipt.
 
-5. [ ] **Process completion/failure/cancellation states**: When a tailed background process ends, replace the "Agent is working…" indicator with a final status line and clear the working indicator:
+5. [x] **Process completion/failure/cancellation states**: When a tailed background process ends, replace the "Agent is working…" indicator with a final status line and clear the working indicator:
    - Completed: `✓ <command> completed`
    - Failed: `✗ <command> failed (exit <code>)`
    - Canceled: `⊘ <command> canceled`
    The working indicator (`Agent is working…`) is removed entirely after any terminal state.
 
-6. [ ] **Input cursor style** — configurable in `daemon.toml` `[shell]` section:
+6. [x] **Input cursor style** — configurable in `daemon.toml` `[shell]` section:
    - Default: larger, white block cursor (replaces the current medium-blue hard-to-read cursor)
    - Config keys: `cursor_color` (CSS color, default `#ffffff`), `cursor_style` (`block` | `bar` | `underline`, default `block`)
    - Applied via CSS on the shell input element; read from `/api/status` alongside other shell config.
 
-7. [ ] **Auto-scroll during tail**: When tailing output, the shell must scroll to follow new lines as they arrive — unless the user has explicitly scrolled up. Behaviour: if the viewport is at (or within a small threshold of) the bottom, each new line scrolls it down to stay visible. If the user scrolls up, auto-scroll pauses. Scrolling back to the bottom resumes auto-scroll. This mirrors the behaviour of `tail -f` in a terminal.
+7. [x] **Auto-scroll during tail**: When tailing output, the shell must scroll to follow new lines as they arrive — unless the user has explicitly scrolled up. Behaviour: if the viewport is at (or within a small threshold of) the bottom, each new line scrolls it down to stay visible. If the user scrolls up, auto-scroll pauses. Scrolling back to the bottom resumes auto-scroll. This mirrors the behaviour of `tail -f` in a terminal.
 
-8. [ ] **`--submit` default on when VCS configured**: `ta draft apply` should default to `--submit` (git commit + push + PR creation) whenever a VCS submit adapter is configured. Add `--no-submit` to explicitly opt out. The current default (no submit unless `--submit` is passed) is surprising — users expect apply to go all the way through.
+8. [x] **`--submit` default on when VCS configured**: `ta draft apply` should default to `--submit` (git commit + push + PR creation) whenever a VCS submit adapter is configured. Add `--no-submit` to explicitly opt out. The current default (no submit unless `--submit` is passed) is surprising — users expect apply to go all the way through.
 
-9. [ ] **`SourceAdapter` trait — `verify_not_on_protected_target()`**: Add two methods with default no-op implementations (no breaking change):
+9. [x] **`SourceAdapter` trait — `verify_not_on_protected_target()`**: Add two methods with default no-op implementations (no breaking change):
    - `fn protected_submit_targets(&self) -> Vec<String>` — adapter declares its protected refs. Default: `vec![]`.
    - `fn verify_not_on_protected_target(&self) -> Result<()>` — asserts post-`prepare()` invariant. Default impl: if `protected_submit_targets()` is non-empty, query the adapter's current position and return `Err` if it matches. Adapters may override.
 
-10. [ ] **Git adapter**: Implement `protected_submit_targets()` returning configured protected branches (defaulting to `["main", "master", "trunk", "dev"]`) and `verify_not_on_protected_target()` via `git rev-parse --abbrev-ref HEAD`.
+10. [x] **Git adapter**: Implement `protected_submit_targets()` returning configured protected branches (defaulting to `["main", "master", "trunk", "dev"]`) and `verify_not_on_protected_target()` via `git rev-parse --abbrev-ref HEAD`.
 
-11. [ ] **Perforce adapter (built-in)**: Implement `protected_submit_targets()` (configured depot paths, default `["//depot/main/..."]`) and `verify_not_on_protected_target()` checking the current CL's target stream. No Perforce installation required for the check to compile — gate behind a `p4` CLI call that degrades gracefully if not present.
+11. [x] **Perforce adapter (built-in)**: Implement `protected_submit_targets()` (configured depot paths, default `["//depot/main/..."]`) and `verify_not_on_protected_target()` checking the current CL's target stream. No Perforce installation required for the check to compile — gate behind a `p4` CLI call that degrades gracefully if not present.
 
-12. [ ] **SVN adapter (built-in)**: Implement `protected_submit_targets()` (configured protected paths, default `["/trunk"]`) and `verify_not_on_protected_target()` via `svn info --show-item url`. SVN's `prepare()` is currently a no-op (no branching) — this at minimum blocks committing to a protected path until proper branch/copy support is added.
+12. [x] **SVN adapter (built-in)**: Implement `protected_submit_targets()` (configured protected paths, default `["/trunk"]`) and `verify_not_on_protected_target()` via `svn info --show-item url`. SVN's `prepare()` is currently a no-op (no branching) — this at minimum blocks committing to a protected path until proper branch/copy support is added.
 
-13. [ ] **Generic guard in `draft.rs`**: Replace the `adapter.name() == "git"` hardcoded check with `adapter.verify_not_on_protected_target()`. All adapters get uniform enforcement with no special-casing.
+13. [x] **Generic guard in `draft.rs`**: Replace the `adapter.name() == "git"` hardcoded check with `adapter.verify_not_on_protected_target()`. All adapters get uniform enforcement with no special-casing.
 
-14. [ ] **Constitution §15 — VCS Submit Invariant**: Add to `docs/TA-CONSTITUTION.md`:
+14. [x] **Constitution §15 — VCS Submit Invariant**: Add to `docs/TA-CONSTITUTION.md`:
     > **§15 VCS Submit Invariant**: All VCS adapters MUST route agent-produced changes through an isolation mechanism (branch, shelved CL, patch queue) before any commit. `prepare()` is the mandatory enforcement point — failure is always a hard abort. After `prepare()`, the adapter MUST NOT be positioned to commit directly to a protected target. Adapters MUST declare protected targets via `protected_submit_targets()`. This invariant applies to all current and plugin-supplied adapters.
 
 **Files**: `crates/ta-daemon/assets/shell.html`, `crates/ta-daemon/src/config.rs`, `crates/ta-daemon/src/api/status.rs`, `apps/ta-cli/src/commands/draft.rs`, `crates/ta-submit/src/adapter.rs`, `crates/ta-submit/src/git.rs`, `crates/ta-submit/src/perforce.rs`, `crates/ta-submit/src/svn.rs`, `docs/TA-CONSTITUTION.md`
@@ -4187,7 +4230,45 @@ Known issue from v0.10.18: Discord-dispatched `ta run` created a goal record (st
 27. [ ] **macOS code signing in plugin install**: When copying plugin binaries to `.ta/plugins/`, re-sign with `codesign --force --sign -` on macOS to prevent AppleSystemPolicy from blocking execution. This caused the v0.10.18 Discord listener to be SIGKILL'd immediately on launch from `.ta/plugins/`.
 28. [ ] **Escape special characters in VCS commit/branch messages**: Goal titles containing backticks, single quotes, or other shell-special characters get truncated or mangled when passed to VCS commands (e.g., `` `ta sync` `` in a title becomes `&` in the git commit message). The submit adapter must properly escape or sanitize goal titles and draft summaries before passing them to shell commands. Use direct argument passing (not shell interpolation) where possible.
 
+29. [ ] **§16.6 — Remove TA-specific scanner from generic draft pipeline** *(constitution §16.6 compliance, pulled forward from v0.14.1 item 1)*: Extract `scan_s4_violations()` from `draft.rs` into a project-specific constitution checker invoked via the `draft-build-post` hook. The generic pipeline gets only the hook point (no-op by default). The TA repo itself activates the hook via `.ta/workflow.toml`. This ensures external projects — Python, C++, content drafts — never receive TA-internal Rust-pattern checks.
+
+30. [ ] **`ta constitution init` (simple)**  *(pulled forward from v0.14.1)*: `ta constitution init` asks the QA agent to draft a `.ta/constitution.md` from the project's `PLAN.md`, `CLAUDE.md`, and stated objectives. No guided UI — a single agent prompt produces the first draft for human review. Gives new projects an immediate behavioral contract without requiring the full v0.14.1 constitution framework.
+
 #### Version: `0.12.0-alpha`
+
+---
+
+### v0.12.0.1 — PR Merge & Main Sync Completion
+<!-- status: pending -->
+**Goal**: Complete the post-apply workflow so that after `ta draft apply --submit` creates a PR, the user can merge it and sync their main branch without leaving TA. This is the final step in the "run → draft → apply → merge → next phase" loop that makes TA a smooth development substrate.
+
+**Current state**: `auto_merge = true` in `workflow.toml` already calls `gh pr merge --auto` when a Git PR is created (v0.11.2.3). `ta sync` already pulls main (v0.11.1). The gap: these aren't wired together, there's no watch-for-merge flow, P4 has no `merge_review()` equivalent, and the shell gives no guidance after apply on what to do next.
+
+#### Items
+
+1. [ ] **`SourceAdapter::merge_review()`**: New optional trait method (default: no-op with guidance message). Git: calls `gh pr merge` (or GitHub API) to merge the PR immediately. P4: calls `p4 submit -c <CL>` to submit the shelved changelist. SVN: no-op (SVN commits directly). Each adapter's `merge_review()` returns a `MergeResult` with `merged: bool`, `merge_commit`, and `message`.
+
+2. [ ] **`ta draft merge <id>`**: CLI command that calls `adapter.merge_review()` for the draft's PR, then calls `adapter.sync_upstream()` to pull main. Handles both auto-merge (CI must pass first) and immediate merge modes. Outputs: merge status, new main HEAD, and suggested next step.
+
+3. [ ] **Shell guidance after apply**: After `ta draft apply --submit` completes, print actionable next steps: PR URL, whether auto-merge is enabled, and the exact command to run when ready (`ta draft merge <id>` or `ta sync`). No silent exits.
+
+4. [ ] **`ta draft watch <id>`**: Polls PR/review status until merged, closed, or failed CI. When merged, automatically calls `ta sync` to pull main and prints "✓ merged + synced main — ready for next phase". Interval: configurable, default 30s. Useful for `auto_merge = true` flows where CI runs before merge.
+
+5. [ ] **`--watch` flag on `ta draft apply`**: `ta draft apply --submit --watch` chains apply → create PR → watch → merge → sync into a single command. The user starts it and walks away; it completes when main is synced.
+
+6. [ ] **`GoalRunState::Merged`**: New state after `Applied` indicating the PR was merged and main was synced. Transition: `Applied → Merged`. Emits `GoalMerged` event. `ta goal list` shows merged goals distinctly from applied-but-not-merged.
+
+7. [ ] **P4 shelved CL workflow**: `ta draft apply --submit` for P4 shelves the CL and opens it for review. `ta draft merge <id>` submits it (`p4 submit -c <CL>`). `ta draft watch <id>` polls CL state via `p4 change -o`. Documents P4-specific workflow in USAGE.md.
+
+8. [ ] **`ta plan next`**: After merge + sync, suggest the next phase from PLAN.md based on the just-completed phase. Reads the plan, finds the current goal's phase, and prints the next unchecked phase with its goal. Makes the "iterate through phases" loop explicit.
+
+**Files**: `crates/ta-submit/src/adapter.rs`, `crates/ta-submit/src/git.rs`, `crates/ta-submit/src/perforce.rs`, `apps/ta-cli/src/commands/draft.rs`, `apps/ta-cli/src/commands/sync.rs`, `crates/ta-goal/src/goal_run.rs` (new state), `docs/USAGE.md`
+
+#### Version: `0.12.0.1-alpha`
+
+---
+
+> **⬇ PUBLIC ALPHA** — After v0.13.5 (VCS Externalization) completes, TA is ready for external users: new project setup, plan + workflow generation, goals run via `ta shell` + Discord/Slack, drafts applied, PRs merged, main synced — in Git or Perforce.
 
 ---
 
@@ -4273,6 +4354,7 @@ The trust model stays the same: daemon detects and diagnoses, agent proposes cor
 
 ### v0.12.3 — Community Knowledge Hub Plugin (Context Hub Integration)
 <!-- status: pending -->
+<!-- priority: deferred — post-launch community feature; not required for public alpha -->
 **Goal**: Give every TA agent access to curated, community-maintained knowledge through a first-class plugin that integrates with [Context Hub](https://github.com/andrewyng/context-hub). Agents query community resources before making API calls, check threat intelligence before security decisions, and contribute discovered gaps back — all with clear attribution and human-reviewable updates captured in the draft.
 
 **Design philosophy**: Community knowledge is a *connector*, not a monolith. Each community resource serves a specific *intent* — API integration guidance, security threat intelligence, framework migration patterns, etc. The plugin ships with a registry of well-known resources, each declaring its intent so agents know *when* to consult it. Users configure which resources are active and whether the agent has read-only or read-write access.
@@ -4417,6 +4499,7 @@ The trust model stays the same: daemon detects and diagnoses, agent proposes cor
 
 ### v0.13.0 — Compliance-Ready Audit Ledger
 <!-- status: pending -->
+<!-- priority: enterprise — deferred; not required for public alpha -->
 **Goal**: Replace the lightweight goal history index with a compliance-ready audit ledger that captures full decision context, covers all goal lifecycle paths, and supports pluggable storage backends.
 
 #### Problem
@@ -4464,6 +4547,7 @@ Even on the happy path, the `GoalHistoryEntry` lacks:
 
 ### v0.13.1 — MCP Transport Abstraction (TCP/Unix Socket)
 <!-- status: pending -->
+<!-- priority: enterprise — SecureTA/container enabler; not required for public alpha; v0.13.2 depends on this -->
 **Goal**: Abstract MCP transport so agents can communicate with TA over TCP or Unix sockets, not just stdio pipes. Critical enabler for container-based isolation (SecureTA) and remote agent execution.
 
 #### Items
@@ -4482,6 +4566,7 @@ Even on the happy path, the `GoalHistoryEntry` lacks:
 
 ### v0.13.2 — Runtime Adapter Trait
 <!-- status: pending -->
+<!-- priority: enterprise — SecureTA/OCI; depends on v0.13.1; not required for public alpha -->
 **Goal**: Abstract how TA spawns and manages agent processes. Today it's hardcoded as a bare child process. A `RuntimeAdapter` trait enables container, VM, and remote execution backends — TA provides BareProcess, SecureTA provides OCI/VM.
 
 **Depends on**: v0.13.1 (MCP Transport — runtime adapters need transport abstraction to connect agents over non-stdio channels)
@@ -4567,6 +4652,7 @@ auto_approve_reads = true  # SELECT is fine, INSERT/UPDATE/DELETE needs review
 
 ### v0.13.5 — VCS Adapter Externalization
 <!-- status: pending -->
+<!-- priority: pre-alpha — moved earlier; Perforce users need this before public alpha; no dependency on v0.13.1 or v0.13.2 (uses JSON-over-stdio protocol from v0.10.2) -->
 **Goal**: Migrate VCS adapters from built-in compiled code to external plugins using the same JSON-over-stdio protocol as channel plugins. Git remains built-in as the zero-dependency fallback. Perforce, SVN, and any future VCS adapters become external plugins that users install when needed.
 
 #### Rationale
@@ -4596,6 +4682,7 @@ Channel plugins proved this migration pattern works (Discord went from built-in 
 
 ### v0.13.6 — Shell Mouse Scroll & TUI-Managed Selection (revisit)
 <!-- status: pending -->
+<!-- priority: deferred — may drop TUI entirely; web shell is default; low user impact -->
 **Goal**: Re-examine mouse scroll and TUI-managed text selection in the terminal TUI shell (now opt-in via `ta shell --tui`). v0.11.4.2 attempted mouse capture but it broke native selection. The web shell is now the default, so this is lower priority — only matters for users who prefer the terminal TUI.
 
 #### Research & approach
@@ -4714,70 +4801,64 @@ Map departments, project types, or goal categories to default workflows.
 
 ### v0.14.1 — Product Constitution Framework
 <!-- status: pending -->
-**Goal**: Make constitution review a first-class, project-configurable capability that works for any project using TA — Rust, Python, C++, JavaScript, or non-code content (emails, posts, documents). Agent-driven review is the primary mechanism; project-generated static checkers are an optional optimization. The current TA-internal §4 scanner is moved out of the core draft pipeline and into a project-specific plugin for the TA repo itself.
+**Goal**: Make the constitution a first-class, configurable artifact that downstream projects declare, extend, and enforce — not a TA-internal concept hard-wired to `docs/TA-CONSTITUTION.md`. A project using TA can define its own invariants (what functions inject, what functions restore, what the rules are), and TA's draft-build scan and release checklist gate read from that config.
 
-**Problem**: The current §4 static scanner in `draft.rs` is TA-internal and Rust-specific: it only scans `.rs` files, looks for TA's own `inject_*/restore_*` naming convention, and silently skips (or misleads) on any other project. Any project using TA — a Python Flask service, a game in C++, an email campaign — gets a scanner that either produces false positives on their files or silently skips them entirely. Agent-driven review doesn't have this problem: an agent reading a project constitution and a diff can reason about intent and context regardless of language or content type.
+**Problem**: Currently the constitution is TA-specific. The §4 injection/cleanup rules, the pattern scanner, and the release checklist all reference TA's own codebase conventions. A downstream project using TA (e.g., a web service or a data pipeline) has different injection patterns, different error paths, and different invariants. They get no constitution enforcement at all.
 
-**See also**: TA-CONSTITUTION.md §16 (Constitution Review Architecture) for the behavioral invariants this phase implements.
+#### Architecture: `constitution.toml`
 
-#### Three Review Modes (§16.2)
-
-**`agent-constitution-draft-review`** — hooks into `ta draft build`. After a draft is built, an agent reviews the artifacts + diff against the project constitution and produces structured findings. Non-blocking by default; configurable to block approval on high-severity findings. Works for any file type.
-
-**`agent-constitution-project-review`** — runs on-demand (`ta constitution review --project`) or hooked into the release pipeline. Reviews the full project against the constitution, not just a single draft. Best for periodic health checks and pre-release gates.
-
-**`agent-build-constitution-static-checker`** — an agent reads the project's constitution and codebase context, then generates a project-specific static checker (patterns, rules, assertions). Output is human-readable and editable. This is how TA's own §4 checker was derived conceptually — but now any project can get a tailored checker automatically. The generated checker integrates as a `ta constitution check` plugin.
-
-#### Architecture: `.ta/constitution.md` + `constitution.toml`
-
-The project constitution lives at `.ta/constitution.md` (narrative document) and `.ta/constitution.toml` (machine-readable rules for hooks and static checkers).
+A project-level constitution config in `.ta/constitution.toml`:
 
 ```toml
-[review]
-# Which review modes are active
-draft_review = true          # agent-constitution-draft-review on draft build
-project_review = false       # agent-constitution-project-review (on-demand only by default)
-draft_review_blocking = false  # block draft approval on high-severity findings
+[rules.injection_cleanup]
+# Functions that inject context into the workspace (must be cleaned up on all error paths)
+inject_fns = ["inject_config", "inject_credentials"]
+restore_fns = ["restore_config", "restore_credentials"]
+severity = "high"
 
-[static_checker]
-# Generated by agent-build-constitution-static-checker; humans may edit
-enabled = false              # off until explicitly generated and reviewed
-plugin = ".ta/plugins/ta-constitution-check"  # path to generated checker binary/script
+[rules.error_paths]
+# Error return patterns that must be preceded by cleanup
+patterns = ["return Err(", "return Ok(()) # error"]
+severity = "medium"
+
+[scan]
+# Files/dirs to scan for constitution violations
+include = ["src/"]
+exclude = ["src/tests/"]
+on_violation = "warn"   # "warn" | "block" | "off"
 
 [release]
-checklist_gate = true        # constitution review gate in release pipeline
-project_review_on_release = false  # run full project review pre-release (opt-in)
+# Whether to include a constitution compliance gate in the release pipeline
+checklist_gate = true
+# Whether to run parallel agent constitution review during release
+agent_review = false   # opt-in — spins up a lighter concurrent review agent
 
 [agent_review]
-model_hint = "fast"          # use a smaller/faster model for draft review
-constitution_path = ".ta/constitution.md"
+# Prompt prefix for the constitution reviewer (lighter than full release notes agent)
+model_hint = "fast"    # hint to use a smaller/faster model
+max_tokens = 2000
+focus = "injection_cleanup,error_paths"
 ```
 
 #### Items
 
-1. [ ] **Remove §4 scanner from core draft pipeline** *(constitution §16.6 compliance)*: The `scan_s4_violations()` function in `draft.rs` violates §16.6 — it is TA-specific, Rust-only logic embedded in a generic command. Extract it as a TA-project constitution checker plugin. The generic draft build pipeline gets only the hook point (item 2); the TA-specific check runs via that hook when developing TA itself.
+1. [ ] **`constitution.toml` schema**: Define and document the config format. Ship TA's own rules as the default template (generated by `ta init constitution`).
 
-2. [ ] **`draft-build-post` hook point**: Add a `draft-build-post` hook in the draft build pipeline. Hook receives: draft ID, artifact list (URIs + change types), project root. Projects configure this hook in `.ta/workflow.toml`. Default: no hook (no-op).
+2. [ ] **`ta init constitution`**: Scaffolding command. Writes `.ta/constitution.toml` with TA's default rules as a starting point. Users edit for their project's patterns.
 
-3. [ ] **`agent-constitution-draft-review` hook implementation**: Built-in hook handler that, when enabled, spawns a QA agent with: the project constitution, the draft summary, and a rendered artifact list. Agent produces structured JSON findings (file, severity, rule, description). Findings are added as `verification_warnings` in the draft package — visible in `ta draft view`, non-blocking by default.
+3. [ ] **Draft-time scanner reads `constitution.toml`**: Move the hardcoded §4 pattern scan (v0.11.5 item 8) to read inject/restore function names from `constitution.toml`. Projects with different conventions get correct scanning.
 
-4. [ ] **`draft-approve-pre` blocking hook**: When `draft_review_blocking = true`, the approve flow reads the draft's verification warnings for constitution findings with `severity = "high"` and rejects approval with a clear message listing the violations. User must resolve or explicitly override.
+4. [ ] **Release pipeline reads `checklist_gate`**: The release checklist gate step (v0.11.4.4 item 9) is enabled/disabled by `constitution.toml`. The checklist content is generated from the declared rules, not hardcoded.
 
-5. [ ] **`agent-constitution-project-review` command**: `ta constitution review --project` spawns an agent that reads the constitution, project plan, recent git history, and a configured sample of source files. Produces a report of systemic adherence or drift. `--output-draft` saves the report as a draft package for review.
+5. [ ] **Parallel agent review during release**: When `agent_review = true` in `constitution.toml`, the release pipeline fans out two agents concurrently: the existing release notes writer, and a lighter constitution reviewer. The reviewer gets the diff + the declared rules + a compact prompt. Its output is appended to the release draft as a "Constitution Review" section. Uses `model_hint = "fast"` to keep it cheap. Opt-in because it adds an LLM call per release.
 
-6. [ ] **`agent-build-constitution-static-checker` command**: `ta constitution build-checker` spawns an agent that reads `.ta/constitution.md` plus a sample of the project's source files, then generates a static checker definition. Output: a checker plugin (script or binary) and a human-readable rules file. The checker integrates via `ta constitution check`.
+6. [ ] **`ta constitution check`**: CLI command to run the scan outside of draft build — useful for CI integration and pre-commit hooks. Exit code 0 = clean, 1 = violations found. Output is machine-readable JSON with `--json` flag.
 
-7. [ ] **`ta constitution check` CLI**: Standalone command that runs the configured static checker (either the generated one or a project-authored one). Exit code 0 = clean, 1 = violations. `--json` for machine-readable output. Suitable for CI pre-commit hooks.
+7. [ ] **Inheritance**: `constitution.toml` can `extends = "ta-default"` to inherit TA's rules and only override specific sections. TA ships a built-in `ta-default` profile.
 
-8. [ ] **`.ta/constitution.md` generator (simple)**: `ta constitution init` writes a starter `.ta/constitution.md` by asking the QA agent to draft one based on the project's `PLAN.md`, `CLAUDE.md`, and stated objectives. No guided setup UI required — a single agent prompt is sufficient for an initial draft. Humans review and refine.
+8. [ ] **Documentation**: "How to write a constitution for your project" guide in `docs/`. Includes worked example for a web service with DB migration injection patterns.
 
-9. [ ] **`constitution.toml` schema**: Define and document the config format with JSON Schema. Ship TA's own rules as `ta-default` profile (available via `extends = "ta-default"`).
-
-10. [ ] **Release pipeline integration**: When `project_review_on_release = true`, the release pipeline fans out two agents: the existing release notes writer, and the constitution reviewer. Review findings are appended to the release draft as a "Constitution Review" section.
-
-11. [ ] **Documentation**: `docs/constitution-guide.md` — "How to write a constitution for your project". Covers: writing `.ta/constitution.md`, generating a static checker, hooking draft review, worked example for a Python service and a content/email project (non-code constitution).
-
-**Files**: `.ta/constitution.md` (new per-project), `.ta/constitution.toml` (new), `apps/ta-cli/src/commands/constitution.rs` (new: init, check, review, build-checker), `apps/ta-cli/src/commands/draft.rs` (remove §4 scanner, add hook point), `.ta/workflow.toml` (hook config), `docs/constitution-guide.md` (new).
+**Files**: `.ta/constitution.toml` (new), `apps/ta-cli/src/commands/` (init, check, draft build scan, release step), `crates/ta-workspace/src/` (scanner crate or module).
 
 #### Version: `0.14.1-alpha`
 
