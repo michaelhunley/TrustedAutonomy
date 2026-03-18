@@ -49,6 +49,30 @@ pub struct WorkflowConfig {
     /// Staging directory management (v0.11.3)
     #[serde(default)]
     pub staging: StagingConfig,
+
+    /// Constitution / compliance checker configuration (v0.12.0)
+    #[serde(default)]
+    pub constitution: ConstitutionConfig,
+}
+
+/// Constitution / compliance checker configuration.
+///
+/// Controls which project-specific checkers run during `ta draft build`.
+/// These are disabled by default so non-TA projects don't receive
+/// TA-internal checks. The TA repo enables them via `.ta/workflow.toml`.
+///
+/// ```toml
+/// [constitution]
+/// s4_scan = true  # scan for inject_*/restore_* imbalance (§4)
+/// ```
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ConstitutionConfig {
+    /// Run the §4 inject/restore balance scanner on changed .rs files.
+    ///
+    /// Default: `false`. Enable in `.ta/workflow.toml` for the TA repo.
+    /// External projects should leave this unset.
+    #[serde(default)]
+    pub s4_scan: bool,
 }
 
 /// Submit adapter configuration

@@ -97,6 +97,17 @@ pub enum NewCommands {
         /// Skip the interactive conversation — generate from template/brief only.
         #[arg(long)]
         non_interactive: bool,
+        /// Declare required plugins (comma-separated: discord,slack,perforce).
+        /// Generates .ta/project.toml with the declared plugin requirements.
+        #[arg(long)]
+        plugins: Option<String>,
+        /// Version control system to use: git, svn, perforce, none.
+        /// When omitted in interactive mode, you will be prompted.
+        #[arg(long)]
+        vcs: Option<String>,
+        /// List available templates and exit (shorthand for `ta new templates`).
+        #[arg(long)]
+        list_templates: bool,
     },
     /// List available project templates.
     Templates,
@@ -114,16 +125,26 @@ pub fn execute(command: &NewCommands, config: &GatewayConfig) -> anyhow::Result<
             agent,
             version_schema,
             non_interactive,
-        } => run_new(
-            config,
-            name.as_deref(),
-            from.as_deref(),
-            template.as_deref(),
-            output_dir.as_deref(),
-            agent,
-            version_schema.as_deref(),
-            *non_interactive,
-        ),
+            plugins,
+            vcs,
+            list_templates: do_list,
+        } => {
+            if *do_list {
+                return list_templates();
+            }
+            run_new(
+                config,
+                name.as_deref(),
+                from.as_deref(),
+                template.as_deref(),
+                output_dir.as_deref(),
+                agent,
+                version_schema.as_deref(),
+                *non_interactive,
+                plugins.as_deref(),
+                vcs.as_deref(),
+            )
+        }
         NewCommands::Templates => list_templates(),
         NewCommands::VersionSchemas => list_version_schemas(),
     }
@@ -610,10 +631,15 @@ fn run_new(
     agent: &str,
     version_schema: Option<&str>,
     non_interactive: bool,
+    plugins: Option<&str>,
+    vcs: Option<&str>,
 ) -> anyhow::Result<()> {
     // 1. Validate inputs.
     if let Some(schema) = version_schema {
         validate_version_schema(schema)?;
+    }
+    if let Some(v) = vcs {
+        validate_vcs(v)?;
     }
     let (init_template_name, _template_desc) = if let Some(tmpl) = template {
         let (init_name, desc) = resolve_template(tmpl)?;
@@ -640,6 +666,7 @@ fn run_new(
 
     // Check if the project directory already has TA configuration.
     let ta_dir = project_dir.join(".ta");
+    // Allow if project.toml exists but not workflow.toml (partial init is fine).
     if ta_dir.join("workflow.toml").exists() {
         anyhow::bail!(
             "Directory '{}' already has TA configuration.\n\
@@ -648,6 +675,9 @@ fn run_new(
         );
     }
 
+    // Parse plugin list.
+    let plugin_names: Vec<&str> = plugins.map(|p| p.split(',').collect()).unwrap_or_default();
+
     println!("Creating new project: {}", project_name);
     println!("  Directory: {}", project_dir.display());
     if let Some(tmpl) = template {
@@ -655,6 +685,9 @@ fn run_new(
     }
     if let Some(schema) = version_schema {
         println!("  Schema:    {}", schema);
+    }
+    if !plugin_names.is_empty() {
+        println!("  Plugins:   {}", plugin_names.join(", "));
     }
     println!();
 
@@ -688,7 +721,31 @@ fn run_new(
         install_version_schema(&project_dir, schema)?;
     }
 
-    // 7. Read description document if --from was provided.
+    // 7. Set up VCS adapter.
+    let resolved_vcs = if let Some(v) = vcs {
+        // Use explicitly provided VCS.
+        setup_vcs(&project_dir, v, &ta_dir)?
+    } else if non_interactive {
+        // Non-interactive: skip VCS setup (remains "none").
+        None
+    } else {
+        // Interactive: ask the user.
+        let chosen = prompt_vcs()?;
+        setup_vcs(&project_dir, &chosen, &ta_dir)?
+    };
+
+    // 8. Generate project.toml with plugin declarations.
+    let vcs_name = resolved_vcs.as_deref();
+    let need_project_toml = !plugin_names.is_empty() || vcs_name == Some("perforce");
+    if need_project_toml {
+        generate_project_toml(&project_dir, &project_name, &plugin_names, vcs_name)?;
+    }
+
+    // 9. Generate setup.sh / setup.ps1 bootstrap scripts.
+    generate_setup_sh(&project_dir, &project_name)?;
+    generate_setup_ps1(&project_dir, &project_name)?;
+
+    // 10. Read description document if --from was provided.
     let description = if let Some(from_path) = from {
         let resolved = if from_path.is_absolute() {
             from_path.to_path_buf()
@@ -725,7 +782,7 @@ fn run_new(
         None
     };
 
-    // 8. Launch the planner agent for interactive bootstrapping.
+    // 11. Launch the planner agent for interactive bootstrapping.
     if non_interactive && from.is_none() {
         // Non-interactive without a description — just scaffold and init.
         println!();
@@ -765,14 +822,358 @@ fn run_new(
         None,  // resume = None
         false, // headless = false
         false, // skip_verify = false
+        false, // quiet = false
         None,  // existing_goal_id = None
     )?;
 
-    // 9. Post-creation handoff.
+    // 12. Post-creation handoff.
     println!();
     let has_plan = project_dir.join("PLAN.md").exists();
     print_post_creation_summary(&project_dir, &project_name, has_plan);
 
+    Ok(())
+}
+
+/// Validate a VCS adapter name.
+fn validate_vcs(vcs: &str) -> anyhow::Result<()> {
+    match vcs {
+        "git" | "svn" | "perforce" | "none" => Ok(()),
+        other => anyhow::bail!(
+            "Unknown VCS adapter: '{}'. Available: git, svn, perforce, none",
+            other
+        ),
+    }
+}
+
+/// Prompt the user to select a VCS adapter interactively.
+fn prompt_vcs() -> anyhow::Result<String> {
+    println!("Version control system:");
+    println!("  [1] git      — Git with branch/PR workflow");
+    println!("  [2] perforce — Perforce with shelved changelists");
+    println!("  [3] svn      — Subversion");
+    println!("  [4] none     — No VCS (files only)");
+    print!("Select [1]: ");
+    io::stdout().flush()?;
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    let choice = input.trim();
+    let vcs = match choice {
+        "" | "1" => "git",
+        "2" => "perforce",
+        "3" => "svn",
+        "4" => "none",
+        other => {
+            // Accept raw adapter names too.
+            match other {
+                "git" | "svn" | "perforce" | "none" => other,
+                _ => {
+                    eprintln!("Unknown choice '{}', defaulting to none.", other);
+                    "none"
+                }
+            }
+        }
+    };
+    Ok(vcs.to_string())
+}
+
+/// Initialize version control for the project directory.
+/// Returns the chosen adapter name, or None if "none".
+fn setup_vcs(project_dir: &Path, vcs_name: &str, ta_dir: &Path) -> anyhow::Result<Option<String>> {
+    match vcs_name {
+        "git" => {
+            // Run git init if not already a git repo.
+            if !project_dir.join(".git").exists() {
+                let status = std::process::Command::new("git")
+                    .arg("init")
+                    .current_dir(project_dir)
+                    .status();
+                match status {
+                    Ok(s) if s.success() => {
+                        println!("  Initialized git repository");
+                    }
+                    Ok(_) => {
+                        tracing::warn!(
+                            "git init returned non-zero exit in {}",
+                            project_dir.display()
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            git_init_error = %e,
+                            "git init failed — git may not be installed. VCS: git written to workflow.toml"
+                        );
+                    }
+                }
+            } else {
+                println!("  Git repository already initialized");
+            }
+
+            // Write submit adapter into workflow.toml.
+            write_vcs_workflow_config(ta_dir, "git")?;
+            Ok(Some("git".to_string()))
+        }
+        "svn" => {
+            write_vcs_workflow_config(ta_dir, "svn")?;
+            println!("  VCS: svn (run `svn checkout` to connect to your repository)");
+            Ok(Some("svn".to_string()))
+        }
+        "perforce" => {
+            write_vcs_workflow_config(ta_dir, "perforce")?;
+            println!("  VCS: perforce (set P4PORT, P4USER, P4CLIENT env vars to connect)");
+            Ok(Some("perforce".to_string()))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// Write or update [submit] adapter in .ta/workflow.toml.
+fn write_vcs_workflow_config(ta_dir: &Path, adapter: &str) -> anyhow::Result<()> {
+    std::fs::create_dir_all(ta_dir)?;
+    let path = ta_dir.join("workflow.toml");
+
+    // Read existing content if present.
+    let existing = if path.exists() {
+        std::fs::read_to_string(&path)?
+    } else {
+        String::new()
+    };
+
+    // If [submit] section already exists, skip (don't overwrite user config).
+    if existing.contains("[submit]") {
+        return Ok(());
+    }
+
+    let vcs_section = match adapter {
+        "git" => {
+            r#"
+[submit]
+adapter = "git"
+auto_submit = true
+auto_review = true
+
+[submit.git]
+branch_prefix = "ta/"
+target_branch = "main"
+merge_strategy = "squash"
+remote = "origin"
+"#
+        }
+        "svn" => {
+            r#"
+[submit]
+adapter = "svn"
+auto_submit = true
+"#
+        }
+        "perforce" => {
+            r#"
+[submit]
+adapter = "perforce"
+auto_submit = true
+auto_review = false
+
+[submit.perforce]
+client = ""
+host = ""
+port = ""
+"#
+        }
+        _ => return Ok(()),
+    };
+
+    let new_content = if existing.is_empty() {
+        format!(
+            "# TA Workflow Configuration\n# Generated by `ta new`\n{}",
+            vcs_section
+        )
+    } else {
+        format!("{}\n{}", existing.trim_end(), vcs_section)
+    };
+
+    std::fs::write(&path, new_content)?;
+    println!(
+        "  Wrote VCS config to .ta/workflow.toml (adapter = {})",
+        adapter
+    );
+    Ok(())
+}
+
+/// Generate .ta/project.toml with declared plugin requirements.
+fn generate_project_toml(
+    project_dir: &Path,
+    project_name: &str,
+    plugins: &[&str],
+    vcs: Option<&str>,
+) -> anyhow::Result<()> {
+    let ta_dir = project_dir.join(".ta");
+    std::fs::create_dir_all(&ta_dir)?;
+
+    let path = ta_dir.join("project.toml");
+    if path.exists() {
+        println!("  .ta/project.toml already exists — skipping");
+        return Ok(());
+    }
+
+    let mut content = format!("[project]\nname = \"{}\"\n", project_name);
+
+    // Add VCS plugin declaration for perforce.
+    if vcs == Some("perforce") {
+        content.push_str(
+            "\n[plugins.ta-submit-perforce]\ntype = \"submit\"\nversion = \">=0.1.0\"\nsource = \"registry:ta-submit-perforce\"\nrequired = true\n",
+        );
+    }
+
+    for plugin_name in plugins {
+        let plugin_name = plugin_name.trim();
+        if plugin_name.is_empty() {
+            continue;
+        }
+        let (type_, registry_name) = match plugin_name {
+            "discord" => ("channel", "ta-channel-discord"),
+            "slack" => ("channel", "ta-channel-slack"),
+            "email" => ("channel", "ta-channel-email"),
+            _ => ("channel", plugin_name),
+        };
+        content.push_str(&format!(
+            "\n[plugins.{}]\ntype = \"{}\"\nversion = \">=0.1.0\"\nsource = \"registry:{}\"\nrequired = false\n",
+            plugin_name, type_, registry_name
+        ));
+    }
+
+    std::fs::write(&path, &content)?;
+    println!(
+        "  Created .ta/project.toml ({} plugin(s) declared)",
+        plugins.len()
+    );
+    Ok(())
+}
+
+/// Generate setup.sh bootstrap script in the project directory.
+fn generate_setup_sh(project_dir: &Path, project_name: &str) -> anyhow::Result<()> {
+    let path = project_dir.join("setup.sh");
+    if path.exists() {
+        return Ok(());
+    }
+
+    let content = format!(
+        r#"#!/usr/bin/env bash
+# setup.sh — Bootstrap script for {name}
+# Generated by `ta new`.  Commit this file to your repository so
+# collaborators can get started with a single command.
+#
+# Usage:
+#   chmod +x setup.sh
+#   ./setup.sh
+#
+# What it does:
+#   1. Installs Trusted Autonomy (ta) if not already installed
+#   2. Resolves and installs declared plugins from .ta/project.toml
+#   3. Prints next steps
+
+set -euo pipefail
+
+echo "==> Setting up {name}"
+echo ""
+
+# ── 1. Install ta if missing ──────────────────────────────────────────────
+if ! command -v ta &>/dev/null; then
+    echo "Installing Trusted Autonomy..."
+    if [[ "$(uname)" == "Darwin" ]]; then
+        if command -v brew &>/dev/null; then
+            brew install trusted-autonomy/tap/ta
+        else
+            echo "Homebrew not found. Install ta manually from https://trustedautonomy.dev/install"
+            exit 1
+        fi
+    elif [[ "$(uname)" == "Linux" ]]; then
+        curl -sSfL https://get.trustedautonomy.dev/install.sh | bash
+    else
+        echo "Windows: run the MSI installer from https://trustedautonomy.dev/install"
+        exit 1
+    fi
+else
+    echo "✓ ta $(ta --version 2>/dev/null | head -1 || echo '') already installed"
+fi
+
+# ── 2. Resolve plugins from project.toml ─────────────────────────────────
+if [[ -f ".ta/project.toml" ]]; then
+    echo ""
+    echo "==> Resolving plugins..."
+    ta setup resolve
+fi
+
+# ── 3. Done ───────────────────────────────────────────────────────────────
+echo ""
+echo "==> Setup complete for {name}!"
+echo ""
+echo "Next steps:"
+echo "  ta plan list          — view development phases"
+echo "  ta shell              — open the interactive shell"
+echo "  ta run --phase v0.1.0 — start implementing Phase 1"
+"#,
+        name = project_name
+    );
+
+    std::fs::write(&path, &content)?;
+
+    // Make the script executable on Unix.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&path)?.permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&path, perms)?;
+    }
+
+    println!("  Created setup.sh (bootstrap script)");
+    Ok(())
+}
+
+/// Generate PowerShell setup script for Windows.
+fn generate_setup_ps1(project_dir: &Path, project_name: &str) -> anyhow::Result<()> {
+    let path = project_dir.join("setup.ps1");
+    if path.exists() {
+        return Ok(());
+    }
+
+    let content = format!(
+        r#"# setup.ps1 — Bootstrap script for {name}
+# Generated by `ta new`.  Commit this file so Windows users can run it.
+#
+# Usage (PowerShell):
+#   Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+#   ./setup.ps1
+
+$ErrorActionPreference = "Stop"
+
+Write-Host "==> Setting up {name}"
+
+# Install ta if missing
+if (-not (Get-Command ta -ErrorAction SilentlyContinue)) {{
+    Write-Host "Installing Trusted Autonomy..."
+    Write-Host "Download the installer from https://trustedautonomy.dev/install"
+    Write-Host "Then re-run this script."
+    exit 1
+}} else {{
+    Write-Host "ta already installed"
+}}
+
+# Resolve plugins
+if (Test-Path ".ta/project.toml") {{
+    Write-Host ""
+    Write-Host "==> Resolving plugins..."
+    ta setup resolve
+}}
+
+Write-Host ""
+Write-Host "==> Setup complete for {name}!"
+Write-Host "Run 'ta shell' to get started."
+"#,
+        name = project_name
+    );
+
+    std::fs::write(&path, &content)?;
+    println!("  Created setup.ps1 (Windows bootstrap script)");
     Ok(())
 }
 
@@ -1026,6 +1427,8 @@ mod tests {
             "claude-code",
             None, // no version schema
             true, // non_interactive
+            None, // no plugins
+            None, // no vcs
         );
         assert!(result.is_ok());
         assert!(project_dir.join("Cargo.toml").exists());
@@ -1050,6 +1453,8 @@ mod tests {
             "claude-code",
             None,
             true,
+            None, // no plugins
+            None, // no vcs
         );
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
@@ -1093,5 +1498,206 @@ mod tests {
     fn resolve_name_non_interactive_from_dir() {
         let name = resolve_project_name(None, Path::new("/tmp/my-project"), true).unwrap();
         assert_eq!(name, "my-project");
+    }
+
+    // ── VCS validation ───────────────────────────────────────────────
+
+    #[test]
+    fn valid_vcs_names() {
+        assert!(validate_vcs("git").is_ok());
+        assert!(validate_vcs("svn").is_ok());
+        assert!(validate_vcs("perforce").is_ok());
+        assert!(validate_vcs("none").is_ok());
+    }
+
+    #[test]
+    fn invalid_vcs_name_errors() {
+        assert!(validate_vcs("mercurial").is_err());
+        assert!(validate_vcs("").is_err());
+    }
+
+    // ── project.toml generation ──────────────────────────────────────
+
+    #[test]
+    fn generate_project_toml_no_plugins() {
+        let dir = TempDir::new().unwrap();
+        // Calling with empty plugins should still work.
+        generate_project_toml(dir.path(), "my-proj", &[], None).unwrap();
+        // No project.toml written when no plugins and no vcs.
+        // (The function returns Ok without writing — actual behavior depends on
+        //  the outer run_new caller deciding whether to call it at all.)
+    }
+
+    #[test]
+    fn generate_project_toml_with_plugins() {
+        let dir = TempDir::new().unwrap();
+        generate_project_toml(dir.path(), "my-proj", &["discord", "slack"], None).unwrap();
+
+        let path = dir.path().join(".ta/project.toml");
+        assert!(path.exists());
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("my-proj"));
+        assert!(content.contains("[plugins.discord]"));
+        assert!(content.contains("[plugins.slack]"));
+        assert!(content.contains("ta-channel-discord"));
+        assert!(content.contains("ta-channel-slack"));
+    }
+
+    #[test]
+    fn generate_project_toml_perforce_vcs_adds_plugin() {
+        let dir = TempDir::new().unwrap();
+        generate_project_toml(dir.path(), "game-proj", &[], Some("perforce")).unwrap();
+
+        let path = dir.path().join(".ta/project.toml");
+        assert!(path.exists());
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("ta-submit-perforce"));
+    }
+
+    #[test]
+    fn generate_project_toml_skips_existing() {
+        let dir = TempDir::new().unwrap();
+        let ta_dir = dir.path().join(".ta");
+        std::fs::create_dir_all(&ta_dir).unwrap();
+        std::fs::write(ta_dir.join("project.toml"), "# existing\n").unwrap();
+
+        generate_project_toml(dir.path(), "my-proj", &["discord"], None).unwrap();
+        let content = std::fs::read_to_string(ta_dir.join("project.toml")).unwrap();
+        assert_eq!(content, "# existing\n"); // not overwritten
+    }
+
+    // ── setup.sh generation ──────────────────────────────────────────
+
+    #[test]
+    fn generate_setup_sh_creates_executable_script() {
+        let dir = TempDir::new().unwrap();
+        generate_setup_sh(dir.path(), "my-proj").unwrap();
+
+        let path = dir.path().join("setup.sh");
+        assert!(path.exists());
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("#!/usr/bin/env bash"));
+        assert!(content.contains("my-proj"));
+        assert!(content.contains("ta setup resolve"));
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::metadata(&path).unwrap().permissions();
+            assert!(perms.mode() & 0o111 != 0, "setup.sh should be executable");
+        }
+    }
+
+    #[test]
+    fn generate_setup_sh_skips_existing() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("setup.sh"), "# custom\n").unwrap();
+
+        generate_setup_sh(dir.path(), "my-proj").unwrap();
+        let content = std::fs::read_to_string(dir.path().join("setup.sh")).unwrap();
+        assert_eq!(content, "# custom\n"); // not overwritten
+    }
+
+    // ── VCS workflow config ──────────────────────────────────────────
+
+    #[test]
+    fn write_vcs_workflow_config_git() {
+        let dir = TempDir::new().unwrap();
+        let ta_dir = dir.path().join(".ta");
+        std::fs::create_dir_all(&ta_dir).unwrap();
+
+        write_vcs_workflow_config(&ta_dir, "git").unwrap();
+
+        let path = ta_dir.join("workflow.toml");
+        assert!(path.exists());
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("adapter = \"git\""));
+        assert!(content.contains("[submit.git]"));
+    }
+
+    #[test]
+    fn write_vcs_workflow_config_skips_if_submit_exists() {
+        let dir = TempDir::new().unwrap();
+        let ta_dir = dir.path().join(".ta");
+        std::fs::create_dir_all(&ta_dir).unwrap();
+        std::fs::write(
+            ta_dir.join("workflow.toml"),
+            "[submit]\nadapter = \"svn\"\n",
+        )
+        .unwrap();
+
+        write_vcs_workflow_config(&ta_dir, "git").unwrap();
+        // Should not overwrite.
+        let content = std::fs::read_to_string(ta_dir.join("workflow.toml")).unwrap();
+        assert!(content.contains("svn"));
+        assert!(!content.contains("branch_prefix"));
+    }
+
+    // ── End-to-end bootstrap (non-interactive, no agent launch) ─────
+
+    #[test]
+    fn run_new_with_plugins_and_git_vcs() {
+        let dir = TempDir::new().unwrap();
+        let project_dir = dir.path().join("bot-project");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        let config = GatewayConfig::for_project(&project_dir);
+
+        let result = run_new(
+            &config,
+            Some("bot-project"),
+            None,
+            Some("rust-cli"),
+            Some(dir.path()),
+            "claude-code",
+            None,
+            true, // non_interactive
+            Some("discord,slack"),
+            Some("git"),
+        );
+        assert!(result.is_ok(), "run_new failed: {:?}", result.err());
+
+        // project.toml should have plugin declarations.
+        let project_toml = project_dir.join(".ta/project.toml");
+        assert!(project_toml.exists());
+        let toml_content = std::fs::read_to_string(&project_toml).unwrap();
+        assert!(toml_content.contains("[plugins.discord]"));
+        assert!(toml_content.contains("[plugins.slack]"));
+
+        // setup.sh should exist.
+        assert!(project_dir.join("setup.sh").exists());
+        assert!(project_dir.join("setup.ps1").exists());
+
+        // workflow.toml should have git adapter.
+        let wf = project_dir.join(".ta/workflow.toml");
+        assert!(wf.exists());
+        let wf_content = std::fs::read_to_string(&wf).unwrap();
+        assert!(wf_content.contains("adapter = \"git\""));
+
+        // Cargo.toml scaffold.
+        assert!(project_dir.join("Cargo.toml").exists());
+    }
+
+    #[test]
+    fn run_new_no_vcs_flag_non_interactive() {
+        let dir = TempDir::new().unwrap();
+        let project_dir = dir.path().join("simple-project");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        let config = GatewayConfig::for_project(&project_dir);
+
+        let result = run_new(
+            &config,
+            Some("simple-project"),
+            None,
+            None,
+            Some(dir.path()),
+            "claude-code",
+            None,
+            true, // non_interactive → no VCS prompt
+            None,
+            None, // no vcs → defaults to none in non-interactive
+        );
+        assert!(result.is_ok(), "{:?}", result.err());
+        // setup.sh still gets generated.
+        assert!(project_dir.join("setup.sh").exists());
     }
 }

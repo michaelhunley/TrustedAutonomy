@@ -1176,14 +1176,16 @@ pub(crate) fn build_package(
         pkg.display_id = Some(format!("{}-{:02}", goal_prefix, seq));
     }
 
-    // v0.11.5 item 8: Draft-time constitution §4 pattern scan.
-    // Scans changed .rs files for inject_* calls without matching restore_* on error paths.
-    // Non-blocking: findings are added as verification_warnings (warn mode by default).
-    {
+    // v0.12.0 §16.6: Constitution §4 pattern scan is now project-specific.
+    // Only runs when `[constitution] s4_scan = true` in .ta/workflow.toml.
+    // Default: false — external projects (Python, C++, content drafts, etc.) are
+    // never given TA-internal Rust checks. The TA repo enables this via its own
+    // workflow.toml. See §16.6 of the TA project constitution.
+    if workflow_config.constitution.s4_scan {
         let s4_warnings = scan_s4_violations(&pkg.changes.artifacts, &goal.workspace_path);
         if !s4_warnings.is_empty() {
             eprintln!(
-                "[constitution] {} potential §4 violation(s) — review before approving",
+                "[constitution §4] {} potential inject/restore imbalance(s) — review before approving",
                 s4_warnings.len()
             );
             pkg.verification_warnings.extend(s4_warnings);
@@ -3160,6 +3162,7 @@ fn fix_package(
         None,  // not resuming
         false, // not headless
         false, // skip_verify = false
+        false, // quiet = false
         None,  // no existing goal id
     )?;
 
@@ -3406,7 +3409,7 @@ fn gc_packages(config: &GatewayConfig, dry_run: bool, archive: bool) -> anyhow::
 
 // ── File-based draft package storage ────────────────────────────────
 
-fn load_all_packages(config: &GatewayConfig) -> anyhow::Result<Vec<DraftPackage>> {
+pub fn load_all_packages(config: &GatewayConfig) -> anyhow::Result<Vec<DraftPackage>> {
     let dir = &config.pr_packages_dir;
     if !dir.exists() {
         return Ok(Vec::new());

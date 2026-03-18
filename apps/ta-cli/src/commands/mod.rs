@@ -4,6 +4,7 @@ pub mod audit;
 pub mod build;
 pub mod config;
 pub mod consent;
+pub mod constitution;
 pub mod context;
 pub mod conversation;
 pub mod credentials;
