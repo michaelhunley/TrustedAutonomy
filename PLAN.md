@@ -91,6 +91,7 @@ External users (working on their own projects, not TA itself) need these phases 
 | **v0.12.2** | Shell Paste-at-End UX fix |
 | **v0.12.6** | Goal lifecycle observability + Discord/Slack SSE notification reliability |
 | **v0.12.7** | Shell UX: "Agent is working" clearance on goal completion + scroll reliability |
+| **v0.12.8** | Alpha bug-fixes: Discord notification flood hardening + draft CLI/API disconnect |
 | ⬇ **PUBLIC BETA (v0.13.x)** | Runtime flexibility, enterprise governance, community ecosystem, goal workflow automation |
 
 ### Pre-Alpha Bugs to Fix (must resolve before external release)
@@ -4547,7 +4548,7 @@ The daemon already exposes `POST /api/goals/{id}/input` which writes directly to
 ---
 
 ### v0.12.7 — Shell UX: Working Indicator Clearance & Scroll Reliability
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Fix two persistent shell regressions that surfaced after v0.12.4.1:
 1. The "Agent is working..." line pushed when a goal is dispatched is not cleared when the goal completes (draft ready, failed, or any terminal state). The heartbeat lines from the tail stream are correctly replaced by `[agent exited]`, but the initial "Agent is working..." line is a non-heartbeat `CommandResponse` that `AgentOutputDone` never finds.
 2. The output pane intermittently does not stay scrolled to the bottom when new output arrives, even when the user has not scrolled up.
@@ -4572,6 +4573,39 @@ Audit all `push_output`, `push_heartbeat`, and `agent_output.push` call sites to
 - 6 new tests in `apps/ta-cli/src/commands/shell_tui.rs` covering all items above.
 
 #### Version: `0.12.7-alpha`
+
+---
+
+### v0.12.8 — Alpha Bug-Fixes: Discord Notification Flood Hardening & Draft CLI Disconnect
+<!-- status: pending -->
+**Goal**: Close two remaining rough edges discovered during public-alpha testing that are annoying enough to fix before beta.
+
+#### Bug 1 — Discord notification flood on reconnect / daemon restart
+
+**Status**: Partially mitigated — two fixes landed but not yet battle-tested end-to-end.
+
+**Root cause (two separate bugs, both fixed, need verification):**
+1. **`start_goal_recovery_tasks` emitting stale events** (PR #207, merged): `last_state` was initialised as `None`, causing `DraftBuilt`/`ReviewRequested` to re-emit for every `pr_ready` goal on every daemon restart. Fixed: initialise with the goal's current state.
+2. **Stale channel plugin binary** (v0.12.6 cursor fix, deployed manually): `progress.rs` didn't pass a `since` cursor on reconnect, so the SSE stream replayed all historical events. Fixed: record `startup_time` at launch; advance a `cursor: DateTime<Utc>` on each event; reconnect with `?since=<cursor>`.
+
+**Remaining hardening items (v0.12.8):**
+
+1. [ ] **Age filter in `progress.rs`**: Skip any SSE event whose timestamp is more than 10 minutes older than the current wall-clock time. Safety net that catches any future replay regression without relying solely on cursor accuracy. *(User request: "ignore notifications older than 5 or 10 min")*
+2. [ ] **Fix `install_local.sh` to build and deploy channel plugins**: The script only installs `ta` and `ta-daemon`; rebuilding the Discord plugin requires a manual step. Add a step that builds `plugins/ta-channel-discord` and copies the binary to `.ta/plugins/channels/discord/`. *(Otherwise version skew between main binary and plugin recurs every release.)*
+3. [ ] **End-to-end reconnect test**: After applying both cursor fix and age filter, simulate a daemon restart with active goals and verify no historical notifications are replayed to Discord.
+4. [ ] **Daemon-side persistent cursor** *(stretch)*: Persist the per-channel event cursor to `.ta/plugins/channels/<name>/cursor` so a plugin restart (not a daemon restart) also avoids replay. This is the "daemon event queue" hardened fix the user mentioned.
+
+#### Bug 2 — `ta draft list` / `ta draft apply` CLI disconnect
+
+**Root cause**: `load_all_packages()` in `draft.rs` uses `if let Ok(pkg) = serde_json::from_str(...)` to silently skip files that fail to deserialise. If any draft file fails (e.g., due to a format mismatch between daemon-written JSON and the compiled `DraftPackage` struct), the package disappears from all CLI operations (`list`, `apply`, `approve`). There is no error surface — the user sees "No active drafts" with no explanation.
+
+**Fix items:**
+
+5. [ ] **Add deserialization error logging in `load_all_packages`**: When a `.json` file in `pr_packages/` fails to parse, emit `tracing::warn!` with the filename and error. Also print a user-visible hint (e.g., `eprintln!("  [warn] Skipping unreadable draft: {}: {}", path, e)`) so the problem is immediately visible in `ta draft list` output.
+6. [ ] **Reproduce and fix the actual parse failure**: Identify what field causes the v0.12.7 draft JSON (written by daemon, status `approved`) to fail deserialisation in the CLI. The likely culprit is a version skew between the installed CLI binary and the daemon — the fix is to ensure both are always rebuilt together (covered by item 2 above for plugins; `install_local.sh` already does this for the main binaries).
+7. [ ] **Regression test**: `load_all_packages` with a directory containing one valid and one corrupted/future-format file should return the valid one and log a warning for the corrupted one.
+
+#### Version: `0.12.8-alpha`
 
 ---
 
