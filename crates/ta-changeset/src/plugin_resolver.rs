@@ -237,7 +237,30 @@ fn resolve_from_registry(
                 "Registry index unavailable — falling back to Trusted-Autonomy GitHub releases"
             );
             let github_repo = format!("Trusted-Autonomy/{}", registry_name);
-            return resolve_from_github(name, &github_repo, requirement, project_root, platform);
+            // Use `registry_name` for the binary filename (e.g. "ta-channel-discord"),
+            // not the plugin key `name` (e.g. "discord"), so the tarball URL matches
+            // the actual release artifact name.
+            let version =
+                crate::project_manifest::parse_min_version(&requirement.version).unwrap_or("0.1.0");
+            let url =
+                RegistryClient::github_release_url(&github_repo, registry_name, version, platform);
+            return match download_and_install(
+                name,
+                &url,
+                "",
+                &requirement.plugin_type,
+                project_root,
+            ) {
+                Ok(_) => PluginResolveResult::Installed {
+                    name: name.to_string(),
+                    version: version.to_string(),
+                    source: format!("github:{}", github_repo),
+                },
+                Err(e) => PluginResolveResult::Failed {
+                    name: name.to_string(),
+                    reason: e,
+                },
+            };
         }
     };
 
