@@ -1,6 +1,7 @@
 // draft.rs — draft package subcommands: build, list, view, approve, deny, apply.
 
 use std::fs;
+use std::path::Path;
 
 use chrono::{Duration, Utc};
 use clap::Subcommand;
@@ -815,6 +816,106 @@ fn is_auto_summary_exempt_with_patterns(uri: &str, source_dir: Option<&std::path
     patterns.is_exempt(uri)
 }
 
+/// v0.12.2.3: Return true if the URL looks like a GitHub pull request URL.
+fn is_github_pr_url(url: &str) -> bool {
+    url.contains("github.com") && url.contains("/pull/")
+}
+
+/// v0.12.2.3: Close a GitHub PR that has been superseded by a follow-up draft.
+///
+/// Runs `gh pr close <url> --comment "..."` in a best-effort fashion.
+/// Failures are logged as warnings but do not abort the build.
+fn close_github_pr_superseded(review_url: &str, child_display_id: &str) {
+    let comment = format!(
+        "Superseded by follow-up draft {}. This PR has been automatically closed.",
+        child_display_id
+    );
+    let result = std::process::Command::new("gh")
+        .args(["pr", "close", review_url, "--comment", &comment])
+        .output();
+
+    match result {
+        Ok(output) if output.status.success() => {
+            println!("  Auto-closed parent GitHub PR: {}", review_url);
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            eprintln!(
+                "Warning: could not close parent GitHub PR {} — {}: {}",
+                review_url,
+                output.status,
+                stderr.trim()
+            );
+        }
+        Err(e) => {
+            eprintln!(
+                "Warning: could not run `gh pr close` for parent PR {} — {}",
+                review_url, e
+            );
+        }
+    }
+}
+
+/// v0.12.2.3: Strip the TA injection header from `CLAUDE.md` in the staging workspace
+/// before computing the staging-vs-source diff.
+///
+/// When a session crashes or is interrupted, `restore_claude_md` in run.rs never runs,
+/// leaving the injected TA header prepended to CLAUDE.md in staging. This causes the
+/// full injection (goal context, plan, memory sections, etc.) to appear as a diff vs
+/// the clean source CLAUDE.md, polluting the PR with internal TA scaffolding.
+///
+/// Detection: file starts with `# Trusted Autonomy — Mediated Goal`
+/// Strip target: everything up to and including the `\n---\n\n` separator that precedes
+/// the original project instructions. If nothing follows the separator, CLAUDE.md is
+/// removed (original sentinel — CLAUDE.md didn't exist before injection).
+///
+/// Returns `Ok(true)` if stripping was applied, `Ok(false)` if not needed.
+fn strip_ta_injection_from_staging(staging_path: &Path) -> anyhow::Result<bool> {
+    let claude_md_path = staging_path.join("CLAUDE.md");
+    if !claude_md_path.exists() {
+        return Ok(false);
+    }
+
+    let content = std::fs::read_to_string(&claude_md_path)?;
+    if !content.starts_with("# Trusted Autonomy \u{2014} Mediated Goal") {
+        return Ok(false); // Not injected — nothing to strip.
+    }
+
+    // Find the separator line (`---`) that precedes the original project instructions.
+    // The injection format ends with: "\n---\n\n{original_content}\n"
+    // We find the first occurrence of "\n---\n" and take everything after it
+    // (skipping the blank line that follows).
+    let separator = "\n---\n";
+    if let Some(sep_pos) = content.find(separator) {
+        let after_sep = &content[sep_pos + separator.len()..];
+        // Skip one leading newline if present (the blank line after `---`).
+        let stripped = after_sep.strip_prefix('\n').unwrap_or(after_sep);
+        // The injection format appends a trailing `\n` after existing_section.
+        // Strip that extra newline to recover the exact original file content.
+        let original = stripped.strip_suffix('\n').unwrap_or(stripped);
+
+        if original.trim().is_empty() {
+            // No original content existed — remove CLAUDE.md entirely.
+            std::fs::remove_file(&claude_md_path)?;
+            eprintln!(
+                "[draft build] Stripped TA injection from CLAUDE.md \
+                 (no original — file removed)"
+            );
+        } else {
+            // Write original content back (without extra trailing newline from injection).
+            std::fs::write(&claude_md_path, original)?;
+            eprintln!(
+                "[draft build] Stripped TA injection from CLAUDE.md \
+                 (crash/freeze left injection in staging)"
+            );
+        }
+        Ok(true)
+    } else {
+        // Injection header present but separator not found — leave as-is.
+        Ok(false)
+    }
+}
+
 pub(crate) fn build_package(
     config: &GatewayConfig,
     goal_id: &str,
@@ -851,6 +952,13 @@ pub(crate) fn build_package(
         .source_dir
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("Goal has no source_dir (not an overlay-based goal)"))?;
+
+    // v0.12.2.3: Strip any leftover TA injection header from CLAUDE.md before diffing.
+    // Protects against crash/freeze that leaves inject_claude_md's content in staging.
+    // For follow-up goals that reuse parent staging, this also ensures the full
+    // staging-vs-source diff is clean (item 1 invariant: always diff_all, never
+    // per-session-only writes).
+    strip_ta_injection_from_staging(&goal.workspace_path)?;
 
     // Open the overlay workspace and compute diffs.
     // V1 TEMPORARY: Load exclude patterns, merging VCS adapter patterns.
@@ -1284,6 +1392,22 @@ pub(crate) fn build_package(
                                     "Parent draft {} superseded by this follow-up draft (same staging).",
                                     parent_pr_id
                                 );
+
+                                // v0.12.2.3: Auto-close parent GitHub PR if one exists.
+                                // The child draft supersedes the parent — close the stale
+                                // open PR immediately so it doesn't sit orphaned in GitHub.
+                                if let Some(ref vcs) = parent_pr.vcs_status {
+                                    if let Some(ref review_url) = vcs.review_url {
+                                        if is_github_pr_url(review_url) {
+                                            close_github_pr_superseded(
+                                                review_url,
+                                                &pkg.display_id
+                                                    .clone()
+                                                    .unwrap_or_else(|| package_id.to_string()),
+                                            );
+                                        }
+                                    }
+                                }
                             }
                             DraftStatus::Applied { .. } | DraftStatus::Denied { .. } => {
                                 // Parent already applied or denied — no supersession needed.
@@ -7554,6 +7678,235 @@ fn run() {
         assert!(
             branch_list.trim().is_empty(),
             "Expected no ta/ branch with --no-submit"
+        );
+    }
+
+    // v0.12.2.3 regression tests ─────────────────────────────────────────────
+
+    #[test]
+    fn follow_up_full_staging_diff_includes_parent_session_files() {
+        // Regression test for v0.12.2.3 item 1/4:
+        // When a follow-up goal reuses the parent's staging directory, `build_package`
+        // must include ALL files that differ from source, including those written by
+        // the parent session and NOT re-written by the child session.
+        let project = TempDir::new().unwrap();
+        std::fs::write(project.path().join("README.md"), "# Original\n").unwrap();
+        std::fs::write(
+            project.path().join("Cargo.toml"),
+            "[package]\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+
+        let config = GatewayConfig::for_project(project.path());
+        let goal_store = GoalRunStore::new(&config.goals_dir).unwrap();
+
+        // Parent session: start goal, write version bump to Cargo.toml and README.
+        super::super::goal::execute(
+            &super::super::goal::GoalCommands::Start {
+                title: "Parent session".to_string(),
+                source: Some(project.path().to_path_buf()),
+                objective: "Parent work".to_string(),
+                agent: "test-agent".to_string(),
+                phase: None,
+                follow_up: None,
+                objective_file: None,
+            },
+            &config,
+        )
+        .unwrap();
+
+        let goals = goal_store.list().unwrap();
+        let parent = &goals[0];
+        let parent_id = parent.goal_run_id;
+
+        // Parent agent wrote version bump (simulates crash — no draft built yet).
+        std::fs::write(
+            parent.workspace_path.join("Cargo.toml"),
+            "[package]\nversion = \"0.2.0\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            parent.workspace_path.join("README.md"),
+            "# Updated by parent\n",
+        )
+        .unwrap();
+
+        // Follow-up session: extends parent staging.
+        // The follow-up agent only writes a NEW file — does NOT re-write Cargo.toml or README.
+        let follow_up = super::super::goal::start_goal_extending_parent(
+            &config,
+            &goal_store,
+            "Follow-up session",
+            "Follow-up work",
+            "test-agent",
+            None,
+            parent,
+            parent_id,
+        )
+        .unwrap();
+
+        // Child agent writes only a new file — parent files (Cargo.toml, README) untouched.
+        std::fs::write(
+            follow_up.workspace_path.join("CHANGELOG.md"),
+            "## v0.2.0\n- Initial release\n",
+        )
+        .unwrap();
+
+        // Build follow-up draft — must include ALL staging changes (parent + child).
+        let follow_up_id = follow_up.goal_run_id.to_string();
+        build_package(&config, &follow_up_id, "Follow-up changes", false).unwrap();
+
+        let packages = load_all_packages(&config).unwrap();
+        let pkg = packages
+            .iter()
+            .find(|p| p.goal.goal_id == follow_up_id)
+            .unwrap();
+
+        let uris: Vec<&str> = pkg
+            .changes
+            .artifacts
+            .iter()
+            .map(|a| a.resource_uri.as_str())
+            .collect();
+
+        // All three files must appear — Cargo.toml and README from parent session,
+        // CHANGELOG from child session.
+        assert!(
+            uris.contains(&"fs://workspace/Cargo.toml"),
+            "Expected Cargo.toml (parent-session write) in follow-up draft; got: {:?}",
+            uris
+        );
+        assert!(
+            uris.contains(&"fs://workspace/README.md"),
+            "Expected README.md (parent-session write) in follow-up draft; got: {:?}",
+            uris
+        );
+        assert!(
+            uris.contains(&"fs://workspace/CHANGELOG.md"),
+            "Expected CHANGELOG.md (child-session write) in follow-up draft; got: {:?}",
+            uris
+        );
+    }
+
+    #[test]
+    fn build_package_strips_ta_injection_from_claude_md() {
+        // v0.12.2.3 item 2: build_package strips the TA injection header from
+        // CLAUDE.md in staging before computing the diff.
+        let project = TempDir::new().unwrap();
+        std::fs::write(
+            project.path().join("CLAUDE.md"),
+            "# Real project instructions\n\nActual content here.\n",
+        )
+        .unwrap();
+        std::fs::write(project.path().join("README.md"), "# Test\n").unwrap();
+
+        let config = GatewayConfig::for_project(project.path());
+        let goal_store = GoalRunStore::new(&config.goals_dir).unwrap();
+
+        super::super::goal::execute(
+            &super::super::goal::GoalCommands::Start {
+                title: "Injection test".to_string(),
+                source: Some(project.path().to_path_buf()),
+                objective: "Test injection strip".to_string(),
+                agent: "test-agent".to_string(),
+                phase: None,
+                follow_up: None,
+                objective_file: None,
+            },
+            &config,
+        )
+        .unwrap();
+
+        let goals = goal_store.list().unwrap();
+        let goal = &goals[0];
+
+        // Simulate crash: inject TA header into CLAUDE.md in staging (restore never ran).
+        // Also make a real change to README so there's at least one diff.
+        let injected = format!(
+            "# Trusted Autonomy \u{2014} Mediated Goal\n\nGoal context here.\n\n---\n\n{}\n",
+            "# Real project instructions\n\nActual content here.\n"
+        );
+        std::fs::write(goal.workspace_path.join("CLAUDE.md"), &injected).unwrap();
+        std::fs::write(goal.workspace_path.join("README.md"), "# Updated\n").unwrap();
+
+        // build_package should strip the injection.
+        let goal_id = goal.goal_run_id.to_string();
+        build_package(&config, &goal_id, "Test changes", false).unwrap();
+
+        // Staging CLAUDE.md should now be the original content (injection stripped).
+        let staged_claude = std::fs::read_to_string(goal.workspace_path.join("CLAUDE.md")).unwrap();
+        assert!(
+            !staged_claude.starts_with("# Trusted Autonomy"),
+            "TA injection header should have been stripped from staging CLAUDE.md"
+        );
+        assert!(
+            staged_claude.contains("# Real project instructions"),
+            "Original CLAUDE.md content should be preserved after stripping"
+        );
+
+        // CLAUDE.md diff in package: should reflect original vs source (no injection noise).
+        let packages = load_all_packages(&config).unwrap();
+        let pkg = packages.iter().find(|p| p.goal.goal_id == goal_id).unwrap();
+
+        // CLAUDE.md should NOT appear in artifacts (stripped = original = source content).
+        let claude_artifact = pkg
+            .changes
+            .artifacts
+            .iter()
+            .find(|a| a.resource_uri == "fs://workspace/CLAUDE.md");
+        assert!(
+            claude_artifact.is_none(),
+            "CLAUDE.md should not appear in diff after stripping (content matches source)"
+        );
+    }
+
+    #[test]
+    fn strip_ta_injection_from_staging_no_injection() {
+        // strip_ta_injection_from_staging is a no-op when CLAUDE.md has no injection.
+        let staging = TempDir::new().unwrap();
+        std::fs::write(
+            staging.path().join("CLAUDE.md"),
+            "# Normal project instructions\n",
+        )
+        .unwrap();
+        let result = strip_ta_injection_from_staging(staging.path()).unwrap();
+        assert!(!result, "Should return false — no injection present");
+        let content = std::fs::read_to_string(staging.path().join("CLAUDE.md")).unwrap();
+        assert_eq!(content, "# Normal project instructions\n");
+    }
+
+    #[test]
+    fn strip_ta_injection_from_staging_with_injection() {
+        // strip_ta_injection_from_staging removes the TA header and preserves original.
+        let staging = TempDir::new().unwrap();
+        let original = "# Project Instructions\n\nDo this and that.\n";
+        let injected = format!(
+            "# Trusted Autonomy \u{2014} Mediated Goal\n\nGoal context.\n\n---\n\n{}\n",
+            original
+        );
+        std::fs::write(staging.path().join("CLAUDE.md"), &injected).unwrap();
+        let result = strip_ta_injection_from_staging(staging.path()).unwrap();
+        assert!(result, "Should return true — injection stripped");
+        let content = std::fs::read_to_string(staging.path().join("CLAUDE.md")).unwrap();
+        assert_eq!(content, original, "Original content should be preserved");
+        assert!(
+            !content.starts_with("# Trusted Autonomy"),
+            "TA header should be gone"
+        );
+    }
+
+    #[test]
+    fn strip_ta_injection_from_staging_no_original_removes_file() {
+        // When injection has no original content, CLAUDE.md is removed entirely.
+        let staging = TempDir::new().unwrap();
+        // Simulate injection where CLAUDE.md did not exist originally.
+        let injected = "# Trusted Autonomy \u{2014} Mediated Goal\n\nGoal context.\n\n---\n\n";
+        std::fs::write(staging.path().join("CLAUDE.md"), injected).unwrap();
+        let result = strip_ta_injection_from_staging(staging.path()).unwrap();
+        assert!(result, "Should return true — injection stripped");
+        assert!(
+            !staging.path().join("CLAUDE.md").exists(),
+            "CLAUDE.md should be removed when no original content existed"
         );
     }
 }
