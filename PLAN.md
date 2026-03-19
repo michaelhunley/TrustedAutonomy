@@ -4447,7 +4447,57 @@ Channel plugins proved this migration pattern works (Discord went from built-in 
 - **Slack inbound listener** (slash commands, button callbacks, Socket Mode) — Slack plugin lacks `listener.rs` and `progress.rs`. Implement in v0.13.x once beta starts. *(Slack is send-only for public alpha.)*
 - **`registry.trustedautonomy.dev` index** — the registry CDN. For now, `ta setup resolve` falls back to GitHub releases directly. A proper registry index (with search, versions, metadata) is a beta-era infrastructure item.
 
+**Remaining external actions** (post-merge):
+1. `gh repo create Trusted-Autonomy/ta-channel-discord && git push` — push `plugins/ta-channel-discord/` as repo root
+2. `git tag v0.1.0 && git push origin v0.1.0` — triggers release workflow, uploads binaries
+3. Verify `ta setup resolve` works end-to-end
+4. Repeat for `ta-channel-slack`
+
 #### Version: `0.12.4-alpha`
+
+---
+
+### v0.12.4.1 — Shell: Clear Working Indicator on Goal Completion
+<!-- status: pending -->
+**Goal**: After `ta run <goal>` (or any daemon command that drives the working indicator) completes, the shell must stop showing `Agent is working ⚠ (Xm elapsed — no heartbeat)` and stop displaying the tail status. Currently both persist indefinitely after the goal finishes, leaving the user unsure whether the process is still running.
+
+#### Items
+1. [ ] **Stop tail stream on goal completion**: When the daemon reports goal state `Completed` (or `Failed`/`Aborted`), the active tail subscription for that goal is torn down immediately — no more output lines arrive after the completion event.
+2. [ ] **Clear working indicator on completion**: The `Agent is working ⚠ / ⠿` line in the output pane is replaced with a one-line completion summary, e.g. `[goal finished] fix-build-01 — draft ready` or `[goal failed] fix-build-01`. Red alert state is cleared.
+3. [ ] **Remove tail indicator from status bar**: The `tailing <label>` segment in the status bar is removed when the tail stream closes.
+4. [ ] **No-heartbeat alert does not reappear after completion**: Once the working indicator is cleared, the heartbeat timer is cancelled — the alert cannot reappear even if a stale heartbeat arrives late.
+5. [ ] **Test**: Unit test for the tail-teardown path; integration test that `ta run` completion clears the working indicator within one poll cycle.
+
+#### Version: `0.12.4-alpha.1`
+
+---
+
+### v0.12.5 — Semantic Memory: RuVector Backing Store & Context Injection
+<!-- status: pending -->
+**Goal**: Make memory useful across runs. Today the daemon uses `FsMemoryStore` (exact-match only) and nothing writes the project constitution or plan completions to memory, so agents start each goal with no accumulated context. This phase wires up `RuVectorStore` as the primary backend (with `FsMemoryStore` as a read fallback for legacy entries), expands what gets written, and injects semantically-retrieved context at goal start.
+
+#### Items
+
+**Backend**
+1. [ ] **Daemon initialises `RuVectorStore`** (`.ta/memory.rvf/`) with `FsMemoryStore` (`.ta/memory/`) as a read-through fallback for entries not yet migrated. Auto-migration on first open is already implemented in `ruvector_store.rs`.
+2. [ ] **`ta memory backend`** CLI sub-command: shows which backend is active, entry count, index size, and last migration date.
+
+**New write points**
+3. [ ] **Plan phase completion → memory**: When `draft apply` marks a phase `done` in PLAN.md, write `plan:{phase_id}:complete` (category: History, confidence 0.9) with the phase title and a one-line summary of what changed.
+4. [ ] **Project constitution → memory**: On daemon startup (and whenever the constitution file changes), index each constitution rule as `constitution:{slug}` (category: Convention, confidence 1.0). Constitution path is configurable; defaults to `.ta/constitution.md`.
+5. [ ] **Wire `on_human_guidance`**: Capture human shell feedback into memory (category: Preference, confidence 0.9). Currently defined in `AutoCapture` but never called.
+6. [ ] **Wire repeated-correction promotion**: The `check_repeated_correction` threshold counter is defined but never called. Wire it into the correction capture path so patterns promoted after N repetitions.
+
+**Context injection at goal start**
+7. [ ] **Semantic top-K retrieval**: At `ta run` time, query `RuVectorStore` with the goal title + objective to retrieve the top-K most relevant memory entries (default K=10, configurable via `workflow.toml`). Falls back to tag/prefix scan on `FsMemoryStore` if RuVector unavailable.
+8. [ ] **Inject retrieved entries into CLAUDE.md**: The existing `build_memory_context_section_for_inject()` already inserts a "Memory Context" section — extend it to include constitution rules and plan-completion entries alongside the existing history entries.
+9. [ ] **Non-Claude agents** (Codex, Ollama): `injects_context_file: false` agents currently receive no context. Add a `context_file` field to `AgentLaunchConfig` pointing to a generic markdown file (e.g., `.ta/agent_context.md`) that TA writes the same sections into, separate from CLAUDE.md. Each agent YAML opts in via `injects_context_file: true` + `context_file: .ta/agent_context.md`. *(Full per-model injection targeting deferred to v0.13.3 RuntimeAdapter.)*
+
+**Tests**
+10. [ ] Integration test: goal completion writes `goal:{id}:complete`; subsequent goal start retrieves it via semantic search.
+11. [ ] Integration test: constitution file indexed on startup; goal start injects at least one constitution rule into CLAUDE.md.
+
+#### Version: `0.12.5-alpha`
 
 ---
 
