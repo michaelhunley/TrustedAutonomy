@@ -4396,15 +4396,15 @@ Channel plugins proved this migration pattern works (Discord went from built-in 
 ---
 
 ### v0.12.2.3 — Follow-Up Draft Completeness & Injection Cleanup
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Fix two follow-up bugs exposed by v0.12.2.2: (1) follow-up drafts only capture per-session writes rather than the full staging-vs-source delta, silently dropping parent-session changes (version bumps, etc.) from the child PR; (2) a crashed/frozen session leaves CLAUDE.md with the TA injection still prepended, which then leaks into the diff and ends up in the GitHub PR.
 
 **Found during**: v0.12.2.2 — computer froze before agent exited, `restore_claude_md` never ran, injected CLAUDE.md appeared in PR 197. Follow-up PR 198 was missing `Cargo.toml`, `Cargo.lock`, `CLAUDE.md` version bumps because the follow-up session didn't re-write those files.
 
-1. [ ] **Follow-up draft uses full staging-vs-source diff**: When `ta draft build` runs for a follow-up goal that reuses the parent's staging directory, diff the full staging tree against the source (same as a non-follow-up build), not just the files written in the child session. This ensures all parent-session changes (version bumps, etc.) are included in the child draft. The child draft already supersedes the parent, so including all changes is correct.
-2. [ ] **`ta draft build` strips injected CLAUDE.md header**: Before capturing the staging diff, check if `CLAUDE.md` in staging starts with `# Trusted Autonomy — Mediated Goal`. If so, strip everything up to and including the `---` separator that precedes the real project instructions, and write the cleaned content back to staging before diffing. This protects against crash/freeze leaving the injection in place.
-3. [ ] **Auto-close parent GitHub PR on supersession (at build time)**: When `build_package` marks a parent draft as `DraftStatus::Superseded`, look up the parent's `vcs_info.review_url`. If it is a GitHub PR URL, run `gh pr close <url> --comment "Superseded by <child-pr-url>"`. This prevents the orphaned open-PR problem without waiting until the child is applied.
-4. [ ] **Test**: Add a regression test that builds a follow-up draft on a staging dir with parent-session changes in files the child session didn't touch — assert all parent-session files appear in the child draft's artifacts.
+1. [x] **Follow-up draft uses full staging-vs-source diff**: When `ta draft build` runs for a follow-up goal that reuses the parent's staging directory, diff the full staging tree against the source (same as a non-follow-up build), not just the files written in the child session. This ensures all parent-session changes (version bumps, etc.) are included in the child draft. The child draft already supersedes the parent, so including all changes is correct.
+2. [x] **`ta draft build` strips injected CLAUDE.md header**: Before capturing the staging diff, check if `CLAUDE.md` in staging starts with `# Trusted Autonomy — Mediated Goal`. If so, strip everything up to and including the `---` separator that precedes the real project instructions, and write the cleaned content back to staging before diffing. This protects against crash/freeze leaving the injection in place.
+3. [x] **Auto-close parent GitHub PR on supersession (at build time)**: When `build_package` marks a parent draft as `DraftStatus::Superseded`, look up the parent's `vcs_info.review_url`. If it is a GitHub PR URL, run `gh pr close <url> --comment "Superseded by <child-pr-url>"`. This prevents the orphaned open-PR problem without waiting until the child is applied.
+4. [x] **Test**: Add a regression test that builds a follow-up draft on a staging dir with parent-session changes in files the child session didn't touch — assert all parent-session files appear in the child draft's artifacts.
 
 #### Version: `0.12.2-alpha.3`
 
