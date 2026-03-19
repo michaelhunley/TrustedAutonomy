@@ -3402,7 +3402,19 @@ Valid `decision` values:
 
 Discord is available as an **external channel plugin** (refactored from a built-in crate in v0.10.2.1). It delivers agent questions as rich embeds with button components to a Discord channel.
 
-#### Quick setup
+#### Quick setup (recommended)
+
+Declare the plugin in your project's `.ta/project.toml` and let TA install it automatically:
+
+```toml
+[plugins.discord]
+type     = "channel"
+version  = ">=0.1.0"
+source   = "registry:ta-channel-discord"
+env_vars = ["TA_DISCORD_TOKEN", "TA_DISCORD_CHANNEL_ID"]
+```
+
+Then:
 
 1. **Create a Discord bot** at [discord.com/developers](https://discord.com/developers/applications):
    - New Application → Bot → copy the token
@@ -3415,17 +3427,12 @@ Discord is available as an **external channel plugin** (refactored from a built-
    export TA_DISCORD_CHANNEL_ID="123456789012345678"
    ```
 
-3. **Install the plugin**:
+3. **Resolve and install**:
    ```bash
-   # Build from source
-   cd plugins/ta-channel-discord
-   cargo build --release
-
-   # Install to project
-   mkdir -p .ta/plugins/channels/discord
-   cp target/release/ta-channel-discord .ta/plugins/channels/discord/
-   cp channel.toml .ta/plugins/channels/discord/
+   ta setup resolve
    ```
+
+   TA downloads the pre-built binary for your platform, installs it to `.ta/plugins/channels/discord/`, and confirms the required env vars are set.
 
 4. **Configure** `.ta/daemon.toml`:
    ```toml
@@ -3438,6 +3445,19 @@ Discord is available as an **external channel plugin** (refactored from a built-
    ta config channels
    # Should show "discord" in the registered channel types list
    ```
+
+#### Manual install (build from source)
+
+If you prefer to build the plugin yourself:
+
+```bash
+cd plugins/ta-channel-discord
+cargo build --release
+
+mkdir -p .ta/plugins/channels/discord
+cp target/release/ta-channel-discord .ta/plugins/channels/discord/
+cp channel.toml .ta/plugins/channels/discord/
+```
 
 #### How it works
 
@@ -3477,9 +3497,21 @@ The icon appears on all bot messages and in the server member list.
 
 ### Slack Channel Plugin
 
-Slack is available as an **external channel plugin**. It delivers agent questions as Block Kit messages with interactive buttons to a Slack channel.
+Slack is available as an **external channel plugin** (send-only starter). It delivers agent questions as Block Kit messages to a Slack channel. Inbound callbacks (slash commands, button clicks) are planned for a future release — reviewers respond via the TA web UI or HTTP API.
 
-#### Quick setup
+#### Quick setup (recommended)
+
+Declare the plugin in your project's `.ta/project.toml`:
+
+```toml
+[plugins.slack]
+type     = "channel"
+version  = ">=0.1.0"
+source   = "registry:ta-channel-slack"
+env_vars = ["TA_SLACK_BOT_TOKEN", "TA_SLACK_CHANNEL_ID"]
+```
+
+Then:
 
 1. **Create a Slack app** at [api.slack.com/apps](https://api.slack.com/apps):
    - Create New App → From scratch
@@ -3495,18 +3527,26 @@ Slack is available as an **external channel plugin**. It delivers agent question
    export TA_SLACK_ALLOWED_USERS="U01ABC,U02DEF"
    ```
 
-3. **Build and install the plugin**:
+3. **Resolve and install**:
    ```bash
-   # Build from source (or use ta plugin build)
-   ta plugin build slack
-
-   # Or manually:
-   cd plugins/ta-channel-slack
-   cargo build --release
-   mkdir -p .ta/plugins/channels/slack
-   cp target/release/ta-channel-slack .ta/plugins/channels/slack/
-   cp channel.toml .ta/plugins/channels/slack/
+   ta setup resolve
    ```
+
+   TA downloads the pre-built binary for your platform, installs it to `.ta/plugins/channels/slack/`, and confirms the required env vars are set.
+
+#### Manual install (build from source)
+
+```bash
+# Build from source (or use ta plugin build)
+ta plugin build slack
+
+# Or manually:
+cd plugins/ta-channel-slack
+cargo build --release
+mkdir -p .ta/plugins/channels/slack
+cp target/release/ta-channel-slack .ta/plugins/channels/slack/
+cp channel.toml .ta/plugins/channels/slack/
+```
 
 4. **Configure** `.ta/daemon.toml`:
    ```toml
