@@ -622,8 +622,9 @@ fn start_goal_recovery_tasks(app_state: &std::sync::Arc<crate::api::AppState>) {
             "Startup recovery: restarting state-poll for goal"
         );
 
+        let initial_state = goal.state.to_string();
         tokio::spawn(async move {
-            let mut last_state: Option<String> = None;
+            let mut last_state: Option<String> = Some(initial_state);
             loop {
                 tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
 
