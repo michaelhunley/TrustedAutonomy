@@ -238,6 +238,13 @@ pub async fn execute_command(
                     let goal_output2 = goal_output.clone();
                     let goal_input2 = goal_input.clone();
                     let output_key2 = output_key.clone();
+                    // Shared goal UUID detected from sentinel — used by state-poll task.
+                    let detected_goal_id: std::sync::Arc<tokio::sync::Mutex<Option<uuid::Uuid>>> =
+                        std::sync::Arc::new(tokio::sync::Mutex::new(None));
+                    #[allow(unused_variables)]
+                    let detected_goal_id2 = detected_goal_id.clone();
+                    let events_dir2 = events_dir.clone();
+                    let working_dir2 = working_dir.clone();
                     let stderr_task = tokio::spawn(async move {
                         if let Some(err) = stderr {
                             let mut reader = BufReader::new(err).lines();
@@ -249,6 +256,15 @@ pub async fn execute_command(
                                     if let Some(goal_uuid) = extract_goal_uuid_from_event(&line) {
                                         goal_output2.add_alias(&goal_uuid, &output_key2).await;
                                         goal_input2.add_alias(&goal_uuid, &output_key2).await;
+                                        // Emit GoalStarted SSE event so channel plugins see it.
+                                        if let Ok(uid) = uuid::Uuid::parse_str(&goal_uuid) {
+                                            emit_goal_started_event(
+                                                &events_dir2,
+                                                uid,
+                                                &working_dir2,
+                                            );
+                                            *detected_goal_id2.lock().await = Some(uid);
+                                        }
                                     }
                                 }
                                 let _ = tx2.send(OutputLine {
@@ -261,6 +277,66 @@ pub async fn execute_command(
                                     lines.remove(0);
                                 }
                                 lines.push(line);
+                            }
+                        }
+                    });
+                    // State-poll task: watches GoalRunStore for state transitions and
+                    // emits GoalCompleted / ReviewRequested SSE events for channel plugins.
+                    let events_dir3 = events_dir.clone();
+                    let working_dir3 = working_dir.clone();
+                    let poll_done = std::sync::Arc::new(tokio::sync::Notify::new());
+                    let poll_done2 = poll_done.clone();
+                    let state_poll_task = tokio::spawn(async move {
+                        let mut last_state: Option<String> = None;
+                        loop {
+                            tokio::select! {
+                                _ = tokio::time::sleep(tokio::time::Duration::from_secs(5)) => {}
+                                _ = poll_done2.notified() => {
+                                    // One final poll on process exit.
+                                }
+                            }
+                            let goal_id = *detected_goal_id.lock().await;
+                            let Some(goal_id) = goal_id else { continue };
+                            let goal_dir = working_dir3.join(".ta/goals");
+                            let store = ta_goal::store::GoalRunStore::new(&goal_dir);
+                            let Ok(store) = store else { continue };
+                            let Ok(Some(goal)) = store.get(goal_id) else {
+                                continue;
+                            };
+                            let state_str = goal.state.to_string();
+                            if last_state.as_deref() == Some(&state_str) {
+                                continue;
+                            }
+                            last_state = Some(state_str.clone());
+                            match state_str.as_str() {
+                                "completed" => {
+                                    emit_goal_completed_event(&events_dir3, goal_id, &goal.title);
+                                }
+                                "pr_ready" => {
+                                    // Emit ReviewRequested so channel plugins show draft-ready.
+                                    let pr_dir = working_dir3.join(".ta/pr_packages");
+                                    if let Some(d) = latest_draft_for_goal(&pr_dir, goal_id) {
+                                        emit_draft_ready_events(
+                                            &events_dir3,
+                                            goal_id,
+                                            d.id,
+                                            &goal.title,
+                                            &d.summary,
+                                            d.artifact_count,
+                                        );
+                                    }
+                                }
+                                "failed" | "denied" => {
+                                    emit_goal_failed_event(&events_dir3, goal_id, &goal.title);
+                                }
+                                _ => {}
+                            }
+                            // Stop polling terminal states.
+                            if matches!(
+                                state_str.as_str(),
+                                "completed" | "failed" | "denied" | "applied"
+                            ) {
+                                break;
                             }
                         }
                     });
@@ -291,8 +367,12 @@ pub async fn execute_command(
 
                     let status = child.wait().await;
                     heartbeat_task.abort(); // Stop heartbeat when command exits.
+                    poll_done.notify_one(); // Trigger final state poll before aborting.
                     let _ = stdout_task.await;
                     let _ = stderr_task.await;
+                    // Give the state poll task a moment for its final check, then abort.
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                    state_poll_task.abort();
 
                     match status {
                         Ok(s) if s.success() => {
@@ -936,6 +1016,120 @@ fn glob_match(pattern: &str, input: &str) -> bool {
 // Replaced by schema-driven ta_output_schema::parse_line(). See agents/output-schemas/*.yaml.
 
 /// Emit a `command_failed` event so the failure is visible to agents and the SSE stream.
+fn emit_sse_event(events_dir: &std::path::Path, event: ta_events::schema::SessionEvent) {
+    use ta_events::store::{EventStore, FsEventStore};
+    let store = FsEventStore::new(events_dir);
+    let envelope = ta_events::schema::EventEnvelope::new(event);
+    if let Err(e) = store.append(&envelope) {
+        tracing::warn!("Failed to emit SSE event: {}", e);
+    }
+}
+
+fn emit_goal_started_event(
+    events_dir: &std::path::Path,
+    goal_id: uuid::Uuid,
+    project_root: &std::path::Path,
+) {
+    use ta_events::schema::SessionEvent;
+    // Load goal title from store if possible.
+    let title = load_goal_title(project_root, goal_id).unwrap_or_else(|| "(goal)".to_string());
+    emit_sse_event(
+        events_dir,
+        SessionEvent::GoalStarted {
+            goal_id,
+            title,
+            agent_id: "ta-run".to_string(),
+            phase: None,
+        },
+    );
+}
+
+fn emit_goal_completed_event(events_dir: &std::path::Path, goal_id: uuid::Uuid, title: &str) {
+    use ta_events::schema::SessionEvent;
+    emit_sse_event(
+        events_dir,
+        SessionEvent::GoalCompleted {
+            goal_id,
+            title: title.to_string(),
+            duration_secs: None,
+        },
+    );
+}
+
+fn emit_goal_failed_event(events_dir: &std::path::Path, goal_id: uuid::Uuid, _title: &str) {
+    use ta_events::schema::SessionEvent;
+    emit_sse_event(
+        events_dir,
+        SessionEvent::GoalFailed {
+            goal_id,
+            error: "Agent exited with error".to_string(),
+            exit_code: None,
+        },
+    );
+}
+
+fn emit_draft_ready_events(
+    events_dir: &std::path::Path,
+    goal_id: uuid::Uuid,
+    draft_id: uuid::Uuid,
+    title: &str,
+    summary: &str,
+    artifact_count: usize,
+) {
+    use ta_events::schema::SessionEvent;
+    emit_sse_event(
+        events_dir,
+        SessionEvent::DraftBuilt {
+            goal_id,
+            draft_id,
+            artifact_count,
+        },
+    );
+    emit_sse_event(
+        events_dir,
+        SessionEvent::ReviewRequested {
+            goal_id,
+            draft_id,
+            summary: if summary.is_empty() {
+                format!(
+                    "Draft ready for '{}' — {} file(s) changed.",
+                    title, artifact_count
+                )
+            } else {
+                summary.to_string()
+            },
+        },
+    );
+}
+
+fn load_goal_title(project_root: &std::path::Path, goal_id: uuid::Uuid) -> Option<String> {
+    let store = ta_goal::store::GoalRunStore::new(project_root.join(".ta/goals")).ok()?;
+    store.get(goal_id).ok()?.map(|g| g.title)
+}
+
+struct LatestDraft {
+    id: uuid::Uuid,
+    summary: String,
+    artifact_count: usize,
+}
+
+fn latest_draft_for_goal(pr_dir: &std::path::Path, goal_id: uuid::Uuid) -> Option<LatestDraft> {
+    use ta_changeset::draft_package::DraftPackage;
+    let goal_str = goal_id.to_string();
+    std::fs::read_dir(pr_dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .filter_map(|e| std::fs::read_to_string(e.path()).ok())
+        .filter_map(|s| serde_json::from_str::<DraftPackage>(&s).ok())
+        .filter(|d| d.goal.goal_id == goal_str)
+        .max_by_key(|d| d.created_at)
+        .map(|d| LatestDraft {
+            id: d.package_id,
+            summary: d.summary.what_changed.clone(),
+            artifact_count: d.changes.artifacts.len(),
+        })
+}
+
 fn emit_command_failed_event(
     events_dir: &std::path::Path,
     command: &str,

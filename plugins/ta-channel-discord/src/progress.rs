@@ -186,10 +186,12 @@ async fn process_event(
     };
 
     match etype {
-        "goal.state_changed" | "goal_state_changed" => {
+        // Legacy names kept for compatibility; actual daemon emits these types:
+        "goal_started" | "goal.state_changed" | "goal_state_changed"
+        | "goal_completed" | "goal_failed" => {
             handle_goal_state_changed(client, token, channel_id, &event, throttle_map).await;
         }
-        "draft.ready" | "draft_ready" => {
+        "review_requested" | "draft_built" | "draft.ready" | "draft_ready" => {
             handle_draft_ready(client, token, channel_id, application_id, &event).await;
         }
         _ => {}
@@ -203,17 +205,21 @@ async fn handle_goal_state_changed(
     event: &serde_json::Value,
     throttle_map: &mut HashMap<String, Instant>,
 ) {
-    let goal_id = event["goal_id"]
+    // The payload is wrapped: { event_type, payload: { type, goal_id, title, ... } }
+    let payload = event.get("payload").unwrap_or(event);
+
+    let goal_id = payload["goal_id"].as_str().unwrap_or("");
+    // Map actual event types to a state label.
+    let event_type = payload["type"].as_str().unwrap_or("");
+    let new_state = match event_type {
+        "goal_started" => "running",
+        "goal_completed" => "completed",
+        "goal_failed" => "failed",
+        _ => payload["to_state"].as_str().unwrap_or(""),
+    };
+    let title = payload["title"]
         .as_str()
-        .or_else(|| event["data"]["goal_id"].as_str())
-        .unwrap_or("");
-    let new_state = event["new_state"]
-        .as_str()
-        .or_else(|| event["data"]["new_state"].as_str())
-        .unwrap_or("");
-    let title = event["goal_title"]
-        .as_str()
-        .or_else(|| event["data"]["goal_title"].as_str())
+        .or_else(|| payload["goal_title"].as_str())
         .unwrap_or("(unnamed goal)");
 
     if goal_id.is_empty() || new_state.is_empty() {
@@ -258,21 +264,25 @@ async fn handle_draft_ready(
     application_id: &Option<String>,
     event: &serde_json::Value,
 ) {
-    let draft_id = event["draft_id"]
+    // EventEnvelope wraps payload; fall back to flat layout for legacy compatibility.
+    let payload = event.get("payload").unwrap_or(event);
+
+    let draft_id = payload["draft_id"]
         .as_str()
-        .or_else(|| event["data"]["draft_id"].as_str())
+        .or_else(|| payload["data"]["draft_id"].as_str())
         .unwrap_or("");
-    let goal_title = event["goal_title"]
+    let goal_title = payload["goal_title"]
         .as_str()
-        .or_else(|| event["data"]["goal_title"].as_str())
+        .or_else(|| payload["title"].as_str())
+        .or_else(|| payload["data"]["goal_title"].as_str())
         .unwrap_or("(unnamed goal)");
-    let summary = event["summary"]
+    let summary = payload["summary"]
         .as_str()
-        .or_else(|| event["data"]["summary"].as_str())
+        .or_else(|| payload["data"]["summary"].as_str())
         .unwrap_or("Review the draft for details.");
-    let artifact_count = event["artifact_count"]
+    let artifact_count = payload["artifact_count"]
         .as_u64()
-        .or_else(|| event["data"]["artifact_count"].as_u64())
+        .or_else(|| payload["data"]["artifact_count"].as_u64())
         .unwrap_or(0);
 
     if draft_id.is_empty() {

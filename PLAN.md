@@ -4452,20 +4452,35 @@ Channel plugins proved this migration pattern works (Discord went from built-in 
 
 ---
 
-### v0.12.4.1 — Shell: Clear Working Indicator & Auto-Scroll Fix
-<!-- status: pending -->
-**Goal**: Fix two shell regressions confirmed in the v0.12.3 build: (1) "Agent is working ⚠" persists after `ta run` completes; (2) the output pane does not stay scrolled to the latest line when new agent output arrives.
+### v0.12.4.1 — Shell: Clear Working Indicator & Auto-Scroll Fix + Channel Goal Input
+<!-- status: done -->
+**Goal**: Fix two shell regressions confirmed in the v0.12.3 build: (1) "Agent is working ⚠" persists after `ta run` completes; (2) the output pane does not stay scrolled to the latest line when new agent output arrives. Also wire Discord (and Slack) to the existing `POST /api/goals/{id}/input` endpoint so users can inject mid-run corrections from a channel.
 
 **Root causes identified** (from `shell_tui.rs` code review):
 - **Working indicator / tail not clearing**: `AgentOutputDone` searches `app.output` for a `is_heartbeat` line to replace. In split-pane mode (Ctrl-W), agent output goes to `app.agent_output` — the heartbeat there is never found, so it's never replaced and the status bar `tailing_goal` never clears. Same bug applies whether or not split-pane is active if the heartbeat line was pushed to the wrong list.
 - **Auto-scroll broken in agent pane**: In split-pane mode, output goes to `agent_output` but `agent_scroll_offset` is never decremented — `auto_scroll_if_near_bottom()` is only called for the main pane `AgentOutput` path. New lines extend `max_scroll` but the render doesn't follow.
 
-#### Items
-1. [ ] **Fix `AgentOutputDone` to clear heartbeat in both panes**: Search both `app.output` and `app.agent_output` for `is_heartbeat` lines. Replace in whichever list contains it, or in both if duplicated. Clear `tailing_goal` unconditionally when the matching goal_id is found.
-2. [ ] **Fix auto-scroll in agent pane (split-pane mode)**: Call `auto_scroll_if_near_bottom()` (or equivalent for `agent_scroll_offset`) after every append to `app.agent_output`, mirroring the existing logic for the main pane.
-3. [ ] **Auto-scroll in main pane when at exact bottom**: When `scroll_offset == 0` and new output arrives via `push_output`, ensure the render recalculates correctly — verify no off-by-one in `max_scroll` that prevents the latest line from appearing.
-4. [ ] **Status bar clears `tailing <label>` on completion**: After `AgentOutputDone`, the status bar segment that shows `tailing <id>` must be removed. Verify this happens even if split-pane mode is off.
-5. [ ] **Tests**: Unit tests covering `AgentOutputDone` in split-pane mode clears both panes; auto-scroll fires after agent output in split-pane mode.
+#### Shell fix items
+1. [x] **Fix `AgentOutputDone` to clear heartbeat in both panes**: Search both `app.output` and `app.agent_output` for `is_heartbeat` lines. Replace in whichever list contains it, or in both if duplicated. Clear `tailing_goal` unconditionally when the matching goal_id is found.
+2. [x] **Fix auto-scroll in agent pane (split-pane mode)**: Call `auto_scroll_if_near_bottom()` (or equivalent for `agent_scroll_offset`) after every append to `app.agent_output`, mirroring the existing logic for the main pane.
+3. [x] **Auto-scroll in main pane when at exact bottom**: Verified existing `auto_scroll_if_near_bottom()` call in the main pane path is correct — no off-by-one.
+4. [x] **Status bar clears `tailing <label>` on completion**: `tailing_goal` is set to `None` in `AgentOutputDone` handler unconditionally when the goal_id matches — status bar clears immediately.
+5. [x] **Tests**: Unit tests covering `AgentOutputDone` in split-pane mode clears both panes; auto-scroll fires after agent output in split-pane mode.
+
+#### Channel goal-input items
+The daemon already exposes `POST /api/goals/{id}/input` which writes directly to a running agent's stdin. The Discord and Slack plugins need a dispatch path to it.
+
+**Message syntax** (prefix-message and slash command):
+- `ta input <goal-id> <message>` — explicit goal ID (short prefix match supported by daemon)
+- `>message text here` — shorthand: routes to the most recently started goal (daemon resolves `latest`)
+
+**Implementation**:
+6. [x] **Discord listener**: In `handle_message_create`, detect messages starting with `>` (after stripping the channel prefix). Strip the `>`, POST `{ "input": "<text>\n" }` to `{daemon_url}/api/goals/latest/input`. Reply with `:speech_balloon: Delivered to agent.` or `:x: No running goal.`
+7. [x] **Discord listener**: Also handle `ta input <goal-id> <text>` as an explicit-ID variant forwarded to `/api/goals/{goal-id}/input`.
+8. [-] **Slack plugin** (`ta-channel-slack`): Deferred — Slack plugin is in an external repo (`Trusted-Autonomy/ta-channel-slack`) and Slack is send-only for public alpha. → v0.13.x
+9. [x] **Daemon**: `latest` is now a valid alias in `resolve_goal_id()` — resolves to the most recently started still-running goal via `GoalOutputManager.latest_goal()` backed by a `creation_order` Vec.
+10. [x] **`ta goal input <id> <text>`** CLI sub-command: thin wrapper over `POST /api/goals/{id}/input` for scripting and testing without a channel plugin.
+11. [x] **Tests**: Discord listener unit tests for `>` shorthand and `ta input` explicit routing; `latest_goal()` unit tests in `goal_output.rs`.
 
 #### Version: `0.12.4-alpha.1`
 

@@ -252,6 +252,17 @@ pub enum GoalCommands {
         #[arg(long, default_value = "20")]
         limit: usize,
     },
+    /// Send text to a running goal's agent stdin (v0.12.4.1).
+    ///
+    /// Thin CLI wrapper over POST /api/goals/{id}/input for scripting and
+    /// testing without a channel plugin. Use "latest" as the ID to route to
+    /// the most recently started still-running goal.
+    Input {
+        /// Goal ID, short prefix, or "latest".
+        id: String,
+        /// Text to deliver to the agent's stdin.
+        text: String,
+    },
 }
 
 /// Access constitution subcommands (v0.4.3).
@@ -405,6 +416,7 @@ pub fn execute(cmd: &GoalCommands, config: &GatewayConfig) -> anyhow::Result<()>
             include_staging,
             threshold_days,
         } => gc_goals(&store, config, *dry_run, *include_staging, *threshold_days),
+        GoalCommands::Input { id, text } => goal_input(config, id, text),
     }
 }
 
@@ -767,6 +779,66 @@ fn goal_history(
     println!("\n{} history entry(ies).", entries.len());
 
     Ok(())
+}
+
+/// Send text to a running goal's agent stdin via the daemon API (v0.12.4.1).
+///
+/// POST /api/goals/{id}/input — thin wrapper for scripting without a channel plugin.
+fn goal_input(config: &GatewayConfig, id: &str, text: &str) -> anyhow::Result<()> {
+    let daemon_url = super::daemon::resolve_daemon_url(&config.workspace_root, None);
+    let url = format!("{}/api/goals/{}/input", daemon_url, id);
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| anyhow::anyhow!("Failed to build HTTP client: {}", e))?;
+
+    let resp = client
+        .post(&url)
+        .json(&serde_json::json!({ "input": text }))
+        .send()
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "Cannot reach daemon at {}: {}. Is the daemon running? Try: ta daemon start",
+                daemon_url,
+                e
+            )
+        })?;
+
+    let status = resp.status();
+    let body: serde_json::Value = resp
+        .json()
+        .unwrap_or_else(|_| serde_json::json!({"error": "non-JSON response"}));
+
+    if status.is_success() {
+        let goal_id = body["goal_id"].as_str().unwrap_or(id);
+        let len = body["input_length"].as_u64().unwrap_or(text.len() as u64);
+        println!(
+            "Delivered {} bytes to goal {} stdin.",
+            len,
+            &goal_id[..8.min(goal_id.len())]
+        );
+        Ok(())
+    } else {
+        let err = body["error"].as_str().unwrap_or("unknown error");
+        let hint = body["hint"].as_str().unwrap_or("");
+        if hint.is_empty() {
+            anyhow::bail!(
+                "Failed to deliver input to goal '{}': {} (HTTP {})",
+                id,
+                err,
+                status
+            )
+        } else {
+            anyhow::bail!(
+                "Failed to deliver input to goal '{}': {} (HTTP {})\nHint: {}",
+                id,
+                err,
+                status,
+                hint
+            )
+        }
+    }
 }
 
 fn show_status(
