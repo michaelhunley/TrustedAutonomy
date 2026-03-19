@@ -573,11 +573,90 @@ cp -r templates/channel-plugins/go     plugins/my-notifier
 
 Edit `channel.toml` to set your plugin name, then implement the delivery logic in the main file.
 
+## Published Plugin Repos
+
+These are standalone repos you can clone, fork, or use as references for building your own plugins:
+
+| Plugin | Repo | Description |
+|--------|------|-------------|
+| Discord | [Trusted-Autonomy/ta-channel-discord](https://github.com/Trusted-Autonomy/ta-channel-discord) | Discord embeds with buttons, slash commands, and progress streaming |
+| Slack | [Trusted-Autonomy/ta-channel-slack](https://github.com/Trusted-Autonomy/ta-channel-slack) | Slack Block Kit messages (send-only starter; inbound planned) |
+
+Install either plugin with:
+
+```bash
+ta setup resolve   # if declared in .ta/project.toml
+```
+
+or download a pre-built binary directly from the repo's GitHub Releases page.
+
+## Publishing Your Plugin
+
+Once your plugin works locally you can publish it as a GitHub Release so others can install it via `ta setup resolve`.
+
+### Tarball format
+
+TA expects tarballs named:
+
+```
+{plugin-name}-{version}-{platform}.tar.gz
+```
+
+where `{platform}` is one of:
+
+| Platform | Value |
+|----------|-------|
+| macOS Apple Silicon | `aarch64-apple-darwin` |
+| macOS Intel | `x86_64-apple-darwin` |
+| Linux x86_64 | `x86_64-unknown-linux-musl` |
+| Linux ARM64 | `aarch64-unknown-linux-musl` |
+| Windows x86_64 | `x86_64-pc-windows-msvc` |
+
+Each tarball must contain the plugin binary and its `channel.toml` manifest:
+
+```
+ta-channel-myplugin-0.1.0-aarch64-apple-darwin.tar.gz
+  ├── ta-channel-myplugin     (binary)
+  └── channel.toml            (manifest)
+```
+
+### GitHub Actions release workflow
+
+Copy `.github/workflows/release.yml` from the [ta-channel-discord repo](https://github.com/Trusted-Autonomy/ta-channel-discord) into your plugin repo. It builds cross-platform binaries and publishes tarballs whenever you push a `v*` tag.
+
+To publish your first release:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The workflow will build for all four platforms and create a GitHub Release with the tarballs.
+
+### Declaring your plugin in project.toml
+
+Users can then install your plugin with a single `ta setup resolve` call by declaring it in `.ta/project.toml`:
+
+```toml
+[plugins.myplugin]
+type    = "channel"
+version = ">=0.1.0"
+source  = "github:your-org/ta-channel-myplugin"
+```
+
+The `github:` source scheme uses the same tarball naming convention, so no registry registration is needed.
+
+### SHA-256 checksums
+
+Include a `.sha256` file alongside each tarball for integrity verification. The release workflow above generates these automatically using `sha256sum`.
+
 ## Reference
 
 - [USAGE.md -- Channel Plugins](USAGE.md) -- full CLI reference for `ta plugin` and `ta config channels` commands
 - [plugins-architecture-guidance.md](plugins-architecture-guidance.md) -- broader plugin architecture, event hooks, and design principles
-- `plugins/ta-channel-slack/` -- production Rust plugin example (Slack Block Kit integration)
-- `plugins/ta-channel-discord/` -- production Rust plugin example (Discord embeds with buttons)
+- [Trusted-Autonomy/ta-channel-discord](https://github.com/Trusted-Autonomy/ta-channel-discord) -- production Rust plugin (Discord)
+- [Trusted-Autonomy/ta-channel-slack](https://github.com/Trusted-Autonomy/ta-channel-slack) -- production Rust plugin (Slack, send-only)
+- `plugins/ta-channel-slack/` -- local source of the Slack plugin (Slack Block Kit integration)
+- `plugins/ta-channel-discord/` -- local source of the Discord plugin (Discord embeds with buttons)
 - `plugins/ta-channel-email/` -- production Rust plugin example (SMTP delivery with IMAP polling)
 - `templates/channel-plugins/` -- starter templates for Python, Node.js, and Go
