@@ -122,7 +122,7 @@ Needed for compliance-focused or container-isolated deployments.
 ### Advanced (Post-Beta)
 
 - v0.13.7 — Goal Workflows: Serial Chains, Parallel Swarms & Office Routing
-- v0.13.8 — Local Model Support
+- v0.13.8 — Agent Framework: Pluggable Agent Backends (Claude Code, Codex, Claude-Flow, Ollama+Qwen, user-defined)
 - v0.14.x — Secure Autonomy (sandboxing, attestation, multi-party governance)
 
 ---
@@ -4970,22 +4970,134 @@ Map departments, project types, or goal categories to default workflows.
 
 ---
 
-### v0.13.8 — Local Model Support: Plan Phase
+### v0.13.8 — Agent Framework: Pluggable Agent Backends with Shared Memory
 <!-- status: pending -->
-<!-- beta: yes — architectural design phase; implementation in subsequent sub-phases -->
-**Goal**: Design and plan TA's support for locally-hosted LLMs as agent backends. The first version of local model support should be plannable and executable using TA itself as the development substrate. Step 1 is building a comprehensive plan.
+<!-- beta: yes — foundational for local models, multi-agent workflows, and community sharing -->
+**Goal**: Introduce an abstract **AgentFramework** concept so any goal, workflow, or daemon role can be wired to any agent backend — Claude Code (default), Codex, Claude-Flow, BMAD, Ollama+Qwen, a bare model, or a user-defined framework — without changing TA's core logic. Frameworks are defined as manifest files, composable at multiple config levels, and shareable via the plugin registry. All frameworks, including generic agents and local models, participate in TA's shared memory system so context and observations carry across goals and model switches.
 
-**Context**: Kimi K2.5 (MoE architecture, strong coding benchmark performance), Ollama (local model serving), llama.cpp, vLLM, and LMStudio represent different deployment patterns for local inference. TA's `RuntimeAdapter` trait (v0.13.3) and the planned agent config system provide natural extension points.
+**Context**: Today `ta run` hardcodes `claude --headless`. The coupling points are thin: (1) the process to launch, (2) the `[goal started]` sentinel on stderr, (3) the exit code. That's enough to swap in any agent. TA needs a dispatch layer, a manifest format, a resolution order, and a memory bridge so generic agents get the same observability as Claude Code.
+
+**Design — manifest**:
+
+```toml
+# ~/.config/ta/agents/qwen-coder.toml  (user-defined framework)
+name        = "qwen-coder"
+version     = "1.0.0"
+type        = "process"           # process | script (future: mcp-server, remote)
+command     = "ta-agent-ollama"
+args        = ["--model", "qwen2.5-coder:7b", "--base-url", "http://localhost:11434"]
+sentinel    = "[goal started]"    # substring to watch for on stderr (default)
+description = "Qwen 2.5 Coder 7B via Ollama — fast local coding agent"
+
+# Context injection — how TA injects goal context before launch
+context_file   = "CLAUDE.md"     # file to prepend goal context into (omit = don't inject)
+context_inject = "prepend"       # prepend | env | arg | none
+# context_env  = "TA_GOAL_CONTEXT"  # if inject=env: env var pointing to temp context file
+# context_arg  = "--context"        # if inject=arg: flag prepended before the file path
+
+# Shared memory — how this framework reads/writes TA memory
+[memory]
+inject  = "context"       # context | mcp | env | none
+# context: serialize relevant memory entries into context_file before launch
+# mcp:     expose ta-memory as a local MCP server; agent connects automatically
+# env:     write memory snapshot to $TA_MEMORY_PATH (temp file), agent reads it
+write_back = "exit-file"  # exit-file | mcp | none
+# exit-file: agent writes new memories to $TA_MEMORY_OUT before exit; TA ingests them
+# mcp:       agent uses ta-memory MCP tools directly during the run
+```
+
+**Design — config levels**:
+
+```toml
+# .ta/daemon.toml  (project-level binding)
+[agent]
+default_framework = "claude-code"   # used by ta run unless overridden
+qa_framework      = "qwen-coder"    # used by automated QA goals (v0.13.7 workflows)
+```
+
+```yaml
+# .ta/workflows/code-review.yaml  (workflow-level override)
+agent_framework: codex
+```
+
+```bash
+ta run "fix the login bug" --agent qwen-coder   # goal-level override
+ta run "write tests" --model ollama/phi4-mini   # shorthand: model implies ta-agent-ollama
+```
+
+**Resolution order** (highest wins): goal `--agent` flag → goal `--model` shorthand → workflow spec → project `daemon.toml` → user `~/.config/ta/daemon.toml` → built-in default (`claude-code`).
+
+**Built-in frameworks** (ship with TA):
+
+| Name | Context file | Memory | Ships as | Notes |
+|------|-------------|--------|----------|-------|
+| `claude-code` | `CLAUDE.md` prepend | MCP (ta-memory server) | built-in | Current default |
+| `codex` | `AGENTS.md` prepend | MCP (Codex supports MCP) | built-in wrapper | Requires Codex CLI |
+| `claude-flow` | `CLAUDE.md` prepend | MCP | built-in wrapper | Swarm config passthrough |
+| `bmad` | `CLAUDE.md` prepend | MCP | built-in wrapper | BMAD personas in `.bmad-core/` |
+| `ollama` | arg injection | env/exit-file | built-in impl | Generic; requires `--model` |
+| `ta-agent-ollama` | system prompt | tool-native | shipped binary | Full tool-loop for any OpenAI-compat endpoint |
+
+**`--model` shorthand**: `ta run "..." --model ollama/qwen2.5-coder:7b` auto-selects `ta-agent-ollama` framework and passes the model string. No manifest authoring needed for the common local-model case.
+
+**Shared memory bridge** — three modes, each covering a different agent class:
+- **MCP mode** (Claude Code, Codex, Claude-Flow, BMAD): TA exposes `ta-memory` as a local MCP server pre-configured in the agent's MCP config before launch. Agent calls `memory_read`/`memory_write`/`memory_search` as tools natively. Zero extra integration.
+- **Context mode** (any agent with a context file): TA serializes the N most relevant memory entries (by goal tags, plan phase, file paths) into a markdown block and prepends it to the context file alongside goal context. Agent reads passively. Write-back: agent appends structured observations to a designated section; TA parses on exit.
+- **Env/exit-file mode** (custom scripts, simple agents): TA writes memory snapshot to `$TA_MEMORY_PATH` before launch. Agent reads it optionally. On exit, TA reads `$TA_MEMORY_OUT` if present and ingests any new entries.
 
 #### Items
 
-1. [ ] **Research spike — model serving options**: Evaluate Ollama, llama.cpp server, vLLM, LMStudio, and LM Studio server for local model serving. Compare: API compatibility (OpenAI-compatible?), hardware requirements, model availability (Kimi K2.5, Llama 3.x, Qwen 2.5-Coder), macOS/Linux support, startup time. Document in `docs/local-model-options.md`.
-2. [ ] **Use TA to plan the implementation**: Run `ta run "Design local model support for TA agents" --phase v0.13.8` to have TA's agent draft the implementation plan. The output becomes the definitive design document and informs v0.13.8.1+.
-3. [ ] **Agent config extension point**: Define how `agents/claude-code.yaml` style configs reference a local model endpoint. Prototype: `model = "ollama/kimi-k2.5"`, `endpoint = "http://localhost:11434"`.
-4. [ ] **Ollama prototype**: Spike: can an Ollama-hosted Kimi K2.5 (or similar) successfully complete a simple `ta run` goal? What breaks? What works? Document findings.
-5. [ ] **Plan sub-phases**: Based on the research and TA-generated plan, break implementation into v0.13.8.1 (Ollama backend), v0.13.8.2 (model config UI), v0.13.8.3 (hardware requirements gate), etc.
+**Core dispatch layer**
+1. [ ] `AgentFrameworkManifest` struct — name, version, type, command, args, sentinel, description, context_file, context_inject, memory section
+2. [ ] `AgentFramework` trait — `resolve()`, `launch()`, `context_inject()`, `memory_bridge()` methods
+3. [ ] Framework resolver: search order — goal flag → `.ta/agents/` → `~/.config/ta/agents/` → built-in registry
+4. [ ] Update `ta run` + daemon `cmd.rs` to dispatch via resolved manifest (replace hardcoded `claude`)
+5. [ ] `ta agent list` — show all frameworks (built-in + discovered), mark default and active
+6. [ ] `ta agent info <name>` — manifest details, required env vars, memory mode, install instructions
 
-#### Version: `0.13.8-alpha` *(plan phase — implementation in v0.13.8.x sub-phases)*
+**Manifest format + context injection**
+7. [ ] Define manifest TOML schema with JSON Schema; document `context_file`, `context_inject`, `context_env`, `context_arg` fields
+8. [ ] Context injector: prepend mode (backup/restore, same as today), env mode (temp file + env var), arg mode (flag + path), none
+9. [ ] Ship built-in manifests: `claude-code` (CLAUDE.md/prepend/MCP), `codex` (AGENTS.md/prepend/MCP), `claude-flow`, `bmad`, `ollama`
+10. [ ] `ta agent validate <path>` — lint manifest, check command exists, verify context_file makes sense for the agent type
+
+**Shared memory bridge**
+11. [ ] MCP memory server: expose `ta-memory` as a local MCP server (`--mcp-config` injection for Claude Code, Codex); register `memory_read`, `memory_write`, `memory_search`, `memory_list` tools
+12. [ ] Context-mode serializer: select relevant memory entries by plan phase + goal tags + recently touched file paths; format as a fenced markdown block for prepending alongside goal context
+13. [ ] Exit-file ingestion: after agent exits, if `$TA_MEMORY_OUT` exists, parse and ingest new memory entries into `ta-memory`; log count
+14. [ ] `ta-agent-ollama` memory tools: include `memory_read`/`memory_write`/`memory_search` in its native tool set, backed by TA's memory REST API
+15. [ ] Memory relevance tuning: `[memory]` manifest section can set `max_entries`, `recency_days`, `tags` filter to control what gets injected into context-mode agents
+
+**Configuration levels**
+16. [ ] `[agent]` section in `daemon.toml`: `default_framework`, `qa_framework`, `memory_inject_mode` override
+17. [ ] Workflow YAML `agent_framework` field — resolved at workflow dispatch time
+18. [ ] `ta run --agent <name>` and `ta run --model <provider/model>` flags (model shorthand auto-selects `ta-agent-ollama`)
+19. [ ] Precedence enforcement and logging: on each `ta run`, log which framework was selected and why (goal/workflow/project/user/default)
+
+**`ta-agent-ollama` implementation**
+20. [ ] New crate `crates/ta-agent-ollama` — binary implementing tool-use loop against any OpenAI-compat endpoint
+21. [ ] Core tool set: bash_exec, file_read, file_write, file_list, web_fetch, memory_read, memory_write, memory_search
+22. [ ] Startup: read context from `--context-file` or `$TA_GOAL_CONTEXT`, include in system prompt; emit sentinel to stderr
+23. [ ] Model validation: probe `/v1/models` + test function-calling call on startup; emit clear error if model doesn't support tools
+24. [ ] Graceful degradation: if model has no function calling, fall back to CoT-with-parsing mode (best-effort) with a warning
+25. [ ] Validated with: Qwen2.5-Coder-7B, Phi-4-mini, Kimi K2.5, Llama3.1-8B (via Ollama and llama.cpp server)
+
+**Easy onboarding — model-as-agent path**
+26. [ ] `ta agent new --model ollama/qwen2.5-coder:7b` — generate a ready-to-use manifest in `~/.config/ta/agents/`, test the Ollama connection, print next steps
+27. [ ] `ta agent new --template <name>` — starter manifests for: `ollama`, `codex`, `bmad`, `openai-compat`, `custom-script`
+28. [ ] `ta agent test <name>` — run a minimal smoke-test goal ("write hello.txt with content 'hello'") using the named framework; report pass/fail and timing
+29. [ ] `ta agent doctor <name>` — check prerequisites: is the command installed? is the model endpoint reachable? does the model support tool calling? print actionable fix instructions
+
+**Sharing + registry**
+30. [ ] Framework manifests publishable to the plugin registry (v0.12.4 registry) — same install flow as VCS plugins
+31. [ ] `ta agent install <registry-name>` — fetch manifest + any companion binary, verify SHA256, run `ta agent test`
+32. [ ] `ta agent publish <path>` — validate + submit to registry
+
+**Research + validation**
+33. [ ] Research spike: Ollama vs llama.cpp server vs vLLM vs LM Studio — API compatibility, tool-calling support, macOS/Linux support, startup time, model availability. Document in `docs/agent-framework-options.md`.
+34. [ ] End-to-end validation: Qwen2.5-Coder-7B completes a real `ta run` goal with memory write-back; memory entries visible in next goal's context
+
+#### Version: `0.13.8-alpha`
 
 ---
 
