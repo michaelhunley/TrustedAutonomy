@@ -1227,6 +1227,7 @@ pub(crate) fn build_package(
             objective: goal.objective.clone(),
             success_criteria: vec![],
             constraints: vec![],
+            parent_goal_title: None, // Set below if this is a follow-up (v0.13.0.1).
         },
         iteration: Iteration {
             iteration_id: format!("{}-1", goal_id),
@@ -1305,6 +1306,10 @@ pub(crate) fn build_package(
     // so chain summary and `--chain` apply work correctly.
     if let Some(parent_goal_id) = goal.parent_goal_id {
         if let Ok(Some(parent_goal)) = goal_store.get(parent_goal_id) {
+            // Preserve parent title in the draft so chain display works even if the
+            // parent goal record is later deleted (v0.13.0.1).
+            pkg.goal.parent_goal_title = Some(parent_goal.title.clone());
+
             if let Some(parent_draft_id) = parent_goal.pr_package_id {
                 pkg.parent_draft_id = Some(parent_draft_id);
 
@@ -2020,50 +2025,70 @@ fn view_package(
     let package_id = resolve_draft_id(id, config)?;
     let pkg = load_package(config, package_id)?;
 
-    // v0.12.2.1: Show chain summary header when this draft is part of a chain.
+    // v0.12.2.1 / v0.13.0.1: Show chain context when this draft is part of a chain.
+    let all_packages = load_all_packages(config).unwrap_or_default();
     if let Some(parent_id) = pkg.parent_draft_id {
         let parent_short = &parent_id.to_string()[..8];
-        // Count all drafts in this chain for combined impact.
-        let all_packages = load_all_packages(config).unwrap_or_default();
+        // Prefer the stored parent title; fall back to ID-only for legacy drafts.
+        let parent_label = pkg
+            .goal
+            .parent_goal_title
+            .as_deref()
+            .map(|t| format!("\"{}\" ({})", t, parent_short))
+            .unwrap_or_else(|| parent_short.to_string());
+
         let combined = compute_chain_file_count(&pkg, &all_packages);
         if combined > pkg.changes.artifacts.len() {
             println!(
                 "Chain: follow-up to {} — combined impact: {} file(s)",
-                parent_short, combined
+                parent_label, combined
             );
         } else {
-            println!("Chain: follow-up to {}", parent_short);
+            println!("Chain: follow-up to {}", parent_label);
         }
 
-        // List any known children of THIS draft.
+        // List any known sibling/child follow-ups of THIS draft.
         let children: Vec<_> = all_packages
             .iter()
             .filter(|p| p.parent_draft_id == Some(package_id))
             .collect();
         if !children.is_empty() {
-            let child_ids: Vec<String> = children
+            let child_labels: Vec<String> = children
                 .iter()
-                .map(|c| format!("{} ({})", &c.package_id.to_string()[..8], c.status))
+                .map(|c| {
+                    format!(
+                        "\"{}\" ({}, {})",
+                        c.goal.title,
+                        &c.package_id.to_string()[..8],
+                        c.status
+                    )
+                })
                 .collect();
-            println!("Children: {}", child_ids.join(", "));
+            println!("Follow-ups: {}", child_labels.join(", "));
         }
         println!();
     } else {
-        // Check if this draft has any follow-ups.
-        let all_packages = load_all_packages(config).unwrap_or_default();
+        // Root draft — check for follow-ups and render "Changes from parent" rollup.
         let children: Vec<_> = all_packages
             .iter()
             .filter(|p| p.parent_draft_id == Some(package_id))
             .collect();
         if !children.is_empty() {
-            let child_ids: Vec<String> = children
+            println!("Changes from parent (follow-up work):");
+            for child in &children {
+                println!(
+                    "  • {} [{}] — {}",
+                    child.goal.title,
+                    &child.package_id.to_string()[..8],
+                    child.status
+                );
+            }
+            let total_files: usize = children
                 .iter()
-                .map(|c| format!("{} ({})", &c.package_id.to_string()[..8], c.status))
-                .collect();
-            println!(
-                "Chain: parent draft — follow-up(s): {}",
-                child_ids.join(", ")
-            );
+                .map(|c| c.changes.artifacts.len())
+                .sum::<usize>()
+                + pkg.changes.artifacts.len();
+            println!("  Combined: {} file(s) across chain", total_files);
             println!();
         }
     }
@@ -2989,6 +3014,25 @@ fn apply_package(
             FsConnector::new(goal.goal_run_id.to_string(), staging, store, &goal.agent_id);
         connector.apply(&target_dir)?
     };
+
+    // v0.13.0.1: Show "Changes from parent" header for follow-up drafts, or list
+    // follow-up work when applying a root draft that has children.
+    if let Some(ref parent_title) = pkg.goal.parent_goal_title {
+        println!("Applied follow-up to \"{}\"", parent_title);
+    } else {
+        // Check for follow-up drafts that contributed to this goal.
+        let all_pkgs = load_all_packages(config).unwrap_or_default();
+        let follow_ups: Vec<_> = all_pkgs
+            .iter()
+            .filter(|p| p.parent_draft_id == Some(package_id))
+            .collect();
+        if !follow_ups.is_empty() {
+            println!("Changes from parent:");
+            for f in &follow_ups {
+                println!("  • {} [{}]", f.goal.title, &f.package_id.to_string()[..8]);
+            }
+        }
+    }
 
     println!(
         "Applied {} file(s) to {}",

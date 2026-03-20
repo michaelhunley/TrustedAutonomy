@@ -103,7 +103,8 @@ External users (working on their own projects, not TA itself) need these phases 
 | Phase | Notes |
 |---|---|
 | v0.13.0 | Reflink/COW — perf optimization, not blocking |
-| v0.13.1 | Self-healing daemon — makes the loop more robust |
+| v0.13.0.1 | Draft parent title rollup — follow-up chains show "Changes from parent" |
+| v0.13.1 | Self-healing daemon + auto-follow-up on validation failure |
 | v0.13.4 | External Action Governance — needed when agents send emails/API calls/posts |
 | v0.13.5 | Database Proxy Plugins — depends on v0.13.4 |
 | v0.13.9 | Product Constitution Framework — project-level behavioral contracts, draft-time scan, release gate |
@@ -4642,6 +4643,23 @@ Audit all `push_output`, `push_heartbeat`, and `agent_output.push` call sites to
 
 ---
 
+### v0.13.0.1 — Draft Parent Title Rollup
+<!-- status: done -->
+**Goal**: Preserve the parent goal's title through the follow-up draft chain so users can track "what was this fixing?" without cross-referencing goal IDs.
+
+**Depends on**: v0.12.2.1 (Draft Compositing — parent_draft_id linkage)
+
+#### Items
+
+1. [x] Add `parent_goal_title: Option<String>` to `DraftPackage.goal` (`ta-changeset/src/draft_package.rs`)
+2. [x] Populate `parent_goal_title` during `ta draft build --follow-up` when parent staging exists
+3. [x] `ta draft view`: show `Chain: follow-up to "<parent title>" (<short-id>)` for follow-up drafts; show "Changes from parent:" item list for root drafts with children
+4. [x] `ta draft apply`: print "Applied follow-up to \"<parent title>\"" or roll up "Changes from parent:" when applying a chain
+
+#### Version: `0.13.0.1-alpha`
+
+---
+
 ### v0.13.1 — Autonomous Operations & Self-Healing Daemon
 <!-- status: pending -->
 **Goal**: Shift from "user runs commands to inspect and fix problems" to "daemon detects, diagnoses, and proposes fixes — user approves." The v0.11.3 observability commands become the foundation, but instead of the user running `ta goal inspect` and `ta doctor` manually, the daemon runs them continuously and surfaces issues proactively. The user's primary interaction becomes reviewing and approving corrective actions, not discovering and diagnosing problems.
@@ -4699,6 +4717,23 @@ The trust model stays the same: daemon detects and diagnoses, agent proposes cor
 21. [ ] **Runbook definitions**: YAML files in `.ta/runbooks/` that define common operational procedures as sequences of corrective actions. Example: `disk-pressure.yaml` defines the steps for handling low disk space (identify largest staging, propose cleanup, execute, verify).
 22. [ ] **Runbook triggers**: Runbooks can be triggered automatically by watchdog conditions or manually via `ta run-book <name>`. Each step is presented for approval unless auto-heal policy covers it.
 23. [ ] **Built-in runbooks**: Ship with default runbooks for common scenarios: disk pressure, zombie goals, crashed plugins, stale drafts, failed CI. Users can customize or add their own.
+
+#### Auto Follow-Up on Validation Failure
+These items integrate with the per-project validation commands defined in `constitution.toml` (v0.13.9). When a draft build or apply fails its validation gate, the daemon can automatically propose — or trigger — a corrective follow-up goal.
+
+24. [ ] **Validation failure event**: When `ta draft build` or `ta draft apply` exits with a validation error (from `constitution.toml [validate]` commands), emit a `ValidationFailed { goal_id, stage, command, exit_code, output }` daemon event.
+25. [ ] **Auto-follow-up proposal**: Daemon receives `ValidationFailed` and — depending on `on_failure` policy — proposes a follow-up goal: "Validation failed at pre-apply (cargo clippy: 3 errors). Want me to start a follow-up goal to fix them?" Posted via all configured channels.
+26. [ ] **Follow-up consent model** in `constitution.toml`:
+    ```toml
+    [validate.on_failure]
+    mode = "ask"       # "ask" (default) | "always" | "off"
+    # "ask"    — surface proposal, require human approval
+    # "always" — auto-start follow-up goal without asking
+    # "off"    — no follow-up; just surface the error
+    ```
+27. [ ] **Follow-up goal bootstrapping**: When approved (or auto-fired), the follow-up goal automatically receives: (a) the validation command output as context, (b) `--follow-up <parent-goal-id>` so the draft chain is preserved, (c) a generated title like `"Fix: <validation command> errors in <parent title>"`.
+28. [ ] **Cycle guard**: If a follow-up itself fails validation, do not auto-follow-up again — surface to human with history of the chain. Prevent runaway self-healing loops.
+29. [ ] **`ta operations log`** extension: Validation failure events and follow-up launches appear in the operations log with outcome (fixed, abandoned, pending).
 
 #### Version: `0.13.1-alpha`
 
@@ -5217,11 +5252,32 @@ agent_review = false   # opt-in — spins up a lighter concurrent review agent
 model_hint = "fast"    # hint to use a smaller/faster model
 max_tokens = 2000
 focus = "injection_cleanup,error_paths"
+
+# Per-project validation commands at each draft stage (not TA-specific)
+# These run in the staging directory; exit code != 0 blocks the stage.
+# on_failure: "block" | "warn" | "ask_follow_up" | "auto_follow_up"
+[[validate]]
+stage = "pre_draft_build"     # runs before `ta draft build` packages the changes
+commands = ["cargo clippy --workspace --all-targets -- -D warnings"]
+on_failure = "block"
+
+[[validate]]
+stage = "pre_draft_apply"     # runs before `ta draft apply` copies to source
+commands = ["cargo test --workspace", "cargo fmt --all -- --check"]
+on_failure = "ask_follow_up"  # propose a follow-up goal (pairs with v0.13.1 auto-follow-up)
+
+# For cross-platform checks (catches Windows-only issues on macOS):
+# [[validate]]
+# stage = "pre_draft_build"
+# commands = ["cargo clippy --target x86_64-pc-windows-gnu --workspace -- -D warnings"]
+# on_failure = "block"
 ```
 
 #### Items
 
 1. [ ] **`constitution.toml` schema**: Define and document the config format. Ship TA's own rules as the default template (generated by `ta init constitution`).
+   - **Key design**: `[[validate]]` arrays replace TA's hardcoded `[verify]` section in `office.yaml`. Project teams define what "passing" means for their codebase — Rust projects add clippy/test, TypeScript projects add tsc/jest, etc.
+   - `on_failure = "ask_follow_up"` emits a `ValidationFailed` event; the auto-follow-up behaviour is provided by v0.13.1 items 24–29.
 2. [ ] **`ta init constitution`**: Scaffolding command. Writes `.ta/constitution.toml` with TA's default rules as a starting point. Users edit for their project's patterns.
 3. [ ] **Draft-time scanner reads `constitution.toml`**: Move the hardcoded §4 pattern scan (v0.11.5 item 8) to read inject/restore function names from `constitution.toml`. Projects with different conventions get correct scanning.
 4. [ ] **Release pipeline reads `checklist_gate`**: The release checklist gate step (v0.11.4.4 item 9) is enabled/disabled by `constitution.toml`. The checklist content is generated from the declared rules, not hardcoded.
