@@ -201,7 +201,13 @@ mod linux {
 
         // SAFETY: FICLONE takes a single int (src fd) as its third argument.
         // Both file descriptors are valid for the duration of this call.
-        let ret = unsafe { libc::ioctl(dst_file.as_raw_fd(), FICLONE, src_file.as_raw_fd()) };
+        // FICLONE is u64 on some targets (e.g. aarch64-linux-musl) but libc::ioctl
+        // expects libc::Ioctl (i32 on musl, c_ulong on glibc). Cast via as to
+        // satisfy both without panicking — ioctl request codes fit in 32 bits.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let ret = unsafe {
+            libc::ioctl(dst_file.as_raw_fd(), FICLONE as libc::Ioctl, src_file.as_raw_fd())
+        };
 
         Ok(ret == 0)
     }
