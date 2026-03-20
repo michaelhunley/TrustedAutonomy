@@ -5499,14 +5499,23 @@ These are addressed across v0.14.4–v0.14.5.
 <!-- status: pending -->
 **Goal**: Run agent processes in hardened sandboxes that limit filesystem access, network reach, and syscall surface. TA manages the sandbox lifecycle; agents work inside it transparently.
 
+**Market context (March 2026)**: NVIDIA launched OpenShell — a Rust-based agent runtime using Landlock + seccomp + L7 network proxy, with 17 named enterprise partners. Rather than building equivalent kernel-level isolation from scratch, this phase supports OpenShell as a first-class runtime adapter. The positioning: OpenShell = runtime confinement; TA = change governance. They are complementary, and the joint story turns NVIDIA's distribution into a tailwind for TA. See `/Paid add-ons/nvidia-openstack-positioning.md`.
+
 #### Items
 
-1. [ ] **Sandbox policy DSL**: Per-goal or per-project sandbox config declaring allowed paths, blocked domains, and syscall allowlist.
+1. [ ] **Sandbox policy DSL**: Per-goal or per-project sandbox config in `constitution.toml` declaring allowed paths, blocked domains, and syscall allowlist. Format aligns with OpenShell's YAML policy schema so policies are portable between the two systems.
 2. [ ] **macOS sandbox-exec integration**: Wrap agent process with `sandbox-exec` profile derived from the goal's allowed paths and declared resource URIs.
 3. [ ] **Linux seccomp/landlock integration**: Apply seccomp-bpf filter + landlock filesystem restrictions to agent process on Linux.
 4. [ ] **Container fallback**: When sandbox-exec/landlock unavailable, fall back to OCI container via the RuntimeAdapter (v0.13.3).
-5. [ ] **Sandbox violation audit events**: Any blocked syscall or filesystem access attempt is captured as an audit event and surfaced to the user.
-6. [ ] **Test harness**: Integration tests that verify blocked paths are actually blocked and allowed paths are accessible.
+5. [ ] **OpenShell runtime adapter**: When `openshell` is installed, delegate runtime confinement to OpenShell instead of TA's native sandbox. SA generates an OpenShell-compatible policy from `constitution.toml`; launches agent via `openshell sandbox create --policy ... -- <agent>`. TA still owns the output layer (staging → draft → approve → apply).
+    ```toml
+    [sandbox]
+    provider = "openshell"    # "native" | "openshell" | "oci"
+    policy = ".ta/sandbox-policy.yaml"
+    ```
+6. [ ] **Credential injection via environment** *(earlier than full sandboxing is fine)*: API keys injected as env vars by the daemon at agent launch — never written to staging, agent config files, or the sandbox filesystem. Mirrors OpenShell's Providers model.
+7. [ ] **Sandbox violation audit events**: Blocked syscall or filesystem access attempt captured as an audit event and surfaced to the user.
+8. [ ] **Test harness**: Integration tests that verify blocked paths are actually blocked and allowed paths are accessible.
 
 #### Version: `0.14.0-alpha`
 
