@@ -27,6 +27,11 @@ pub struct Goal {
     pub success_criteria: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub constraints: Vec<String>,
+    /// Title of the root/parent goal this is a follow-up to (v0.13.0.1).
+    /// Preserved so draft view and apply can show the chain context even if
+    /// the parent goal record is no longer available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_goal_title: Option<String>,
 }
 
 // ---- Iteration ----
@@ -613,6 +618,7 @@ mod tests {
                 objective: "Test the system".to_string(),
                 success_criteria: vec!["tests pass".to_string()],
                 constraints: vec![],
+                parent_goal_title: None,
             },
             iteration: Iteration {
                 iteration_id: "iter-1".to_string(),

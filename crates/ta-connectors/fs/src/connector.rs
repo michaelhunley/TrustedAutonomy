@@ -242,6 +242,7 @@ impl<S: ChangeStore> FsConnector<S> {
                 objective: goal_objective.to_string(),
                 success_criteria: vec![],
                 constraints: vec![],
+                parent_goal_title: None,
             },
             iteration: Iteration {
                 iteration_id: format!("{}-iter-1", self.goal_id),

@@ -235,6 +235,7 @@ mod tests {
                 objective: "Test".to_string(),
                 success_criteria: vec![],
                 constraints: vec![],
+                parent_goal_title: None,
             },
             iteration: Iteration {
                 iteration_id: "i1".to_string(),
