@@ -5,8 +5,8 @@
 <h1 align="center">Trusted Autonomy</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/latest-v0.10.18--alpha-blue" alt="Latest">
-  <img src="https://img.shields.io/badge/released-v0.10.18--alpha-green" alt="Released">
+  <img src="https://img.shields.io/badge/latest-v0.12.8-alpha-blue" alt="Latest">
+  <img src="https://img.shields.io/badge/released-v0.12.8-alpha-green" alt="Released">
   <img src="https://img.shields.io/badge/license-Apache--2.0-orange" alt="License">
 </p>
 
