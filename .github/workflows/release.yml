@@ -231,7 +231,34 @@ jobs:
           # Write to file for the release action (handles multiline safely)
           echo "$BODY" > release-body.md
 
-      - name: Create or update GitHub Release
+      - name: Validate artifacts before publish
+        env:
+          TAG: ${{ steps.get_version.outputs.version }}
+        run: |
+          # Verify all platform archives exist locally before touching GitHub.
+          # This catches missing builds before we create any release object.
+          REQUIRED=(
+            "ta-${TAG}-aarch64-apple-darwin.tar.gz"
+            "ta-${TAG}-x86_64-apple-darwin.tar.gz"
+            "ta-${TAG}-x86_64-unknown-linux-musl.tar.gz"
+            "ta-${TAG}-aarch64-unknown-linux-musl.tar.gz"
+            "ta-${TAG}-x86_64-pc-windows-msvc.zip"
+            "SHA256SUMS.txt"
+          )
+          MISSING=()
+          for f in "${REQUIRED[@]}"; do
+            if [ ! -f "artifacts/$f" ]; then
+              MISSING+=("$f")
+            fi
+          done
+          if [ ${#MISSING[@]} -gt 0 ]; then
+            echo "ERROR: Missing build artifacts (upload step failed?):"
+            for m in "${MISSING[@]}"; do echo "  - $m"; done
+            exit 1
+          fi
+          echo "All ${#REQUIRED[@]} required artifacts present locally."
+
+      - name: Publish GitHub Release
         id: release
         uses: softprops/action-gh-release@v2
         with:
@@ -241,10 +268,9 @@ jobs:
           prerelease: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.prerelease == 'true' }}
           files: artifacts/*
           body_path: release-body.md
-          # Update the release if it already exists (e.g. manually created before CI ran)
           make_latest: true
 
-      - name: Validate release assets
+      - name: Validate release assets on GitHub
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.get_version.outputs.version }}
