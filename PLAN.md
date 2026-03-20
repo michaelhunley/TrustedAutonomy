@@ -4817,6 +4817,94 @@ On Windows, `find_daemon_binary()` additionally has two bugs: `dir.join("ta-daem
 
 ---
 
+### v0.13.1.4 — Game Engine Project Templates (Unreal / Unity)
+<!-- status: pending -->
+**Goal**: Make onboarding an existing game project to TA fast and opinionated. Add `unreal-cpp` and `unity-csharp` templates to `ta init` that wire up BMAD (for structured planning) and Claude Flow (for parallel implementation) out of the box, and launch an automated discovery goal that produces ready-to-use context for both frameworks.
+
+#### Design
+
+**The onboarding problem for games:**
+- Game codebases are large, domain-specific, and have unusual build toolchains (UBT, IL2CPP, hot reload)
+- Agents need UE/Unity-specific conventions up front or they produce wrong code (raw pointers vs TObjectPtr, UPROPERTY, C# coroutines vs Unity Jobs, etc.)
+- BMAD requires a `PRD.md` and `architecture.md` to function well — these don't exist for existing projects
+- Claude Flow swarms need module boundaries to parallelize safely — those aren't obvious from the outside
+
+**Solution: discovery-first onboarding**
+`ta init run --template unreal-cpp` (or `unity-csharp`) does two things:
+1. Writes all TA + BMAD + Claude Flow config files from an opinionated template
+2. Immediately kicks off a **discovery goal** whose output *is* the remaining context — it produces `docs/architecture.md`, `docs/prd.md`, and a populated `.ta/memory/` — rather than asking the user to fill in blanks
+
+#### What each framework provides
+
+| Framework | Role in workflow | Where it lives |
+|---|---|---|
+| **BMAD** | Structured planning — PRD, architecture, story decomposition, role-based review | `docs/bmad/`, `.ta/agents/bmad-*.toml` |
+| **Claude Flow** | Parallel implementation — swarm coordination across module boundaries | `.mcp.json` (claude-flow server), `.ta/workflow.toml` swarm steps |
+| **TA** | Governance — staging isolation, draft review, audit trail, policy | `.ta/` (all of it) |
+
+BMAD drives *what* to build; Claude Flow drives *how* to parallelize the build; TA ensures every change is reviewed before it lands.
+
+#### Items
+
+1. [ ] **`detect_project_type` for games**: Detect `*.uproject` → `ProjectType::UnrealCpp`; detect `*.asmdef` / `ProjectSettings/` → `ProjectType::UnityCsharp`; add both to auto-detect path in `init.rs`
+
+2. [ ] **`unreal-cpp` template — TA config**:
+   - `.taignore`: exclude `Binaries/`, `Intermediate/`, `Saved/`, `DerivedDataCache/`, `*.generated.h`, `*.gen.cpp`
+   - `workflow.toml` verify: `"UnrealBuildTool ..."` or `"Engine/Build/BatchFiles/RunUAT.sh BuildCookRun"` (platform-conditional)
+   - `policy.yaml`: protect `Config/DefaultEngine.ini`, `*.uproject`, `Build.cs` files from agent writes without approval
+   - `memory.toml`: pre-seed UE5 conventions key (TObjectPtr, UPROPERTY/UFUNCTION, UE_LOG, TArray not std::vector, game thread rules)
+
+3. [ ] **`unity-csharp` template — TA config**:
+   - `.taignore`: exclude `Library/`, `Temp/`, `obj/`, `*.csproj.user`
+   - `workflow.toml` verify: `"dotnet build"` or Unity batch-mode compile command
+   - `policy.yaml`: protect `ProjectSettings/`, `*.asmdef`, `manifest.json` (package manager)
+   - `memory.toml`: pre-seed Unity conventions key (MonoBehaviour lifecycle, Coroutines vs Jobs, SerializeField, Unity.Mathematics)
+
+4. [ ] **BMAD agent configs** (both templates):
+   Write `.ta/agents/bmad-pm.toml`, `.ta/agents/bmad-architect.toml`, `.ta/agents/bmad-dev.toml`, `.ta/agents/bmad-qa.toml` pointing at the BMAD role prompts. These become available as named agents in `ta run --agent bmad-architect "..."`.
+
+5. [ ] **Claude Flow `.mcp.json` stub** (both templates):
+   Merge claude-flow MCP server into project `.mcp.json` so `ta run` sessions have both TA and claude-flow tools available. Include swarm config stub in `workflow.toml` that splits work by module/directory.
+
+6. [ ] **Discovery goal template** — the key UX win:
+   After writing config files, `ta init run --template unreal-cpp` automatically starts:
+   ```
+   ta run "Game project discovery: explore codebase, produce BMAD docs and TA memory" \
+     --agent bmad-architect \
+     --phase onboarding
+   ```
+   The goal's injected CLAUDE.md gives the agent explicit instructions:
+   - Read `*.uproject` / `Source/` / `Config/` / key `.h` files
+   - Write `docs/architecture.md` (module list, key classes, plugin deps, build targets)
+   - Write `docs/bmad/prd.md` (inferred from GameMode, maps, feature flags)
+   - Write `docs/bmad/stories/` — top 5 inferred work areas as story stubs
+   - Call `ta_pr_build` with all docs as artifacts for human review before they land
+
+   User reviews the draft, approves/edits, and immediately has a BMAD-ready project.
+
+7. [ ] **`ta init templates` output**: Update to show game templates with engine versions and notes about BMAD + Claude Flow dependency:
+   ```
+   unreal-cpp        Unreal Engine C++ project (UE5+) — includes BMAD planning + Claude Flow swarm
+   unity-csharp      Unity C# project (2021+) — includes BMAD planning + Claude Flow swarm
+   ```
+
+8. [ ] **USAGE.md section**: Add "Game project onboarding" how-to covering the two-command workflow:
+   ```bash
+   cd MyUnrealGame
+   ta init run --template unreal-cpp   # config + auto-starts discovery goal
+   # review draft in ta shell, approve docs
+   ta run "implement story X" --agent bmad-dev  # now you're in the workflow
+   ```
+
+#### Dependencies
+- BMAD method repo: github.com/bmadcode/BMAD-METHOD (brownfield agent prompts)
+- Claude Flow: `npx claude-flow@alpha` or local install; `.mcp.json` server entry
+- These are external tools — TA configs reference them but doesn't bundle them
+
+#### Version: `0.13.1-alpha.4`
+
+---
+
 ### v0.13.2 — MCP Transport Abstraction (TCP/Unix Socket)
 <!-- status: pending -->
 <!-- beta: yes — enables container isolation and remote agent execution for team deployments -->
