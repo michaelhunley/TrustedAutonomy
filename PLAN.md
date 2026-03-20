@@ -4815,7 +4815,7 @@ On Windows, `find_daemon_binary()` additionally has two bugs: `dir.join("ta-daem
 <!-- status: pending -->
 **Goal**: Make onboarding an existing Unreal C++ or Unity C# game project seamless. `ta init --template unreal-cpp` / `ta init --template unity-csharp` provisions BMAD agent configs, Claude Flow `.mcp.json`, a discovery goal, and project-appropriate `.taignore` and `policy.yaml`. First-run experience: one command starts a structured onboarding goal that produces a PRD, architecture doc, and sprint-1 stories.
 
-**BMAD integration model**: BMAD is a git repo of markdown persona prompts — it must be installed **machine-locally**, not cloned into the game project (Perforce depot or otherwise). The canonical install location is `~/.bmad/` (Unix) or `%USERPROFILE%\.bmad` (Windows). TA stores the path in `.ta/bmad.toml` and agent configs reference it from there. The project itself stays clean — no BMAD files are committed to VCS.
+**BMAD integration model**: BMAD is a git repo of markdown persona prompts — it must be installed **machine-locally**, not cloned into the game project (Perforce depot or otherwise). The canonical install location is `~/.bmad/` (Unix) or `%USERPROFILE%\bmad` (Windows — no dot prefix; use `"$HOME\bmad"` in PowerShell). TA stores the path in `.ta/bmad.toml` and agent configs reference it from there. The project itself stays clean — no BMAD files are committed to VCS.
 
 | Framework | Role | Installation |
 |---|---|---|
@@ -4830,7 +4830,7 @@ On Windows, `find_daemon_binary()` additionally has two bugs: `dir.join("ta-daem
 1. [ ] **`ProjectType` enum**: Add `UnrealCpp` and `UnityCsharp` variants to `detect_project_type()` — detect by `*.uproject` or `*.sln` + `Assets/` presence
 2. [ ] **`ta init --template unreal-cpp`**: Write `.taignore` (excludes `Binaries/`, `Intermediate/`, `Saved/`, `DerivedDataCache/`, `*.generated.h`), `workflow.toml`, `policy.yaml` (protect `Config/DefaultEngine.ini`, `*.uproject`, `Build.cs`), `memory.toml` (pre-seed UE5 conventions: TObjectPtr, UPROPERTY, game thread rules)
 3. [ ] **`ta init --template unity-csharp`**: Write `.taignore` (excludes `Library/`, `Temp/`, `obj/`, `*.csproj.user`), `workflow.toml`, `policy.yaml` (protect `ProjectSettings/`, `*.asmdef`), `memory.toml` (pre-seed Unity conventions: MonoBehaviour lifecycle, Coroutines vs Jobs)
-4. [ ] **`.ta/bmad.toml` config**: Written by `ta init --template`; stores `bmad_home` (default: `~/.bmad` / `%USERPROFILE%\.bmad`). `TA_BMAD_HOME` env var takes precedence. Agent configs reference `${bmad_home}/agents/`.
+4. [ ] **`.ta/bmad.toml` config**: Written by `ta init --template`; stores `bmad_home` (default: `~/.bmad` on Unix, `%USERPROFILE%\bmad` on Windows — no dot prefix). `TA_BMAD_HOME` env var takes precedence. Agent configs reference `${bmad_home}/agents/`.
 5. [ ] **BMAD agent configs (`.ta/agents/`)**: Generate `bmad-pm.toml`, `bmad-architect.toml`, `bmad-dev.toml`, `bmad-qa.toml` pointing to `${bmad_home}/agents/` persona prompts. Lives under `.ta/agents/` — not in the game source tree.
 6. [ ] **Claude Flow `.mcp.json`**: Generate project-root `.mcp.json` with `claude-flow` and `ta` MCP server entries; note that `claude-flow` must be installed via npm separately.
 7. [ ] **Discovery goal template** (`.ta/onboarding-goal.md`): Describes the first TA goal to run — survey the project, produce `docs/architecture.md`, `docs/bmad/prd.md`, and `docs/bmad/stories/` using BMAD roles. Includes prerequisite checklist: Claude installed, claude-flow installed, BMAD cloned to `bmad_home`.

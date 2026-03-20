@@ -1462,17 +1462,26 @@ BMAD is a collection of markdown persona prompts. Install it once to a home dire
 ```bash
 # macOS / Linux
 git clone https://github.com/bmadcode/BMAD-METHOD ~/.bmad
-
-# Windows (PowerShell — run from your user home directory)
-git clone https://github.com/bmadcode/BMAD-METHOD "$env:USERPROFILE\.bmad"
 ```
+
+```powershell
+# Windows (PowerShell)
+# Use a plain folder name — dot-prefixed hidden dirs aren't conventional on Windows
+git clone https://github.com/bmadcode/BMAD-METHOD "$HOME\bmad"
+```
+
+> **Windows pitfall**: Do not write `"$env:USERPROFILE.bmad"` (missing backslash). That resolves to `C:\Users\YourName.bmad` inside `C:\Users\`, which requires admin access. The correct form is `"$HOME\bmad"` → `C:\Users\YourName\bmad`.
 
 TA stores the path in `.ta/bmad.toml` (set automatically by `ta init --template`). You can override it with the `TA_BMAD_HOME` environment variable:
 
 ```bash
-# If you cloned BMAD somewhere else
-export TA_BMAD_HOME=/path/to/bmad   # Unix
-$env:TA_BMAD_HOME = "C:\tools\bmad"  # Windows PowerShell
+# macOS / Linux — if you cloned BMAD somewhere other than ~/.bmad
+export TA_BMAD_HOME=/path/to/bmad
+```
+
+```powershell
+# Windows PowerShell — if you cloned BMAD somewhere other than $HOME\bmad
+$env:TA_BMAD_HOME = "C:\Users\FPS\bmad"
 ```
 
 **4. Anthropic API key**
