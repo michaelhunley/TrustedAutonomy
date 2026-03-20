@@ -457,8 +457,7 @@ fn run_pipeline(
             version
         );
     }
-    let (commits, last_tag) =
-        collect_commits_since_tag(&config.workspace_root, from_tag)?;
+    let (commits, last_tag) = collect_commits_since_tag(&config.workspace_root, from_tag)?;
 
     let total = pipeline.steps.len();
     let start_idx = from_step.map(|s| s.saturating_sub(1)).unwrap_or(0);
