@@ -4781,6 +4781,7 @@ On Windows, `find_daemon_binary()` additionally has two bugs: `dir.join("ta-daem
 9. [x] **Windows install note**: Documented in USAGE.md that `ta shell` (PTY) is Unix-only; `ta daemon start`, `ta run`, and all non-interactive commands work on Windows. Includes PowerShell examples.
 10. [x] **Fix Windows clippy: `cmd_install` unused params + `dirs_home` dead code**: On Windows, `project_root` and `apply` are used only in macOS/Linux `#[cfg]` blocks; `dirs_home()` is only called from those same blocks. Add `let _ = (project_root, apply)` in the Windows branch and gate `dirs_home` with `#[cfg(any(target_os = "macos", target_os = "linux"))]`.
 11. [x] **Bug C — Incomplete top-level draft summary fields** (GitHub issue #76): Added `extract_phase_goal_description()` helper in `ta-mcp-gateway/src/tools/draft.rs`. When `goal.plan_phase` is set, reads PLAN.md and finds the phase's `**Goal**:` line for use as `summary_why`; also detects placeholder values (objective equals title exactly) and substitutes the phase description. 3 new tests.
+12. [ ] **Bug D — `ta draft apply` fails when plan-update dirties working tree before branch checkout** → v0.13.1.7: `apply` writes PLAN.md (plan status update) to disk before calling `git checkout -b <feature-branch>`. Git refuses the checkout because PLAN.md has unstaged changes, triggering rollback. Root cause: plan-update should run *after* the feature branch is checked out, not before. Workaround: `ta draft apply --no-submit` then manually commit. Fix: reorder `apply_plan_update()` to run after `checkout_feature_branch()` in `draft.rs`. Also surface a clearer failure summary with explicit next steps when the apply pipeline fails mid-way (observability mandate). → v0.13.1.7
 
 #### Version: `0.13.1-alpha.2`
 
@@ -4879,6 +4880,21 @@ On Windows, `find_daemon_binary()` additionally has two bugs: `dir.join("ta-daem
 9. [ ] **Built-in runbooks**: Ship defaults for: disk pressure, zombie goals, crashed plugins, stale drafts, failed CI. Users can override or add their own.
 
 #### Version: `0.13.1-alpha.6`
+
+---
+
+### v0.13.1.7 — Apply Pipeline Reliability & Failure Observability
+<!-- status: pending -->
+**Goal**: Fix the `ta draft apply` plan-update ordering bug (Bug D) and make the full apply pipeline surface clear failure summaries with actionable next steps when any stage fails mid-way.
+
+#### Items
+
+1. [ ] **Fix Bug D — plan-update ordering**: In `draft.rs`, move `apply_plan_update()` to run *after* `checkout_feature_branch()`. Currently PLAN.md is written to disk before the branch checkout, leaving it dirty and causing `git checkout` to fail. Fix ensures the working tree is clean at checkout time.
+2. [ ] **Failure summary on mid-pipeline abort**: When the apply pipeline fails after partially writing files (e.g., files applied but VCS step fails), print a structured summary: which files were written, which step failed, what was rolled back, and the exact command to retry. Do not print the raw git error message without context.
+3. [ ] **Actionable next steps in error output**: Every apply failure path must include at least one concrete next step. Examples: "Run `ta draft apply --no-submit` to copy files without VCS, then commit manually" or "Fix the conflict in PLAN.md, then re-run `ta draft apply`."
+4. [ ] **Test coverage**: Add integration test for the plan-update + branch-checkout ordering; assert that a plan-phase-linked goal applies cleanly even when the working tree has the plan file staged from a prior operation.
+
+#### Version: `0.13.1-alpha.7`
 
 ---
 
