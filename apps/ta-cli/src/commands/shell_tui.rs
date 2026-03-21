@@ -795,11 +795,13 @@ impl App {
 
     /// Auto-scroll to bottom when "near bottom" (within threshold lines).
     ///
-    /// Called after agent output lines arrive so that a user who is at or
+    /// Called after any output line arrives so that a user who is at or
     /// near the bottom stays pinned there — matching a `tail -f` experience.
     /// If the user has scrolled far up to read history, this is a no-op.
+    /// Threshold reduced to 3 (from 5) to avoid surprising snaps when the user
+    /// has scrolled 4-5 lines to re-read recent output (R2 fix, v0.13.1.5).
     fn auto_scroll_if_near_bottom(&mut self) {
-        const NEAR_BOTTOM_LINES: usize = 5;
+        const NEAR_BOTTOM_LINES: usize = 3;
         if self.scroll_offset <= NEAR_BOTTOM_LINES {
             self.scroll_offset = 0;
             self.unread_events = 0;
@@ -2110,6 +2112,8 @@ fn handle_tui_message(app: &mut App, msg: TuiMessage) {
                 }
             }
             app.push_lines(&text, OutputLine::event);
+            // R2 fix: auto-scroll on ALL output paths, not just AgentOutput (v0.13.1.5).
+            app.auto_scroll_if_near_bottom();
         }
         TuiMessage::CommandResponse(text) => {
             // Check if we got a response that clears workflow prompt.
@@ -2117,6 +2121,8 @@ fn handle_tui_message(app: &mut App, msg: TuiMessage) {
                 app.workflow_prompt = None;
             }
             app.push_lines(&text, OutputLine::command);
+            // R2 fix: auto-scroll on ALL output paths (v0.13.1.5).
+            app.auto_scroll_if_near_bottom();
         }
         TuiMessage::WorkingIndicator(text) => {
             // Push "Agent is working..." as a heartbeat-flagged line so that
@@ -2132,6 +2138,7 @@ fn handle_tui_message(app: &mut App, msg: TuiMessage) {
                 app.push_output(OutputLine::error(
                     "[disconnected] Daemon unreachable. Will auto-reconnect.".into(),
                 ));
+                app.auto_scroll_if_near_bottom(); // R2 fix (v0.13.1.5)
             }
         }
         TuiMessage::DaemonUp => {
@@ -2140,6 +2147,7 @@ fn handle_tui_message(app: &mut App, msg: TuiMessage) {
                 app.push_output(OutputLine::info(
                     "[reconnected] Daemon is back online.".into(),
                 ));
+                app.auto_scroll_if_near_bottom(); // R2 fix (v0.13.1.5)
             }
         }
         TuiMessage::AgentQuestion(pq) => {
@@ -2247,7 +2255,7 @@ fn handle_tui_message(app: &mut App, msg: TuiMessage) {
                         if last.is_heartbeat {
                             last.text = heartbeat_text;
                             // Still auto-scroll agent pane when near bottom (v0.12.7 item 3).
-                            const AGENT_NEAR_BOTTOM_LINES: usize = 5;
+                            const AGENT_NEAR_BOTTOM_LINES: usize = 3;
                             if app.agent_scroll_offset <= AGENT_NEAR_BOTTOM_LINES {
                                 app.agent_scroll_offset = 0;
                             }
@@ -2256,7 +2264,7 @@ fn handle_tui_message(app: &mut App, msg: TuiMessage) {
                     }
                     app.agent_output.push(OutputLine::heartbeat(heartbeat_text));
                     // Auto-scroll agent pane when near bottom.
-                    const AGENT_NEAR_BOTTOM_LINES: usize = 5;
+                    const AGENT_NEAR_BOTTOM_LINES: usize = 3;
                     if app.agent_scroll_offset <= AGENT_NEAR_BOTTOM_LINES {
                         app.agent_scroll_offset = 0;
                     }
@@ -2336,7 +2344,7 @@ fn handle_tui_message(app: &mut App, msg: TuiMessage) {
                 }
                 // Auto-scroll agent pane when near bottom (v0.12.4.1 fix item 2).
                 // Mirrors the main-pane auto_scroll_if_near_bottom() logic.
-                const AGENT_NEAR_BOTTOM_LINES: usize = 5;
+                const AGENT_NEAR_BOTTOM_LINES: usize = 3;
                 if app.agent_scroll_offset <= AGENT_NEAR_BOTTOM_LINES {
                     app.agent_scroll_offset = 0;
                 }
@@ -2378,27 +2386,51 @@ fn handle_tui_message(app: &mut App, msg: TuiMessage) {
         TuiMessage::AgentOutputDone(goal_id) => {
             let short_id = &goal_id[..8.min(goal_id.len())];
 
-            // Replace the last heartbeat line with a clean "[agent exited]" line
-            // so the "Agent is working ⚠" indicator doesn't linger after exit (v0.12.3 items 5, 7).
-            // v0.12.4.1 fix: also search agent_output (split-pane mode sends heartbeats there).
-            let replaced_main =
-                if let Some(last) = app.output.iter_mut().rev().find(|l| l.is_heartbeat) {
-                    last.is_heartbeat = false;
-                    last.text = format!("[agent exited] {}", short_id);
-                    last.style = Style::default().fg(Color::DarkGray);
-                    true
-                } else {
-                    false
-                };
-            let replaced_agent =
-                if let Some(last) = app.agent_output.iter_mut().rev().find(|l| l.is_heartbeat) {
-                    last.is_heartbeat = false;
-                    last.text = format!("[agent exited] {}", short_id);
-                    last.style = Style::default().fg(Color::DarkGray);
-                    true
-                } else {
-                    false
-                };
+            // Clear ALL heartbeat lines so neither the WorkingIndicator ("Agent is
+            // working...") nor any subsequent [heartbeat] tick lines linger after exit.
+            // R1 regression fix (v0.13.1.5): the previous code only cleared the LAST
+            // heartbeat.  When a WorkingIndicator is pushed and then regular agent output
+            // arrives before the first [heartbeat] tick, the tick creates a NEW heartbeat
+            // line.  AgentOutputDone then cleared only the tick, leaving the
+            // WorkingIndicator visible indefinitely.  We now clear ALL heartbeat lines:
+            // the final one becomes "[agent exited]" and earlier ones are blanked.
+            // v0.12.4.1 fix preserved: also search agent_output (split-pane mode).
+            let replaced_main = {
+                let indices: Vec<usize> = app
+                    .output
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, l)| if l.is_heartbeat { Some(i) } else { None })
+                    .collect();
+                let found = !indices.is_empty();
+                for &i in &indices {
+                    app.output[i].is_heartbeat = false;
+                    app.output[i].style = Style::default().fg(Color::DarkGray);
+                    app.output[i].text = String::new(); // blank earlier heartbeats
+                }
+                if let Some(&last) = indices.last() {
+                    app.output[last].text = format!("[agent exited] {}", short_id);
+                }
+                found
+            };
+            let replaced_agent = {
+                let indices: Vec<usize> = app
+                    .agent_output
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, l)| if l.is_heartbeat { Some(i) } else { None })
+                    .collect();
+                let found = !indices.is_empty();
+                for &i in &indices {
+                    app.agent_output[i].is_heartbeat = false;
+                    app.agent_output[i].style = Style::default().fg(Color::DarkGray);
+                    app.agent_output[i].text = String::new();
+                }
+                if let Some(&last) = indices.last() {
+                    app.agent_output[last].text = format!("[agent exited] {}", short_id);
+                }
+                found
+            };
             let replaced = replaced_main || replaced_agent;
 
             if !replaced {
@@ -6532,6 +6564,164 @@ mod tests {
     }
 
     #[test]
+    fn r1_working_indicator_cleared_when_heartbeat_tick_arrives_before_exit() {
+        // R1 regression test (v0.13.1.5): when WorkingIndicator is pushed, then
+        // regular output arrives (non-heartbeat), then a [heartbeat] tick creates a
+        // NEW heartbeat line, AgentOutputDone must clear BOTH heartbeat lines — not
+        // just the last [heartbeat] tick — so "Agent is working..." doesn't linger.
+        let mut app = App::new(
+            "http://localhost".into(),
+            None,
+            std::path::PathBuf::from("/tmp"),
+        );
+        app.tailing_goal = Some("goal-r1".into());
+
+        // Step 1: WorkingIndicator pushed (heartbeat line #1).
+        handle_tui_message(
+            &mut app,
+            TuiMessage::WorkingIndicator("Agent is working...".into()),
+        );
+        // Step 2: Regular agent output arrives (non-heartbeat) — breaks the in-place chain.
+        handle_tui_message(
+            &mut app,
+            TuiMessage::AgentOutput(AgentOutputLine {
+                stream: "stdout".into(),
+                line: "some agent output".into(),
+                goal_id: Some("goal-r1".into()),
+            }),
+        );
+        // Step 3: [heartbeat] tick arrives and appends a NEW heartbeat line (line #2).
+        handle_tui_message(
+            &mut app,
+            TuiMessage::AgentOutput(AgentOutputLine {
+                stream: "stdout".into(),
+                line: "[heartbeat] 5s elapsed".into(),
+                goal_id: Some("goal-r1".into()),
+            }),
+        );
+        // Confirm two heartbeat lines exist.
+        let heartbeat_count = app.output.iter().filter(|l| l.is_heartbeat).count();
+        assert_eq!(
+            heartbeat_count, 2,
+            "should have 2 heartbeat lines before exit (working indicator + tick)"
+        );
+
+        // Step 4: Goal exits.
+        handle_tui_message(&mut app, TuiMessage::AgentOutputDone("goal-r1".into()));
+
+        // Both heartbeat lines must be cleared.
+        let remaining: Vec<_> = app.output.iter().filter(|l| l.is_heartbeat).collect();
+        assert!(
+            remaining.is_empty(),
+            "AgentOutputDone must clear ALL heartbeat lines, not just the last tick"
+        );
+        // The last heartbeat should show "[agent exited]", not "Agent is working..."
+        let working_lines: Vec<_> = app
+            .output
+            .iter()
+            .filter(|l| l.text.contains("Agent is working"))
+            .collect();
+        assert!(
+            working_lines.is_empty(),
+            "'Agent is working...' must not remain visible after agent exit"
+        );
+        assert!(app.output.iter().any(|l| l.text.contains("agent exited")));
+    }
+
+    #[test]
+    fn r2_command_response_auto_scrolls_near_bottom() {
+        // R2 regression test (v0.13.1.5): CommandResponse must call
+        // auto_scroll_if_near_bottom so a user near the tail stays pinned.
+        let mut app = App::new(
+            "http://localhost".into(),
+            None,
+            std::path::PathBuf::from("/tmp"),
+        );
+        // Simulate near-bottom (within NEAR_BOTTOM_LINES=3).
+        app.scroll_offset = 2;
+
+        handle_tui_message(
+            &mut app,
+            TuiMessage::CommandResponse("command output\nline 2".into()),
+        );
+
+        assert_eq!(
+            app.scroll_offset, 0,
+            "CommandResponse near bottom must snap scroll to 0"
+        );
+    }
+
+    #[test]
+    fn r2_sse_event_auto_scrolls_near_bottom() {
+        // R2 regression test (v0.13.1.5): SseEvent must call
+        // auto_scroll_if_near_bottom so a user near the tail stays pinned.
+        let mut app = App::new(
+            "http://localhost".into(),
+            None,
+            std::path::PathBuf::from("/tmp"),
+        );
+        app.scroll_offset = 2;
+
+        handle_tui_message(&mut app, TuiMessage::SseEvent("status update event".into()));
+
+        assert_eq!(
+            app.scroll_offset, 0,
+            "SseEvent near bottom must snap scroll to 0"
+        );
+    }
+
+    #[test]
+    fn r2_command_response_preserves_scroll_when_far_up() {
+        // R2: when user has scrolled far up, CommandResponse must NOT auto-scroll.
+        let mut app = App::new(
+            "http://localhost".into(),
+            None,
+            std::path::PathBuf::from("/tmp"),
+        );
+        app.scroll_offset = 50;
+
+        handle_tui_message(&mut app, TuiMessage::CommandResponse("output".into()));
+
+        assert_eq!(
+            app.scroll_offset, 50,
+            "far-up scroll must not be reset by CommandResponse"
+        );
+    }
+
+    #[test]
+    fn r3_paste_appends_at_end_when_cursor_in_middle() {
+        // R3 regression test (v0.13.1.5): paste must always append at end of
+        // input even when the cursor is positioned mid-input by arrow keys.
+        // This mirrors what simulate_paste does but explicitly tests the scenario
+        // described in the v0.12.2 deferred verification item.
+        let mut app = App::new(
+            "http://localhost".into(),
+            None,
+            std::path::PathBuf::from("/tmp"),
+        );
+        // Type some text, then move cursor left (simulating the user pressing ←).
+        for ch in "hello".chars() {
+            app.insert_char(ch);
+        }
+        app.cursor_left(); // cursor at byte 4 (before 'o')
+        app.cursor_left(); // cursor at byte 3 (before 'l')
+        assert_eq!(app.cursor, 3, "cursor should be mid-input");
+
+        // Paste — must go to end regardless of cursor position.
+        simulate_paste(&mut app, " world");
+
+        assert_eq!(
+            app.input, "hello world",
+            "R3: paste must append at end, not at cursor position 3"
+        );
+        assert_eq!(
+            app.cursor,
+            app.input.len(),
+            "cursor must be at end after paste"
+        );
+    }
+
+    #[test]
     fn heartbeat_auto_scrolls_main_pane_near_bottom() {
         // Item 3: heartbeat lines in main pane must auto-scroll when scroll_offset
         // is within NEAR_BOTTOM_LINES (intermittent scroll regression fix).
@@ -6540,8 +6730,8 @@ mod tests {
             None,
             std::path::PathBuf::from("/tmp"),
         );
-        // Simulate user near-bottom (3 lines up — within NEAR_BOTTOM_LINES=5).
-        app.scroll_offset = 3;
+        // Simulate user near-bottom (2 lines up — within NEAR_BOTTOM_LINES=3).
+        app.scroll_offset = 2;
 
         handle_tui_message(
             &mut app,
