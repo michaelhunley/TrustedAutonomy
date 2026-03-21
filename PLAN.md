@@ -5805,10 +5805,47 @@ Current releases ship archives containing a bare binary and docs. Users must man
 
 #### Agent Framework Templates (deferred from v0.13.1.4)
 
-17. [ ] **GSD (get-shit-done) template — `ta init run --template gsd`**: Add GSD as a third supported spec-driven agent framework alongside BMAD and Claude Flow. Two files:
+17. [ ] **External template system — `~/.config/ta/templates/` and project-local `.ta/templates/`**: Currently all `ta init` templates are hardcoded in the binary (`TEMPLATES` const + `ProjectType` enum + `match` arms scattered through `init.rs`). Adding a new template requires a code change and a new TA release. This is a blocker for community templates and makes GSD (item 18 below) heavier than it needs to be.
 
+    **Design**: Templates become directories of files that TA reads at runtime, same pattern as `agents/*.yaml`:
+
+    ```
+    # Discovery order (later overrides earlier):
+    <binary built-ins>                        # embedded via include_str! / baked manifest
+    ~/.config/ta/templates/<name>/            # user-global installs
+    .ta/templates/<name>/                     # project-local overrides
+
+    # Each template directory contains:
+    template.toml           # metadata + behaviour
+    workflow.toml           # copied to .ta/workflow.toml
+    policy.yaml             # copied to .ta/policy.yaml
+    taignore                # copied to .taignore
+    memory.toml             # copied to .ta/memory.toml
+    onboarding-goal.md      # optional: copied to .ta/onboarding-goal.md
+    files/                  # arbitrary files scaffolded into project root
+    ```
+
+    **`template.toml` format**:
+    ```toml
+    name        = "gsd"
+    description = "GSD context-engineering workflow (get-shit-done)"
+    aliases     = ["get-shit-done"]
+    detect      = [".planning/config.json"]     # auto-detect signals
+    prerequisites = ["npx get-shit-done-cc@latest --version"]
+    post_init   = "npx get-shit-done-cc@latest install --local"
+    ```
+
+    **`ta init templates`** lists built-ins first, then external templates found in discovery dirs with a `(user)` or `(project)` tag. **Community templates**: share as a git repo — users do `git clone <url> ~/.config/ta/templates/<name>`. No TA release needed.
+
+    **Migration**: built-in templates become files in `templates/` at the repo root, embedded via `include_dir!` or a manifest. `ProjectType` enum shrinks to `External(String)` for loaded templates; the individual variants stay for templates that need custom Rust logic (e.g., `RustWorkspace` runs `cargo init`).
+
+    **Effort**: ~1 day. Unblocks all future template additions without code changes.
+
+18. [ ] **GSD (get-shit-done) template — `ta init run --template gsd`**: Once item 17 lands, GSD is just a template directory committed to the `templates/gsd/` folder in the TA repo — no Rust code changes needed. Pre-item-17: two files (`agents/gsd.yaml` + `ProjectType::Gsd` in `init.rs`) as described previously.
+
+    **Template contents** (`.planning/` scaffold):
     - **`agents/gsd.yaml`**: Launch config — `command: claude`, `pre_launch: npx get-shit-done-cc@latest install --local`, same `alignment` block as `bmad.yaml`. GSD installs into `.claude/get-shit-done/` and runs via `/gsd:*` slash commands within Claude Code — no separate binary.
-    - **`ProjectType::Gsd` in `init.rs`**: Creates `.planning/` scaffold:
+    - **`ProjectType::Gsd` in `init.rs`** (pre-item-17 only): Creates `.planning/` scaffold:
       - `PROJECT.md` — project context stub (name, stack, goals)
       - `REQUIREMENTS.md` — empty requirements register
       - `ROADMAP.md` — phase list keyed to TA PLAN.md phases
