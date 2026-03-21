@@ -705,6 +705,7 @@ fn generate_onboarding_goal(
         r#"# Onboarding Goal: {project} Discovery
 #
 # Run with: ta run --objective-file .ta/onboarding-goal.md
+#           (title is derived from the first heading above)
 #
 # Prerequisites (must be installed before running):
 #   - claude   : Claude Code CLI  (claude.ai/code)
