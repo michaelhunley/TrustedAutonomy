@@ -4940,6 +4940,20 @@ On Windows, `find_daemon_binary()` additionally has two bugs: `dir.join("ta-daem
 
 ---
 
+### v0.13.2.1 — "No changes detected" UX fix
+<!-- status: done -->
+**Goal**: When `ta draft build` finds an empty diff, the error `No changes detected in staging workspace` is unhelpful — it doesn't tell the user why, what state the goal is in, or what to do next. Fix: diagnose the cause and print actionable guidance.
+
+#### Items
+
+1. [x] **Detect uncommitted working tree changes**: When `diff_all()` returns empty, check `git status --porcelain` on the source directory. If uncommitted changes exist, explain that the overlay mirrors the working tree so the diff is empty — and show the exact `git checkout -b / git add / git commit / gh pr create` sequence to fix it.
+2. [x] **Generic empty-diff guidance**: When no uncommitted changes exist either, list the three most common causes (already implemented, agent exited early, agent only produced text) and show `cd <staging> && ta draft build <id>` for manual recovery.
+3. [x] **`count_working_tree_changes()` helper**: Runs `git status --porcelain` in the source dir; returns 0 on non-git dirs or git errors (safe degradation).
+
+#### Version: `0.13.2.1` → semver `0.13.2-alpha.1`
+
+---
+
 ### v0.13.3 — Runtime Adapter Trait
 <!-- status: pending -->
 <!-- beta: yes — prerequisite for local model support (v0.13.8) -->
