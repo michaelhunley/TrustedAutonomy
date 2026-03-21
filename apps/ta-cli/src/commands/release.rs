@@ -799,10 +799,32 @@ fn execute_agent_step(
 
     // Extract draft ID directly from `ta run` output (prints "draft package built: <uuid>").
     // This is more reliable than scanning all draft files on disk.
-    let draft_id = extract_draft_id_from_output(&stdout_text).or_else(|| {
+    let mut draft_id = extract_draft_id_from_output(&stdout_text).or_else(|| {
         // Fallback: find latest eligible draft on disk.
         find_latest_draft(config).ok().flatten()
     });
+
+    // If the agent didn't call `ta draft build` itself (no draft ID in stdout),
+    // extract the goal ID from `ta run` output and call it explicitly.
+    // `ta run` prints "  ta draft build <goal-id>" as a reminder to the user.
+    if draft_id.is_none() {
+        if let Some(goal_id) = extract_goal_id_from_output(&stdout_text) {
+            println!(
+                "  Agent did not build draft — running: ta draft build {}",
+                goal_id
+            );
+            let build_output = Command::new(&ta_bin)
+                .args(["draft", "build", &goal_id])
+                .current_dir(&config.workspace_root)
+                .output()?;
+            let build_stdout = String::from_utf8_lossy(&build_output.stdout);
+            for line in build_stdout.lines() {
+                println!("    {}", line);
+            }
+            draft_id = extract_draft_id_from_output(&build_stdout)
+                .or_else(|| find_latest_draft(config).ok().flatten());
+        }
+    }
 
     // Auto-approve and apply the draft so output files land in the working
     // directory before the next pipeline step runs. Without this, agent output
@@ -869,6 +891,21 @@ fn extract_draft_id_from_output(output: &str) -> Option<uuid::Uuid> {
         if let Some(rest) = line.strip_prefix("draft package built:") {
             if let Ok(id) = uuid::Uuid::parse_str(rest.trim()) {
                 return Some(id);
+            }
+        }
+    }
+    None
+}
+
+/// Extract the goal run ID from `ta run` stdout output.
+/// `ta run` prints "  ta draft build <goal-id>" as a reminder when the agent exits.
+fn extract_goal_id_from_output(output: &str) -> Option<String> {
+    for line in output.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("ta draft build") {
+            let id = rest.trim();
+            if uuid::Uuid::parse_str(id).is_ok() {
+                return Some(id.to_string());
             }
         }
     }
