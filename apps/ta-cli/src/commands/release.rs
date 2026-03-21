@@ -1756,7 +1756,7 @@ steps:
 
   - name: Generate release notes
     agent:
-      id: releaser
+      id: claude-code
     objective: |
       Synthesize user-facing release notes for version ${TAG}.
       Commits since ${LAST_TAG}:
