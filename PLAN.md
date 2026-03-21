@@ -4940,9 +4940,11 @@ On Windows, `find_daemon_binary()` additionally has two bugs: `dir.join("ta-daem
 
 ---
 
-### v0.13.2.1 — "No changes detected" UX fix
+### v0.13.2.1 — "No changes detected" diagnostic UX
 <!-- status: done -->
-**Goal**: When `ta draft build` finds an empty diff, the error `No changes detected in staging workspace` is unhelpful — it doesn't tell the user why, what state the goal is in, or what to do next. Fix: diagnose the cause and print actionable guidance.
+**Goal**: Interim UX improvement while `GoalBaseline` (v0.13.12 item 6) is not yet implemented. When `diff_all()` returns empty, diagnose the most likely cause and print actionable guidance instead of a bare error.
+
+**Note**: This is a symptom fix. The root fix is v0.13.12 item 6 (`GoalBaseline` trait), which eliminates the empty-diff-on-dirty-tree class of error entirely by diffing against the goal-start snapshot rather than the live working tree.
 
 #### Items
 
@@ -5683,18 +5685,52 @@ Current releases ship archives containing a bare binary and docs. Users must man
 4. [x] **`--label` dispatches even when pipeline is aborted**: When the user cancels at an approval gate (e.g., "Proceed with 'Push'? [y/N] n"), `run_pipeline` returns early via `?` but the `--label` dispatch block was outside the else branch and ran unconditionally. Fix: moved `--label` dispatch inside the `else { run_pipeline()? ... }` block so it only executes on successful pipeline completion. (Fixed in `release.rs` during v0.13.12 planning.)
 5. [ ] **GC should not run while a release pipeline is active**: `ta gc` should check for running release pipeline processes (or a lockfile written by `ta release run`) and skip — or warn — rather than deleting staging dirs mid-pipeline. Add a `--force` flag to override.
 
-#### Overlay Baseline Bugs
+#### Overlay Baseline — `GoalBaseline` Trait
 
-6. [ ] **`ta goal start` does not detect dirty working tree**: The overlay workspace copies the source directory verbatim — including all modified and untracked files. When uncommitted changes already exist in the working tree (e.g., implementation code written outside of TA), staging is created from the dirty tree. The agent sees everything already done and makes no changes. `diff_all()` returns empty because staging == source. **Root cause** of the v0.13.2 "No changes detected" incident.
+6. [ ] **Replace live-source diff with `GoalBaseline` trait**: The overlay currently diffs staging vs the *live working tree*. When uncommitted changes exist in the source at goal-start time, staging mirrors them and the diff is empty — "No changes detected." The correct fix is not a warning; it is to diff against a **stable snapshot of the source captured at goal-start** rather than the live filesystem. This is also the enabling abstraction for non-VCS and non-filesystem workflows (DB records, email threads, document stores).
 
-    Fix: at `ta goal start`, run `git status --porcelain` on the source. If uncommitted changes are detected, warn the user and offer three choices:
-    1. **Proceed anyway** (current behaviour — useful if the working-tree changes are intentional pre-work the agent should build on)
-    2. **Adopt the changes** — create a feature branch, commit the working-tree changes to it, then start the goal on that clean baseline; the goal's diff will be empty but the branch is ready for PR
-    3. **Abort** — let the user clean up first
+    **`GoalBaseline` trait** (in `crates/ta-workspace/src/baseline.rs`):
+    ```rust
+    /// Defines the "before" state at goal-start. The overlay diffs staging
+    /// against this, not the live source directory.
+    pub trait GoalBaseline: Send + Sync {
+        /// Read a file's content at the baseline (None = file didn't exist).
+        fn read_file(&self, path: &Path) -> Result<Option<Vec<u8>>>;
+        /// List all paths present at the baseline.
+        fn list_files(&self) -> Result<Vec<PathBuf>>;
+        /// Stable key for this baseline (used for caching, logging, drift detection).
+        fn baseline_key(&self) -> String;
+    }
+    ```
 
-    The warning message should show the count and a sample of modified/untracked files.
+    **Implementations for v0.13.12:**
 
-    Long-term design (v0.14.x): record the HEAD commit hash at goal-start time as the "baseline ref"; `diff_all()` compares staging vs `git show <baseline>:<path>` rather than the live working tree. This decouples the overlay diff from working-tree state entirely.
+    - `GitBaseline { commit: String }` — reads files via `git show <commit>:<path>`.
+      At goal-start, record `git rev-parse HEAD` into the goal record.
+      `baseline_key()` returns the commit SHA.
+      Works correctly even when the working tree is dirty — diff is always against committed state.
+
+    - `SnapshotBaseline { snapshot_dir: PathBuf }` — for non-git workspaces.
+      At goal-start, compute SHA-256 of each file and record in a lightweight manifest at `.ta/snapshots/<goal-id>/manifest.json`.
+      `read_file()` reads from the snapshot dir (files copied at goal-start) or recomputes from the manifest.
+      `baseline_key()` returns the manifest hash.
+
+    **Selection logic at goal-start:**
+    ```
+    if git repo → GitBaseline(HEAD)
+    else        → SnapshotBaseline(sha256 of each file)
+    ```
+    Stored as `GoalRun.baseline_ref: BaselineRef` (enum: `Git(sha)` | `Snapshot(path)` | `LiveSource` (legacy)).
+    `diff_all()` accepts `&dyn GoalBaseline`; `LiveSource` adapter wraps the current live-source comparison for backwards compatibility with old goal records.
+
+    **Future implementations (not in v0.13.12, defined by trait):**
+    - `DbRecordBaseline { table, pk_snapshot }` — row hashes at goal-start; diff = changed rows
+    - `EmailThreadBaseline { thread_ids, message_ids }` — message-ID list at goal-start; diff = new/modified messages
+    - `S3PrefixBaseline { bucket, prefix, etag_map }` — ETag map at goal-start; diff = changed objects
+    - `DocumentStoreBaseline { collection, doc_revision_map }` — revision IDs at goal-start
+
+    **Why this is the right fix, not the warn/adopt approach:**
+    The warn approach treats dirty-tree as user error and forces a workflow detour. The `GoalBaseline` approach eliminates the class of error entirely — the diff is always "what did the agent change relative to when the goal started," regardless of what was already in the working tree. It also unblocks the `--adopt` shortcut naturally: `ta draft apply --adopt` commits working-tree changes to a branch before starting, setting `GitBaseline(HEAD)` on the new branch — no special code path needed.
 
 #### UX & Health-Check Bugs
 
