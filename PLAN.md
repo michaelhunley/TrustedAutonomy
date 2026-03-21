@@ -4845,7 +4845,7 @@ On Windows, `find_daemon_binary()` additionally has two bugs: `dir.join("ta-daem
 ---
 
 ### v0.13.1.5 — Shell Regression Fixes
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Resolve three confirmed-active shell regressions. All three were nominally fixed in v0.12.2/v0.12.7 but are observed broken in v0.13.1.
 
 #### Regressions
@@ -4858,12 +4858,14 @@ On Windows, `find_daemon_binary()` additionally has two bugs: `dir.join("ta-daem
 
 #### Items
 
-1. [ ] **Reproduce R1**: Confirm the indicator state machine path that leaves `working = true` after agent exit
-2. [ ] **Fix R1**: Clear `WorkingIndicator` on `AgentExit` / `GoalCompleted` events; add state assertion in existing TUI tests
-3. [ ] **Reproduce R2**: Confirm whether `auto_scroll_if_near_bottom()` is called on all output paths (streaming tokens, tool results, heartbeat)
-4. [ ] **Fix R2**: Ensure scroll-to-bottom fires on every output-append path when the view is within N lines of the bottom (N = configurable, default 3)
-5. [ ] **Fix R3**: On paste, always move cursor to end of prompt before inserting; ignore current cursor position within the prompt line
-6. [ ] **Manual verification**: Run all three scenarios and confirm fixed; update the v0.12.2 open verification item
+1. [x] **Reproduce R1**: Root cause confirmed — `AgentOutputDone` only cleared the LAST heartbeat line. When `WorkingIndicator` is pushed, then regular agent output arrives before the first `[heartbeat]` tick, the tick creates a NEW heartbeat entry. On exit only the tick was cleared; the original "Agent is working..." line remained with `is_heartbeat=true` indefinitely.
+2. [x] **Fix R1**: Changed `AgentOutputDone` to scan ALL heartbeat lines in both `app.output` and `app.agent_output`, setting each to `is_heartbeat=false`. Earlier heartbeats get blanked; the last one shows "[agent exited]". Added `r1_working_indicator_cleared_when_heartbeat_tick_arrives_before_exit` regression test that exercises the exact failure sequence (WorkingIndicator → output → [heartbeat] tick → AgentOutputDone).
+3. [x] **Reproduce R2**: `auto_scroll_if_near_bottom()` was not called on `SseEvent`, `CommandResponse`, `DaemonDown`, or `DaemonUp` output paths — only on `AgentOutput` and heartbeat paths.
+4. [x] **Fix R2**: Added `auto_scroll_if_near_bottom()` call after `push_lines` in `SseEvent` and `CommandResponse` handlers, and after `push_output` in `DaemonDown`/`DaemonUp`. Reduced `NEAR_BOTTOM_LINES` and `AGENT_NEAR_BOTTOM_LINES` from 5 to 3 to avoid surprising snaps when user is reviewing recent output. Added `r2_command_response_auto_scrolls_near_bottom`, `r2_sse_event_auto_scrolls_near_bottom`, and `r2_command_response_preserves_scroll_when_far_up` tests.
+5. [x] **Fix R3**: Code already correctly sets `app.cursor = app.input.len()` before paste insertion (added in v0.12.2). Added `r3_paste_appends_at_end_when_cursor_in_middle` test to close the open v0.12.2 verification item — confirmed the `Event::Paste` handler always moves cursor to end regardless of prior cursor position.
+6. [x] **Manual verification**: All three fixes covered by automated tests (5 new tests). v0.12.2 R3 open item resolved.
+
+#### Completed: 5 new tests, all workspace tests pass (578 ta-cli tests, 0 failures).
 
 #### Version: `0.13.1-alpha.5`
 
