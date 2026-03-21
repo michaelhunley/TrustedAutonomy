@@ -4883,10 +4883,10 @@ On Windows, `find_daemon_binary()` additionally has two bugs: `dir.join("ta-daem
 2. [x] **`ta` with no arguments shows dashboard**: Instead of showing help, run `ta status`. The bare command becomes the entry point.
 #### Deferred to v0.13.12
 
-- **[D] Proactive notifications**: Daemon pushes for: goal completed, goal failed, draft ready for review, corrective action needed, disk warning. Delivered via configured channels (shell SSE, Discord, future: email/Slack). → v0.13.12 item 5
-- **[D] Suggested next actions**: After any command, daemon suggests what to do next based on current state: "Draft applied. PR #157 created. Next: `ta pr status` or `ta run` to start next phase." → v0.13.12 item 6
-- **[D] Intent-based interaction in `ta shell`**: Natural language operational requests ("clean up old goals", "what's stuck?") translated to command sequences, shown for approval before executing. → v0.13.12 item 7
-- **[D] Reduce command surface**: Commands subsumed by the intelligent layer marked "advanced" in help — not removed, but deprioritised. Default path is through the intelligent surface. → v0.13.12 item 8
+- **[D] Proactive notifications**: Daemon pushes for: goal completed, goal failed, draft ready for review, corrective action needed, disk warning. Delivered via configured channels (shell SSE, Discord, future: email/Slack). → v0.13.12 item 8
+- **[D] Suggested next actions**: After any command, daemon suggests what to do next based on current state: "Draft applied. PR #157 created. Next: `ta pr status` or `ta run` to start next phase." → v0.13.12 item 9
+- **[D] Intent-based interaction in `ta shell`**: Natural language operational requests ("clean up old goals", "what's stuck?") translated to command sequences, shown for approval before executing. → v0.13.12 item 10
+- **[D] Reduce command surface**: Commands subsumed by the intelligent layer marked "advanced" in help — not removed, but deprioritised. Default path is through the intelligent surface. → v0.13.12 item 11
 
 #### Operational Runbooks
 
@@ -5641,18 +5641,67 @@ Current releases ship archives containing a bare binary and docs. Users must man
 4. [x] **`--label` dispatches even when pipeline is aborted**: When the user cancels at an approval gate (e.g., "Proceed with 'Push'? [y/N] n"), `run_pipeline` returns early via `?` but the `--label` dispatch block was outside the else branch and ran unconditionally. Fix: moved `--label` dispatch inside the `else { run_pipeline()? ... }` block so it only executes on successful pipeline completion. (Fixed in `release.rs` during v0.13.12 planning.)
 5. [ ] **GC should not run while a release pipeline is active**: `ta gc` should check for running release pipeline processes (or a lockfile written by `ta release run`) and skip — or warn — rather than deleting staging dirs mid-pipeline. Add a `--force` flag to override.
 
+#### UX & Health-Check Bugs
+
+6. [ ] **`check_stale_drafts` threshold mismatch**: The startup hint (`"N draft(s) approved/pending but not applied for 3+ days"`) uses a hardcoded 3-day cutoff, but `ta draft list --stale` uses `gc.stale_threshold_days` (default: 7). When the threshold is 7 days, the hint fires for days 3–6 but `--stale` finds nothing — a confusing false alarm. Fix: split into two configurable values in `workflow.toml`:
+   ```toml
+   [gc]
+   stale_hint_days      = 3   # when the startup hint fires (informational)
+   stale_threshold_days = 7   # when --stale filter shows them
+   ```
+   The hint message updates to reflect the configured value. Note: 3-day default means a Friday-evening draft hints on Monday morning — acceptable since it is informational only, not blocking. Users who find it noisy can set `stale_hint_days = 5`.
+
+7. [ ] **Browser tools off by default; enable per agent-capability profile**: The claude-flow MCP server exposes `browser_*` tools (Playwright-backed) which trigger macOS TCC permission prompts for Contacts, Reminders, iCloud, etc. on first use. These tools are legitimate for research workflows but should not be active in standard dev/QA agent profiles. Fix: add an `agent_capabilities` field to agent config (e.g., `.ta/agents/research.toml`). Standard profiles declare `capabilities = []`; a research profile declares `capabilities = ["browser"]`. The MCP tool filter in the daemon only forwards browser tool calls to agents with the capability declared. Add a `research` agent profile template to the default `ta init run` scaffold.
+   ```toml
+   # .ta/agents/research.toml
+   [agent]
+   capabilities = ["browser"]
+   model        = "claude-opus-4-6"
+   ```
+
 #### Intelligent Surface (deferred from v0.13.1.6)
 
-5. [ ] **Proactive notifications**: Daemon pushes for: goal completed, goal failed, draft ready for review, corrective action needed, disk warning. Delivered via configured channels (shell SSE, Discord, future: email/Slack).
-6. [ ] **Suggested next actions**: After any command, daemon suggests what to do next based on current state: "Draft applied. PR #157 created. Next: `ta pr status` or `ta run` to start next phase."
-7. [ ] **Intent-based interaction in `ta shell`**: Natural language operational requests ("clean up old goals", "what's stuck?") are translated to command sequences by the shell agent, shown for approval before executing.
-8. [ ] **Reduce command surface**: Commands subsumed by the intelligent layer are marked "advanced" in help — not removed, but deprioritised. Default path is through the intelligent surface.
+8. [ ] **Proactive notifications**: Daemon pushes for: goal completed, goal failed, draft ready for review, corrective action needed, disk warning. Delivered via configured channels (shell SSE, Discord, future: email/Slack).
+9. [ ] **Suggested next actions**: After any command, daemon suggests what to do next based on current state: "Draft applied. PR #157 created. Next: `ta pr status` or `ta run` to start next phase."
+10. [ ] **Intent-based interaction in `ta shell`**: Natural language operational requests ("clean up old goals", "what's stuck?") are translated to command sequences by the shell agent, shown for approval before executing.
+11. [ ] **Reduce command surface**: Commands subsumed by the intelligent layer are marked "advanced" in help — not removed, but deprioritised. Default path is through the intelligent surface.
+
+#### Project Context Cache (hybrid now + AMP)
+
+12. [ ] **`.ta/project-digest.json` — inject pre-summarised project context at goal start**: Every goal invocation re-sends PLAN.md, CLAUDE.md, and Cargo.toml structure to the agent — typically 10–20k tokens of context that rarely changes between goals. Fix: build a lightweight content-addressed cache. At `ta run` time, hash the key files; if the hash matches the stored digest, inject a pre-built "Project Context" block (~150 lines) instead of the raw files.
+
+    **Design:**
+    ```json
+    // .ta/project-digest.json
+    {
+      "schema": 1,
+      "entries": [
+        {
+          "key": "plan_phase_status",
+          "source_hash": "sha256:<hash-of-PLAN.md>",
+          "summary": "Current phase: v0.13.12 (pending). Last completed: v0.13.1.7 ...",
+          "generated_at": "2026-03-21T..."
+        },
+        {
+          "key": "workspace_structure",
+          "source_hash": "sha256:<hash-of-Cargo.toml>",
+          "summary": "Workspace crates: ta-cli, ta-daemon, ta-goal, ta-changeset, ...",
+          "generated_at": "2026-03-21T..."
+        }
+      ]
+    }
+    ```
+    The injected block replaces the raw file content in the CLAUDE.md goal preamble. When a source file changes (hash mismatch), the digest entry is regenerated. Regeneration uses a short `claude --print` call or mechanical extraction (no staging spin-up).
+
+    **Why now, not deferred to AMP (v0.14.2)**: This is ~150 lines of Rust, no new dependencies, and saves 10–20k tokens per goal invocation immediately. At v0.14.2, each digest entry maps 1:1 to an AMP context registry entry — zero rework, pure additive migration. The `context_hash` field in AMP messages already assumes a store with this exact shape.
+
+    **AMP bridge at v0.14.2**: digest entries become the seed of the AMP context registry. The `source_hash` becomes the AMP `context_hash`; the `summary` becomes the stored embedding payload. Agents that have seen a goal built on the same PLAN.md hash skip retransmitting context entirely.
 
 #### Release Pipeline Polish (deferred from v0.13.1.x)
 
-9. [x] **Stale `.release-draft.md` poisons release notes**: If a prior release run left `.release-draft.md` in the source tree, the next release notes agent reads it as context and re-emits the old version header. Fix: added "Clear stale release draft" shell step immediately before the "Generate release notes" agent step in `DEFAULT_PIPELINE_YAML`. (Fixed in `release.rs` during v0.13.12 planning.)
-10. [ ] **Single GitHub release per build**: `ta release run --label` currently creates two GitHub release objects (one for the semver tag, one for the label tag). Redesign: one release using the label tag as the primary identifier; semver tag is a lightweight git tag only (no GH release object). Avoids duplicate entries in the GitHub releases UI.
-11. [ ] **VCS-agnostic release pipeline**: `release.rs` calls `git` and `gh` directly. Document that `ta release` requires git for now; design a path for VCS-agnostic release via `.ta/release.yaml` script hooks that project owners can override for Perforce or SVN environments.
+13. [x] **Stale `.release-draft.md` poisons release notes**: If a prior release run left `.release-draft.md` in the source tree, the next release notes agent reads it as context and re-emits the old version header. Fix: added "Clear stale release draft" shell step immediately before the "Generate release notes" agent step in `DEFAULT_PIPELINE_YAML`. (Fixed in `release.rs` during v0.13.12 planning.)
+14. [ ] **Single GitHub release per build**: `ta release run --label` currently creates two GitHub release objects (one for the semver tag, one for the label tag). Redesign: one release using the label tag as the primary identifier; semver tag is a lightweight git tag only (no GH release object). Avoids duplicate entries in the GitHub releases UI.
+15. [ ] **VCS-agnostic release pipeline**: `release.rs` calls `git` and `gh` directly. Document that `ta release` requires git for now; design a path for VCS-agnostic release via `.ta/release.yaml` script hooks that project owners can override for Perforce or SVN environments.
 
 #### Version: `0.13.12-alpha`
 
