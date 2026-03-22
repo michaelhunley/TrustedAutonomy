@@ -120,6 +120,8 @@ Needed for compliance-focused or container-isolated deployments.
 - v0.13.6 — Community Knowledge Hub (post-launch community feature)
 - v0.13.9 — Product Constitution Framework (project-level invariants, draft-time scan, release gate)
 - v0.13.10 — Feature Velocity Stats: build time, fix time, goal outcomes, connector events
+- v0.13.13 — VCS-Aware Team Setup, Project Sharing & Large-Workspace Staging
+- v0.13.14 — Watchdog/Exit-Handler Race & Goal Recovery (`ta goal recover`)
 
 ### Deferred / May Drop
 
@@ -5437,6 +5439,14 @@ ta run "write tests" --model ollama/phi4-mini   # shorthand: model implies ta-ag
 28. [ ] `ta agent test <name>` — run a minimal smoke-test goal ("write hello.txt with content 'hello'") using the named framework; report pass/fail and timing
 29. [ ] `ta agent doctor <name>` — check prerequisites: is the command installed? is the model endpoint reachable? does the model support tool calling? print actionable fix instructions
 
+**Cross-language project scaffolding**
+35. [ ] **`ta new --template <lang>`**: `ta new` gains language-specific project templates that pre-populate `workflow.toml` with sensible verify commands and a starter `.ta/constitution.toml`. Templates: `python`, `typescript`, `nodejs`, `rust` (existing default), `generic`.
+   - `python`: verify commands = `["ruff check .", "mypy src/", "pytest"]`; constitution inject/restore patterns for Python conventions; `.taignore` with `__pycache__/`, `.venv/`, `*.egg-info/`, `dist/`, `.mypy_cache/`
+   - `typescript`/`nodejs`: verify commands = `["tsc --noEmit", "npm test"]` (or `pnpm`/`yarn` variant); `.taignore` with `node_modules/`, `.next/`, `dist/`, `build/`, `.turbo/`
+   - `generic`: empty verify commands; minimal constitution; basic `.taignore`
+36. [ ] **`ta init --template <lang>`**: Same as `ta new` but for an existing project — writes only the `.ta/` config files without touching source. Detects language automatically from presence of `package.json`, `pyproject.toml`, `Cargo.toml`, `go.mod` and suggests the matching template.
+37. [ ] **`.taignore` — overlay exclusion patterns**: `.ta/taignore` (or `.taignore` at project root) lists glob patterns excluded from staging copies and diffs — analogous to `.gitignore`. The overlay workspace (`ta-workspace/overlay.rs`) reads this file before copying and skips matching paths. **This is the single highest-impact change for non-Rust adoption**: `node_modules/` (200MB+), `.venv/`, `__pycache__/`, `.next/`, `dist/`, `build/` copied to every staging directory make first-time staging extremely slow and bloated. Default exclusions (always applied regardless of `.taignore`): `.git/`, `.ta/`. Language templates (item 35) write a `.taignore` appropriate for the detected language. `ta goal status` shows staging size and excluded path count so users can tune it.
+
 **Sharing + registry**
 30. [ ] Framework manifests publishable to the plugin registry (v0.12.4 registry) — same install flow as VCS plugins
 31. [ ] `ta agent install <registry-name>` — fetch manifest + any companion binary, verify SHA256, run `ta agent test`
@@ -5528,6 +5538,13 @@ on_failure = "ask_follow_up"  # propose a follow-up goal (pairs with v0.13.1 aut
 6. [x] **`ta constitution check-toml`**: CLI command to run the scanner outside of draft build — useful for CI integration and pre-commit hooks. Exit code 0 = clean, 1 = violations found when `on_violation = "block"`. Output is machine-readable JSON with `--json` flag.
 7. [ ] **Inheritance**: `constitution.toml` can `extends = "ta-default"` to inherit TA's rules and only override specific sections. TA ships a built-in `ta-default` profile. → partial (`extends` field is stored but not yet applied at load time); deferred to follow-up phase
 8. [x] **Documentation**: Added "Constitution Config (`constitution.toml`)" section to `docs/USAGE.md`. Full web-service worked example deferred to follow-up phase.
+9. [ ] **`ta constitution init-toml --template <lang>`**: Language-specific constitution templates so Python/TypeScript/Node projects get relevant defaults rather than Rust-centric examples. Templates:
+   - `python`: `inject_fns`/`restore_fns` use Python conventions (e.g., `setup_env`, `teardown_env`); scan includes `src/`, `app/`; excludes `__pycache__/`, `.venv/`
+   - `typescript`/`nodejs`: patterns for async setup/teardown; scans `src/`, `lib/`; excludes `node_modules/`, `dist/`
+   - `rust`: existing TA defaults (current behaviour)
+   - `generic`: minimal rules with descriptive comments as a starting point
+   Auto-detects language if `--template` omitted (same detection logic as `ta init --template`, v0.13.8 item 36).
+10. [ ] **USAGE.md cross-language worked examples**: Add a "Using TA with Python / TypeScript / Node.js" section showing complete `workflow.toml`, `.taignore`, and `constitution.toml` for each ecosystem. Covers: verify command setup, common pitfalls (`node_modules` exclusion, virtualenv placement), and a full first-goal walkthrough.
 
 **Files**: `.ta/constitution.toml` (new), `apps/ta-cli/src/commands/` (init, check, draft build scan, release step), `crates/ta-workspace/src/` (scanner crate or module).
 
@@ -5602,41 +5619,6 @@ This data exists ephemerally in goal JSON and draft packages, but is never aggre
   }
 }
 ```
-
-#### How TA helps you manage projects and realize results
-
-Velocity stats are not just observability data — they are the feedback loop that converts governance into compound value over time.
-
-**For individual developers and small teams:**
-
-> *"How long does it actually take to close a feature from goal-start to applied commit?"*
-
-Most teams have no answer to this. Work feels either fast or slow, but there's no durable record of where time goes. TA's `velocity-stats.jsonl` captures the full timeline: build time (start → pr_ready), review time (pr_ready → applied), rework cost (follow-up goals spawned to address review feedback), and outcome rate (applied vs denied vs cancelled). After 20–30 goals, patterns emerge:
-- Which workflow types produce low rework?
-- Does agent performance degrade on large goals?
-- Does review time spike on specific categories of work?
-
-These are answerable questions. Without TA, they aren't.
-
-**For team leads and engineering managers:**
-
-> *"Are our agents actually delivering outcomes, or just producing drafts that get denied?"*
-
-`ta stats velocity` gives an at-a-glance answer: outcome distribution, average build time, p90 review latency, rework cost per workflow type. The `VelocitySnapshot` event (emitted on every terminal outcome) lets enterprise deployments aggregate this across projects. A central dashboard shows which teams are getting high apply rates and where bottlenecks are — the same way a CI dashboard shows build health.
-
-**For governance and compliance owners:**
-
-> *"We deployed AI agents — how do we know they're being used appropriately?"*
-
-Velocity stats are the behavioral record of human oversight: every review event (approved, denied, amended, discussed) is captured. The apply rate for governance-sensitive workflows (code changes, config changes, external actions) tells you whether the human-in-the-loop is functioning as a meaningful control or a rubber stamp. Low amendment rates and high apply rates on well-scoped goals signal a healthy system. High denial rates or high rework costs signal misaligned goals or insufficient agent guidance.
-
-**The compound effect:**
-
-Governance gates prevent bad outcomes. Telemetry reveals patterns. Those patterns drive better goal scoping, better workflow design, and better agent configuration — which produces higher apply rates, lower rework costs, and shorter cycle times. The system improves itself.
-
-> *TA makes the invisible visible: not just what agents did, but how well the human-AI collaboration is working at the project level.*
-
-This section's content belongs in the README and governance documentation as the answer to: *"Why instrument if I'm already reviewing every draft?"* — because reviewing is a gate, and telemetry is a map.
 
 #### Items
 
@@ -5814,6 +5796,112 @@ Current releases ship archives containing a bare binary and docs. Users must man
 16. → **v0.14.0** **VCS-agnostic release pipeline**: Deferred — document git requirement now; design hook override for Perforce/SVN at v0.14.0 alongside VCS plugin architecture work.
 
 #### Version: `0.13.12-alpha`
+
+---
+
+### v0.13.14 — Watchdog/Exit-Handler Race & Goal Recovery
+<!-- status: pending -->
+<!-- beta: yes — critical correctness fix; goal state machine must be reliable for all users -->
+**Goal**: Fix three related bugs where a long-running goal (10+ hours) is incorrectly marked `failed` on clean agent exit, add the `finalizing` lifecycle state to prevent the race, and introduce `ta goal recover` for human-driven recovery when state goes wrong.
+
+**Root cause report** (discovered on Windows with a 10-hour Unreal Engine onboarding goal):
+
+When agent PID 76108 exited (code 0) at 15:59:32, two things happened concurrently:
+- **Exit handler** (correct path): detected code 0, began draft creation from staging (~3 seconds for large UE workspace).
+- **Watchdog** (zombie path): next tick at 15:59:33, saw PID gone + goal state still `running` + `last_update: 36357s ago` > `stale_threshold: 3600s`. Declared zombie. At 15:59:35 — simultaneously with draft creation — transitioned goal to `failed`.
+
+The watchdog won the final write. Draft was created correctly, but goal state was `failed`. Two earlier failed goals (`bf54b517`, `85070aa3`) had legitimate `program not found` failures, creating a cluttered watchdog queue that contributed to the race.
+
+#### Bug 1 (Critical): Watchdog races with exit handler
+
+**Fix**: Atomic state transition to `finalizing` at the moment of exit detection, before slow draft creation begins.
+
+```rust
+// In process monitor, on exit code 0 detection:
+goal.transition_to(GoalState::Finalizing {
+    exit_code: 0,
+    finalize_started_at: Utc::now(),
+})?;  // atomic write — watchdog must skip Finalizing goals
+// Now draft creation (potentially slow) can proceed safely
+```
+
+**Watchdog rule**: Skip any goal in `Finalizing` state. Only transition to `failed` if `Finalizing` has been stuck for > `finalize_timeout` (default: 300s — enough for any staging size).
+
+1. [ ] **`GoalState::Finalizing`**: Add `Finalizing { exit_code: i32, finalize_started_at: DateTime<Utc> }` variant to `GoalRunState` enum in `ta-goal/src/goal_run.rs`. Serialize as `"finalizing"` in goal JSON.
+2. [ ] **Atomic transition on clean exit**: In the process monitor exit handler, before starting draft creation: atomically write `state: finalizing` to the goal JSON. Use a file-level lock (or JSONL append + read-back) to make this atomic with respect to concurrent watchdog writes.
+3. [ ] **Watchdog skips `Finalizing`**: Watchdog loop skips any goal in `Finalizing` state unless `finalize_timeout` exceeded (default: 300s). After timeout, transitions to `failed` with reason `"Finalizing timed out after Xs — draft creation may have been interrupted"`.
+4. [ ] **Tests**: concurrent exit + watchdog tick (use `tokio::time::pause()`); `Finalizing` → `Applied` happy path; `Finalizing` timeout → `Failed`; JSON serialization round-trip.
+
+#### Bug 2 (Important): Exit code 0 must never produce zombie
+
+**Fix**: Zombie detection logic must gate on exit code. Code 0 = clean exit; watchdog must never promote this to `failed`.
+
+5. [ ] **Exit-code gate in zombie detection**: In `ta-daemon/src/watchdog.rs` (or equivalent), add `if exit_code == Some(0) { continue; }` before any zombie/stale evaluation. A successfully-exited goal that hasn't been collected yet is **not** a zombie.
+6. [ ] **Distinguish `stale` from `zombie`**: Separate the two conditions:
+   - **Stale**: goal is `running`, PID still alive, no state update for > `stale_threshold`. Action: warn only (no state change). Emit `GoalStale` event.
+   - **Zombie**: goal is `running`, PID is gone, exit code non-zero or unknown. Action: transition to `failed`.
+   - **Clean exit pending collection**: goal is `running`, PID gone, exit code = 0. Action: trigger exit handler (do not mark failed).
+7. [ ] **Tests**: stale-but-alive never becomes failed; zombie (non-zero exit) → failed; clean-exit-pending-collection → triggers finalizing transition.
+
+#### Bug 3 (Minor): Heartbeat protocol undefined for non-heartbeating agents
+
+The `stale_threshold: 3600s` implies heartbeats are expected, but Claude Code (and most agents) never send them. A 10-hour goal looks identical to a crashed goal after 1 hour.
+
+8. [ ] **`heartbeat_required` flag per agent framework**: In agent manifest (`.ta/agents/<name>.toml`), add `heartbeat_required = false` (default). When `false`, disable `stale` checking for that agent — only zombie detection (PID-gone + non-zero exit) applies. Claude Code manifest gets `heartbeat_required = false`.
+9. [ ] **Configurable stale threshold**: `workflow.toml` already has `stale_threshold` but it applies to all agents. Add per-agent override:
+   ```toml
+   [agents.claude-code]
+   stale_threshold_secs = 0   # 0 = disable stale checking
+   ```
+10. [ ] **Document heartbeat protocol**: If an agent framework *does* want to heartbeat (e.g., a custom long-running agent), document the API: `POST /api/goals/:id/heartbeat` — daemon updates `last_activity_at`. Agents that don't call this are treated as `heartbeat_required = false`.
+
+#### `ta goal recover` — Human Recovery Command
+
+When goal state is wrong (e.g., `failed` but draft was created, `running` with dead PID), the user needs a safe way to inspect and correct state without editing JSON files manually.
+
+11. [ ] **`ta goal recover [--latest | <id-prefix>]`**: Interactive recovery command:
+    ```
+    $ ta goal recover --latest
+
+    Goal: "Onboarding — Unreal Engine CLAUDE.md" (226dea99)
+    Current state: failed
+    Agent exit: code 0 at 15:59:32 (clean exit)
+    Draft: dbb8fe26 — present and valid (11 artifacts, created at 15:59:35)
+
+    Detected issue: Watchdog overrode clean exit with failed state.
+
+    Recovery options:
+      [1] Restore state to pr_ready (draft is valid, proceed to review)
+      [2] Rebuild draft from staging (re-run diff against current source)
+      [3] Mark as cancelled (discard goal and draft)
+      [4] Show goal JSON (inspect and exit)
+      [5] Abort (no changes)
+
+    Choice [1-5]:
+    ```
+    - **Option 1** (most common for this bug): atomically writes `state: pr_ready` + `draft_id` to goal JSON. Emits `GoalRecovered` audit event.
+    - **Option 2**: re-runs `ta draft build <goal-id>` to create a fresh draft from staging.
+    - **Option 3**: marks `state: cancelled`, moves goal to history with `disposition: "recovered_as_cancelled"`.
+
+12. [ ] **Diagnosis heuristics**: `ta goal recover` inspects the goal to produce a diagnosis before showing options:
+    - If `state == failed` AND a valid draft exists → likely watchdog race
+    - If `state == running` AND PID is dead → zombie not cleaned up
+    - If `state == running` AND PID alive AND last_update > threshold → stale/heartbeat issue
+    - If `state == finalizing` AND stuck > 300s → draft creation interrupted
+    - Otherwise → "Unknown issue — showing raw state for manual inspection"
+
+13. [ ] **`ta goal recover --list`**: Show all goals in potentially-recoverable states (`failed` with draft, `running` with dead PID, `finalizing` stuck > 300s) without interactive mode — useful for automation and CI.
+
+14. [ ] **`GoalRecovered` audit event**: Emit to audit log with: goal_id, previous_state, new_state, recovery_option, operator (CLI user or "auto"). Ensures human-driven recovery is auditable.
+
+15. [ ] **Tests**: recover failed-with-valid-draft → pr_ready; recover running-with-dead-pid; recover stuck-finalizing; `--list` output format; audit event emitted.
+
+#### Observability improvements (contributing factors)
+
+16. [ ] **Goal state logged on every watchdog action**: Current watchdog may silently transition state. Add `tracing::warn!(goal_id, prev_state, new_state, reason, "watchdog: goal state transition")` on every watchdog-driven transition.
+17. [ ] **`ta goal status <id>` shows watchdog fields**: Include `last_update`, `stale_threshold`, `pid_alive`, `exit_code` in `ta goal status` output so users can diagnose without reading raw JSON.
+
+#### Version: `0.13.14-alpha`
 
 ---
 
@@ -6030,6 +6118,82 @@ The current `.ta/goal-history.jsonl` is a compact index written only on the happ
 12. [ ] **Migration**: Migrate existing `.ta/goal-history.jsonl` entries to the new format on first run.
 
 #### Version: `0.14.3-alpha`
+
+---
+
+## v0.15 — IDE Integration & Developer Experience
+
+> **Focus**: First-class IDE integration for VS Code, JetBrains (PyCharm, WebStorm, IntelliJ), and Neovim. TA transitions from a pure CLI tool to an embedded development workflow component with sidebar panels, inline draft review, and one-click goal approval.
+
+### v0.15.0 — VS Code Extension
+<!-- status: pending -->
+**Goal**: A VS Code extension that surfaces TA's core workflow directly in the editor: start goals from the command palette, view draft diffs in the native diff viewer, approve/deny artifacts inline, and see live goal status in the sidebar. Python, TypeScript, and Node.js users (the primary audience) should be able to use TA without leaving VS Code.
+
+**Why this phase exists**: TA's primary friction for non-Rust developers is the context switch to the terminal. IDE integration collapses this: a TypeScript developer working in VS Code can trigger a goal, review the proposed changes as a standard pull-request diff, and approve — all without leaving the editor. This is the experience that drives mainstream adoption beyond the Rust/CLI-first audience.
+
+#### Architecture
+
+The extension communicates with the TA daemon over the existing HTTP API (localhost). No new backend API is needed — the extension is a thin UI layer over the daemon's REST endpoints. The web shell (`ta shell`) uses the same API; the extension reuses that knowledge.
+
+```
+VS Code Extension
+  ├─ Command Palette: "TA: Start Goal", "TA: View Drafts", "TA: Approve Draft"
+  ├─ Sidebar Panel: goal list (running/completed), draft queue, quick actions
+  ├─ Diff Viewer: opens staging diff in VS Code's native diff editor
+  ├─ Status Bar: current goal state, daemon health indicator
+  └─ Notifications: toast on goal completion / draft ready / approval needed
+```
+
+#### Items
+
+1. [ ] **Extension scaffold**: TypeScript extension using the VS Code Extension API. Published to VS Code Marketplace as `trusted-autonomy.ta`. Commands registered: `ta.startGoal`, `ta.listDrafts`, `ta.approveDraft`, `ta.denyDraft`, `ta.viewDiff`, `ta.openShell`.
+2. [ ] **Daemon connectivity**: Extension connects to the TA daemon over `http://127.0.0.1:7700` (configurable). Health-check on activation; clear error if daemon not running with a "Start daemon" button.
+3. [ ] **Goal sidebar panel (`TA Goals`)**: Tree view listing active/recent goals with state icons (running/pr_ready/applied/failed). Click a goal → open detail panel showing title, phase, agent, timestamps.
+4. [ ] **Draft review panel**: Lists pending drafts. Click a draft → show summary (what changed, why, impact). "View Diff" button opens each changed file in VS Code's native diff editor (staging vs source). "Approve" / "Deny" buttons call the daemon API.
+5. [ ] **Inline diff viewer**: Opens `vscode.diff(source_uri, staging_uri, "TA Draft: <filename>")` for each artifact. Reviewer sees exactly what the agent changed without leaving the editor.
+6. [ ] **Status bar item**: Shows current goal state (e.g., `TA: running goal-123`) with a click-to-open shortcut. Turns amber on `pr_ready`, green on `applied`, red on `failed`.
+7. [ ] **Desktop notifications**: `vscode.window.showInformationMessage` (or `showWarningMessage`) on goal completion, draft ready, and approval-needed events — polled via SSE from the daemon.
+8. [ ] **"Start Goal" command**: Opens a quick-pick input for goal title + optional phase. Calls `POST /api/goals`. Shows progress in the status bar.
+9. [ ] **Settings**: `ta.daemonUrl` (default `http://127.0.0.1:7700`), `ta.autoOpenDiff` (default `true`), `ta.notifyOnComplete` (default `true`).
+10. [ ] **Walkthrough**: VS Code onboarding walkthrough ("Get Started with TA") covering: install daemon, configure `workflow.toml` for Python/TS/Node, start first goal, approve first draft.
+11. [ ] **Marketplace publishing**: CI workflow to package and publish to VS Code Marketplace on `v*` tags. Extension version tracks TA version.
+
+#### Version: `0.15.0-alpha`
+
+---
+
+### v0.15.1 — JetBrains Plugin (PyCharm / WebStorm / IntelliJ)
+<!-- status: pending -->
+**Goal**: A JetBrains Platform plugin providing the same core workflow as the VS Code extension — goal management, draft review, inline diff, approval — targeting PyCharm (Python), WebStorm (TypeScript/Node), and IntelliJ IDEA users.
+
+#### Items
+
+1. [ ] **Plugin scaffold**: Kotlin plugin using the IntelliJ Platform SDK. Published to JetBrains Marketplace as `com.trusted-autonomy.ta`. Supports PyCharm 2024.1+, WebStorm 2024.1+, IntelliJ IDEA 2024.1+.
+2. [ ] **Tool window**: "TA" tool window (sidebar panel equivalent) with goal list, draft queue, and status. Uses JetBrains tree view components.
+3. [ ] **Daemon connectivity**: HTTP client connecting to `http://127.0.0.1:7700`. Health check on IDE startup.
+4. [ ] **Diff viewer**: Opens staging vs source diffs in IntelliJ's built-in diff tool (`DiffManager.showDiff()`).
+5. [ ] **Notifications**: IntelliJ notification group for goal completion / draft ready events.
+6. [ ] **Actions**: "Start Goal" (toolbar + right-click menu), "Approve Draft", "Deny Draft", "Open TA Shell" registered as IDE actions.
+7. [ ] **Marketplace publishing**: CI workflow to build and publish to JetBrains Marketplace on `v*` tags.
+
+#### Version: `0.15.1-alpha`
+
+---
+
+### v0.15.2 — Neovim Plugin
+<!-- status: pending -->
+**Goal**: A Lua Neovim plugin for terminal-first developers who work in Neovim. Provides goal management, draft review via telescope/fzf pickers, and approval workflow without leaving the editor.
+
+#### Items
+
+1. [ ] **Plugin scaffold**: Lua plugin (`ta.nvim`). Installable via `lazy.nvim`, `packer.nvim`. Communicates with daemon over HTTP (uses `vim.system` + `curl`/`plenary.nvim`).
+2. [ ] **Telescope picker**: `:TA goals` opens telescope with goal list. `:TA drafts` opens draft queue.
+3. [ ] **Diff view**: Opens staging diff in a split buffer using `vim.diff()` or `diffview.nvim`.
+4. [ ] **Floating window**: `:TA status` shows daemon health and active goal in a floating window.
+5. [ ] **Commands**: `:TA start`, `:TA approve <id>`, `:TA deny <id>`, `:TA shell`.
+6. [ ] **luarocks / GitHub Releases packaging**: Distribute via `luarocks` and GitHub Releases.
+
+#### Version: `0.15.2-alpha`
 
 ---
 
