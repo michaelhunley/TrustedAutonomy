@@ -984,8 +984,8 @@ pub fn execute(
             // Detect command-not-found regardless of error path:
             // - Direct spawn (legacy launch_agent): e.kind() == NotFound
             // - RuntimeAdapter path: kind() is Other but message says "Spawn failed:"
-            let is_not_found = e.kind() == std::io::ErrorKind::NotFound
-                || e.to_string().contains("Spawn failed:");
+            let is_not_found =
+                e.kind() == std::io::ErrorKind::NotFound || e.to_string().contains("Spawn failed:");
             if is_not_found {
                 // Restore injected files before returning — agent won't run.
                 if agent_config.injects_context_file {
@@ -1014,10 +1014,15 @@ pub fn execute(
                         .unwrap_or_else(|_| "not found on PATH".to_string());
                     println!("Windows diagnostic:");
                     println!("  Searching for '{}': {}", agent_config.command, found);
-                    if found.to_lowercase().ends_with(".cmd") || found.to_lowercase().ends_with(".bat") {
+                    if found.to_lowercase().ends_with(".cmd")
+                        || found.to_lowercase().ends_with(".bat")
+                    {
                         println!("  Found as .cmd batch file — update TA to v0.13.4+ which handles this automatically.");
                     } else {
-                        println!("  PATH: {}", std::env::var("PATH").unwrap_or_else(|_| "(not set)".to_string()));
+                        println!(
+                            "  PATH: {}",
+                            std::env::var("PATH").unwrap_or_else(|_| "(not set)".to_string())
+                        );
                     }
                     println!();
                 }
