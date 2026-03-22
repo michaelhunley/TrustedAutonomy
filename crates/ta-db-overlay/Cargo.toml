@@ -1,0 +1,18 @@
+[package]
+name = "ta-db-overlay"
+version.workspace = true
+edition = "2021"
+description = "DraftOverlay: read-your-writes consistency for DB proxy plugins in Trusted Autonomy"
+license = "Apache-2.0"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+sha2 = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

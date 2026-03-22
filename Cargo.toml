@@ -25,6 +25,9 @@ members = [
     "crates/ta-output-schema",
     "crates/ta-runtime",
     "crates/ta-actions",
+    "crates/ta-db-overlay",
+    "crates/ta-db-proxy",
+    "crates/ta-db-proxy-sqlite",
     "crates/ta-connectors/fs",
     "crates/ta-connectors/web",
     "crates/ta-connectors/mock-drive",
@@ -124,6 +127,9 @@ notify = { version = "7", default-features = false, features = ["macos_kqueue"] 
 
 # Binary discovery — resolves .cmd/.bat wrappers on Windows (v0.13.4).
 which = "7"
+
+# SQLite — bundled build (no system sqlite3 required) for db proxy plugin (v0.13.5).
+rusqlite = { version = "0.31", features = ["bundled"] }
 
 # Testing utilities
 tempfile = "3"
