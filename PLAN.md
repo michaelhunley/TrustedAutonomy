@@ -5038,16 +5038,41 @@ auto_approve_reads = true  # SELECT is fine, INSERT/UPDATE/DELETE needs review
 
 **Depends on**: v0.13.4 (External Action Governance — DB proxy extends the `ExternalAction` trait)
 
+#### DraftOverlay — read-your-writes within a draft
+
+DB plugins must satisfy "read-your-writes" consistency: if an agent writes `active_issues = 7` (staged, not yet committed to the real DB), a subsequent read must return `7`, not the real DB's stale `4`.
+
+TA provides a `DraftOverlay` struct (in a new `ta-db-overlay` crate) that all DB plugins use instead of implementing their own caching:
+
+```
+// Plugin flow:
+overlay.put(resource_uri, after_doc)?;      // on write — stores mutation
+let cached = overlay.get(resource_uri)?;   // on read — returns staged value before hitting real DB
+```
+
+Overlay is stored in `.ta/staging/<goal_id>/db-overlay.jsonl` (same durability boundary as file diffs). Each entry records `{uri, before, after, ts}` — `before` is populated lazily on first write from the real DB. Multiple writes to the same row accumulate: `before` stays fixed (original value), `after` is the latest value.
+
+`ta draft view` shows DB mutations alongside file changes. `ta draft apply` runs mutations against the real DB (or defers to the plugin's `apply()` method).
+
+Special cases:
+- **NoSQL (MongoDB)**: `resource_uri = "mongodb://db/collection/doc_id"`. Plugin serializes BSON to JSON for overlay; deserializes on read. Nested document updates: plugin merges before writing to overlay.
+- **Binary blob fields**: `overlay.put_blob(uri, field, bytes)?` — blob stored in `.ta/staging/<goal_id>/db-blobs/<sha256>`, overlay entry stores hash reference. `ta draft view` shows `<binary: 14723 bytes, sha256: abc>`.
+- **DDL (schema changes)**: stored as a separate `DDLMutation` entry type — shown prominently in draft review with explicit approval required.
+
+This is conceptually a **git staging area for DB mutations**: the overlay is the canonical state during the draft; the real DB is "main". Unlike a WAL, it's scoped to a single goal and designed for human review, not crash recovery.
+
 #### Items
 
-1. [ ] `DbProxyPlugin` trait extending `ExternalAction`: `wire_protocol()`, `parse_query()`, `classify_mutation()`, `proxy_port()`
-2. [ ] Proxy lifecycle: TA starts proxy before agent, stops after agent exits
-3. [ ] Query classification: READ vs WRITE vs DDL vs ADMIN — policy applied per class
-4. [ ] Mutation capture: all write operations logged with full query + parameters in draft audit trail
-5. [ ] Replay support: captured mutations can replay against real DB on `ta draft apply`
-6. [ ] Reference plugin: `ta-db-proxy-sqlite` — SQLite VFS shim, simplest implementation
-7. [ ] Reference plugin: `ta-db-proxy-postgres` — Postgres wire protocol proxy
-8. [ ] Future plugins (community): MySQL, MongoDB, Redis
+1. [ ] `ta-db-overlay` crate: `DraftOverlay` struct with `put()`, `get()`, `put_blob()`, `list_mutations()`, field-level diff on `ta draft view`
+2. [ ] `DbProxyPlugin` trait extending `ExternalAction`: `wire_protocol()`, `parse_query()`, `classify_mutation()`, `proxy_port()`
+3. [ ] Proxy lifecycle: TA starts proxy before agent, stops after agent exits
+4. [ ] Query classification: READ vs WRITE vs DDL vs ADMIN — policy applied per class
+5. [ ] Mutation capture: all write operations go through `DraftOverlay` — provides read-your-writes + audit trail
+6. [ ] Replay support: captured mutations replay against real DB on `ta draft apply` via plugin `apply()` method
+7. [ ] Reference plugin: `ta-db-proxy-sqlite` — SQLite VFS shim, simplest implementation
+8. [ ] Reference plugin: `ta-db-proxy-postgres` — Postgres wire protocol proxy
+9. [ ] Reference plugin: `ta-db-proxy-mongo` — MongoDB wire protocol proxy (demonstrates NoSQL + binary blob handling)
+10. [ ] Future plugins (community): MySQL, Redis, DynamoDB
 
 #### Version: `0.13.5-alpha`
 
