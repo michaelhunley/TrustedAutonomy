@@ -301,6 +301,7 @@ fn which_bwrap() -> bool {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+    use std::path::Path;
 
     fn dummy_request(working_dir: &Path) -> SpawnRequest {
         SpawnRequest {
