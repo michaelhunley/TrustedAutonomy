@@ -5910,6 +5910,58 @@ strategy = "refs-cow"   # Windows ReFS only; auto-falls back to "smart" on NTFS
 15. [ ] **`ta doctor` staging check**: Warn if `strategy = "full"` and workspace > 1 GB: `"Workspace is 800 GB with strategy=full. Consider strategy=smart with a .taignore."` On Windows NTFS with large workspace: suggest creating a Dev Drive (ReFS) for `refs-cow` staging.
 16. [ ] **Tests**: smart staging creates symlinks for ignored paths; copy loop skips them; write-through detection fires correctly; ReFS probe falls back on NTFS; staging size report matches actual copy + symlink sizes.
 
+#### 5. Shared vs Personal Config Overlay (`local.workflow.toml`)
+
+**Problem**: `workflow.toml` contains both team settings (VCS adapter, shelve-on-submit, follow-up defaults, verify commands) and personal settings (P4 workspace name, local notification prefs, personal agent framework). Splitting is impossible today — teams either commit personal settings or lose team settings.
+
+**Solution**: Load `.ta/local.workflow.toml` (gitignored) after `workflow.toml` and deep-merge it, with local values taking precedence. This mirrors Git's `config` + `config.local` pattern and is the conventional approach in P4 shops (`p4 set` per-workspace).
+
+```toml
+# .ta/workflow.toml — committed, shared with the team
+[source]
+vcs = "perforce"
+p4_port = "ssl:p4server:1666"
+shelve_on_submit = true
+
+[follow_up]
+default_mode = "continue"
+
+# .ta/local.workflow.toml — gitignored, personal only
+[source]
+p4_client = "michael_ue5_ws"          # personal workspace name
+
+[notify]
+enabled = true                         # personal preference
+```
+
+17. [ ] **`local.workflow.toml` loading**: In `ta-submit/src/config.rs`, after loading `.ta/workflow.toml`, check for `.ta/local.workflow.toml`. If present, deep-merge (field-level: local values override shared values; missing local fields inherit from shared). Produce a single merged `WorkflowConfig`. Log which file each override came from at `tracing::debug` level.
+18. [ ] **Add to `LOCAL_TA_PATHS`**: Add `local.workflow.toml` and `daemon.local.toml` to `LOCAL_TA_PATHS` (item 4) so ignore-file generation automatically excludes them.
+19. [ ] **`ta setup wizard` personal step**: Wizard asks "Are there any personal settings (e.g. P4 workspace name) that should not be committed?" — if yes, writes personal keys to `local.workflow.toml` and shared keys to `workflow.toml`. Regenerates `.gitignore`/`.p4ignore` to include `local.workflow.toml`.
+20. [ ] **`ta plan shared` local overlay display**: Extend item 5 output to show which keys are overridden locally:
+    ```
+    workflow.toml (shared):
+      [source] vcs = "perforce"
+      [source] p4_port = "ssl:p4server:1666"
+    local.workflow.toml (personal, not committed):
+      [source] p4_client = "michael_ue5_ws"   ← overrides shared
+    ```
+21. [ ] **USAGE.md**: Document the local override pattern, when to use it, and how to migrate an existing `workflow.toml` that mixes shared and personal settings. Include P4 workspace example.
+
+#### 6. Retroactive VCS Configuration (`ta setup vcs`)
+
+**Problem**: `ta init` may not detect Perforce if `.p4config` is in a parent directory, `P4PORT` is set in a per-session env but not the shell profile, or the project was initialized before Perforce was set up. Users need a focused command to add or reconfigure VCS without re-running the full wizard.
+
+22. [ ] **`ta setup vcs`**: New focused subcommand (runs interactively or accepts `--vcs perforce|git|none` flag):
+    - Detects current VCS configuration from `workflow.toml`
+    - Re-runs VCS probe (`.git/`, `.p4config`, `p4 info`, env vars) and presents findings
+    - For Perforce: prompts for `P4PORT`, `P4CLIENT`, shelve preference; updates `workflow.toml` (shared) and `local.workflow.toml` (personal p4_client)
+    - Appends/updates `[source]` block in `workflow.toml` (idempotent)
+    - Runs `ta doctor --vcs` check at end and prints result
+    - Example: `ta setup vcs --vcs perforce` — non-interactive if all P4 env vars are already set
+23. [ ] **`ta setup vcs --detect`**: Probe only — print what was found (VCS type, client name, port) without writing config. Useful for diagnosing why init didn't pick up P4.
+24. [ ] **Idempotency**: `ta setup vcs` re-run updates existing `[source]` block rather than appending a second one. Use TOML document model (preserve comments and ordering).
+25. [ ] **Tests**: `ta setup vcs` on an already-initialized project updates the existing `[source]` block; `--detect` prints found config without writing; non-interactive mode with all env vars set; local.workflow.toml receives p4_client without affecting shared workflow.toml.
+
 #### Version: `0.13.13-alpha`
 
 ---
