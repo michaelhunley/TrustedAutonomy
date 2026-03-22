@@ -560,7 +560,7 @@ fn check_stale_question(
 
 /// Check whether a process with the given PID is alive.
 ///
-/// Platform-specific: uses `kill(pid, 0)` on Unix, `tasklist` on Windows.
+/// Platform-specific: uses `kill(pid, 0)` on Unix, `OpenProcess` on Windows.
 fn is_process_alive(pid: u32) -> bool {
     #[cfg(unix)]
     {
@@ -570,15 +570,24 @@ fn is_process_alive(pid: u32) -> bool {
     }
     #[cfg(windows)]
     {
-        use std::process::Command;
-        Command::new("tasklist")
-            .args(["/FI", &format!("PID eq {}", pid), "/NH"])
-            .output()
-            .map(|o| {
-                let stdout = String::from_utf8_lossy(&o.stdout);
-                stdout.contains(&pid.to_string()) && !stdout.contains("No tasks")
-            })
-            .unwrap_or(false)
+        // Use OpenProcess(SYNCHRONIZE, FALSE, pid) — O(1) kernel call, no subprocess.
+        // A non-null handle means the process exists; CloseHandle releases it.
+        // On access-denied (0x5) the process is still alive but we lack permission.
+        // Previously used `tasklist.exe` which is notoriously slow (1–3 s per call)
+        // and was blocking the Tokio runtime during the watchdog cycle.
+        use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+        use windows_sys::Win32::System::Threading::{OpenProcess, SYNCHRONIZE};
+        unsafe {
+            let handle = OpenProcess(SYNCHRONIZE, 0, pid);
+            if handle == 0 || handle == INVALID_HANDLE_VALUE {
+                let err = windows_sys::Win32::Foundation::GetLastError();
+                // ERROR_ACCESS_DENIED (5) means the process exists but we can't open it.
+                err == 5
+            } else {
+                CloseHandle(handle);
+                true
+            }
+        }
     }
     #[cfg(not(any(unix, windows)))]
     {
