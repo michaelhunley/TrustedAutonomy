@@ -78,7 +78,7 @@ Trusted Autonomy achieves this by:
 
 ---
 
-## Current status: v0.10.18-alpha
+## Current status: v0.14.2-alpha
 
 Under active development. See [PLAN.md](PLAN.md) for the full roadmap.
 
@@ -307,7 +307,7 @@ That separation is the core architectural property.
 
 ## Why Draft-style milestones matter
 
-Continuous human oversight destroys autonomy.  
+Continuous human oversight destroys autonomy.
 Zero oversight destroys trust.
 
 Trusted Autonomy enforces review at **meaningful boundaries**:
@@ -316,6 +316,46 @@ Trusted Autonomy enforces review at **meaningful boundaries**:
 - when risk increases
 
 This mirrors how high-trust engineering systems already work.
+
+---
+
+## Why TA adds project orchestration and workflows
+
+*"I thought TA wasn't an orchestrator?"*
+
+TA is not an agent orchestrator — it does not replace LangGraph, CrewAI, or claude-flow. Those systems decide *what* agents do and in what order. TA decides *how governed execution works*: what can be staged, what requires human review, and what record is kept.
+
+But governance without orchestration creates a safe system that nobody uses. If every multi-step plan requires a human to manually chain `ta run` → review → `ta run --follow-up` → review, then the operational burden of safety is unbounded. Users disable safeguards not because they don't want safety — they do — but because the cost of remaining safe exceeds the cost of the risk.
+
+The two questions governance and orchestration each answer:
+
+| | Governance | Orchestration |
+|---|---|---|
+| **Question** | Was this action safe? | Did the right things happen, in the right order? |
+| **Role** | Gate | Map |
+| **Without the other** | Safe but manually exhausting | Efficient but untrustworthy |
+
+**Where they compound**: TA's orchestration layer makes governed workflows the *default operating model*, not a friction layer users have to work around.
+
+### What orchestration adds to governance
+
+**Serial phase chains** (`ta workflow serial-phases`): A multi-phase plan executes as a single invocation with configurable gates (build, test, clippy, custom command). If phase 3 fails tests, the workflow pauses and surfaces the failure. The human intervenes once — not six times.
+
+**Parallel agent swarms** (`ta workflow swarm`): A large goal decomposes into concurrent sub-goals, each in its own governed staging environment. An integration agent merges results. Without safe parallel staging, this pattern requires either manual coordination or unreviewed auto-merge.
+
+**Workflow routing**: Department configs map "engineering" → `serial-phases`, "content" → `editorial-pipeline`, "compliance" → `approval-chain`. The agent doesn't decide which governance model applies — the institution does, once, and it applies uniformly.
+
+**Institutional process encoding**: Different teams, project types, and risk levels need different execution patterns. A legal document review is not the same as a code sprint. Workflow routing makes this explicit rather than leaving it to ad-hoc manual process.
+
+### The deeper argument
+
+**Governance without orchestration** creates a safe but exhausting system. Every safety guarantee is honored, but the human load is unbounded — you must manually chain, schedule, route, and monitor every agent action. Adoption collapses under operational weight.
+
+**Orchestration without governance** creates an efficient but untrustworthy system. Tasks complete, but you can't prove what happened, why, or whether any policy was respected.
+
+**TA's thesis is that safety and efficiency are not a trade-off — they compound.** Orchestration multiplies the value of governance by making governed workflows the default, and governance ensures every orchestrated step is auditable and human-overridable.
+
+> Governance is a gate. Orchestration is a map. Both are required for autonomy that organizations will actually trust.
 
 ---
 
