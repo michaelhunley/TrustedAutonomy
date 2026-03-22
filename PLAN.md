@@ -5033,7 +5033,7 @@ auto_approve_reads = true  # SELECT is fine, INSERT/UPDATE/DELETE needs review
 ---
 
 ### v0.13.5 — Database Proxy Plugins
-<!-- status: pending -->
+<!-- status: in_progress -->
 **Goal**: Plugin-based database proxies that intercept agent DB operations. The agent connects to a local proxy thinking it's a real database; TA captures every query, enforces read/write policies, and logs mutations for review. Plugins provide wire protocol implementations; TA provides the governance framework (v0.13.4).
 
 **Depends on**: v0.13.4 (External Action Governance — DB proxy extends the `ExternalAction` trait)
@@ -5063,16 +5063,16 @@ This is conceptually a **git staging area for DB mutations**: the overlay is the
 
 #### Items
 
-1. [ ] `ta-db-overlay` crate: `DraftOverlay` struct with `put()`, `get()`, `put_blob()`, `list_mutations()`, field-level diff on `ta draft view`
-2. [ ] `DbProxyPlugin` trait extending `ExternalAction`: `wire_protocol()`, `parse_query()`, `classify_mutation()`, `proxy_port()`
-3. [ ] Proxy lifecycle: TA starts proxy before agent, stops after agent exits
-4. [ ] Query classification: READ vs WRITE vs DDL vs ADMIN — policy applied per class
-5. [ ] Mutation capture: all write operations go through `DraftOverlay` — provides read-your-writes + audit trail
-6. [ ] Replay support: captured mutations replay against real DB on `ta draft apply` via plugin `apply()` method
-7. [ ] Reference plugin: `ta-db-proxy-sqlite` — SQLite VFS shim, simplest implementation
-8. [ ] Reference plugin: `ta-db-proxy-postgres` — Postgres wire protocol proxy
-9. [ ] Reference plugin: `ta-db-proxy-mongo` — MongoDB wire protocol proxy (demonstrates NoSQL + binary blob handling)
-10. [ ] Future plugins (community): MySQL, Redis, DynamoDB
+1. [x] `ta-db-overlay` crate: `DraftOverlay` struct with `put()`, `get()`, `put_blob()`, `list_mutations()`, `delete()`, `put_ddl()`, `mutation_count()` — persisted to JSONL with SHA-256 blob storage
+2. [x] `DbProxyPlugin` trait in `ta-db-proxy` crate: `wire_protocol()`, `classify_query()`, `start()`, `apply_mutation()` — plus `ProxyConfig`, `ProxyHandle`, `QueryClass`, `MutationKind`
+3. [x] Proxy lifecycle: `ProxyHandle` trait with `start()`/`stop()` — TA calls before/after agent
+4. [x] Query classification: `QueryClass` enum (Read/Write/Ddl/Admin/Unknown) with `MutationKind` (Insert/Update/Delete/Upsert)
+5. [x] Mutation capture: all write operations staged through `DraftOverlay` — provides read-your-writes + JSONL audit trail
+6. [x] Replay support: `apply_mutation()` on `DbProxyPlugin` replays staged mutations against real DB on `ta draft apply`
+7. [x] Reference plugin: `ta-db-proxy-sqlite` — shadow copy approach with SQL classification and mutation replay via rusqlite
+8. [ ] Reference plugin: `ta-db-proxy-postgres` — Postgres wire protocol proxy → v0.13.6+
+9. [ ] Reference plugin: `ta-db-proxy-mongo` — MongoDB wire protocol proxy → v0.13.6+
+10. [ ] Future plugins (community): MySQL, Redis, DynamoDB → v0.14.0+
 
 #### Version: `0.13.5-alpha`
 
