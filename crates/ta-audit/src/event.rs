@@ -120,6 +120,12 @@ pub struct AuditEvent {
     /// Goal run ID associated with this action (v0.10.15).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub goal_run_id: Option<Uuid>,
+
+    /// Cryptographic attestation over this event's canonical form (v0.14.1).
+    /// When present, the signature was produced by the backend at log-write time.
+    /// Verify with `ta audit verify-attestation`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attestation: Option<crate::attestation::AttestationRecord>,
 }
 
 impl AuditEvent {
@@ -142,6 +148,7 @@ impl AuditEvent {
             caller_mode: None,
             tool_name: None,
             goal_run_id: None,
+            attestation: None,
         }
     }
 

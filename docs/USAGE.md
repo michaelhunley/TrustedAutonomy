@@ -2965,6 +2965,12 @@ ta audit export <goal-id> --format json
 # Verify audit log integrity (hash chain)
 ta audit verify
 
+# Verify cryptographic attestation signatures on all events
+ta audit verify-attestation
+
+# Verify a specific event by UUID prefix
+ta audit verify-attestation <event-id-prefix>
+
 # Recent events
 ta audit tail -n 20
 ```
@@ -2983,6 +2989,39 @@ TA maintains an append-only, SHA-256 hash-chained audit log of every action:
 - Auto-approval decisions with condition evaluation details
 
 Every MCP tool invocation (`ta_fs_write`, `ta_goal_start`, `ta_pr_build`, etc.) is individually logged to the audit trail with the agent identity, caller mode (`Normal`, `Orchestrator`, or `Unrestricted`), and the tool name. Agent identity is resolved from `TA_AGENT_ID` (set by orchestrators), falling back to the dev session ID, then `"unknown"`. This gives full traceability of which agent called which tool, when, and in what security context.
+
+#### Cryptographic Attestation
+
+Audit events can be cryptographically signed with an Ed25519 key so that retroactive forgery is detectable — even without a hardware TPM.
+
+Enable attestation in `.ta/workflow.toml`:
+
+```toml
+[audit]
+attestation = true
+# keys_dir defaults to .ta/keys/
+```
+
+On first use, TA auto-generates a keypair:
+- `.ta/keys/attestation.pkcs8` — PKCS8 DER private key (keep private)
+- `.ta/keys/attestation.pub` — hex-encoded public key (safe to share)
+
+Verify signatures:
+
+```sh
+# Verify all signed events
+ta audit verify-attestation
+
+# Verify a specific event
+ta audit verify-attestation <event-id-prefix>
+
+# Use a custom keys directory
+ta audit verify-attestation --keys /path/to/keys
+```
+
+Output shows `OK`, `INVALID SIGNATURE`, or `unsigned` for each event. Any `INVALID SIGNATURE` exits with code 1 — wiring this into CI catches tampering automatically.
+
+Hardware backends (TPM 2.0, Apple Secure Enclave) are community-contributed plugins that implement the `AttestationBackend` trait.
 
 ### Credential Management
 

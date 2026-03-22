@@ -5810,7 +5810,7 @@ Key design questions to resolve in v0.14:
 These are addressed across v0.14.4–v0.14.5.
 
 ### v0.14.0 — Agent Sandboxing & Process Isolation
-<!-- status: in_progress -->
+<!-- status: done -->
 **Goal**: Run agent processes in hardened sandboxes that limit filesystem access, network reach, and syscall surface. TA manages the sandbox lifecycle; agents work inside it transparently.
 
 **Trust metric alignment**: Directly satisfies Security (§11), Risk Mitigation (§1), and Robustness & Resilience (§10) from *Suggested Metrics for Trusted Autonomy* (NIST-2023-0009-0002). Sandboxing reduces the consequence term in the risk formula: even a misbehaving agent cannot affect production without explicit approval. See `docs/trust-metrics.md`.
@@ -5822,30 +5822,36 @@ These are addressed across v0.14.4–v0.14.5.
 1. [x] **Sandbox policy DSL**: `[sandbox]` section in `.ta/workflow.toml`. Fields: `enabled`, `provider` ("native"/"openshell"/"oci"), `allow_read`, `allow_write`, `allow_network`. Defaults: `enabled = false` (no breakage on upgrade). Implemented in `ta-submit/src/config.rs::SandboxConfig`. 3 tests. (v0.14.0)
 2. [x] **macOS sandbox-exec integration**: `SandboxPolicy::apply()` wraps the `SpawnRequest` in `sandbox-exec -p <profile> -- <cmd>`. Profile generated in `generate_macos_profile()`: `(deny default)`, allows system libs, workspace, declared `allow_read`/`allow_write`, optional outbound network. Agent sandbox activated automatically when `sandbox.enabled = true` in workflow.toml. 5 tests in `ta-runtime/src/sandbox.rs`. (v0.14.0)
 3. [x] **Linux bwrap integration**: `apply_linux_bwrap()` wraps agent in `bwrap` with ro-bind for system paths, rw-bind for workspace, tmpfs for /tmp, optional `--unshare-net`. Available when `bwrap` is on PATH. (v0.14.0)
-4. [ ] **Container fallback (OCI)**: When sandbox-exec/bwrap unavailable, fall back to OCI container via the RuntimeAdapter (v0.13.3). Blocked by OCI plugin implementation (external).
-5. [ ] **OpenShell runtime adapter**: When `openshell` is installed, delegate confinement. TA still owns staging → draft → approve → apply.
+4. → **v0.14.4** **Container fallback (OCI)**: Deferred — blocked by OCI plugin implementation (external). v0.14.4 (Central Daemon) is the natural home as it requires containerised agent isolation.
+5. → **community** **OpenShell runtime adapter**: Deferred — blocked on NVIDIA OpenShell public availability. Community contribution once the API stabilises.
 6. [x] **Credential injection via environment**: Already implemented as `ScopedCredential` + `apply_credentials_to_env()` in `ta-runtime` (v0.13.3). `SpawnRequest.env` carries the credential; never written to staging or config files.
-7. [ ] **Sandbox violation audit events**: Blocked syscall or filesystem access attempt captured as an audit event. Requires parsing sandbox-exec/bwrap stderr output. Deferred to v0.14.1 (attestation infrastructure).
-8. [ ] **Test harness**: Integration tests that verify blocked paths are actually blocked. Requires privileged CI environment. Deferred.
+7. → **v0.14.1** **Sandbox violation audit events**: Deferred — requires parsing sandbox-exec/bwrap stderr output. Requires attestation infrastructure (v0.14.1) and is naturally implemented alongside audit trail work.
+8. → **v0.14.1** **Test harness**: Deferred — integration tests for blocked paths require privileged CI environment. Will be implemented as part of v0.14.1 attestation test infrastructure.
+
+#### Deferred items resolved
+- Item 4 → v0.14.4 (Central Daemon, requires OCI runtime plugin)
+- Item 5 → community (depends on NVIDIA OpenShell public API)
+- Item 7 → v0.14.1 (attestation infrastructure enables audit event parsing)
+- Item 8 → v0.14.1 (privileged CI test harness grouped with attestation tests)
 
 #### Version: `0.14.0-alpha`
 
 ---
 
 ### v0.14.1 — Hardware Attestation & Verifiable Audit Trails
-<!-- status: pending -->
+<!-- status: in_progress -->
 **Goal**: Bind audit log entries to the hardware that produced them via TPM attestation or Apple Secure Enclave signing. Enables cryptographic proof that audit records were produced on the declared machine and not retroactively fabricated.
 
 **Trust metric alignment**: Implements the "complete accounting of behavior" requirement in Self-Reflexive Meta Control (§15) and the traceability requirement in Reliability (§3) from *Suggested Metrics for Trusted Autonomy* (NIST-2023-0009-0002). A tamper-evident log cryptographically bound to hardware is the infrastructure that makes the accounting trustworthy rather than self-reported. See `docs/trust-metrics.md`.
 
 #### Items
 
-1. [ ] **`AttestationBackend` trait**: `sign(payload) → attestation`, `verify(payload, attestation) → bool`. Plugin registry loads backends from `~/.config/ta/plugins/attestation/`.
-2. [ ] **Software fallback backend**: Ed25519 key in `.ta/keys/` — ships in TA, works on any machine without hardware TPM.
-3. [ ] **TPM 2.0 backend plugin**: `tss2-rs` / `tpm2-tools` PCR quote and signing. Linux/Windows.
-4. [ ] **Apple Secure Enclave backend plugin**: macOS Keychain + CryptoKit `SecureEnclave.P256`.
-5. [ ] **Attestation fields in `AuditEntry`**: `attestation: Option<AttestationRecord>` with backend name, public key fingerprint, and signature.
-6. [ ] **`ta audit verify-attestation <id>`**: Verify the attestation signature on an audit entry using the stored public key.
+1. [x] **`AttestationBackend` trait**: `sign(payload) → attestation`, `verify(payload, attestation) → bool`. Implemented in `crates/ta-audit/src/attestation.rs`. Plugin registry from `~/.config/ta/plugins/attestation/` deferred to v0.14.3 (Constitution). (v0.14.1)
+2. [x] **Software fallback backend**: `SoftwareAttestationBackend` — Ed25519 key pair auto-generated in `.ta/keys/attestation.pkcs8` on first use. Public key exported to `.ta/keys/attestation.pub`. 5 tests. (v0.14.1)
+3. → **community** **TPM 2.0 backend plugin**: Deferred — requires `tss2-rs` and TPM hardware. Community contribution; will be a plugin when the `AttestationBackend` trait is stable.
+4. → **community** **Apple Secure Enclave backend plugin**: Deferred — requires macOS Keychain + CryptoKit integration. Community contribution; the `AttestationBackend` trait is the stable plugin point.
+5. [x] **Attestation fields in `AuditEvent`**: `attestation: Option<AttestationRecord>` added to `AuditEvent` with `backend`, `key_fingerprint`, `signature` fields. `AuditLog::with_attestation()` wires the backend at log-open time. (v0.14.1)
+6. [x] **`ta audit verify-attestation`**: Verifies Ed25519 signatures for all (or a specific) event. Loads key from `.ta/keys/`. Reports per-event OK/INVALID/unsigned, fails with exit code 1 if any signature invalid. (v0.14.1)
 
 #### Version: `0.14.1-alpha`
 

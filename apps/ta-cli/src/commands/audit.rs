@@ -1,7 +1,11 @@
-// audit.rs — Audit subcommands: verify, tail, show, export, drift, baseline.
+// audit.rs — Audit subcommands: verify, tail, show, export, drift, baseline,
+//             verify-attestation (v0.14.1).
 
 use clap::Subcommand;
-use ta_audit::{AuditEvent, AuditLog, BaselineStore, DraftSummary, DriftSeverity};
+use ta_audit::{
+    AttestationBackend, AuditEvent, AuditLog, BaselineStore, DraftSummary, DriftSeverity,
+    SoftwareAttestationBackend,
+};
 use ta_mcp_gateway::GatewayConfig;
 
 #[derive(Subcommand)]
@@ -61,6 +65,21 @@ pub enum AuditCommands {
         /// Path to audit log (defaults to .ta/audit.jsonl).
         #[arg(long)]
         log: Option<String>,
+    },
+    /// Verify cryptographic attestation signatures on audit events (v0.14.1).
+    ///
+    /// For each event that carries an attestation record, re-derives the
+    /// canonical payload and verifies the Ed25519 signature.  Events without
+    /// attestation are shown as "unsigned".
+    VerifyAttestation {
+        /// Path to audit log (defaults to .ta/audit.jsonl).
+        #[arg(long)]
+        log: Option<String>,
+        /// Verify only the event with this ID (UUID).
+        event_id: Option<String>,
+        /// Path to keys directory (defaults to .ta/keys).
+        #[arg(long)]
+        keys: Option<String>,
     },
 }
 
@@ -167,6 +186,19 @@ pub fn execute(cmd: &AuditCommands, config: &GatewayConfig) -> anyhow::Result<()
 
         AuditCommands::Baseline { agent_id, log } => {
             execute_baseline(config, agent_id, log.as_deref())?;
+        }
+
+        AuditCommands::VerifyAttestation {
+            log,
+            event_id,
+            keys,
+        } => {
+            execute_verify_attestation(
+                config,
+                log.as_deref(),
+                event_id.as_deref(),
+                keys.as_deref(),
+            )?;
         }
     }
 
@@ -457,6 +489,115 @@ fn print_events_with_reasoning(events: &[&AuditEvent]) {
         }
         println!();
     }
+}
+
+// ── VerifyAttestation subcommand (v0.14.1) ──
+
+fn execute_verify_attestation(
+    config: &GatewayConfig,
+    log_path: Option<&str>,
+    event_id: Option<&str>,
+    keys_path: Option<&str>,
+) -> anyhow::Result<()> {
+    let path = log_path
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| config.audit_log.clone());
+
+    if !path.exists() {
+        println!("No audit log found at {}", path.display());
+        return Ok(());
+    }
+
+    let keys_dir = keys_path
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| config.workspace_root.join(".ta").join("keys"));
+
+    // Load or generate the software backend.
+    let backend = SoftwareAttestationBackend::load_or_generate(&keys_dir).map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to load attestation key from {}: {}",
+            keys_dir.display(),
+            e
+        )
+    })?;
+
+    let events = AuditLog::read_all(&path)?;
+    let events_to_check: Vec<&AuditEvent> = if let Some(id) = event_id {
+        events
+            .iter()
+            .filter(|e| e.event_id.to_string().starts_with(id))
+            .collect()
+    } else {
+        events.iter().collect()
+    };
+
+    if events_to_check.is_empty() {
+        println!("No events found.");
+        return Ok(());
+    }
+
+    let mut signed = 0usize;
+    let mut valid = 0usize;
+    let mut invalid = 0usize;
+    let mut unsigned = 0usize;
+
+    println!("{:<36}  {:<16}  STATUS", "EVENT ID", "BACKEND");
+    println!("{}", "-".repeat(70));
+
+    for event in &events_to_check {
+        if let Some(record) = &event.attestation {
+            signed += 1;
+            // Reconstruct canonical payload: event JSON with attestation = None.
+            let mut canonical_event = (*event).clone();
+            canonical_event.attestation = None;
+            let canonical = serde_json::to_string(&canonical_event)?;
+
+            match backend.verify(canonical.as_bytes(), record) {
+                Ok(true) => {
+                    valid += 1;
+                    println!(
+                        "{:<36}  {:<16}  OK (key: {})",
+                        event.event_id, record.backend, record.key_fingerprint
+                    );
+                }
+                Ok(false) => {
+                    invalid += 1;
+                    println!(
+                        "{:<36}  {:<16}  INVALID SIGNATURE",
+                        event.event_id, record.backend
+                    );
+                }
+                Err(e) => {
+                    invalid += 1;
+                    println!(
+                        "{:<36}  {:<16}  ERROR: {}",
+                        event.event_id, record.backend, e
+                    );
+                }
+            }
+        } else {
+            unsigned += 1;
+            if event_id.is_some() {
+                // Only show unsigned events if explicitly requested by ID.
+                println!("{:<36}  {:<16}  unsigned", event.event_id, "-");
+            }
+        }
+    }
+
+    println!();
+    println!(
+        "Summary: {} signed ({} valid, {} invalid), {} unsigned",
+        signed, valid, invalid, unsigned
+    );
+
+    if invalid > 0 {
+        anyhow::bail!(
+            "{} event(s) failed attestation verification — audit log may have been tampered with",
+            invalid
+        );
+    }
+
+    Ok(())
 }
 
 /// Export audit data for compliance reporting (v0.3.3).

@@ -38,4 +38,8 @@ pub enum AuditError {
         path: PathBuf,
         source: std::io::Error,
     },
+
+    /// Attestation signing or verification failed.
+    #[error("attestation failed: {0}")]
+    AttestationFailed(String),
 }
