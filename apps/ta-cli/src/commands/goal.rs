@@ -505,8 +505,23 @@ fn start_goal(
         // (e.g. ".git/" for Git) so VCS metadata is never captured in staging
         // diffs or overwritten on apply.
         let excludes = super::draft::load_excludes_with_adapter(&source_dir);
-        let overlay =
-            OverlayWorkspace::create(&goal_id, &source_dir, &config.staging_dir, excludes)?;
+
+        // v0.13.13: Use configured staging strategy (default: Full).
+        let workflow = ta_submit::config::WorkflowConfig::load_or_default(&source_dir);
+        let staging_mode = match workflow.staging.strategy {
+            ta_submit::config::StagingStrategy::Full => ta_workspace::OverlayStagingMode::Full,
+            ta_submit::config::StagingStrategy::Smart => ta_workspace::OverlayStagingMode::Smart,
+            ta_submit::config::StagingStrategy::RefsCow => {
+                ta_workspace::OverlayStagingMode::RefsCow
+            }
+        };
+        let overlay = OverlayWorkspace::create_with_strategy(
+            &goal_id,
+            &source_dir,
+            &config.staging_dir,
+            excludes,
+            staging_mode,
+        )?;
 
         // v0.2.1: Capture source snapshot for conflict detection.
         let snapshot_json = overlay
@@ -2284,6 +2299,113 @@ pub fn doctor(config: &GatewayConfig) -> anyhow::Result<()> {
         }
         Err(_) => {
             println!("no goal store");
+        }
+    }
+
+    // ── VCS checks (v0.13.13) ────────────────────────────────────
+    {
+        use ta_workspace::partitioning::{git_is_ignored, VcsBackend, LOCAL_TA_PATHS};
+        let vcs = VcsBackend::detect(&config.workspace_root);
+        print!("  VCS... ");
+        match &vcs {
+            VcsBackend::Git => {
+                // Verify git status works.
+                let git_ok = std::process::Command::new("git")
+                    .args(["status", "--porcelain"])
+                    .current_dir(&config.workspace_root)
+                    .output()
+                    .map(|o| o.status.success())
+                    .unwrap_or(false);
+                if git_ok {
+                    println!("git (ok)");
+                    pass += 1;
+                } else {
+                    println!("git (git status failed — check git installation)");
+                    warn += 1;
+                }
+                // Check that local-only .ta/ paths are in .gitignore.
+                let mut unignored: Vec<&str> = Vec::new();
+                for path in LOCAL_TA_PATHS {
+                    let full = config
+                        .workspace_root
+                        .join(".ta")
+                        .join(path.trim_end_matches('/'));
+                    if full.exists() {
+                        if let Ok(false) = git_is_ignored(&config.workspace_root, path) {
+                            unignored.push(path);
+                        }
+                    }
+                }
+                if !unignored.is_empty() {
+                    println!(
+                        "  [warn] {} local .ta/ path(s) are not in .gitignore:",
+                        unignored.len()
+                    );
+                    for p in &unignored {
+                        println!("    .ta/{}", p);
+                    }
+                    println!("    Fix: ta setup vcs");
+                    warn += 1;
+                }
+            }
+            VcsBackend::Perforce => {
+                // Verify p4 info responds.
+                let p4_ok = std::process::Command::new("p4")
+                    .arg("info")
+                    .current_dir(&config.workspace_root)
+                    .output()
+                    .map(|o| o.status.success())
+                    .unwrap_or(false);
+                if p4_ok {
+                    println!("perforce (ok)");
+                    pass += 1;
+                } else {
+                    println!("perforce (p4 info failed — check P4PORT/P4CLIENT)");
+                    warn += 1;
+                }
+                // Warn if P4IGNORE is not set.
+                if std::env::var("P4IGNORE").is_err() {
+                    println!("  [warn] P4IGNORE env var is not set.");
+                    println!("    TA local paths may be submitted accidentally.");
+                    println!("    Fix: export P4IGNORE=.p4ignore  (and re-run `ta setup vcs`)");
+                    warn += 1;
+                }
+            }
+            VcsBackend::None => {
+                println!("none detected (ok — skipping VCS checks)");
+                pass += 1;
+            }
+        }
+
+        // ── Staging strategy check ────────────────────────────────
+        print!("  Staging strategy... ");
+        let workflow = ta_submit::config::WorkflowConfig::load_or_default(&config.workspace_root);
+        let strategy = &workflow.staging.strategy;
+        match strategy {
+            ta_submit::config::StagingStrategy::Full => {
+                // Warn if workspace is large (>1 GB).
+                let workspace_bytes = dir_size_bytes(&config.workspace_root);
+                let workspace_mb = workspace_bytes / (1024 * 1024);
+                if workspace_mb > 1024 {
+                    println!(
+                        "full (workspace is {} GB — consider strategy=smart with a .taignore)",
+                        workspace_mb / 1024
+                    );
+                    println!("    Add to .ta/workflow.toml: [staging]\\nstrategy = \"smart\"");
+                    warn += 1;
+                } else {
+                    println!("full (ok)");
+                    pass += 1;
+                }
+            }
+            ta_submit::config::StagingStrategy::Smart => {
+                println!("smart (ok)");
+                pass += 1;
+            }
+            ta_submit::config::StagingStrategy::RefsCow => {
+                println!("refs-cow (ok — Windows ReFS CoW)");
+                pass += 1;
+            }
         }
     }
 

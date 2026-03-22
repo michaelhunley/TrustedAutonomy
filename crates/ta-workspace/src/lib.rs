@@ -20,12 +20,17 @@ pub mod conflict;
 pub mod copy_strategy;
 pub mod error;
 pub mod overlay;
+pub mod partitioning;
 pub mod staging;
 pub mod store;
 
 pub use conflict::{Conflict, ConflictResolution, FileSnapshot, SourceSnapshot};
 pub use copy_strategy::{CopyStat, CopyStrategy};
 pub use error::WorkspaceError;
-pub use overlay::{ExcludePatterns, OverlayWorkspace};
+pub use overlay::{ExcludePatterns, OverlayStagingMode, OverlayWorkspace};
+pub use partitioning::{
+    gitignore_block, p4ignore_block, update_gitignore, update_p4ignore, VcsBackend,
+    GITIGNORE_MARKER, LOCAL_TA_PATHS, P4IGNORE_MARKER, SHARED_TA_PATHS,
+};
 pub use staging::StagingWorkspace;
 pub use store::{ChangeStore, JsonFileStore};

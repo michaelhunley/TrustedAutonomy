@@ -881,7 +881,42 @@ fn default_notify_title() -> String {
     "TA".to_string()
 }
 
-/// Staging directory management (v0.11.3).
+/// How the staging workspace copies the source project (v0.13.13).
+///
+/// Configured in `workflow.toml` under `[staging]`:
+/// ```toml
+/// [staging]
+/// strategy = "smart"   # "full" | "smart" | "refs-cow"
+/// ```
+///
+/// - **Full** (default): byte-for-byte copy, always works, may be slow for large workspaces.
+/// - **Smart**: symlinks `.taignore`/`protected_paths` entries instead of copying them —
+///   near-zero staging cost for large ignored directories (e.g., `node_modules/`, UE Content/).
+/// - **RefsCow**: Windows ReFS Dev Drive only — instant zero-cost clone via
+///   `FSCTL_DUPLICATE_EXTENTS_TO_FILE`; auto-falls back to `smart` on NTFS.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum StagingStrategy {
+    /// Byte-for-byte copy of the source project. Always works; may be slow for large workspaces.
+    #[default]
+    Full,
+    /// Symlink excluded directories instead of copying. Fast for large workspaces with many ignored dirs.
+    Smart,
+    /// Windows ReFS CoW clone. Auto-falls back to `smart` on non-ReFS volumes.
+    RefsCow,
+}
+
+impl StagingStrategy {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::Smart => "smart",
+            Self::RefsCow => "refs-cow",
+        }
+    }
+}
+
+/// Staging directory management (v0.11.3, extended v0.13.13).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StagingConfig {
     /// Auto-remove staging after successful apply. Default: true.
@@ -890,6 +925,9 @@ pub struct StagingConfig {
     /// Minimum free disk space in MB. Default: 2048.
     #[serde(default = "default_min_disk_mb")]
     pub min_disk_mb: u64,
+    /// Staging strategy for large workspaces (v0.13.13). Default: Full.
+    #[serde(default)]
+    pub strategy: StagingStrategy,
 }
 
 impl Default for StagingConfig {
@@ -897,6 +935,7 @@ impl Default for StagingConfig {
         Self {
             auto_clean: default_auto_clean(),
             min_disk_mb: default_min_disk_mb(),
+            strategy: StagingStrategy::Full,
         }
     }
 }

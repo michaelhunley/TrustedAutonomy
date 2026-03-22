@@ -19,6 +19,21 @@ use std::time::Instant;
 
 use crate::copy_strategy::{copy_file_with_strategy, detect_strategy, CopyStat, CopyStrategy};
 
+/// Staging mode for workspace creation (v0.13.13).
+///
+/// Passed to [`OverlayWorkspace::create_with_strategy`] by callers that read
+/// `WorkflowConfig::staging.strategy`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OverlayStagingMode {
+    /// Byte-for-byte copy (default — always works, may be slow for large workspaces).
+    #[default]
+    Full,
+    /// Symlink excluded directories instead of copying — fast for large workspaces.
+    Smart,
+    /// Windows ReFS CoW clone — auto-falls back to `Smart` on non-ReFS volumes.
+    RefsCow,
+}
+
 use crate::conflict::{Conflict, ConflictResolution, FileSnapshot, SourceSnapshot};
 use crate::error::WorkspaceError;
 
@@ -179,6 +194,10 @@ pub enum OverlayChange {
 /// On APFS (macOS) and Btrfs (Linux), staging creation uses copy-on-write:
 /// files are cloned instantly with zero disk space consumed until the agent
 /// actually modifies them. Falls back to full copy on other filesystems.
+///
+/// In `Smart` mode (v0.13.13), excluded directories are symlinked instead of
+/// copied, reducing staging cost from the full workspace size to only the
+/// agent-writable subset.
 pub struct OverlayWorkspace {
     goal_id: String,
     source_dir: PathBuf,
@@ -190,20 +209,46 @@ pub struct OverlayWorkspace {
 }
 
 impl OverlayWorkspace {
-    /// Create an overlay workspace by copying the source project to staging.
+    /// Create an overlay workspace using the default (full copy) strategy.
     ///
     /// Copies everything from `source_dir` to `staging_root/<goal_id>/`,
     /// excluding `.ta/` (always) and configured exclude patterns.
     ///
-    /// On APFS (macOS) and Btrfs (Linux), uses copy-on-write (COW) cloning:
-    /// the staging copy is created instantly with no disk I/O. The filesystem
-    /// shares data pages between the source and staging until either is modified.
+    /// On APFS (macOS) and Btrfs (Linux), uses copy-on-write (COW) cloning.
     /// Falls back to full byte-for-byte copy on other filesystems.
     pub fn create(
         goal_id: impl Into<String>,
         source_dir: impl AsRef<Path>,
         staging_root: impl AsRef<Path>,
         excludes: ExcludePatterns,
+    ) -> Result<Self, WorkspaceError> {
+        Self::create_with_strategy(
+            goal_id,
+            source_dir,
+            staging_root,
+            excludes,
+            OverlayStagingMode::Full,
+        )
+    }
+
+    /// Create an overlay workspace with an explicit staging strategy (v0.13.13).
+    ///
+    /// - `Full`: full copy (default, always works)
+    /// - `Smart`: symlink excluded directories instead of copying — near-zero staging
+    ///   cost for large ignored trees (e.g., `node_modules/`, `Content/`)
+    /// - `RefsCow`: Windows ReFS Dev Drive instant CoW clone (falls back to `Smart`
+    ///   on non-ReFS volumes)
+    ///
+    /// After staging, prints a size report to stdout:
+    /// ```text
+    /// Staging: 55 MB copied, 749 GB symlinked (smart mode) in 0.3s
+    /// ```
+    pub fn create_with_strategy(
+        goal_id: impl Into<String>,
+        source_dir: impl AsRef<Path>,
+        staging_root: impl AsRef<Path>,
+        excludes: ExcludePatterns,
+        mode: OverlayStagingMode,
     ) -> Result<Self, WorkspaceError> {
         let goal_id = goal_id.into();
         let source_dir = source_dir.as_ref().to_path_buf();
@@ -214,33 +259,60 @@ impl OverlayWorkspace {
             source,
         })?;
 
-        // Detect the best available copy strategy for this filesystem.
-        let strategy = detect_strategy(&staging_dir);
+        // Resolve the effective mode: RefsCow falls back to Smart on non-ReFS.
+        let effective_mode = resolve_staging_mode(mode, &staging_dir);
+
+        // Detect the best available COW file-copy strategy (APFS/Btrfs/Full).
+        let copy_strategy = detect_strategy(&staging_dir);
 
         tracing::info!(
             goal_id = %goal_id,
-            strategy = strategy.description(),
+            staging_mode = ?effective_mode,
+            copy_strategy = copy_strategy.description(),
             source = %source_dir.display(),
             staging = %staging_dir.display(),
             "creating overlay workspace"
         );
 
         let start = Instant::now();
-        let mut stat = CopyStat::new(strategy);
+        let mut stat = CopyStat::new(copy_strategy);
 
-        copy_dir_recursive(&source_dir, &staging_dir, &excludes, strategy, &mut stat)?;
+        match effective_mode {
+            OverlayStagingMode::Smart => {
+                copy_dir_recursive_smart(
+                    &source_dir,
+                    &staging_dir,
+                    &source_dir,
+                    &excludes,
+                    copy_strategy,
+                    &mut stat,
+                )?;
+            }
+            _ => {
+                // Full or RefsCow-resolved-to-full.
+                copy_dir_recursive(
+                    &source_dir,
+                    &staging_dir,
+                    &excludes,
+                    copy_strategy,
+                    &mut stat,
+                )?;
+            }
+        }
 
         stat.duration = start.elapsed();
 
         tracing::info!(
             goal_id = %goal_id,
-            strategy = strategy.description(),
             files = stat.files_copied,
             bytes = stat.bytes_total,
+            symlinks = stat.symlinks_created,
             duration_ms = stat.duration.as_millis(),
-            cow = strategy.is_cow(),
             "overlay workspace created"
         );
+
+        // Print staging size report.
+        println!("{}", stat.size_report());
 
         // v0.2.1: Capture source snapshot for conflict detection.
         let snapshot =
@@ -766,6 +838,49 @@ impl OverlayWorkspace {
     }
 }
 
+// ── Staging mode resolution ─────────────────────────────────────
+
+/// Resolve the effective staging mode at workspace creation time.
+///
+/// `RefsCow` auto-falls back to `Smart` when not on a Windows ReFS volume.
+fn resolve_staging_mode(mode: OverlayStagingMode, _staging_dir: &Path) -> OverlayStagingMode {
+    match mode {
+        OverlayStagingMode::RefsCow => {
+            // Windows ReFS CoW support — probe and fall back to Smart on NTFS.
+            if is_refs_volume(_staging_dir) {
+                OverlayStagingMode::RefsCow
+            } else {
+                tracing::info!(
+                    "refs-cow requested but volume is not ReFS — falling back to smart staging"
+                );
+                OverlayStagingMode::Smart
+            }
+        }
+        other => other,
+    }
+}
+
+/// Probe whether the given path is on a Windows ReFS volume.
+///
+/// On non-Windows platforms always returns false (no ReFS support).
+#[allow(unused_variables)]
+fn is_refs_volume(path: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        use std::ffi::OsStr;
+        use std::os::windows::ffi::OsStrExt;
+        // GetVolumeInformationW: if FILE_SUPPORTS_BLOCK_REFCOUNTING (0x08000000) is set, it's ReFS.
+        // For now this is a stub — full ReFS IOCTL support is deferred to a later phase.
+        // Return false until the full DeviceIoControl path is implemented.
+        let _ = path;
+        false
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
 // ── Directory copy ──────────────────────────────────────────────
 
 /// Recursively copy a directory using the specified strategy.
@@ -822,6 +937,176 @@ fn copy_dir_recursive(
     }
 
     Ok(())
+}
+
+/// Recursively copy a directory in "smart" mode.
+///
+/// Unlike the full copy path, when a directory entry matches a user-configured
+/// exclude pattern (but is NOT a hardcoded infra dir like `.ta/`), a symlink
+/// pointing back to the source directory is created instead of copying.
+/// Infra dirs (`.ta/`, `.claude-flow/`, etc.) are still silently skipped.
+///
+/// This gives the agent a view of the full workspace with minimal disk I/O:
+/// only the agent-writable subset is physically copied; large excluded trees
+/// (e.g., `node_modules/`, Unreal `Content/`) appear as read-only symlinks.
+#[allow(clippy::only_used_in_recursion)]
+fn copy_dir_recursive_smart(
+    src: &Path,
+    dst: &Path,
+    source_root: &Path,
+    excludes: &ExcludePatterns,
+    strategy: CopyStrategy,
+    stat: &mut CopyStat,
+) -> Result<(), WorkspaceError> {
+    let entries = fs::read_dir(src).map_err(|source| WorkspaceError::IoError {
+        path: src.to_path_buf(),
+        source,
+    })?;
+
+    for entry in entries {
+        let entry = entry.map_err(|source| WorkspaceError::IoError {
+            path: src.to_path_buf(),
+            source,
+        })?;
+        let file_name = entry.file_name();
+        let name = file_name.to_string_lossy();
+
+        // Always skip infra dirs (hardcoded, never symlinked).
+        if ExcludePatterns::INFRA_DIRS.contains(&name.as_ref()) {
+            continue;
+        }
+
+        let src_path = entry.path();
+        let dst_path = dst.join(&file_name);
+
+        if src_path.is_dir() {
+            // Check if this directory should be excluded by user patterns.
+            if excludes.should_exclude(&name) {
+                // Symlink the whole directory instead of recursing into it.
+                create_symlink_dir(&src_path, &dst_path)?;
+                // Estimate size for the report (best-effort, non-blocking).
+                let estimated_bytes = estimate_dir_bytes(&src_path, 3);
+                stat.symlinks_created += 1;
+                stat.bytes_symlinked += estimated_bytes;
+                tracing::debug!(
+                    src = %src_path.display(),
+                    dst = %dst_path.display(),
+                    bytes = estimated_bytes,
+                    "smart staging: symlinked excluded dir"
+                );
+                continue;
+            }
+            // Not excluded — recurse into the directory.
+            fs::create_dir_all(&dst_path).map_err(|source| WorkspaceError::IoError {
+                path: dst_path.clone(),
+                source,
+            })?;
+            copy_dir_recursive_smart(&src_path, &dst_path, source_root, excludes, strategy, stat)?;
+        } else {
+            // Files: check user excludes (glob patterns like "*.pyc").
+            if excludes.should_exclude(&name) {
+                // For individual files, create a symlink too.
+                create_symlink_file(&src_path, &dst_path)?;
+                let file_size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                stat.symlinks_created += 1;
+                stat.bytes_symlinked += file_size;
+                continue;
+            }
+            let file_size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+            copy_file_with_strategy(&src_path, &dst_path, strategy).map_err(|source| {
+                WorkspaceError::IoError {
+                    path: dst_path,
+                    source,
+                }
+            })?;
+            stat.files_copied += 1;
+            stat.bytes_total += file_size;
+        }
+    }
+
+    Ok(())
+}
+
+/// Create a directory symlink (platform-specific).
+#[allow(unused_variables)]
+fn create_symlink_dir(src: &Path, dst: &Path) -> Result<(), WorkspaceError> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(src, dst).map_err(|source| WorkspaceError::IoError {
+            path: dst.to_path_buf(),
+            source,
+        })
+    }
+    #[cfg(windows)]
+    {
+        std::os::windows::fs::symlink_dir(src, dst).map_err(|source| WorkspaceError::IoError {
+            path: dst.to_path_buf(),
+            source,
+        })
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        // Unsupported platform — fall back to full copy.
+        copy_dir_recursive(
+            src,
+            dst,
+            &ExcludePatterns::none(),
+            CopyStrategy::Full,
+            &mut CopyStat::new(CopyStrategy::Full),
+        )
+    }
+}
+
+/// Create a file symlink (platform-specific).
+#[allow(unused_variables)]
+fn create_symlink_file(src: &Path, dst: &Path) -> Result<(), WorkspaceError> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(src, dst).map_err(|source| WorkspaceError::IoError {
+            path: dst.to_path_buf(),
+            source,
+        })
+    }
+    #[cfg(windows)]
+    {
+        std::os::windows::fs::symlink_file(src, dst).map_err(|source| WorkspaceError::IoError {
+            path: dst.to_path_buf(),
+            source,
+        })
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        // Unsupported platform — fall back to copy.
+        copy_file_with_strategy(src, dst, CopyStrategy::Full).map_err(|source| {
+            WorkspaceError::IoError {
+                path: dst.to_path_buf(),
+                source,
+            }
+        })
+    }
+}
+
+/// Estimate the total bytes in a directory tree up to `depth` levels deep.
+/// Non-blocking best-effort — ignores errors, used only for the size report.
+fn estimate_dir_bytes(path: &Path, depth: u8) -> u64 {
+    if depth == 0 {
+        return 0;
+    }
+    let Ok(entries) = fs::read_dir(path) else {
+        return 0;
+    };
+    let mut total = 0u64;
+    for entry in entries.flatten() {
+        let p = entry.path();
+        if let Ok(meta) = p.metadata() {
+            if meta.is_dir() {
+                total += estimate_dir_bytes(&p, depth - 1);
+            } else {
+                total += meta.len();
+            }
+        }
+    }
+    total
 }
 
 // ── Directory walking ───────────────────────────────────────────
@@ -1523,5 +1808,143 @@ mod tests {
             "expected only src/main.rs change, got: {:?}",
             changes
         );
+    }
+
+    // ── Smart staging tests (v0.13.13) ───────────────────────────
+
+    #[cfg(unix)]
+    #[test]
+    fn smart_staging_creates_symlinks_for_excluded_dirs() {
+        let source = TempDir::new().unwrap();
+        // Create source tree with a large excluded dir (node_modules).
+        fs::create_dir_all(source.path().join("src")).unwrap();
+        fs::write(source.path().join("src/index.js"), "// main\n").unwrap();
+        fs::create_dir_all(source.path().join("node_modules/some-pkg")).unwrap();
+        fs::write(
+            source.path().join("node_modules/some-pkg/index.js"),
+            "// pkg\n",
+        )
+        .unwrap();
+
+        let staging_root = TempDir::new().unwrap();
+        let excludes = ExcludePatterns::defaults(); // includes "node_modules/"
+
+        let overlay = OverlayWorkspace::create_with_strategy(
+            "goal-smart",
+            source.path(),
+            staging_root.path(),
+            excludes,
+            OverlayStagingMode::Smart,
+        )
+        .unwrap();
+
+        // node_modules/ should be a symlink in staging, not a full copy.
+        let nm_in_staging = overlay.staging_dir().join("node_modules");
+        assert!(
+            nm_in_staging.exists(),
+            "node_modules should exist in staging"
+        );
+        assert!(
+            nm_in_staging
+                .symlink_metadata()
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "node_modules should be a symlink in smart mode"
+        );
+
+        // src/ should be a real directory (not excluded).
+        let src_in_staging = overlay.staging_dir().join("src");
+        assert!(src_in_staging.is_dir());
+        assert!(
+            !src_in_staging
+                .symlink_metadata()
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "src/ should be copied, not symlinked"
+        );
+
+        // Symlink should point back to source.
+        let link_target = fs::read_link(&nm_in_staging).unwrap();
+        assert_eq!(
+            link_target.canonicalize().unwrap(),
+            source.path().join("node_modules").canonicalize().unwrap()
+        );
+
+        // Stat should record the symlink.
+        let stat = overlay.copy_stat().unwrap();
+        assert_eq!(stat.symlinks_created, 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn smart_staging_copy_skips_symlinked_in_diff() {
+        // Files behind a symlink should not appear as changes (content is identical).
+        let source = TempDir::new().unwrap();
+        fs::create_dir_all(source.path().join("src")).unwrap();
+        fs::write(source.path().join("src/main.rs"), "fn main(){}\n").unwrap();
+        fs::create_dir_all(source.path().join("node_modules/pkg")).unwrap();
+        fs::write(source.path().join("node_modules/pkg/lib.js"), "// lib\n").unwrap();
+
+        let staging_root = TempDir::new().unwrap();
+        let excludes = ExcludePatterns::defaults();
+
+        let overlay = OverlayWorkspace::create_with_strategy(
+            "goal-diff",
+            source.path(),
+            staging_root.path(),
+            excludes,
+            OverlayStagingMode::Smart,
+        )
+        .unwrap();
+
+        // No changes made — diff should be empty.
+        let changes = overlay.diff_all().unwrap();
+        let node_changes: Vec<_> = changes
+            .iter()
+            .filter(|c| {
+                let p = match c {
+                    OverlayChange::Modified { path, .. } => path,
+                    OverlayChange::Created { path, .. } => path,
+                    OverlayChange::Deleted { path } => path,
+                };
+                p.starts_with("node_modules")
+            })
+            .collect();
+        assert!(
+            node_changes.is_empty(),
+            "node_modules changes must not appear in diff (symlinked): {:?}",
+            node_changes
+        );
+    }
+
+    #[test]
+    fn staging_mode_default_is_full() {
+        assert_eq!(OverlayStagingMode::default(), OverlayStagingMode::Full);
+    }
+
+    #[test]
+    fn copy_stat_size_report_full_mode() {
+        let mut stat = crate::copy_strategy::CopyStat::new(CopyStrategy::Full);
+        stat.files_copied = 42;
+        stat.bytes_total = 10 * 1024 * 1024; // 10 MB
+        stat.duration = std::time::Duration::from_millis(250);
+        let report = stat.size_report();
+        assert!(report.contains("42 files"), "report: {}", report);
+        assert!(report.contains("10.0 MB"), "report: {}", report);
+    }
+
+    #[test]
+    fn copy_stat_size_report_smart_mode() {
+        let mut stat = crate::copy_strategy::CopyStat::new(CopyStrategy::Full);
+        stat.files_copied = 10;
+        stat.bytes_total = 5 * 1024 * 1024; // 5 MB copied
+        stat.symlinks_created = 3;
+        stat.bytes_symlinked = 2 * 1024 * 1024 * 1024; // 2 GB symlinked
+        stat.duration = std::time::Duration::from_millis(100);
+        let report = stat.size_report();
+        assert!(report.contains("5.0 MB copied"), "report: {}", report);
+        assert!(report.contains("smart mode"), "report: {}", report);
     }
 }

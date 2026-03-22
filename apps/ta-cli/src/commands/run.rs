@@ -1213,11 +1213,21 @@ pub fn execute(
             .unwrap_or_else(|| config.workspace_root.clone());
         let source_dir = source_dir.canonicalize().unwrap_or(source_dir);
         let excludes = ta_workspace::ExcludePatterns::load(&source_dir);
-        let overlay = ta_workspace::OverlayWorkspace::create(
+        // v0.13.13: Use configured staging strategy.
+        let workflow = ta_submit::config::WorkflowConfig::load_or_default(&source_dir);
+        let staging_mode = match workflow.staging.strategy {
+            ta_submit::config::StagingStrategy::Full => ta_workspace::OverlayStagingMode::Full,
+            ta_submit::config::StagingStrategy::Smart => ta_workspace::OverlayStagingMode::Smart,
+            ta_submit::config::StagingStrategy::RefsCow => {
+                ta_workspace::OverlayStagingMode::RefsCow
+            }
+        };
+        let overlay = ta_workspace::OverlayWorkspace::create_with_strategy(
             goal_uuid.to_string(),
             &source_dir,
             &config.staging_dir,
             excludes,
+            staging_mode,
         )?;
 
         // Capture source snapshot for conflict detection.
