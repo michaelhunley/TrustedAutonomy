@@ -5033,7 +5033,7 @@ auto_approve_reads = true  # SELECT is fine, INSERT/UPDATE/DELETE needs review
 ---
 
 ### v0.13.5 — Database Proxy Plugins
-<!-- status: in_progress -->
+<!-- status: done -->
 **Goal**: Plugin-based database proxies that intercept agent DB operations. The agent connects to a local proxy thinking it's a real database; TA captures every query, enforces read/write policies, and logs mutations for review. Plugins provide wire protocol implementations; TA provides the governance framework (v0.13.4).
 
 **Depends on**: v0.13.4 (External Action Governance — DB proxy extends the `ExternalAction` trait)
@@ -5070,9 +5070,14 @@ This is conceptually a **git staging area for DB mutations**: the overlay is the
 5. [x] Mutation capture: all write operations staged through `DraftOverlay` — provides read-your-writes + JSONL audit trail
 6. [x] Replay support: `apply_mutation()` on `DbProxyPlugin` replays staged mutations against real DB on `ta draft apply`
 7. [x] Reference plugin: `ta-db-proxy-sqlite` — shadow copy approach with SQL classification and mutation replay via rusqlite
-8. [ ] Reference plugin: `ta-db-proxy-postgres` — Postgres wire protocol proxy → v0.13.6+
-9. [ ] Reference plugin: `ta-db-proxy-mongo` — MongoDB wire protocol proxy → v0.13.6+
-10. [ ] Future plugins (community): MySQL, Redis, DynamoDB → v0.14.0+
+8. → **v0.13.6** Reference plugin: `ta-db-proxy-postgres` — Postgres wire protocol proxy. Deferred: requires wire-protocol proxy infrastructure separate from the SQLite shadow-copy approach.
+9. → **v0.13.6** Reference plugin: `ta-db-proxy-mongo` — MongoDB wire protocol proxy. Deferred with item 8.
+10. → **v0.14.0+** Future plugins (community): MySQL, Redis, DynamoDB. Community contribution point once the `DbProxyPlugin` trait is stable.
+
+#### Deferred items resolved
+
+- Items 8, 9 → v0.13.6: Postgres and MongoDB wire-protocol proxies require a real protocol proxy implementation distinct from SQLite's shadow-copy. Will be implemented when the Community Hub phase lands the plugin ecosystem.
+- Item 10 → v0.14.0+: Community-contributed DB plugins (MySQL, Redis, DynamoDB). `DbProxyPlugin` trait in `ta-db-proxy` is the stable extension point.
 
 #### Version: `0.13.5-alpha`
 
