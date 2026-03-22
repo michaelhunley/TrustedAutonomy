@@ -20,6 +20,7 @@
 
 // Module declarations — each `mod foo;` tells Rust to look for `foo.rs`
 // in the same directory and include it as a submodule.
+pub mod attestation;
 pub mod drift;
 pub mod error;
 pub mod event;
@@ -28,6 +29,9 @@ pub mod log;
 
 // Re-export the main types at the crate root for convenience.
 // Users can write `use ta_audit::AuditLog` instead of `use ta_audit::log::AuditLog`.
+pub use attestation::{
+    AttestationBackend, AttestationError, AttestationRecord, SoftwareAttestationBackend,
+};
 pub use drift::{
     constitution_violation_finding, BaselineStore, BehavioralBaseline, DraftSummary, DriftFinding,
     DriftReport, DriftSeverity, DriftSignal,

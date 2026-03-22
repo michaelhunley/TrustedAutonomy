@@ -12,6 +12,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
+use crate::attestation::AttestationBackend;
 use crate::error::AuditError;
 use crate::event::AuditEvent;
 use crate::hasher;
@@ -20,11 +21,16 @@ use crate::hasher;
 ///
 /// In Rust, `BufWriter` wraps a `File` and batches writes for performance.
 /// We flush after each event to ensure durability.
+///
+/// An optional `AttestationBackend` can be attached via `with_attestation()`.
+/// When set, every appended event is cryptographically signed before writing.
 pub struct AuditLog {
     writer: BufWriter<File>,
     path: PathBuf,
     /// Hash of the last event written — used to set `previous_hash` on the next event.
     last_hash: Option<String>,
+    /// Optional cryptographic attestation backend.
+    attestation: Option<Box<dyn AttestationBackend>>,
 }
 
 impl AuditLog {
@@ -57,16 +63,38 @@ impl AuditLog {
             writer: BufWriter::new(file),
             path,
             last_hash,
+            attestation: None,
         })
+    }
+
+    /// Attach an attestation backend.  When set, every event appended after
+    /// this call will be signed before writing.
+    pub fn with_attestation(mut self, backend: Box<dyn AttestationBackend>) -> Self {
+        self.attestation = Some(backend);
+        self
     }
 
     /// Append an event to the log.
     ///
     /// Automatically sets the `previous_hash` field to chain this event
-    /// to the last one. Flushes to disk after writing.
+    /// to the last one.  If an attestation backend is configured, the event
+    /// is signed (canonical form → signature) before serialization.
+    /// Flushes to disk after writing.
     pub fn append(&mut self, event: &mut AuditEvent) -> Result<(), AuditError> {
         // Link this event to the previous one.
         event.previous_hash = self.last_hash.clone();
+
+        // If attestation is configured, sign the canonical form of the event
+        // (with attestation = None) before writing.
+        if let Some(backend) = &self.attestation {
+            // Produce canonical bytes: event JSON with attestation = null.
+            event.attestation = None;
+            let canonical = serde_json::to_string(event)?;
+            let record = backend
+                .sign(canonical.as_bytes())
+                .map_err(|e| AuditError::AttestationFailed(e.to_string()))?;
+            event.attestation = Some(record);
+        }
 
         // Serialize to a single JSON line (no pretty-printing).
         let json = serde_json::to_string(event)?;

@@ -57,6 +57,10 @@ pub struct WorkflowConfig {
     /// Agent sandboxing configuration (v0.14.0)
     #[serde(default)]
     pub sandbox: SandboxConfig,
+
+    /// Audit log attestation configuration (v0.14.1)
+    #[serde(default)]
+    pub audit: AuditConfig,
 }
 
 /// Constitution / compliance checker configuration.
@@ -134,6 +138,40 @@ impl Default for SandboxConfig {
             allow_read: Vec::new(),
             allow_write: Vec::new(),
             allow_network: Vec::new(),
+        }
+    }
+}
+
+/// Audit log attestation configuration (v0.14.1).
+///
+/// ```toml
+/// [audit]
+/// attestation = true
+/// # keys_dir defaults to .ta/keys/ (relative to workspace root)
+/// keys_dir = ".ta/keys"
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditConfig {
+    /// Enable Ed25519 attestation signing of every audit event.
+    /// Keys are auto-generated in `keys_dir` on first use.
+    #[serde(default)]
+    pub attestation: bool,
+
+    /// Directory for attestation key files.
+    /// Defaults to `.ta/keys` (relative to workspace root).
+    #[serde(default = "default_keys_dir")]
+    pub keys_dir: String,
+}
+
+fn default_keys_dir() -> String {
+    ".ta/keys".to_string()
+}
+
+impl Default for AuditConfig {
+    fn default() -> Self {
+        Self {
+            attestation: false,
+            keys_dir: default_keys_dir(),
         }
     }
 }

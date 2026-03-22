@@ -20,7 +20,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use ta_audit::AuditLog;
+use ta_audit::{AttestationBackend, AuditLog, SoftwareAttestationBackend};
 use ta_changeset::channel_registry;
 use ta_changeset::interaction::{InteractionRequest, Notification};
 use ta_changeset::multi_channel::MultiChannelStrategy;
@@ -464,13 +464,42 @@ impl GatewayState {
     /// the config is missing or the channel type is unknown.
     pub fn new(config: GatewayConfig) -> Result<Self, GatewayError> {
         let goal_store = GoalRunStore::new(&config.goals_dir)?;
-        let audit_log = AuditLog::open(&config.audit_log)?;
+
+        let workflow_toml = config.workspace_root.join(".ta").join("workflow.toml");
+        let wf = ta_submit::WorkflowConfig::load_or_default(&workflow_toml);
+
+        // Optionally attach Ed25519 attestation backend when enabled in workflow.toml.
+        let audit_log = {
+            let log = AuditLog::open(&config.audit_log)?;
+            if wf.audit.attestation {
+                let keys_dir = if wf.audit.keys_dir.starts_with('/') {
+                    std::path::PathBuf::from(&wf.audit.keys_dir)
+                } else {
+                    config.workspace_root.join(&wf.audit.keys_dir)
+                };
+                match SoftwareAttestationBackend::load_or_generate(&keys_dir) {
+                    Ok(backend) => {
+                        tracing::info!(
+                            keys_dir = ?keys_dir,
+                            fingerprint = %backend.public_key_fingerprint(),
+                            "Audit attestation enabled"
+                        );
+                        log.with_attestation(Box::new(backend))
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Failed to load attestation key — audit events will not be signed");
+                        log
+                    }
+                }
+            } else {
+                log
+            }
+        };
 
         let mut event_dispatcher = EventDispatcher::new();
         event_dispatcher.add_sink(Box::new(LogSink::new(&config.events_log)));
         let memory_store = FsMemoryStore::new(config.workspace_root.join(".ta").join("memory"));
 
-        let workflow_toml = config.workspace_root.join(".ta").join("workflow.toml");
         let auto_capture_config = ta_memory::auto_capture::load_config(&workflow_toml);
 
         // v0.10.0: Load channel routing from .ta/config.yaml and build review
