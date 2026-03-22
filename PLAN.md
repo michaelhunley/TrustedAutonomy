@@ -5991,6 +5991,44 @@ When goal state is wrong (e.g., `failed` but draft was created, `running` with d
 
 ---
 
+### v0.13.15 — Agent Pipeline Fix Pass
+<!-- status: pending -->
+<!-- beta: yes — correctness and tooling reliability fixes observed during v0.13.6–v0.13.11 implementation -->
+**Goal**: Fix a set of correctness and reliability bugs observed during the v0.13.x implementation run. No new features — only targeted fixes to the agent pipeline, draft apply flow, and developer tooling.
+
+#### 1. Version Management: Prevent Backward Bumps
+
+**Problem**: CLAUDE.md instructs agents to "update version to match the phase" without a guard. When implementing backfilled phases (v0.13.6–v0.13.11 added after the codebase reached v0.14.2-alpha), agents set `Cargo.toml` version backward to e.g. `0.13.8-alpha`. This corrupts semver history and causes confusing build output.
+
+1. [x] **CLAUDE.md guard**: Updated rule — only bump version if the phase version is higher than current workspace version. Never set a lower version. (Fixed in this session's CLAUDE.md edit.)
+2. [ ] **Draft build version check**: In `draft.rs` or the plan-update path, add a validation: if the agent changed `Cargo.toml` `version` to a semver lower than the current source version, emit a `VerificationWarning` (type: `backward_version_bump`) and optionally block with `on_failure = "block"`.
+3. [ ] **Test**: version `0.14.2-alpha` in source, agent sets `0.13.8-alpha` → warning emitted; `0.14.3-alpha` → no warning.
+
+#### 2. `ta-memory` MCP Injection Cleanup
+
+**Problem**: `inject_memory_mcp_server()` (v0.13.8) writes a `ta-memory` entry with the staging-directory path into `.mcp.json` but never saves a backup. `restore_mcp_server_config()` only restores from `MCP_JSON_BACKUP`, leaving the `ta-memory` key in place. It then propagates through the draft diff into source, appearing in every PR as a one-line spurious `.mcp.json` change with a stale staging path.
+
+4. [x] **Restore fallback**: `restore_mcp_server_config()` now strips the `ta-memory` key when no backup exists. (Fixed in PR #258, merged.)
+5. [ ] **Test**: `inject_memory_mcp_server()` followed by `restore_mcp_server_config()` → `ta-memory` key absent; key absent when no injection ran → no-op; key still present for non-TA keys.
+
+#### 3. `ta draft apply` Should Use Configured VCS Workflow
+
+**Problem**: In practice, `ta draft apply --no-submit` has been used, then git branch/commit/PR created manually. This bypasses TA's VCS pipeline and produces `ta/` branches instead of `feature/` branches. The configured adapter (`adapter = "git"`, `branch_prefix = "ta/"`, `auto_review = true`) should handle the full workflow.
+
+6. [ ] **`branch_prefix` config in wizard**: `ta setup wizard` should ask for branch prefix preference (`ta/`, `feature/`, etc.) and write it to `[submit.git] branch_prefix`. Default `ta/` is fine; the wizard should surface it so teams can align.
+7. [ ] **`ta draft apply` default behavior documentation**: Clarify in USAGE.md that `ta draft apply` (without `--no-submit`) is the standard path — it runs the full submit workflow (branch → commit → push → PR) via the configured adapter. `--no-submit` is for manual override only.
+
+#### 4. PLAN.md Deferred Items in Completed Phases
+
+**Problem**: Agents marking phases done sometimes leave `[ ]` items without explicit deferred targets (just `→ Deferred` without a phase number). CLAUDE.md deferred items policy requires every unchecked item to be moved to a named phase.
+
+8. [ ] **Draft build deferred items validation**: Extend plan validation in draft build to detect `[ ]` items in `<!-- status: done -->` phases that lack a `→ vX.Y` target. Emit `VerificationWarning` (type: `unchecked_items_in_done_phase`) with the item text. Block with `on_failure = "warn"` so agents catch it before the draft is submitted.
+9. [ ] **Test**: phase with unchecked items + no `→ vX.Y` → warning; same items with `→ v0.14.0` → no warning; `<!-- status: pending -->` phase → no warning.
+
+#### Version: `0.13.15-alpha`
+
+---
+
 > **⬇ PUBLIC BETA** — v0.13.x complete: runtime flexibility (local models, containers), enterprise governance (audit ledger, action governance, compliance), community ecosystem, and goal workflow automation. TA is ready for team and enterprise deployments.
 
 ---

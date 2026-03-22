@@ -101,8 +101,8 @@ All outcomes must be **observable** (with details and logging) and **actionable*
 
 When completing a phase, you MUST update versions as part of the work:
 
-1. **`apps/ta-cli/Cargo.toml`**: Update `version` to the phase's target version (e.g., `"0.2.0-alpha"`)
-2. **This file (`CLAUDE.md`)**: Update "Current version" above to match
+1. **`apps/ta-cli/Cargo.toml`**: Update `version` to the phase's target version **only if it is higher than the current workspace version**. Never set the version to a lower value — if the workspace is at `0.14.2-alpha` and the phase is `v0.13.8`, do **not** change the version. Only bump forward (e.g., from `0.14.2-alpha` to `0.14.3-alpha`).
+2. **This file (`CLAUDE.md`)**: Update "Current version" above only when you bumped the version in step 1.
 3. **`PLAN.md`**: Mark the phase `<!-- status: done -->` (done automatically by `ta draft apply --phase`)
 4. **`docs/USAGE.md`**: Update with any new commands, flags, config options, or workflow changes. USAGE.md is the user onboarding guide — write feature documentation as "how to" sections, not version-annotated changelogs. Keep version references out of feature descriptions (use the Roadmap section for version tracking). When adding a new workflow or command, add it to the appropriate section with a clear code example.
 
