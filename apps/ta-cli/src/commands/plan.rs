@@ -1464,6 +1464,7 @@ fn plan_add(
         false, // skip_verify = false
         false, // quiet = false
         None,  // existing_goal_id = None
+        None,  // workflow = default (single-agent)
     )
 }
 
@@ -1714,6 +1715,7 @@ fn plan_from(
         false, // skip_verify = false
         false, // quiet = false
         None,  // existing_goal_id = None
+        None,  // workflow = default (single-agent)
     )
 }
 

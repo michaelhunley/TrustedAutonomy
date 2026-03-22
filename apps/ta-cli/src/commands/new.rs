@@ -825,6 +825,7 @@ fn run_new(
         false, // skip_verify = false
         false, // quiet = false
         None,  // existing_goal_id = None
+        None,  // workflow = default (single-agent)
     )?;
 
     // 12. Post-creation handoff.

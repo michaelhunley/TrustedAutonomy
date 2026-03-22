@@ -123,6 +123,17 @@ enum Commands {
         /// when `ta_goal_start` has already created the goal.
         #[arg(long)]
         goal_id: Option<String>,
+        /// Workflow to execute (e.g., 'serial-phases', 'single-agent').
+        ///
+        /// Resolves in priority order:
+        /// 1. This flag (explicit override)
+        /// 2. Plan phase metadata (future)
+        /// 3. .ta/config.yaml default_workflow (future)
+        /// 4. Built-in "single-agent" (backwards-compatible default)
+        ///
+        /// Run `ta workflow list --builtin` to see available workflows.
+        #[arg(long)]
+        workflow: Option<String>,
     },
     /// Review and manage draft packages.
     Draft {
@@ -564,6 +575,7 @@ fn main() -> anyhow::Result<()> {
             skip_verify,
             quiet,
             goal_id,
+            workflow,
         } => {
             // Phase-aware title resolution: if the positional title looks like
             // a phase ID (e.g., "v0.9.8.1", "0.9.8.1", "phase 0.9.8.1"),
@@ -588,6 +600,7 @@ fn main() -> anyhow::Result<()> {
                 *skip_verify,
                 *quiet,
                 goal_id.as_deref(),
+                workflow.as_deref(),
             )
         }
         Commands::Events { command } => commands::events::execute(command, &config),

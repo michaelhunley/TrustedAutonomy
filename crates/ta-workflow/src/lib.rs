@@ -16,7 +16,8 @@ pub mod verdict;
 pub mod yaml_engine;
 
 pub use definition::{
-    FailureRouting, RoleDefinition, StageDefinition, StageReview, WorkflowDefinition,
+    FailureRouting, RoleDefinition, StageDefinition, StageReview, WorkflowCatalog,
+    WorkflowDefinition,
 };
 pub use error::WorkflowError;
 pub use interaction::{AwaitHumanConfig, InteractionRequest, InteractionResponse};
