@@ -1724,6 +1724,43 @@ fn find_session_by_prefix(
 
 // ── Agent launch ────────────────────────────────────────────────
 
+/// Build a `Command` for `command` with `args`, handling Windows `.cmd`/`.bat` wrappers.
+///
+/// On Windows, npm-installed tools (Claude Code, npx, etc.) are `.cmd` batch files.
+/// `Command::new("claude")` only finds `claude.exe` and fails with NotFound.
+/// We use `which::which()` (which respects `PATHEXT`) and wrap `.cmd`/`.bat`
+/// files in `cmd.exe /c` so they execute correctly.
+fn resolve_agent_command(command: &str, args: &[String]) -> std::process::Command {
+    #[cfg(windows)]
+    {
+        if let Ok(resolved) = which::which(command) {
+            let ext = resolved
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            if ext == "cmd" || ext == "bat" {
+                tracing::debug!(
+                    command = command,
+                    resolved = %resolved.display(),
+                    "Wrapping .cmd/.bat in cmd.exe /c"
+                );
+                let mut cmd = std::process::Command::new("cmd");
+                cmd.arg("/c").arg(resolved);
+                for arg in args {
+                    cmd.arg(arg);
+                }
+                return cmd;
+            }
+        }
+    }
+    let mut cmd = std::process::Command::new(command);
+    for arg in args {
+        cmd.arg(arg);
+    }
+    cmd
+}
+
 /// Launch an agent process with template-substituted arguments.
 ///
 /// If `pid_callback` is provided, it is called with the child PID immediately
