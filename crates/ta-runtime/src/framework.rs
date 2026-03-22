@@ -1,9 +1,24 @@
-// framework.rs — Agent framework manifest and resolution for v0.13.8.
+// framework.rs — Agent framework manifest, resolution, and dispatch for v0.13.8.
 //
 // An AgentFramework defines how TA launches an agent backend.
 // Built-in frameworks ship with TA; custom frameworks are TOML manifests
 // discovered from well-known paths.
+//
+// ## Architecture
+//
+// ```text
+// ta run --agent qwen-coder
+//         │
+//         ▼
+// AgentFrameworkManifest::resolve("qwen-coder", project_root)
+//         │
+//         ▼
+// framework_to_command() → (command, args, env)
+// context_injector()     → inject goal context before launch
+// memory_bridge_mode()   → select MCP / context / env / none
+// ```
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -47,6 +62,12 @@ pub struct FrameworkMemoryConfig {
     /// Max memory entries to inject in context mode.
     #[serde(default = "default_max_memory_entries")]
     pub max_entries: usize,
+    /// Only inject entries with these tags (empty = all entries).
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// Only inject entries updated within this many days (0 = no filter).
+    #[serde(default)]
+    pub recency_days: u32,
 }
 
 fn default_max_memory_entries() -> usize {
@@ -120,6 +141,7 @@ impl AgentFrameworkManifest {
                 memory: FrameworkMemoryConfig {
                     inject: MemoryInjectMode::Mcp,
                     max_entries: 20,
+                    ..Default::default()
                 },
                 builtin: true,
             },
@@ -137,6 +159,7 @@ impl AgentFrameworkManifest {
                 memory: FrameworkMemoryConfig {
                     inject: MemoryInjectMode::Mcp,
                     max_entries: 20,
+                    ..Default::default()
                 },
                 builtin: true,
             },
@@ -153,6 +176,7 @@ impl AgentFrameworkManifest {
                 memory: FrameworkMemoryConfig {
                     inject: MemoryInjectMode::Mcp,
                     max_entries: 20,
+                    ..Default::default()
                 },
                 builtin: true,
             },
@@ -169,6 +193,7 @@ impl AgentFrameworkManifest {
                 memory: FrameworkMemoryConfig {
                     inject: MemoryInjectMode::Env,
                     max_entries: 10,
+                    ..Default::default()
                 },
                 builtin: true,
             },
@@ -231,6 +256,135 @@ impl AgentFrameworkManifest {
             .into_iter()
             .find(|f| f.name == name)
     }
+}
+
+// ── AgentFramework trait (v0.13.8 item 2) ──────────────────────────────────
+//
+// Trait abstraction over agent backends. Each framework backend implements
+// this to provide polymorphic dispatch. The default implementation is
+// `ManifestBackedFramework` which reads an `AgentFrameworkManifest` TOML.
+
+/// Core abstraction over an agent backend.
+///
+/// Implement this to provide a new agent backend. The default implementation
+/// is `ManifestBackedFramework` which reads from an `AgentFrameworkManifest`.
+pub trait AgentFramework: Send + Sync {
+    /// Unique name of this framework (e.g., "claude-code", "codex").
+    fn name(&self) -> &str;
+    /// Return the underlying manifest.
+    fn manifest(&self) -> &AgentFrameworkManifest;
+    /// Build the (command, args) to use when spawning the agent.
+    /// Returns the command binary and a list of arguments to prepend before the prompt.
+    fn build_command(&self) -> (&str, &[String]) {
+        let m = self.manifest();
+        (&m.command, &m.args)
+    }
+    /// How context is injected into this framework.
+    fn context_inject_mode(&self) -> &ContextInjectMode {
+        &self.manifest().context_inject
+    }
+    /// Memory configuration for this framework.
+    fn memory_config(&self) -> &FrameworkMemoryConfig {
+        &self.manifest().memory
+    }
+}
+
+/// Default framework implementation backed by an `AgentFrameworkManifest`.
+#[derive(Debug, Clone)]
+pub struct ManifestBackedFramework {
+    manifest: AgentFrameworkManifest,
+}
+
+impl ManifestBackedFramework {
+    pub fn new(manifest: AgentFrameworkManifest) -> Self {
+        Self { manifest }
+    }
+}
+
+impl AgentFramework for ManifestBackedFramework {
+    fn name(&self) -> &str {
+        &self.manifest.name
+    }
+    fn manifest(&self) -> &AgentFrameworkManifest {
+        &self.manifest
+    }
+}
+
+// ── ContextInjector (v0.13.8 item 8) ───────────────────────────────────────
+//
+// Handles the various modes for injecting goal context before agent launch.
+//
+// Prepend: backup + prepend to context_file (existing behaviour for Claude Code).
+// Env:     write context to a temp file; return TA_GOAL_CONTEXT env var.
+// Arg:     write context to a temp file; return (flag, path) to prepend as args.
+// None:    no injection.
+
+/// Result of env/arg-mode context injection.
+pub struct ContextInjectionResult {
+    /// Environment variables to add to the agent process.
+    pub env_vars: HashMap<String, String>,
+    /// Extra args to prepend before the prompt (flag + path for Arg mode).
+    pub extra_args: Vec<String>,
+    /// Path to the temp context file, if one was written (must be kept alive
+    /// until agent exits — caller is responsible for cleanup).
+    pub context_file: Option<PathBuf>,
+}
+
+/// Inject context in Env mode: write to `.ta/goal_context.md` in staging dir
+/// and return the `TA_GOAL_CONTEXT` env var pointing to it.
+pub fn inject_context_env(
+    staging_dir: &Path,
+    context: &str,
+) -> std::io::Result<ContextInjectionResult> {
+    let ta_dir = staging_dir.join(".ta");
+    std::fs::create_dir_all(&ta_dir)?;
+    let ctx_path = ta_dir.join("goal_context.md");
+    std::fs::write(&ctx_path, context)?;
+    let mut env_vars = HashMap::new();
+    env_vars.insert(
+        "TA_GOAL_CONTEXT".to_string(),
+        ctx_path.display().to_string(),
+    );
+    Ok(ContextInjectionResult {
+        env_vars,
+        extra_args: Vec::new(),
+        context_file: Some(ctx_path),
+    })
+}
+
+/// Inject context in Arg mode: write to `.ta/goal_context.md` and return
+/// `["--context", "<path>"]` to prepend to agent args.
+pub fn inject_context_arg(
+    staging_dir: &Path,
+    context: &str,
+    flag: &str,
+) -> std::io::Result<ContextInjectionResult> {
+    let ta_dir = staging_dir.join(".ta");
+    std::fs::create_dir_all(&ta_dir)?;
+    let ctx_path = ta_dir.join("goal_context.md");
+    std::fs::write(&ctx_path, context)?;
+    let extra_args = vec![flag.to_string(), ctx_path.display().to_string()];
+    Ok(ContextInjectionResult {
+        env_vars: HashMap::new(),
+        extra_args,
+        context_file: Some(ctx_path),
+    })
+}
+
+/// Set the TA_MEMORY_OUT path in the agent's environment.
+/// The agent writes new memory entries to this file on exit; TA ingests them.
+pub fn inject_memory_out_env(staging_dir: &Path) -> (String, String) {
+    let out_path = staging_dir.join(".ta").join("memory_out.json");
+    ("TA_MEMORY_OUT".to_string(), out_path.display().to_string())
+}
+
+/// Build TA_MEMORY_PATH env var: path to a snapshot file TA writes before launch.
+pub fn inject_memory_snapshot_env(staging_dir: &Path) -> (String, String) {
+    let snap_path = staging_dir.join(".ta").join("memory_snapshot.md");
+    (
+        "TA_MEMORY_PATH".to_string(),
+        snap_path.display().to_string(),
+    )
 }
 
 #[cfg(test)]

@@ -66,5 +66,9 @@ pub use adapter::{
 pub use bare_process::{apply_credentials_to_env, BareProcessRuntime};
 pub use config::{RuntimeConfig, RuntimeRegistry};
 pub use credential::ScopedCredential;
-pub use framework::{AgentFrameworkManifest, ContextInjectMode, MemoryInjectMode};
+pub use framework::{
+    inject_context_arg, inject_context_env, inject_memory_out_env, inject_memory_snapshot_env,
+    AgentFramework, AgentFrameworkManifest, ContextInjectMode, ContextInjectionResult,
+    FrameworkMemoryConfig, ManifestBackedFramework, MemoryInjectMode,
+};
 pub use sandbox::{SandboxPolicy, SandboxProvider};

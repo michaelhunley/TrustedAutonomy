@@ -368,6 +368,7 @@ mod tests {
             ],
             roles: HashMap::new(),
             verdict: None,
+            agent_framework: None,
         }
     }
 
