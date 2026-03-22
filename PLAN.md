@@ -5518,10 +5518,10 @@ on_failure = "ask_follow_up"  # propose a follow-up goal (pairs with v0.13.1 aut
    - `ProjectConstitutionConfig` struct in `apps/ta-cli/src/commands/constitution.rs` with `ValidationStep`, `ConstitutionRule`, `ConstitutionScan`, `ConstitutionRelease`.
 2. [x] **`ta constitution init-toml`**: Scaffolding command. Writes `.ta/constitution.toml` with TA's default rules as a starting point. Users edit for their project's patterns.
 3. [x] **Draft-time scanner reads `constitution.toml`**: `scan_for_violations()` reads inject/restore function names from `ProjectConstitutionConfig`. Projects with different conventions get correct scanning.
-4. [ ] **Release pipeline reads `checklist_gate`**: The release checklist gate step (v0.11.4.4 item 9) is enabled/disabled by `constitution.toml`. The checklist content is generated from the declared rules, not hardcoded. → deferred to follow-up phase
-5. [ ] **Parallel agent review during release**: When `agent_review = true` in `constitution.toml`, the release pipeline fans out two agents concurrently: the existing release notes writer, and a lighter constitution reviewer. Its output is appended to the release draft as a "Constitution Review" section. → deferred to follow-up phase
+4. → **v0.13.9.1** **Release pipeline reads `checklist_gate`**: The release checklist gate step (v0.11.4.4 item 9) is enabled/disabled by `constitution.toml`. The checklist content is generated from the declared rules, not hardcoded. Moved to v0.13.9.1 — requires wiring `constitution.toml` into the release pipeline's gate step, which is a separate concern from the scanner and deserves its own focused pass.
+5. [ ] **Parallel agent review during release**: When `agent_review = true` in `constitution.toml`, the release pipeline fans out two agents concurrently: the existing release notes writer, and a lighter constitution reviewer. Its output is appended to the release draft as a "Constitution Review" section. **Depends on v0.13.7 parallel swarm infrastructure** — will be implemented in v0.13.9 after v0.13.7 lands, using the swarm fan-out machinery rather than a one-off tokio spawn.
 6. [x] **`ta constitution check-toml`**: CLI command to run the scanner outside of draft build — useful for CI integration and pre-commit hooks. Exit code 0 = clean, 1 = violations found when `on_violation = "block"`. Output is machine-readable JSON with `--json` flag.
-7. [ ] **Inheritance**: `constitution.toml` can `extends = "ta-default"` to inherit TA's rules and only override specific sections. TA ships a built-in `ta-default` profile. → partial (`extends` field is stored but not yet applied at load time); deferred to follow-up phase
+7. [ ] **Inheritance**: `constitution.toml` can `extends = "ta-default"` to inherit TA's rules and only override specific sections. TA ships a built-in `ta-default` profile. (`extends` field is stored but merge logic not yet applied at load time — complete the inheritance resolution in this phase.)
 8. [x] **Documentation**: Added "Constitution Config (`constitution.toml`)" section to `docs/USAGE.md`. Full web-service worked example deferred to follow-up phase.
 
 **Files**: `.ta/constitution.toml` (new), `apps/ta-cli/src/commands/` (init, check, draft build scan, release step), `crates/ta-workspace/src/` (scanner crate or module).
@@ -5529,6 +5529,25 @@ on_failure = "ask_follow_up"  # propose a follow-up goal (pairs with v0.13.1 aut
 #### Version: `0.13.9-alpha`
 
 ---
+
+### v0.13.9.1 — Constitution Release Pipeline Integration
+<!-- status: pending -->
+<!-- beta: yes — constitution-gated releases -->
+**Goal**: Wire `constitution.toml` into the release pipeline so the `checklist_gate` flag controls whether the release checklist step runs, and the checklist content is generated from the project's declared constitution rules rather than hardcoded TA-internal patterns.
+
+**Context**: v0.13.9 built the constitution config schema, scanner, and CLI commands. This sub-phase completes the release pipeline integration that was scoped out of v0.13.9 due to complexity: the release pipeline (`release.rs`) has its own gate/step lifecycle independent of the draft scanner, and wiring `constitution.toml` into it requires extending `PipelineConfig` to consult the constitution at runtime.
+
+**Moved from**: v0.13.9 item 4 (deferred during v0.13.9 implementation — release pipeline integration is a distinct concern from the draft-time scanner).
+
+#### Items
+
+1. [ ] **`PipelineConfig` reads `constitution.toml`**: At pipeline startup, load `.ta/constitution.toml` (if present). Store `constitution: Option<ProjectConstitutionConfig>` on `PipelineConfig`. Falls back gracefully if file absent.
+2. [ ] **`checklist_gate` controls the gate step**: The existing release checklist gate step (`v0.11.4.4 item 9`) checks `constitution.release.checklist_gate` (default: `true`). If `false`, the gate step is skipped and a `[info]` message is printed: `"Checklist gate disabled by constitution.toml — skipping"`.
+3. [ ] **Checklist content generated from constitution rules**: Rather than hardcoded strings, the checklist items are generated from `constitution.rules.*` entries. Each rule with `severity = "high"` produces a mandatory checkbox; `"medium"` produces an informational item. TA's own built-in checklist is the fallback when no `constitution.toml` is present.
+4. [ ] **`ta release run --constitution-check`**: Flag to force checklist gate on regardless of `checklist_gate` setting — useful for CI pipelines that want to enforce the check independently of project config.
+5. [ ] **Tests**: pipeline skips gate when `checklist_gate = false`; checklist items match declared rules; fallback to built-in when no constitution file present.
+
+#### Version: `0.13.9.1-alpha`
 
 ---
 
@@ -5603,22 +5622,22 @@ This data exists ephemerally in goal JSON and draft packages, but is never aggre
 1. [x] **`VelocityEntry` struct** (`crates/ta-goal/src/velocity.rs`): fields per schema above; `Serialize`/`Deserialize`; builder from `GoalRun`
 2. [x] **`VelocityStore`** (`crates/ta-goal/src/velocity.rs`): append-only JSONL writer to `.ta/velocity-stats.jsonl`; load/query/aggregate helpers
 3. [x] **Hook into goal terminal states**: `ta draft apply`, `ta goal delete` (non-terminal), and gc-driven `failed`/`timeout` transitions each write a `VelocityEntry`
-4. [ ] **Build time calculation**: `pr_ready_at` from first `DraftBuilt` event timestamp (separate build phase) — deferred to v0.13.12 (requires event timestamp lookup)
-5. [ ] **Rework tracking**: follow-up goals sum into root goal's `rework_seconds` — deferred to v0.13.12
+4. [ ] **Build time calculation**: `pr_ready_at` from first `DraftBuilt` event timestamp. Requires looking up the `DraftBuilt` event in the goal's event log to find the exact timestamp when staging transitioned to `pr_ready`.
+5. [ ] **Rework tracking**: follow-up goals sum into root goal's `rework_seconds`. On each follow-up goal completion, walk the parent chain and accumulate `build_seconds` into the root entry's `rework_seconds` field.
 6. [x] **`ta stats`** CLI command: `ta stats velocity` pretty-prints aggregate stats; `--json`, `--workflow`, `--since` filters
 7. [x] **`ta stats velocity-detail`**: per-goal breakdown table (title, outcome, build time, rework time, amended)
-8. [ ] **`VelocitySnapshot` event emission**: emit via `EventRouter` on every terminal outcome — deferred to v0.13.12
-9. [ ] **Connector forwarding**: Discord plugin velocity cards — deferred to v0.13.12
-10. [ ] **Enterprise HTTP connector** *(stretch)*: deferred to v0.14.x
+8. [ ] **`VelocitySnapshot` event emission**: emit via `EventRouter` on every terminal outcome (`GoalApplied`, `GoalDenied`, `GoalCancelled`, `GoalFailed`). Channel plugins receive this event and decide whether to forward/render it.
+9. [ ] **Connector forwarding**: Discord plugin velocity cards — render `VelocitySnapshot` as a compact Discord embed (outcome badge, build time, rework time, phase link). Controlled by the opt-in flag (item 12).
+10. [ ] **Enterprise HTTP connector** *(stretch)*: → **v0.14.x** — requires a dedicated HTTP webhook connector crate. Deferred: adds significant scope and is not required for beta. At v0.14.x, the `VelocitySnapshot` event shape is the stable API surface.
 11. [x] **`ta stats export`**: export full history as JSON (default) or CSV
-12. [ ] Add `velocity_events` opt-in flag to `channel.toml` schema — deferred to v0.13.12
+12. [ ] **`velocity_events` opt-in flag in `channel.toml`**: `velocity_events = true` (default: `false`). When enabled, the channel plugin receives and forwards `VelocitySnapshot` events. Prevents noise for teams that only want approval/denial notifications.
 13. [x] Tests: `VelocityEntry` builder; `VelocityStore` append/load round-trip; aggregate calculation
 
 #### Goal History Rollover
 
 `goal-history.jsonl` accumulates one line per goal indefinitely. For long-lived projects this becomes unwieldy to query and back up. Rollover segments the ledger by version range (or time range) — analogous to log rotation but keyed to release milestones rather than wall-clock dates, since a project's natural unit of history is a version, not a week.
 
-14. [ ] **Rollover policy in `daemon.toml`** → deferred to v0.13.12:
+14. [ ] **Rollover policy in `daemon.toml`**:
     ```toml
     [lifecycle.history_rollover]
     enabled = true
@@ -5674,8 +5693,8 @@ Current releases ship archives containing a bare binary and docs. Users must man
 6. [x] **Update required-assets validation**: `.msi` and `.dmg` treated as optional (non-fatal) in asset check; required archives unchanged
 7. [x] **Update release body template**: Installers (`.dmg`, `.msi`) as primary download options in release notes
 8. [x] **Update USAGE.md**: Added Option A (installer), Option B (one-liner), Option C (manual tar.gz) for Install section; updated Windows instructions
-9. [ ] **Bundle USAGE.html in MSI** (installed to `%ProgramFiles%\TrustedAutonomy\docs\`) → deferred to v0.13.12
-10. [ ] **Homebrew tap** → deferred to v0.14.x
+9. [ ] **Bundle USAGE.html in MSI** (installed to `%ProgramFiles%\TrustedAutonomy\docs\`). The release workflow already `sed`-stamps USAGE.md; add a `pandoc` (or `wkhtmltopdf`) step to convert it to USAGE.html and include it in the WiX source XML as a `File` element under a `docs` component group. Falls back to raw USAGE.md if pandoc unavailable.
+10. → **v0.14.3** **Homebrew tap**: Create `Trusted-Autonomy/homebrew-ta` tap repository. Add a `Formula/ta.rb` that downloads the macOS release archive, verifies SHA256, and installs the binary. Wire the release workflow to auto-update the formula on each `v*` tag using `brew bump-formula-pr` or direct commit. Deferred to v0.14.3 (post-beta) — Homebrew cask review requires a stable release cadence and a public binary URL, which beta releases don't guarantee. At v0.14.3, add `tap_formula_update` step to release pipeline.
 11. [x] **System requirements in USAGE.md**: Added "System Requirements" section with platform table and agent framework requirements table
 
     **USAGE.md section** (under Installation):
@@ -5988,6 +6007,10 @@ The current `.ta/goal-history.jsonl` is a compact index written only on the happ
 10. [ ] **Retention policy**: Configurable retention. `ta audit gc --older-than 1y` removes entries beyond retention while preserving chain integrity.
 11. [ ] **Structured agent output logging**: Optional `[agent].output_log = "structured"` captures full JSON agent output to the audit ledger for compliance and reproducibility.
 12. [ ] **Migration**: Migrate existing `.ta/goal-history.jsonl` entries to the new format on first run.
+
+#### Distribution (moved from v0.13.11)
+
+13. [ ] **Homebrew tap** (`Trusted-Autonomy/homebrew-ta`): Create tap repository with `Formula/ta.rb`. Formula downloads the macOS `.tar.gz` release archive, verifies SHA256, and places the binary in `bin/`. Wire release workflow (`release.yml`) to auto-update the formula on each `v*` tag: add a `tap_formula_update` step after asset upload that commits an updated `ta.rb` to the tap repo (using `brew bump-formula-pr` or direct file commit with `gh`). Prerequisites before landing: stable binary URL pattern (currently `public-alpha-*` non-standard), 2+ consecutive clean releases, Homebrew cask review readiness. At implementation time, review the [Homebrew acceptable formulae policy](https://docs.brew.sh/Acceptable-Formulae) for binary CLI tools.
 
 #### Version: `0.14.3-alpha`
 
