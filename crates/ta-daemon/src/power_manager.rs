@@ -126,12 +126,27 @@ impl PowerManager {
         }
         #[cfg(target_os = "windows")]
         {
-            // On Windows we spawn a minimal process that holds ES_SYSTEM_REQUIRED.
-            // For now, return a "not supported" error — the goal still runs.
-            Err(std::io::Error::new(
-                std::io::ErrorKind::Unsupported,
-                "Power assertion not yet implemented on Windows (goal will continue without it)",
-            ))
+            // Spawn a PowerShell one-liner that calls SetThreadExecutionState via P/Invoke.
+            // Flags: ES_CONTINUOUS (0x80000000) | ES_SYSTEM_REQUIRED (0x00000001) |
+            //        ES_AWAYMODE_REQUIRED (0x00000040) — prevents idle/away sleep.
+            // The process sleeps indefinitely; killing it releases the ES state.
+            std::process::Command::new("powershell")
+                .args([
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    concat!(
+                        "Add-Type -MemberDefinition '[DllImport(\"kernel32.dll\")] ",
+                        "public static extern uint SetThreadExecutionState(uint s);' ",
+                        "-Name P -Namespace W; ",
+                        "[W.P]::SetThreadExecutionState(0x80000041); ",
+                        "Start-Sleep -Seconds 86400",
+                    ),
+                ])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
         }
         #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
         {
