@@ -4241,6 +4241,7 @@ fn fix_package(
         false, // skip_verify = false
         false, // quiet = false
         None,  // no existing goal id
+        None,  // workflow = default (single-agent)
     )?;
 
     if no_launch {

@@ -6,6 +6,41 @@ use serde::{Deserialize, Serialize};
 
 use crate::interaction::AwaitHumanConfig;
 
+/// Catalog of built-in workflow names and descriptions shipped with TA.
+///
+/// Used by `ta workflow list --builtin` and `ta run --workflow` to enumerate
+/// known workflows and validate user-provided names.
+pub struct WorkflowCatalog;
+
+impl WorkflowCatalog {
+    /// Returns all built-in workflow names and descriptions.
+    pub fn list() -> Vec<(&'static str, &'static str)> {
+        vec![
+            (
+                "single-agent",
+                "Default: one agent in one staging directory (backwards-compatible)",
+            ),
+            (
+                "serial-phases",
+                "Chain phases serially: each phase as follow-up in same staging, one PR at end",
+            ),
+            (
+                "swarm",
+                "Parallel sub-goals with integration agent (v0.13.7.2+)",
+            ),
+            (
+                "approval-chain",
+                "Sequential human approval steps (v0.13.7.3+)",
+            ),
+        ]
+    }
+
+    /// Returns true if the given name is a known built-in workflow.
+    pub fn is_known(name: &str) -> bool {
+        Self::list().iter().any(|(n, _)| *n == name)
+    }
+}
+
 /// A complete workflow definition that engines parse and execute.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowDefinition {
@@ -350,5 +385,38 @@ verdict:
         assert_eq!(verdict.pass_threshold, 0.8);
         assert_eq!(verdict.required_pass, vec!["security-reviewer"]);
         assert!(verdict.scorer.is_some());
+    }
+
+    #[test]
+    fn workflow_catalog_lists_known_workflows() {
+        let catalog = WorkflowCatalog::list();
+        let names: Vec<&str> = catalog.iter().map(|(n, _)| *n).collect();
+        assert!(names.contains(&"single-agent"));
+        assert!(names.contains(&"serial-phases"));
+        assert!(names.contains(&"swarm"));
+        assert!(names.contains(&"approval-chain"));
+        assert_eq!(catalog.len(), 4);
+    }
+
+    #[test]
+    fn workflow_catalog_is_known() {
+        assert!(WorkflowCatalog::is_known("single-agent"));
+        assert!(WorkflowCatalog::is_known("serial-phases"));
+        assert!(WorkflowCatalog::is_known("swarm"));
+        assert!(WorkflowCatalog::is_known("approval-chain"));
+        assert!(!WorkflowCatalog::is_known("unknown-workflow"));
+        assert!(!WorkflowCatalog::is_known(""));
+    }
+
+    #[test]
+    fn workflow_catalog_descriptions_nonempty() {
+        for (name, desc) in WorkflowCatalog::list() {
+            assert!(!name.is_empty(), "workflow name should not be empty");
+            assert!(
+                !desc.is_empty(),
+                "description for '{}' should not be empty",
+                name
+            );
+        }
     }
 }

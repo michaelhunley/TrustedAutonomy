@@ -456,6 +456,42 @@ ta draft apply <draft-id> --no-submit  # copy files only, no VCS ops
 ta draft apply <draft-id> --dry-run    # preview what would happen
 ```
 
+### Workflow Selection
+
+Every `ta run` uses a named *workflow* that controls how the goal is dispatched. The default is `single-agent` (one agent, one staging directory), which is backwards-compatible with all existing usage.
+
+**Choosing a workflow:**
+
+```bash
+ta run "goal"                              # default: single-agent
+ta run "goal" --workflow single-agent      # explicit (same as default)
+ta run "goal" --workflow serial-phases     # chain phases in series (stub — v0.13.7.1)
+```
+
+**See available built-in workflows:**
+
+```bash
+ta workflow list --builtin
+```
+
+Output:
+
+```
+Built-in workflows (use with: ta run "goal" --workflow <name>):
+
+  single-agent         Default: one agent in one staging directory (backwards-compatible)
+  serial-phases        Chain phases serially: each phase as follow-up in same staging, one PR at end
+  swarm                Parallel sub-goals with integration agent (v0.13.7.2+)
+  approval-chain       Sequential human approval steps (v0.13.7.3+)
+```
+
+**Resolution order** (first match wins):
+
+1. `--workflow <name>` flag on `ta run`
+2. Plan phase metadata (future)
+3. `.ta/config.yaml` `default_workflow` (future)
+4. Built-in `single-agent` (backwards-compatible default)
+
 ### Follow-Up Iterations
 
 Fix issues discovered during review without losing context. The smart follow-up system scans your goals, drafts, plan phases, and verification failures to find what you want to resume — no need to remember branch names, draft IDs, or internal state.

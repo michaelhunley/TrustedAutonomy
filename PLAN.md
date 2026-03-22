@@ -5220,7 +5220,7 @@ This is conceptually a **git staging area for DB mutations**: the overlay is the
 ---
 
 ### v0.13.7 — Goal Workflows: Serial Chains, Parallel Swarms & Office Routing
-<!-- status: pending -->
+<!-- status: in_progress -->
 **Goal**: Connect goals to workflows so that *how* a goal executes is configurable per-project, per-department, or per-invocation — not hardcoded into `ta run`. Today every goal is a single agent in a single staging directory. This phase introduces workflow-driven execution: serial phase chains, parallel agent swarms, and a routing layer that maps goals to the right workflow based on project config, department, or explicit flag.
 
 #### Problem
@@ -5263,12 +5263,12 @@ steps:
 Chain multiple phases into one execution. Each phase runs → builds → tests → if green, the next phase starts as a follow-up in the same staging. One draft/PR at the end.
 
 **Planning items** (detailed design deferred to implementation):
-1. [ ] **Workflow engine integration with `ta run`**: `ta run` accepts `--workflow` and delegates to the workflow engine (v0.10.5 `ta-workflow` crate) instead of directly spawning an agent. The workflow engine manages step sequencing, gate evaluation, and error handling.
-2. [ ] **`serial-phases` built-in workflow**: Workflow definition that takes a list of phases (or a range), runs each as a follow-up goal in the same staging, with configurable gates between steps (build, test, clippy, custom command).
-3. [ ] **Gate evaluation**: After each phase, run the gate command(s). If a gate fails, the workflow pauses and surfaces the failure to the user (via shell notification + SSE event). User can fix and resume, or abort.
-4. [ ] **Automatic follow-up chaining**: The workflow engine manages the `--follow-up-goal` chain automatically. Each step reuses the previous step's staging. No manual intervention between phases.
-5. [ ] **Single-PR output**: When all phases complete, the workflow builds one draft covering all changes. The draft summary aggregates per-phase summaries.
-6. [ ] **Resume/retry on failure**: If a phase fails, `ta run --resume` picks up from the failed step. The workflow engine persists step state.
+1. [x] **Workflow engine integration with `ta run`**: `ta run` accepts `--workflow` flag with resolution order (explicit > config default > `single-agent`). `WorkflowKind` enum, `resolve_workflow()` fn, and `WorkflowCatalog` in `ta-workflow` crate. `serial-phases` routes through single-agent with TODO stub for v0.13.7.1.
+2. [ ] **`serial-phases` built-in workflow**: Workflow definition that takes a list of phases (or a range), runs each as a follow-up goal in the same staging, with configurable gates between steps (build, test, clippy, custom command). → v0.13.7.1
+3. [ ] **Gate evaluation**: After each phase, run the gate command(s). If a gate fails, the workflow pauses and surfaces the failure to the user (via shell notification + SSE event). User can fix and resume, or abort. → v0.13.7.1
+4. [ ] **Automatic follow-up chaining**: The workflow engine manages the `--follow-up-goal` chain automatically. Each step reuses the previous step's staging. No manual intervention between phases. → v0.13.7.1
+5. [ ] **Single-PR output**: When all phases complete, the workflow builds one draft covering all changes. The draft summary aggregates per-phase summaries. → v0.13.7.1
+6. [ ] **Resume/retry on failure**: If a phase fails, `ta run --resume` picks up from the failed step. The workflow engine persists step state. → v0.13.7.1
 
 #### Track 2: Parallel Agent Swarms (`swarm` workflow)
 
@@ -5297,10 +5297,11 @@ Map departments, project types, or goal categories to default workflows.
         default_workflow: editorial-pipeline
         projects: [docs, blog]
     ```
-14. [ ] **Project-level workflow default**: `.ta/config.yaml` gains `default_workflow: <name>`. Used when no explicit `--workflow` and no department mapping applies.
-15. [ ] **Workflow library**: Ship built-in workflows (`single-agent`, `serial-phases`, `swarm`, `approval-chain`). Users can create custom workflows in `.ta/workflows/` using the same YAML schema.
-16. [ ] **`ta workflow list`**: Show available workflows (built-in + custom) with descriptions.
-17. [ ] **`ta run` routing integration**: Wire the routing resolution order into `ta run`. Log which workflow was selected and why.
+    → v0.13.7.3
+14. [ ] **Project-level workflow default**: `.ta/config.yaml` gains `default_workflow: <name>`. Used when no explicit `--workflow` and no department mapping applies. → v0.13.7.1
+15. [x] **Workflow library**: `WorkflowCatalog` in `ta-workflow::definition` ships `single-agent`, `serial-phases`, `swarm`, `approval-chain` as built-in named workflows. Users can create custom YAML definitions in `.ta/workflows/`.
+16. [x] **`ta workflow list --builtin`**: Lists all built-in workflow names and descriptions. Usage: `ta workflow list --builtin`.
+17. [x] **`ta run` routing integration**: `--workflow` flag wired into `ta run` with `resolve_workflow()`. Prints informational message for `serial-phases`. Unknown workflow names print a warning with recovery instruction.
 
 #### Open Questions (resolve during implementation)
 - **Agent coordination protocol**: How do swarm agents communicate? Shared memory store? File-based? Event bus?

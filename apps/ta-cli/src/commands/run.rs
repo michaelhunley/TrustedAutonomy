@@ -419,6 +419,48 @@ fn resolve_smart_follow_up(
     ))
 }
 
+// ── Workflow routing (v0.13.7) ───────────────────────────────────
+
+/// The kind of workflow to use for this goal run.
+///
+/// Resolved from (in priority order):
+/// 1. Explicit `--workflow` flag
+/// 2. Project config `default_workflow` (future)
+/// 3. Built-in `single-agent` (backwards-compatible default)
+#[derive(Debug, Clone)]
+enum WorkflowKind {
+    /// Default: one agent, one staging directory. Backwards-compatible.
+    SingleAgent,
+    /// Chain phases serially: each phase as a follow-up in the same staging,
+    /// one PR at the end.
+    ///
+    /// TODO(v0.13.7.1): implement multi-phase gate evaluation and auto follow-up
+    /// chaining. For now, runs as single-agent with an informational message.
+    SerialPhases,
+    /// Future/plugin workflow name not yet implemented.
+    Unknown(String),
+}
+
+impl WorkflowKind {
+    fn from_str(s: &str) -> Self {
+        match s {
+            "single-agent" | "" => WorkflowKind::SingleAgent,
+            "serial-phases" => WorkflowKind::SerialPhases,
+            other => WorkflowKind::Unknown(other.to_string()),
+        }
+    }
+}
+
+/// Resolve the workflow kind from the explicit flag or fall back to the default.
+///
+/// Future: check `.ta/config.yaml` `default_workflow` between explicit and default.
+fn resolve_workflow(explicit: Option<&str>) -> WorkflowKind {
+    if let Some(w) = explicit {
+        return WorkflowKind::from_str(w);
+    }
+    WorkflowKind::SingleAgent
+}
+
 // ── Public API ──────────────────────────────────────────────────
 
 #[allow(clippy::too_many_arguments)]
@@ -441,6 +483,7 @@ pub fn execute(
     skip_verify: bool,
     quiet: bool,
     existing_goal_id: Option<&str>,
+    workflow: Option<&str>,
 ) -> anyhow::Result<()> {
     // ── Resume an existing session ──────────────────────────────
     if let Some(session_id_prefix) = resume {
@@ -501,6 +544,35 @@ pub fn execute(
             "Title is required. Provide it as an argument, or add a `# Heading` to your --objective-file."
         )
     })?;
+
+    // ── Workflow routing (v0.13.7) ───────────────────────────────
+    //
+    // Resolve the workflow kind and, if non-default, print an informational
+    // message. Multi-phase chaining is a stub — full gate evaluation and
+    // auto follow-up sequencing land in v0.13.7.1.
+    let workflow_kind = resolve_workflow(workflow);
+    match &workflow_kind {
+        WorkflowKind::SingleAgent => {}
+        WorkflowKind::SerialPhases => {
+            if !quiet {
+                println!(
+                    "Workflow: serial-phases \
+                     (executing as single-agent — multi-phase chaining requires --phases flag, \
+                     full implementation in v0.13.7.1)"
+                );
+            }
+        }
+        WorkflowKind::Unknown(name) => {
+            if !ta_workflow::WorkflowCatalog::is_known(name) {
+                eprintln!(
+                    "Warning: unknown workflow '{}'. \
+                     Run `ta workflow list --builtin` to see available built-in workflows. \
+                     Falling back to single-agent.",
+                    name
+                );
+            }
+        }
+    }
 
     let agent_config = agent_launch_config(agent, source);
 
@@ -3277,6 +3349,7 @@ mod tests {
             false, // skip_verify = false
             false, // quiet = false
             None,  // no existing goal id
+            None,  // workflow = default (single-agent)
         )
         .unwrap();
 

@@ -87,6 +87,7 @@ pub fn execute(cmd: &SessionCommands, config: &GatewayConfig) -> anyhow::Result<
                 false, // skip_verify = false
                 false, // quiet = false
                 None,  // no existing goal id
+                None,  // workflow = default (single-agent)
             )
         }
         SessionCommands::Pause { id } => pause_session(config, id),

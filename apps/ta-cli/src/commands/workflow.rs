@@ -18,7 +18,7 @@ use std::path::PathBuf;
 use clap::Subcommand;
 use ta_changeset::sources::{ExternalSource, Lockfile, PackageManifest, SourceCache};
 use ta_mcp_gateway::GatewayConfig;
-use ta_workflow::{WorkflowDefinition, WorkflowEngine, YamlWorkflowEngine};
+use ta_workflow::{WorkflowCatalog, WorkflowDefinition, WorkflowEngine, YamlWorkflowEngine};
 
 #[derive(Subcommand)]
 pub enum WorkflowCommands {
@@ -40,6 +40,9 @@ pub enum WorkflowCommands {
         /// Show only externally-sourced workflows.
         #[arg(long)]
         source: Option<String>,
+        /// List built-in workflow names shipped with TA (usable with `ta run --workflow`).
+        #[arg(long)]
+        builtin: bool,
     },
     /// Cancel a running workflow.
     Cancel {
@@ -102,8 +105,14 @@ pub fn execute(command: &WorkflowCommands, config: &GatewayConfig) -> anyhow::Re
     match command {
         WorkflowCommands::Start { definition } => start_workflow(definition),
         WorkflowCommands::Status { workflow_id } => show_status(workflow_id.as_deref()),
-        WorkflowCommands::List { templates, source } => {
-            if *templates {
+        WorkflowCommands::List {
+            templates,
+            source,
+            builtin,
+        } => {
+            if *builtin {
+                list_builtin_workflows()
+            } else if *templates {
                 list_templates()
             } else if source.as_deref() == Some("external") {
                 list_external_workflows(config)
@@ -214,6 +223,27 @@ fn list_workflows() -> anyhow::Result<()> {
     println!();
     println!("Browse built-in templates:");
     println!("  ta workflow list --templates");
+    println!();
+    println!("List built-in workflows (usable with ta run --workflow):");
+    println!("  ta workflow list --builtin");
+    Ok(())
+}
+
+/// List built-in workflow names usable with `ta run --workflow`.
+///
+/// These are the named execution strategies shipped with TA — distinct from
+/// YAML workflow *definitions* (which are multi-stage agent graphs). Built-in
+/// workflows control how a goal is dispatched: as a single agent, as a serial
+/// phase chain, or as a parallel swarm.
+fn list_builtin_workflows() -> anyhow::Result<()> {
+    println!("Built-in workflows (use with: ta run \"goal\" --workflow <name>):");
+    println!();
+    for (name, desc) in WorkflowCatalog::list() {
+        println!("  {:<20} {}", name, desc);
+    }
+    println!();
+    println!("Example:");
+    println!("  ta run \"Implement v0.13.7\" --workflow serial-phases");
     Ok(())
 }
 
