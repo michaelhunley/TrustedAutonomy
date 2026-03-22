@@ -274,9 +274,16 @@ jobs:
         shell: pwsh
         run: |
           cd artifacts
-          Get-FileHash * -Algorithm SHA256 | ForEach-Object {
-            "$($_.Hash.ToLower())  $($_.Path | Split-Path -Leaf)"
-          } | Out-File -Encoding ascii "SHA256SUMS-${{ matrix.target }}.txt"
+          # Explicitly hash only archive files — avoids reading the checksum output file
+          # (Get-FileHash * races with its own output file being written).
+          $files = @(Get-ChildItem -Filter "*.zip") + @(Get-ChildItem -Filter "*.msi")
+          if ($files.Count -eq 0) {
+            Write-Warning "No zip/msi files found in artifacts — skipping checksum"
+          } else {
+            Get-FileHash $files -Algorithm SHA256 | ForEach-Object {
+              "$($_.Hash.ToLower())  $($_.Path | Split-Path -Leaf)"
+            } | Out-File -Encoding ascii "SHA256SUMS-${{ matrix.target }}.txt"
+          }
 
       - name: Generate HTML docs (macOS Intel only)
         if: matrix.target == 'x86_64-apple-darwin'
