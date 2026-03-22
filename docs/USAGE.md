@@ -1114,9 +1114,12 @@ Configure thresholds:
 ```toml
 # .ta/workflow.toml
 [gc]
-stale_threshold_days = 7
-health_check = true          # One-line warning on startup if stale drafts exist
+stale_threshold_days = 7    # When --stale filter shows drafts (default: 7 days)
+stale_hint_days = 3         # When startup hint fires (default: 3 days, informational)
+health_check = true         # One-line warning on startup if stale drafts exist
 ```
+
+`stale_hint_days` and `stale_threshold_days` are independent: the startup hint can fire early (e.g., after a weekend) without `ta draft list --stale` showing anything yet. Set `stale_hint_days = 5` to reduce noise if you find the Monday-morning reminder too aggressive.
 
 ### Unified Garbage Collection (`ta gc`)
 
@@ -3585,6 +3588,23 @@ The `/api/status` endpoint includes `process_health` and `agent_pid` fields in t
   ]
 }
 ```
+
+### CLI Startup Profiling
+
+If `ta` commands feel slow (especially on Windows), use `--startup-profile` to print wall-clock timing for each startup phase:
+
+```bash
+ta --startup-profile version
+# [startup-profile] arg parse:          0.3ms
+# [startup-profile] project root:       0.8ms  (+0.5ms)
+# [startup-profile] config load:        1.2ms  (+0.4ms)
+# [startup-profile] health check:       2.1ms  (+0.9ms)
+# [startup-profile] command dispatch:   2.2ms  (+0.1ms)
+# [startup-profile] ---
+# [startup-profile] total to dispatch:  2.2ms
+```
+
+The flag is global — works with any command. Typical bottlenecks on slow systems: config file I/O, daemon socket connect, PATH scan (`which` on Windows).
 
 ### Daemon Debugging
 

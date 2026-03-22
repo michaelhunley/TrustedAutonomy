@@ -5712,17 +5712,17 @@ Current releases ship archives containing a bare binary and docs. Users must man
 ---
 
 ### v0.13.12 — Beta Bug Bash & Polish
-<!-- status: pending -->
+<!-- status: in_progress -->
 **Goal**: Catch and fix accumulated polish debt, false positives, and deferred UX items from the v0.13.1.x sub-phases before advancing to the deeper v0.13.2+ infrastructure phases. No new features — only fixes, observability improvements, and cleanup.
 
 #### Release Pipeline & Staging Bugs
 
-1. [ ] **`ta draft apply` scans unrelated staging dirs**: During diff/rebase, `apply` enumerates all `.ta/staging/` entries and hits I/O errors on dirs deleted mid-run by GC or manual cleanup. Fix: `apply` should only access its own goal's staging dir by ID — never enumerate the staging directory. (Discovered during v0.13.1.7 release run — GC deleted a sibling staging dir while `ta draft apply` was running.)
+1. [x] **`ta draft apply` scans unrelated staging dirs**: `apply` now validates that the goal's staging workspace exists before opening it. If deleted by concurrent `ta gc`, provides actionable error with exact recovery commands. (Discovered during v0.13.1.7 release run.)
 2. [ ] **Release pipeline drift false positive**: The "Generate release notes" agent step triggers `[info] Source changed since goal start — rebasing against current source.` even when the source has not changed since the goal started. Root cause: drift check uses mtime rather than content hash. Fix: record a content hash of source files at goal-start time and compare by content, not mtime. (Discovered during v0.13.1.7 release run.)
 3. [ ] **Release notes agent should not need a full workspace copy**: The release notes agent only reads git history and writes one `.md` file — it does not need a full staging copy of the workspace. Redesign: release notes generation queries `goal-history.jsonl` (v0.13.10) for completed phases since last tag, then writes the file directly to source without staging. This eliminates the staging/drift fragility entirely for this use case. Longer term: introduce a lightweight "scribe" goal type (no workspace copy, declared write path only) for pure-write, no-compile artifacts. (Design discussion: staging is the right model for code changes that need build/test validation; it is wasteful and fragile for pure documentation/metadata outputs that don't need verification.)
 4. [x] **`--label` dispatches even when pipeline is aborted**: When the user cancels at an approval gate (e.g., "Proceed with 'Push'? [y/N] n"), `run_pipeline` returns early via `?` but the `--label` dispatch block was outside the else branch and ran unconditionally. Fix: moved `--label` dispatch inside the `else { run_pipeline()? ... }` block so it only executes on successful pipeline completion. (Fixed in `release.rs` during v0.13.12 planning.)
 5. [ ] **GC should not run while a release pipeline is active**: `ta gc` should check for running release pipeline processes (or a lockfile written by `ta release run`) and skip — or warn — rather than deleting staging dirs mid-pipeline. Add a `--force` flag to override.
-5b. [ ] **Build-tool lock files left uncommitted after verify step**: After the `[verify]` commands run (`cargo build`, `cargo test`, etc.), build tools may rewrite lock files (`Cargo.lock`, `package-lock.json`, `go.sum`, `Pipfile.lock`) in the staging directory. These are not agent-written changes — they are deterministic outputs of the build tool. The overlay diff currently includes them as changed files, which is correct, but the issue is they accumulate as uncommitted changes in the source after `ta draft apply` because:
+5b. [x] **Build-tool lock files left uncommitted after verify step**: After the `[verify]` commands run (`cargo build`, `cargo test`, etc.), build tools may rewrite lock files (`Cargo.lock`, `package-lock.json`, `go.sum`, `Pipfile.lock`) in the staging directory. These are not agent-written changes — they are deterministic outputs of the build tool. The overlay diff currently includes them as changed files, which is correct, but the issue is they accumulate as uncommitted changes in the source after `ta draft apply` because:
     1. `apply` copies `Cargo.lock` from staging → source (content matches, so source is now "correct")
     2. User then runs a build command → cargo rewrites `Cargo.lock` again (may differ if deps resolved differently)
     3. Nobody commits it because it "wasn't the real work"
@@ -5783,7 +5783,7 @@ Current releases ship archives containing a bare binary and docs. Users must man
 
 #### UX & Health-Check Bugs
 
-7. [ ] **`check_stale_drafts` threshold mismatch**: The startup hint (`"N draft(s) approved/pending but not applied for 3+ days"`) uses a hardcoded 3-day cutoff, but `ta draft list --stale` uses `gc.stale_threshold_days` (default: 7). When the threshold is 7 days, the hint fires for days 3–6 but `--stale` finds nothing — a confusing false alarm. Fix: split into two configurable values in `workflow.toml`:
+7. [x] **`check_stale_drafts` threshold mismatch**: The startup hint (`"N draft(s) approved/pending but not applied for 3+ days"`) uses a hardcoded 3-day cutoff, but `ta draft list --stale` uses `gc.stale_threshold_days` (default: 7). When the threshold is 7 days, the hint fires for days 3–6 but `--stale` finds nothing — a confusing false alarm. Fix: split into two configurable values in `workflow.toml`:
    ```toml
    [gc]
    stale_hint_days      = 3   # when the startup hint fires (informational)
@@ -5801,9 +5801,9 @@ Current releases ship archives containing a bare binary and docs. Users must man
 
 #### Windows Performance & Diagnostics
 
-9w. [ ] **Windows startup profiling**: `ta` commands feel slow on Windows compared to macOS. Add startup-time diagnostics (`ta --startup-profile` or always-on tracing at `RUST_LOG=ta=debug`) that report wall-clock time for each startup phase: binary load, config parse, daemon socket connect, command dispatch. Identify bottlenecks: likely candidates are (a) `which::which()` PATH scan on every command, (b) daemon IPC handshake latency, (c) missing Windows file-open shortcuts compared to macOS `O_CLOEXEC`/TCC caches. Fix the slowest path; add a CI benchmark asserting `ta --version` cold-start < 500ms on Windows runners.
+9w. [x] **Windows startup profiling**: `ta` commands feel slow on Windows compared to macOS. Add startup-time diagnostics (`ta --startup-profile` or always-on tracing at `RUST_LOG=ta=debug`) that report wall-clock time for each startup phase: binary load, config parse, daemon socket connect, command dispatch. Identify bottlenecks: likely candidates are (a) `which::which()` PATH scan on every command, (b) daemon IPC handshake latency, (c) missing Windows file-open shortcuts compared to macOS `O_CLOEXEC`/TCC caches. Fix the slowest path; add a CI benchmark asserting `ta --version` cold-start < 500ms on Windows runners.
 
-10w. [ ] **Lazy `which::which()` for Windows agent resolution**: `build_command()` in `bare_process.rs` calls `which::which()` on every agent spawn even on macOS/Linux where it is not needed. Move the `which` lookup behind `#[cfg(windows)]` so the PATH scan only happens on Windows, and cache the result for the lifetime of the daemon process.
+10w. [x] **Lazy `which::which()` for Windows agent resolution**: `build_command()` in `bare_process.rs` calls `which::which()` on every agent spawn even on macOS/Linux where it is not needed. Move the `which` lookup behind `#[cfg(windows)]` so the PATH scan only happens on Windows, and cache the result for the lifetime of the daemon process.
 
 #### Intelligent Surface (deferred from v0.13.1.6)
 
