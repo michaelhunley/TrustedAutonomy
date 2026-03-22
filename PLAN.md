@@ -120,8 +120,6 @@ Needed for compliance-focused or container-isolated deployments.
 - v0.13.6 — Community Knowledge Hub (post-launch community feature)
 - v0.13.9 — Product Constitution Framework (project-level invariants, draft-time scan, release gate)
 - v0.13.10 — Feature Velocity Stats: build time, fix time, goal outcomes, connector events
-- v0.13.13 — VCS-Aware Team Setup, Project Sharing & Large-Workspace Staging
-- v0.13.14 — Watchdog/Exit-Handler Race & Goal Recovery (`ta goal recover`)
 
 ### Deferred / May Drop
 
@@ -5035,7 +5033,7 @@ auto_approve_reads = true  # SELECT is fine, INSERT/UPDATE/DELETE needs review
 ---
 
 ### v0.13.5 — Database Proxy Plugins
-<!-- status: done -->
+<!-- status: in_progress -->
 **Goal**: Plugin-based database proxies that intercept agent DB operations. The agent connects to a local proxy thinking it's a real database; TA captures every query, enforces read/write policies, and logs mutations for review. Plugins provide wire protocol implementations; TA provides the governance framework (v0.13.4).
 
 **Depends on**: v0.13.4 (External Action Governance — DB proxy extends the `ExternalAction` trait)
@@ -5072,14 +5070,9 @@ This is conceptually a **git staging area for DB mutations**: the overlay is the
 5. [x] Mutation capture: all write operations staged through `DraftOverlay` — provides read-your-writes + JSONL audit trail
 6. [x] Replay support: `apply_mutation()` on `DbProxyPlugin` replays staged mutations against real DB on `ta draft apply`
 7. [x] Reference plugin: `ta-db-proxy-sqlite` — shadow copy approach with SQL classification and mutation replay via rusqlite
-8. → **v0.13.6** Reference plugin: `ta-db-proxy-postgres` — Postgres wire protocol proxy. Deferred: requires wire-protocol proxy infrastructure separate from the SQLite shadow-copy approach.
-9. → **v0.13.6** Reference plugin: `ta-db-proxy-mongo` — MongoDB wire protocol proxy. Deferred with item 8.
-10. → **v0.14.0+** Future plugins (community): MySQL, Redis, DynamoDB. Community contribution point once the `DbProxyPlugin` trait is stable.
-
-#### Deferred items resolved
-
-- Items 8, 9 → v0.13.6: Postgres and MongoDB wire-protocol proxies require a real protocol proxy implementation distinct from SQLite's shadow-copy. Will be implemented when the Community Hub phase lands the plugin ecosystem.
-- Item 10 → v0.14.0+: Community-contributed DB plugins (MySQL, Redis, DynamoDB). `DbProxyPlugin` trait in `ta-db-proxy` is the stable extension point.
+8. [ ] Reference plugin: `ta-db-proxy-postgres` — Postgres wire protocol proxy → v0.13.6+
+9. [ ] Reference plugin: `ta-db-proxy-mongo` — MongoDB wire protocol proxy → v0.13.6+
+10. [ ] Future plugins (community): MySQL, Redis, DynamoDB → v0.14.0+
 
 #### Version: `0.13.5-alpha`
 
@@ -5799,44 +5792,164 @@ Current releases ship archives containing a bare binary and docs. Users must man
 
 ---
 
+### v0.13.13 — VCS-Aware Team Setup, Project Sharing & Large-Workspace Staging
+<!-- status: pending -->
+<!-- beta: yes — foundational for team adoption and game/media project support -->
+**Goal**: Make TA a first-class citizen in any VCS-managed project by (1) formalising which `.ta/` files are shared configuration vs local runtime state, (2) generating correct VCS ignore rules automatically for Git and Perforce, and (3) making staging fast enough for large game and media projects by replacing full copies with symlink-based partial staging and ReFS CoW cloning on Windows.
+
+**Problem — team setup**: There is no formal split between "team configuration" (should be versioned and shared: `workflow.toml`, `policy.yaml`, `constitution.toml`, agent manifests) and "local runtime state" (should be ignored: `staging/`, `goals/`, `events/`, `daemon.toml`). New team members have no guidance, setups drift, and `.ta/staging/` occasionally gets committed accidentally.
+
+**Problem — large workspaces**: `ta goal start` copies the entire project workspace. For a game project (800GB Unreal Engine workspace) or a Node.js project with `node_modules/`, this makes staging impractically slow or impossible. A 400GB project where only `Source/` (~50MB) is agent-writable should cost ~50MB to stage, not 400GB.
+
+#### 1. VCS Detection & Setup Wizard
+
+1. [ ] **VCS detection in `ta init` / `ta setup`**: Before writing config files, detect the VCS backend:
+   - **Git**: check for `.git/` directory (or `git rev-parse --git-dir` succeeds)
+   - **Perforce**: check for `.p4config` in any parent directory, or `P4PORT`/`P4CLIENT` env vars set
+   - **None / unknown**: prompt user to select from `[git, perforce, none]`
+   - Detected VCS written to `workflow.toml` under `[source]`:
+     ```toml
+     [source]
+     vcs = "git"          # "git" | "perforce" | "none"
+     # p4_client = ""     # Perforce: P4CLIENT name (from wizard if P4 detected)
+     # p4_port = ""       # Perforce: P4PORT (from env or .p4config)
+     ```
+2. [ ] **Interactive wizard (`ta setup`)**: Step-by-step first-time setup:
+   - Detect VCS (item 1) and project language (from `package.json`, `pyproject.toml`, `Cargo.toml`, `go.mod`)
+   - Write `workflow.toml` with VCS + language + verify commands
+   - Write `.taignore` (item 10)
+   - Generate VCS ignore entries (items 7–8)
+   - Run `ta doctor` to validate the resulting setup
+   - Print summary: `"Shared files to commit: workflow.toml, policy.yaml [list]. Local files already ignored: [list]."`
+3. [ ] **`ta doctor` VCS validation**: Extend `ta doctor` with:
+   - **Git**: verify `git status` works; check that local-only `.ta/` paths are in `.gitignore`; warn if any are untracked/staged
+   - **Perforce**: verify `p4 info` responds; check `P4IGNORE` env var is set and includes local-only paths; warn if not
+   - **None**: skip with info message
+   - Output: `[ok]`, `[warn]`, `[error]` per check, matching existing `ta doctor` style
+
+#### 2. Shared vs Local File Partitioning
+
+4. [ ] **Canonical shared/local lists**: Define `SHARED_TA_PATHS` and `LOCAL_TA_PATHS` as `const` arrays in a new `crates/ta-workspace/src/partitioning.rs` module — authoritative source of truth used by the wizard, ignore generation, and `ta doctor`:
+   ```rust
+   pub const SHARED_TA_PATHS: &[&str] = &[
+       "workflow.toml", "policy.yaml", "constitution.toml",
+       "memory.toml", "bmad.toml", "agents/", "constitutions/",
+       "memory/", "templates/",
+   ];
+   pub const LOCAL_TA_PATHS: &[&str] = &[
+       "daemon.toml", "daemon.local.toml", "memory.rvf",
+       "staging/", "store/", "goals/", "events/", "sessions/",
+       "release.lock", "velocity-stats.jsonl", "audit-ledger.jsonl",
+       "taignore", "interactions/", "release-history.json",
+   ];
+   ```
+5. [ ] **`ta plan shared`**: Prints shared/local split for the current project — which files would be committed and which ignored. Useful for auditing team setups and onboarding contributors:
+   ```
+   Shared (commit to VCS):
+     workflow.toml         [present]
+     policy.yaml           [present]
+     constitution.toml     [missing — run `ta constitution init-toml` to create]
+   Local (should be ignored):
+     staging/              [ignored ✓]
+     daemon.toml           [NOT IGNORED ⚠ — run `ta doctor` to fix]
+   ```
+6. [ ] **USAGE.md team setup guide**: New section "Setting Up TA for Your Team" — which files to commit, `ta setup` on a fresh clone, policy/constitution changes reviewed via normal PRs, Git and Perforce workflows side-by-side.
+
+#### 3. VCS-Specific Ignore File Generation
+
+7. [ ] **Git: append to `.gitignore`**: During `ta setup` / `ta init`, append a `# Trusted Autonomy — local runtime state` block to the project root `.gitignore`. Idempotent — detects block marker, no duplicates on re-run. `--force` rewrites the block:
+   ```
+   # Trusted Autonomy — local runtime state (do not commit)
+   .ta/daemon.toml
+   .ta/daemon.local.toml
+   .ta/memory.rvf
+   .ta/staging/
+   .ta/store/
+   .ta/goals/
+   .ta/events/
+   .ta/sessions/
+   .ta/release.lock
+   .ta/velocity-stats.jsonl
+   .ta/audit-ledger.jsonl
+   .ta/interactions/
+   .ta/release-history.json
+   ```
+8. [ ] **Perforce: generate `.p4ignore`**: Write (or append to) `.p4ignore` at workspace root with the same local-only paths. Include a prominent warning if `P4IGNORE` env var is not set:
+   ```
+   ⚠ Perforce: P4IGNORE env var is not set.
+     TA wrote local-only paths to .p4ignore, but Perforce won't use it until:
+       export P4IGNORE=.p4ignore   (add to your shell profile)
+     Without this, .ta/staging/, .ta/goals/, etc. may be submitted accidentally.
+   ```
+   `ta doctor` re-surfaces this warning when `P4IGNORE` is unset.
+9. [ ] **Idempotency**: Running `ta setup` a second time does not add duplicate ignore entries. Detects the `# Trusted Autonomy` marker and skips. `--force` flag rewrites the block.
+
+#### 4. Large-Workspace Staging Optimisation
+
+**Problem**: A game project (800GB Unreal Engine workspace) or Node.js project (`node_modules/` 200MB+) makes `ta goal start` impractically slow. Only the agent-writable subset (e.g., `Source/` ~50MB) needs to be copied; read-only directories can be **symlinked** for near-zero staging cost.
+
+**Strategy A — Smart symlink staging (cross-platform default)**
+
+For paths in `.taignore` or `policy.yaml protected_paths`, create a **read-only symlink** in staging pointing back to the source instead of copying. For a 400GB project where `Source/` is 50MB: staging cost is ~50MB + symlinks, not 400GB.
+
+```toml
+# workflow.toml
+[staging]
+strategy = "smart"     # "full" (default, no change) | "smart" | "refs-cow" (Windows ReFS)
+symlink_protected = true   # symlink policy.yaml protected_paths
+symlink_ignored = true     # symlink .taignore paths
+```
+
+**Strategy B — ReFS CoW cloning (Windows Dev Drive)**
+
+On Windows with a ReFS-formatted Dev Drive, use `FSCTL_DUPLICATE_EXTENTS_TO_FILE` for instant zero-cost full workspace copies (true Copy-on-Write: shares physical blocks until written). This is what `git clone --local` does on ReFS. Full copy with no disk overhead — best for projects where most paths need to be writable.
+
+```toml
+[staging]
+strategy = "refs-cow"   # Windows ReFS only; auto-falls back to "smart" on NTFS
+```
+
+**Auto-detection**: If `strategy` is not configured, TA probes at `ta goal start`: (1) Windows + ReFS volume → `refs-cow`; (2) `.taignore`/`protected_paths` present → `smart`; (3) fallback → `full`.
+
+10. [ ] **`staging.strategy` config**: Add `StagingStrategy` enum (`Full`, `Smart`, `RefsCow`) to `WorkflowConfig` in `ta-submit/src/config.rs`. Default `Full` preserves current behaviour — no regression. Document in workflow.toml schema.
+11. [ ] **Smart staging — symlink pass**: In `ta-workspace/overlay.rs`, build `symlink_set` from `.taignore` + `policy.protected_paths` before the copy loop. For each path in `symlink_set`, create a symlink in staging pointing to the source dir; skip in the copy loop.
+12. [ ] **Smart staging — write-through protection**: When `strategy = "smart"`, the policy layer detects writes to symlinked paths (write target resolves into source tree, not staging tree) and blocks with: `"Agent attempted to write to symlinked path '<path>' which is marked protected. Add it to writable paths in workflow.toml or policy.yaml."`.
+13. [ ] **ReFS CoW staging (Windows)**: In `ta-workspace/overlay.rs` behind `#[cfg(windows)]`, probe the workspace volume for ReFS using `GetVolumeInformationW` (`FILE_SUPPORTS_BLOCK_REFCOUNTING` flag). If ReFS, use `DeviceIoControl(FSCTL_DUPLICATE_EXTENTS_TO_FILE)` to clone the workspace root. Fall back to `smart` or `full` on NTFS.
+14. [ ] **Staging size report at `ta goal start`**: After staging: `"Staging: 55 MB copied, 749 GB symlinked (smart mode) — 13,636× reduction."` For `full` mode on a large workspace: warn and suggest `smart`.
+15. [ ] **`ta doctor` staging check**: Warn if `strategy = "full"` and workspace > 1 GB: `"Workspace is 800 GB with strategy=full. Consider strategy=smart with a .taignore."` On Windows NTFS with large workspace: suggest creating a Dev Drive (ReFS) for `refs-cow` staging.
+16. [ ] **Tests**: smart staging creates symlinks for ignored paths; copy loop skips them; write-through detection fires correctly; ReFS probe falls back on NTFS; staging size report matches actual copy + symlink sizes.
+
+#### Version: `0.13.13-alpha`
+
+---
+
 ### v0.13.14 — Watchdog/Exit-Handler Race & Goal Recovery
 <!-- status: pending -->
 <!-- beta: yes — critical correctness fix; goal state machine must be reliable for all users -->
-**Goal**: Fix three related bugs where a long-running goal (10+ hours) is incorrectly marked `failed` on clean agent exit, add the `finalizing` lifecycle state to prevent the race, and introduce `ta goal recover` for human-driven recovery when state goes wrong.
+**Goal**: Fix three related bugs where a long-running goal (10+ hours) is incorrectly marked `failed` on clean agent exit, add the `finalizing` lifecycle state to close the race window, and introduce `ta goal recover` for human-driven recovery when state goes wrong.
 
-**Root cause report** (discovered on Windows with a 10-hour Unreal Engine onboarding goal):
+**Root cause report** (reproduced on Windows with a 10-hour Unreal Engine onboarding goal):
 
 When agent PID 76108 exited (code 0) at 15:59:32, two things happened concurrently:
 - **Exit handler** (correct path): detected code 0, began draft creation from staging (~3 seconds for large UE workspace).
 - **Watchdog** (zombie path): next tick at 15:59:33, saw PID gone + goal state still `running` + `last_update: 36357s ago` > `stale_threshold: 3600s`. Declared zombie. At 15:59:35 — simultaneously with draft creation — transitioned goal to `failed`.
 
-The watchdog won the final write. Draft was created correctly, but goal state was `failed`. Two earlier failed goals (`bf54b517`, `85070aa3`) had legitimate `program not found` failures, creating a cluttered watchdog queue that contributed to the race.
+The watchdog won the final write. Draft was created correctly, but goal state was `failed`. Two earlier failed goals (`bf54b517`, `85070aa3`) had legitimate `program not found` failures, creating watchdog noise that contributed to the race.
 
 #### Bug 1 (Critical): Watchdog races with exit handler
 
 **Fix**: Atomic state transition to `finalizing` at the moment of exit detection, before slow draft creation begins.
 
-```rust
-// In process monitor, on exit code 0 detection:
-goal.transition_to(GoalState::Finalizing {
-    exit_code: 0,
-    finalize_started_at: Utc::now(),
-})?;  // atomic write — watchdog must skip Finalizing goals
-// Now draft creation (potentially slow) can proceed safely
-```
-
-**Watchdog rule**: Skip any goal in `Finalizing` state. Only transition to `failed` if `Finalizing` has been stuck for > `finalize_timeout` (default: 300s — enough for any staging size).
-
 1. [ ] **`GoalState::Finalizing`**: Add `Finalizing { exit_code: i32, finalize_started_at: DateTime<Utc> }` variant to `GoalRunState` enum in `ta-goal/src/goal_run.rs`. Serialize as `"finalizing"` in goal JSON.
 2. [ ] **Atomic transition on clean exit**: In the process monitor exit handler, before starting draft creation: atomically write `state: finalizing` to the goal JSON. Use a file-level lock (or JSONL append + read-back) to make this atomic with respect to concurrent watchdog writes.
-3. [ ] **Watchdog skips `Finalizing`**: Watchdog loop skips any goal in `Finalizing` state unless `finalize_timeout` exceeded (default: 300s). After timeout, transitions to `failed` with reason `"Finalizing timed out after Xs — draft creation may have been interrupted"`.
+3. [ ] **Watchdog skips `Finalizing`**: Watchdog loop skips any goal in `Finalizing` state unless `finalize_timeout` exceeded (default: 300s — enough for any staging size). After timeout, transitions to `failed` with reason: `"Finalizing timed out after Xs — draft creation may have been interrupted. Run: ta goal recover <id>"`.
 4. [ ] **Tests**: concurrent exit + watchdog tick (use `tokio::time::pause()`); `Finalizing` → `Applied` happy path; `Finalizing` timeout → `Failed`; JSON serialization round-trip.
 
 #### Bug 2 (Important): Exit code 0 must never produce zombie
 
-**Fix**: Zombie detection logic must gate on exit code. Code 0 = clean exit; watchdog must never promote this to `failed`.
+**Fix**: Zombie detection must gate on exit code. Code 0 = clean exit; watchdog must never promote this to `failed`.
 
-5. [ ] **Exit-code gate in zombie detection**: In `ta-daemon/src/watchdog.rs` (or equivalent), add `if exit_code == Some(0) { continue; }` before any zombie/stale evaluation. A successfully-exited goal that hasn't been collected yet is **not** a zombie.
+5. [ ] **Exit-code gate in zombie detection**: In `ta-daemon/src/watchdog.rs` (or equivalent), add `if exit_code == Some(0) { continue; }` before any zombie/stale evaluation.
 6. [ ] **Distinguish `stale` from `zombie`**: Separate the two conditions:
    - **Stale**: goal is `running`, PID still alive, no state update for > `stale_threshold`. Action: warn only (no state change). Emit `GoalStale` event.
    - **Zombie**: goal is `running`, PID is gone, exit code non-zero or unknown. Action: transition to `failed`.
@@ -5847,13 +5960,13 @@ goal.transition_to(GoalState::Finalizing {
 
 The `stale_threshold: 3600s` implies heartbeats are expected, but Claude Code (and most agents) never send them. A 10-hour goal looks identical to a crashed goal after 1 hour.
 
-8. [ ] **`heartbeat_required` flag per agent framework**: In agent manifest (`.ta/agents/<name>.toml`), add `heartbeat_required = false` (default). When `false`, disable `stale` checking for that agent — only zombie detection (PID-gone + non-zero exit) applies. Claude Code manifest gets `heartbeat_required = false`.
-9. [ ] **Configurable stale threshold**: `workflow.toml` already has `stale_threshold` but it applies to all agents. Add per-agent override:
+8. [ ] **`heartbeat_required` flag per agent framework**: In agent manifest (`.ta/agents/<name>.toml`), add `heartbeat_required = false` (default). When `false`, disable stale checking for that agent — only zombie detection (PID-gone + non-zero exit) applies. Claude Code manifest gets `heartbeat_required = false`.
+9. [ ] **Configurable stale threshold per agent**:
    ```toml
    [agents.claude-code]
    stale_threshold_secs = 0   # 0 = disable stale checking
    ```
-10. [ ] **Document heartbeat protocol**: If an agent framework *does* want to heartbeat (e.g., a custom long-running agent), document the API: `POST /api/goals/:id/heartbeat` — daemon updates `last_activity_at`. Agents that don't call this are treated as `heartbeat_required = false`.
+10. [ ] **Document heartbeat API**: `POST /api/goals/:id/heartbeat` — daemon updates `last_activity_at`. Agents that don't call this are treated as `heartbeat_required = false`.
 
 #### `ta goal recover` — Human Recovery Command
 
@@ -5879,27 +5992,27 @@ When goal state is wrong (e.g., `failed` but draft was created, `running` with d
 
     Choice [1-5]:
     ```
-    - **Option 1** (most common for this bug): atomically writes `state: pr_ready` + `draft_id` to goal JSON. Emits `GoalRecovered` audit event.
+    - **Option 1**: atomically writes `state: pr_ready` + `draft_id` to goal JSON. Emits `GoalRecovered` audit event.
     - **Option 2**: re-runs `ta draft build <goal-id>` to create a fresh draft from staging.
     - **Option 3**: marks `state: cancelled`, moves goal to history with `disposition: "recovered_as_cancelled"`.
 
-12. [ ] **Diagnosis heuristics**: `ta goal recover` inspects the goal to produce a diagnosis before showing options:
-    - If `state == failed` AND a valid draft exists → likely watchdog race
-    - If `state == running` AND PID is dead → zombie not cleaned up
-    - If `state == running` AND PID alive AND last_update > threshold → stale/heartbeat issue
-    - If `state == finalizing` AND stuck > 300s → draft creation interrupted
-    - Otherwise → "Unknown issue — showing raw state for manual inspection"
+12. [ ] **Diagnosis heuristics**: `ta goal recover` inspects the goal to produce a plain-English diagnosis before showing options:
+    - `state == failed` AND valid draft exists → "Watchdog overrode clean exit with failed state."
+    - `state == running` AND PID dead → "Goal is running but agent process is gone (zombie not cleaned up)."
+    - `state == running` AND PID alive AND last_update > threshold → "Agent is alive but not sending heartbeats."
+    - `state == finalizing` AND stuck > 300s → "Draft creation was interrupted or very slow."
+    - Otherwise → "Unknown issue — showing raw state for manual inspection."
 
-13. [ ] **`ta goal recover --list`**: Show all goals in potentially-recoverable states (`failed` with draft, `running` with dead PID, `finalizing` stuck > 300s) without interactive mode — useful for automation and CI.
+13. [ ] **`ta goal recover --list`**: Show all goals in potentially-recoverable states (`failed` with draft, `running` with dead PID, `finalizing` stuck > 300s). Useful for automation and post-incident review.
 
-14. [ ] **`GoalRecovered` audit event**: Emit to audit log with: goal_id, previous_state, new_state, recovery_option, operator (CLI user or "auto"). Ensures human-driven recovery is auditable.
+14. [ ] **`GoalRecovered` audit event**: Emitted with: goal_id, previous_state, new_state, recovery_option, operator (CLI user). Human-driven recovery is fully auditable.
 
-15. [ ] **Tests**: recover failed-with-valid-draft → pr_ready; recover running-with-dead-pid; recover stuck-finalizing; `--list` output format; audit event emitted.
+15. [ ] **Tests**: recover failed-with-valid-draft → pr_ready; recover running-with-dead-pid; recover stuck-finalizing; `--list` output; audit event emitted.
 
-#### Observability improvements (contributing factors)
+#### Observability improvements
 
-16. [ ] **Goal state logged on every watchdog action**: Current watchdog may silently transition state. Add `tracing::warn!(goal_id, prev_state, new_state, reason, "watchdog: goal state transition")` on every watchdog-driven transition.
-17. [ ] **`ta goal status <id>` shows watchdog fields**: Include `last_update`, `stale_threshold`, `pid_alive`, `exit_code` in `ta goal status` output so users can diagnose without reading raw JSON.
+16. [ ] **Watchdog logs every state transition**: `tracing::warn!(goal_id, prev_state, new_state, reason, "watchdog: goal state transition")` on every watchdog-driven transition. Currently silent.
+17. [ ] **`ta goal status <id>` shows watchdog fields**: Include `last_update`, `stale_threshold`, `pid_alive`, `exit_code` in output so users can diagnose without reading raw JSON.
 
 #### Version: `0.13.14-alpha`
 
