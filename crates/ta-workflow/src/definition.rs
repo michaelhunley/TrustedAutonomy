@@ -54,6 +54,15 @@ pub struct WorkflowDefinition {
     /// Verdict scoring configuration.
     #[serde(default)]
     pub verdict: Option<VerdictConfig>,
+    /// Default agent framework for all roles in this workflow (v0.13.8).
+    ///
+    /// Overrides the project `[agent].default_framework` in daemon.toml.
+    /// Individual roles can override this via their `framework` field.
+    ///
+    /// Example in workflow YAML:
+    ///   agent_framework: codex
+    #[serde(default)]
+    pub agent_framework: Option<String>,
 }
 
 /// A single stage in the workflow.
@@ -285,6 +294,7 @@ roles:
             ],
             roles: Default::default(),
             verdict: None,
+            agent_framework: None,
         };
         let order = def.stage_order().unwrap();
         assert_eq!(order, vec!["build", "review"]);
@@ -316,6 +326,7 @@ roles:
             ],
             roles: Default::default(),
             verdict: None,
+            agent_framework: None,
         };
         let result = def.stage_order();
         assert!(matches!(

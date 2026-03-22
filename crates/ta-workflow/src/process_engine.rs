@@ -369,6 +369,7 @@ mod tests {
                 stages: vec![],
                 roles: Default::default(),
                 verdict: None,
+                agent_framework: None,
             },
         };
         let json = serde_json::to_string(&req).unwrap();
@@ -399,6 +400,7 @@ mod tests {
             stages: vec![],
             roles: Default::default(),
             verdict: None,
+            agent_framework: None,
         };
         let result = engine.start(&def);
         assert!(matches!(result, Err(WorkflowError::ProcessError { .. })));

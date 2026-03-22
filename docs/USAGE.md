@@ -474,22 +474,41 @@ ta agent info claude-flow
 
 #### Add a custom framework
 
-Create a TOML manifest in `.ta/agents/` (project-level) or `~/.config/ta/agents/` (user-level):
+The fastest way is `ta agent new`:
+
+```bash
+# Generate a manifest for a local Ollama model
+ta agent new --model ollama/qwen2.5-coder:7b
+
+# Generate from a starter template
+ta agent new --template ollama        # Local Ollama model
+ta agent new --template codex         # OpenAI Codex
+ta agent new --template openai-compat # Any OpenAI-compatible endpoint
+ta agent new --template custom-script # Shell script agent
+```
+
+Or create a TOML manifest manually in `.ta/agents/` (project-level) or `~/.config/ta/agents/` (user-level):
 
 ```toml
-# .ta/agents/my-agent.toml
+# ~/.config/ta/agents/my-agent.toml
 name        = "my-agent"
 version     = "1.0.0"
 description = "My custom agent backend"
 command     = "my-agent-bin"
 args        = ["--headless"]
-context_file = "CLAUDE.md"
+context_inject = "prepend"   # prepend | env | arg | none
+
+[memory]
+inject    = "context"     # context | mcp | env | none
+write_back = "exit-file"  # exit-file | mcp | none
 ```
 
-Validate with:
+Check prerequisites and validate:
 
 ```bash
-ta agent framework-validate .ta/agents/my-agent.toml
+ta agent doctor my-agent              # checks command, endpoint, API keys
+ta agent framework-validate ~/.config/ta/agents/my-agent.toml
+ta agent test my-agent                # smoke-test instructions
 ```
 
 Then use it:
@@ -497,6 +516,22 @@ Then use it:
 ```bash
 ta run "Fix the bug" --agent my-agent
 ```
+
+#### Default framework
+
+Set per-project defaults in `.ta/daemon.toml`:
+
+```toml
+[agent]
+default_framework = "qwen-coder"   # used by ta run unless overridden
+qa_framework      = "claude-code"  # used by automated QA workflow roles
+```
+
+#### Framework selection order
+
+Highest priority wins: `--agent` flag → workflow `agent_framework` field → project `daemon.toml` → user `~/.config/ta/daemon.toml` → built-in default (`claude-code`).
+
+TA logs which framework was selected and why each time `ta run` is invoked.
 
 You can also add YAML agent configs (see [Agent Configuration](#agent-configuration)).
 

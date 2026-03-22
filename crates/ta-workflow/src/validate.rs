@@ -471,6 +471,7 @@ mod tests {
                 m
             },
             verdict: None,
+            agent_framework: None,
         }
     }
 
@@ -547,6 +548,7 @@ mod tests {
             ],
             roles: HashMap::new(),
             verdict: None,
+            agent_framework: None,
         };
         let result = validate_workflow(&wf, None);
         assert!(result.has_errors());

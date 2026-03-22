@@ -621,6 +621,24 @@ pub struct AgentConfig {
     pub max_sessions: usize,
     pub idle_timeout_secs: u64,
     pub default_agent: String,
+    /// Default agent framework for goal execution (`ta run`).
+    ///
+    /// Used when no `--agent` flag is provided and no workflow specifies a framework.
+    /// Resolution order: goal --agent flag → workflow agent_framework → this field → "claude-code".
+    ///
+    /// Example in daemon.toml:
+    ///   [agent]
+    ///   default_framework = "codex"
+    #[serde(default = "default_framework")]
+    pub default_framework: String,
+    /// Framework to use for automated QA / review goals (e.g., v0.13.7 workflow steps).
+    ///
+    /// When a workflow's stage specifies `role.type = "qa"` and no explicit framework is
+    /// configured for that role, this framework is used.
+    ///
+    /// Example: `qa_framework = "qwen-coder"` runs QA checks on a fast local model.
+    #[serde(default = "default_qa_framework")]
+    pub qa_framework: String,
     /// Agent for shell Q&A sessions (natural language questions in `ta shell`).
     /// Defaults to `"claude-code"` — must be a prompt-capable agent, not a framework.
     /// Separate from `default_agent` which is used for goal execution (`ta run`).
@@ -643,6 +661,14 @@ pub struct AgentConfig {
     pub parallel_idle_timeout_secs: u64,
 }
 
+fn default_framework() -> String {
+    "claude-code".to_string()
+}
+
+fn default_qa_framework() -> String {
+    "claude-code".to_string()
+}
+
 fn default_qa_agent() -> String {
     "claude-code".to_string()
 }
@@ -661,6 +687,8 @@ impl Default for AgentConfig {
             max_sessions: 3,
             idle_timeout_secs: 3600,
             default_agent: "claude-code".to_string(),
+            default_framework: "claude-code".to_string(),
+            qa_framework: "claude-code".to_string(),
             qa_agent: "claude-code".to_string(),
             timeout_secs: 300,
             tool_access: AgentToolAccess::default(),

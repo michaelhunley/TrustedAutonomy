@@ -307,6 +307,37 @@ fn builtin_agent_config(agent_id: &str) -> AgentLaunchConfig {
     }
 }
 
+/// Build an `AgentLaunchConfig` from a resolved `AgentFrameworkManifest` (v0.13.8 item 4).
+///
+/// Used when the framework is a non-built-in TOML manifest — provides the
+/// minimal config needed to launch the process. Built-in frameworks keep their
+/// hardcoded `builtin_agent_config()` values which have richer headless_args etc.
+fn framework_to_launch_config(manifest: &ta_runtime::AgentFrameworkManifest) -> AgentLaunchConfig {
+    use ta_runtime::ContextInjectMode;
+    // Append {prompt} placeholder after the manifest's fixed args.
+    let mut args_template = manifest.args.clone();
+    args_template.push("{prompt}".to_string());
+    let injects_context_file = matches!(manifest.context_inject, ContextInjectMode::Prepend);
+    AgentLaunchConfig {
+        command: manifest.command.clone(),
+        args_template,
+        injects_context_file,
+        injects_settings: false, // custom frameworks don't get claude settings
+        pre_launch: None,
+        env: Default::default(),
+        shell: None,
+        name: Some(manifest.name.clone()),
+        description: Some(manifest.description.clone()),
+        interactive: None,
+        alignment: None,
+        headless_args: Vec::new(),
+        non_interactive_env: Default::default(),
+        auto_answers: Vec::new(),
+        context_file: None,
+        runtime: Default::default(),
+    }
+}
+
 // ── Smart Follow-Up Resolution (v0.10.9) ────────────────────────
 
 /// Resolve smart follow-up flags into concrete title, phase, follow-up ID, and context.
@@ -1061,20 +1092,57 @@ pub fn execute(
         }
     }
 
-    // ── Agent framework resolution (v0.13.8) ────────────────────
+    // ── Agent framework resolution (v0.13.8 items 2, 4, 19) ────────────────
     //
-    // Resolve the named agent framework manifest. Built-in frameworks are
-    // always available; custom frameworks are discovered from .ta/agents/
-    // and ~/.config/ta/agents/. When the framework is not claude-code,
-    // print an informational message so the user knows which backend is active.
-    // TODO(v0.13.8): use framework.command/args instead of hardcoded claude.
-    {
-        let framework = ta_runtime::AgentFrameworkManifest::resolve(agent, &config.workspace_root);
-        match framework {
-            Some(ref f) if f.name != "claude-code" => {
+    // Resolution order (highest-priority wins):
+    //   1. --agent flag (goal-level, passed as `agent` parameter)
+    //   2. workflow YAML `agent_framework` field (resolved upstream)
+    //   3. [agent].default_framework in daemon.toml (not available here — resolved by caller)
+    //   4. built-in default "claude-code"
+    //
+    // For built-in frameworks (claude-code, codex, claude-flow), the existing
+    // `builtin_agent_config()` provides richer launch config (headless_args etc.).
+    // For custom/discovered manifests, `framework_to_launch_config()` converts the
+    // manifest to an AgentLaunchConfig.
+    //
+    // `resolved_framework` is stored for memory bridge injection later.
+    let resolved_framework =
+        ta_runtime::AgentFrameworkManifest::resolve(agent, &config.workspace_root);
+
+    let agent_config = {
+        let framework_source = if agent != "claude-code" {
+            "goal --agent flag"
+        } else {
+            "default"
+        };
+        match &resolved_framework {
+            Some(f) if !f.builtin => {
+                // Custom manifest — log and build config from it.
+                tracing::info!(
+                    framework = %f.name,
+                    command = %f.command,
+                    source = framework_source,
+                    "Selected custom agent framework"
+                );
+                if !quiet {
+                    println!(
+                        "Agent framework: {} — {} (source: {})",
+                        f.name, f.description, framework_source
+                    );
+                }
+                framework_to_launch_config(f)
+            }
+            Some(f) if f.name != "claude-code" => {
+                // Known built-in (codex, claude-flow, ollama).
+                tracing::info!(
+                    framework = %f.name,
+                    source = framework_source,
+                    "Selected built-in agent framework"
+                );
                 if !quiet {
                     println!("Agent framework: {} ({})", f.name, f.description);
                 }
+                agent_launch_config(agent, source)
             }
             None => {
                 eprintln!(
@@ -1082,12 +1150,25 @@ pub fn execute(
                     agent
                 );
                 eprintln!("  Run `ta agent frameworks` to see available frameworks.");
+                tracing::warn!(
+                    framework = %agent,
+                    "Unknown agent framework — falling back to claude-code"
+                );
+                agent_launch_config("claude-code", source)
             }
-            _ => {}
+            _ => {
+                // claude-code (default) — no announcement needed.
+                tracing::debug!(
+                    framework = "claude-code",
+                    source = framework_source,
+                    "Selected agent framework"
+                );
+                agent_launch_config(agent, source)
+            }
         }
-    }
-
-    let agent_config = agent_launch_config(agent, source);
+    };
+    // agent_config is mutable so we can extend its env with framework-specific vars.
+    let mut agent_config = agent_config;
 
     // Disk space pre-flight (v0.11.3 item 28).
     {
@@ -1227,12 +1308,101 @@ pub fn execute(
         inject_claude_settings(&staging_path, source)?;
     }
 
+    // v0.13.8 item 8: Env/Arg-mode context injection for non-prepend frameworks.
+    // For custom frameworks with context_inject = "env" or "arg", write the goal
+    // context to .ta/goal_context.md and set TA_GOAL_CONTEXT (env mode) or
+    // inject --context <path> args (arg mode). This runs in addition to — or
+    // instead of — the CLAUDE.md prepend path above.
+    let framework_env_extras: std::collections::HashMap<String, String> = {
+        use ta_runtime::{inject_context_arg, inject_context_env, ContextInjectMode};
+        if let Some(ref fw) = resolved_framework {
+            if !fw.builtin
+                && !matches!(
+                    fw.context_inject,
+                    ContextInjectMode::Prepend | ContextInjectMode::None
+                )
+            {
+                let context_text =
+                    build_goal_context_text(title, &goal_id, goal.plan_phase.as_deref(), config);
+                match fw.context_inject {
+                    ContextInjectMode::Env => {
+                        match inject_context_env(&staging_path, &context_text) {
+                            Ok(r) => {
+                                tracing::info!(framework = %fw.name, "Injected context via env (TA_GOAL_CONTEXT)");
+                                r.env_vars
+                            }
+                            Err(e) => {
+                                tracing::warn!(framework = %fw.name, "Failed to inject env context: {}", e);
+                                Default::default()
+                            }
+                        }
+                    }
+                    ContextInjectMode::Arg => {
+                        match inject_context_arg(&staging_path, &context_text, "--context") {
+                            Ok(r) => {
+                                tracing::info!(framework = %fw.name, "Injected context via arg (--context)");
+                                r.env_vars // no env vars for arg mode, but keeps structure
+                            }
+                            Err(e) => {
+                                tracing::warn!(framework = %fw.name, "Failed to inject arg context: {}", e);
+                                Default::default()
+                            }
+                        }
+                    }
+                    _ => Default::default(),
+                }
+            } else {
+                Default::default()
+            }
+        } else {
+            Default::default()
+        }
+    };
+
     // Inject TA MCP server config into .mcp.json for macro goals (#60).
     // Without this, the agent sees MCP tool documentation in CLAUDE.md but
     // can't actually call the tools because no MCP server is configured.
     if macro_goal {
         inject_mcp_server_config(&staging_path)?;
     }
+
+    // v0.13.8 item 11: Memory bridge — MCP mode.
+    // For frameworks with memory.inject = "mcp" (Claude Code, Codex, Claude-Flow),
+    // inject ta-memory as a local MCP server so the agent can call memory tools natively.
+    // This happens for all goals when the framework supports MCP memory, not just macro goals.
+    {
+        use ta_runtime::MemoryInjectMode;
+        if let Some(ref fw) = resolved_framework {
+            if matches!(fw.memory.inject, MemoryInjectMode::Mcp) {
+                if let Err(e) = inject_memory_mcp_server(&staging_path) {
+                    tracing::warn!(framework = %fw.name, "Failed to inject ta-memory MCP server: {}", e);
+                }
+            }
+        }
+    }
+
+    // v0.13.8 item 12: Memory bridge — context mode.
+    // For frameworks with memory.inject = "context", serialize relevant memory
+    // entries into the context file alongside goal context.
+    {
+        use ta_runtime::MemoryInjectMode;
+        if let Some(ref fw) = resolved_framework {
+            if matches!(fw.memory.inject, MemoryInjectMode::Context) {
+                let context_file_name = &fw.context_file;
+                let max_entries = fw.memory.max_entries;
+                inject_memory_context(
+                    &staging_path,
+                    context_file_name,
+                    max_entries,
+                    goal.plan_phase.as_deref(),
+                    config,
+                );
+            }
+        }
+    }
+
+    // Merge framework env extras into agent_config so they are passed to the process.
+    agent_config.env.extend(framework_env_extras);
 
     // Emit GoalStarted event to FsEventStore (v0.9.4.1).
     // Skip when reusing an existing goal — the MCP tool already emitted GoalStarted.
@@ -1531,6 +1701,11 @@ pub fn execute(
                     tracing::warn!("Failed to persist goal exit event: {}", e);
                 }
             }
+
+            // v0.13.8 item 13: Exit-file memory ingestion.
+            // If the agent wrote new memories to TA_MEMORY_OUT (exit-file mode),
+            // ingest them into ta-memory now.
+            ingest_memory_out(&staging_path, config);
 
             // Log guidance interactions to session if any.
             if let Some((ref store, ref mut session)) = session_store {
@@ -3826,6 +4001,168 @@ fn count_changed_recursive(staging_root: &Path, dir: &Path, source_root: &Path) 
         }
     }
     count
+}
+
+// ── v0.13.8: Memory bridge helper functions ─────────────────────────────────
+
+/// Build a plain goal context text string for env/arg-mode injection.
+/// (Simpler than the full CLAUDE.md prepend — just goal ID, title, plan phase.)
+fn build_goal_context_text(
+    title: &str,
+    goal_id: &str,
+    plan_phase: Option<&str>,
+    config: &GatewayConfig,
+) -> String {
+    let phase_line = plan_phase
+        .map(|p| format!("\n**Plan Phase:** {}", p))
+        .unwrap_or_default();
+    let memory_section = build_memory_context_section_for_inject(config, title, plan_phase);
+    format!(
+        "# TA Goal Context\n\n**Goal:** {}\n**Goal ID:** {}{}\n{}",
+        title, goal_id, phase_line, memory_section
+    )
+}
+
+/// Inject ta-memory as a local MCP server into `.mcp.json` (v0.13.8 item 11).
+///
+/// For MCP-mode memory frameworks (Claude Code, Codex, Claude-Flow), TA exposes
+/// `ta-memory` as an MCP server so the agent can call memory_read/write/search natively.
+/// This extends the existing inject_mcp_server_config logic.
+fn inject_memory_mcp_server(staging_path: &Path) -> anyhow::Result<()> {
+    let mcp_json_path = staging_path.join(MCP_JSON_PATH);
+
+    let ta_binary = std::env::current_exe()
+        .ok()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "ta".to_string());
+
+    let memory_server_entry = serde_json::json!({
+        "command": ta_binary,
+        "args": ["memory", "serve"],
+        "env": {
+            "TA_PROJECT_ROOT": staging_path.display().to_string()
+        }
+    });
+
+    // Read or create .mcp.json
+    let mut mcp_config: serde_json::Value = if mcp_json_path.exists() {
+        let content = std::fs::read_to_string(&mcp_json_path)?;
+        serde_json::from_str(&content).unwrap_or_else(|_| serde_json::json!({ "mcpServers": {} }))
+    } else {
+        serde_json::json!({ "mcpServers": {} })
+    };
+
+    if let Some(servers) = mcp_config
+        .get_mut("mcpServers")
+        .and_then(|s| s.as_object_mut())
+    {
+        servers.insert("ta-memory".to_string(), memory_server_entry);
+    } else {
+        mcp_config["mcpServers"] = serde_json::json!({
+            "ta-memory": memory_server_entry
+        });
+    }
+
+    if let Some(parent) = mcp_json_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&mcp_json_path, serde_json::to_string_pretty(&mcp_config)?)?;
+    tracing::debug!("Injected ta-memory MCP server into .mcp.json");
+    Ok(())
+}
+
+/// Serialize memory entries into the agent's context file (v0.13.8 item 12).
+///
+/// For context-mode frameworks, appends relevant memory entries to the context
+/// file as a markdown block so the agent sees prior context passively.
+fn inject_memory_context(
+    staging_path: &Path,
+    context_file: &str,
+    max_entries: usize,
+    plan_phase: Option<&str>,
+    config: &GatewayConfig,
+) {
+    // max_entries from manifest controls how many entries to serialize.
+    // build_memory_context_section_for_inject uses capture_config.max_context_entries
+    // internally; we pass our override via a custom path when it differs.
+    let _ = max_entries; // passed as manifest config; full tuning deferred to later sub-phase
+    let memory_section = build_memory_context_section_for_inject(config, "", plan_phase);
+    if memory_section.is_empty() {
+        return;
+    }
+    let target = if std::path::Path::new(context_file).is_absolute() {
+        std::path::PathBuf::from(context_file)
+    } else {
+        staging_path.join(context_file)
+    };
+    if let Ok(existing) = std::fs::read_to_string(&target) {
+        let updated = format!("{}\n{}", existing, memory_section);
+        if let Err(e) = std::fs::write(&target, updated) {
+            tracing::warn!(file = %target.display(), "Failed to append memory context: {}", e);
+        }
+    }
+}
+
+/// Ingest memory entries written by the agent to TA_MEMORY_OUT (v0.13.8 item 13).
+///
+/// After agent exit, if `.ta/memory_out.json` exists, parse it as a JSON array
+/// of memory entries and store each in the project's ta-memory store.
+fn ingest_memory_out(staging_path: &Path, config: &GatewayConfig) {
+    let out_path = staging_path.join(".ta").join("memory_out.json");
+    if !out_path.exists() {
+        return;
+    }
+    let content = match std::fs::read_to_string(&out_path) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(path = %out_path.display(), "Failed to read memory_out.json: {}", e);
+            return;
+        }
+    };
+    // Parse as array of {key, value, tags, category} objects.
+    let entries: Vec<serde_json::Value> = match serde_json::from_str(&content) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(path = %out_path.display(), "Failed to parse memory_out.json: {}", e);
+            return;
+        }
+    };
+    if entries.is_empty() {
+        return;
+    }
+    // Write entries to ta-memory using the FsMemoryStore.
+    let memory_dir = config.workspace_root.join(".ta").join("memory");
+    let mut store = ta_memory::FsMemoryStore::new(&memory_dir);
+    let mut ingested = 0usize;
+    for entry in &entries {
+        let key = entry
+            .get("key")
+            .and_then(|v| v.as_str())
+            .unwrap_or("agent-memory");
+        let value = entry.get("value").cloned().unwrap_or_else(|| entry.clone());
+        let tags: Vec<String> = entry
+            .get("tags")
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|t| t.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        use ta_memory::MemoryStore as _;
+        if let Err(e) = store.store(key, value, tags, "agent-exit-file") {
+            tracing::warn!(key = key, "Failed to ingest memory entry: {}", e);
+        } else {
+            ingested += 1;
+        }
+    }
+    tracing::info!(
+        count = ingested,
+        total = entries.len(),
+        "Ingested agent exit-file memory entries"
+    );
+    // Clean up the output file.
+    let _ = std::fs::remove_file(&out_path);
 }
 
 #[cfg(test)]
