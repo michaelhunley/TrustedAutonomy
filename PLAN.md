@@ -5603,6 +5603,41 @@ This data exists ephemerally in goal JSON and draft packages, but is never aggre
 }
 ```
 
+#### How TA helps you manage projects and realize results
+
+Velocity stats are not just observability data — they are the feedback loop that converts governance into compound value over time.
+
+**For individual developers and small teams:**
+
+> *"How long does it actually take to close a feature from goal-start to applied commit?"*
+
+Most teams have no answer to this. Work feels either fast or slow, but there's no durable record of where time goes. TA's `velocity-stats.jsonl` captures the full timeline: build time (start → pr_ready), review time (pr_ready → applied), rework cost (follow-up goals spawned to address review feedback), and outcome rate (applied vs denied vs cancelled). After 20–30 goals, patterns emerge:
+- Which workflow types produce low rework?
+- Does agent performance degrade on large goals?
+- Does review time spike on specific categories of work?
+
+These are answerable questions. Without TA, they aren't.
+
+**For team leads and engineering managers:**
+
+> *"Are our agents actually delivering outcomes, or just producing drafts that get denied?"*
+
+`ta stats velocity` gives an at-a-glance answer: outcome distribution, average build time, p90 review latency, rework cost per workflow type. The `VelocitySnapshot` event (emitted on every terminal outcome) lets enterprise deployments aggregate this across projects. A central dashboard shows which teams are getting high apply rates and where bottlenecks are — the same way a CI dashboard shows build health.
+
+**For governance and compliance owners:**
+
+> *"We deployed AI agents — how do we know they're being used appropriately?"*
+
+Velocity stats are the behavioral record of human oversight: every review event (approved, denied, amended, discussed) is captured. The apply rate for governance-sensitive workflows (code changes, config changes, external actions) tells you whether the human-in-the-loop is functioning as a meaningful control or a rubber stamp. Low amendment rates and high apply rates on well-scoped goals signal a healthy system. High denial rates or high rework costs signal misaligned goals or insufficient agent guidance.
+
+**The compound effect:**
+
+Governance gates prevent bad outcomes. Telemetry reveals patterns. Those patterns drive better goal scoping, better workflow design, and better agent configuration — which produces higher apply rates, lower rework costs, and shorter cycle times. The system improves itself.
+
+> *TA makes the invisible visible: not just what agents did, but how well the human-AI collaboration is working at the project level.*
+
+This section's content belongs in the README and governance documentation as the answer to: *"Why instrument if I'm already reviewing every draft?"* — because reviewing is a gate, and telemetry is a map.
+
 #### Items
 
 1. [x] **`VelocityEntry` struct** (`crates/ta-goal/src/velocity.rs`): fields per schema above; `Serialize`/`Deserialize`; builder from `GoalRun`
