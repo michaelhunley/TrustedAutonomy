@@ -3447,6 +3447,7 @@ dependencies = [
  "ta-goal",
  "ta-memory",
  "ta-policy",
+ "ta-submit",
  "ta-workflow",
  "ta-workspace",
  "tempfile",
