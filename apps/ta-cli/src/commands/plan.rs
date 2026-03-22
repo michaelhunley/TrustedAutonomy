@@ -172,6 +172,13 @@ pub enum PlanCommands {
         #[arg(long)]
         goal: Option<String>,
     },
+    /// Show which .ta/ files are shared (commit to VCS) vs local (should be ignored) (v0.13.13).
+    ///
+    /// Useful for auditing team setups and onboarding contributors to ensure
+    /// config files are tracked and runtime state is ignored.
+    ///
+    /// Example: `ta plan shared`
+    Shared,
 }
 
 pub fn execute(cmd: &PlanCommands, config: &GatewayConfig) -> anyhow::Result<()> {
@@ -241,6 +248,7 @@ pub fn execute(cmd: &PlanCommands, config: &GatewayConfig) -> anyhow::Result<()>
             after,
             goal,
         } => plan_create_phase(config, id, title, after.as_deref(), goal.as_deref()),
+        PlanCommands::Shared => plan_shared(config),
     }
 }
 
@@ -1951,6 +1959,67 @@ fn check_plan_constitution(config: &GatewayConfig, phases: &[PlanPhase]) -> anyh
     }
     if warnings == 0 {
         println!("  No constitutional concerns found.");
+    }
+    Ok(())
+}
+
+/// Show the shared/local .ta/ file split for the current project (v0.13.13).
+///
+/// Prints which .ta/ files should be committed to VCS (shared with the team)
+/// and which are local runtime state that should be ignored.
+fn plan_shared(config: &GatewayConfig) -> anyhow::Result<()> {
+    use ta_workspace::partitioning::{git_is_ignored, VcsBackend, LOCAL_TA_PATHS, SHARED_TA_PATHS};
+
+    let project_root = &config.workspace_root;
+    let ta_dir = project_root.join(".ta");
+    let vcs = VcsBackend::detect(project_root);
+
+    println!("TA file partitioning — VCS: {}", vcs.as_str());
+    println!("{}", "─".repeat(48));
+    println!();
+    println!("Shared (commit to VCS):");
+    for path in SHARED_TA_PATHS {
+        let full = ta_dir.join(path.trim_end_matches('/'));
+        let status = if full.exists() {
+            "[present]"
+        } else {
+            "[missing]"
+        };
+        // Format: left-align path in 28 chars.
+        println!("  .ta/{:<28} {}", path, status);
+    }
+    println!();
+    println!("Local (should be ignored):");
+    let mut warn_count = 0u32;
+    for path in LOCAL_TA_PATHS {
+        let full = ta_dir.join(path.trim_end_matches('/'));
+        let exists = full.exists();
+        let ignored_status = if vcs == VcsBackend::Git {
+            match git_is_ignored(project_root, path) {
+                Ok(true) => "ignored ✓",
+                Ok(false) if exists => {
+                    warn_count += 1;
+                    "NOT IGNORED ⚠"
+                }
+                Ok(false) => "not present",
+                Err(_) => "unknown",
+            }
+        } else {
+            if exists {
+                "present"
+            } else {
+                "absent"
+            }
+        };
+        println!("  .ta/{:<28} [{}]", path, ignored_status);
+    }
+    println!();
+    if warn_count > 0 {
+        println!("  {} path(s) are present but not ignored.", warn_count);
+        println!("  Run `ta setup vcs` to add the TA block to .gitignore.");
+        println!("  Run `ta doctor` for a full VCS health report.");
+    } else {
+        println!("  All local paths are either absent or properly ignored.");
     }
     Ok(())
 }

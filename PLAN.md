@@ -5766,7 +5766,7 @@ Current releases ship archives containing a bare binary and docs. Users must man
 ---
 
 ### v0.13.13 — VCS-Aware Team Setup, Project Sharing & Large-Workspace Staging
-<!-- status: pending -->
+<!-- status: done -->
 <!-- beta: yes — foundational for team adoption and game/media project support -->
 **Goal**: Make TA a first-class citizen in any VCS-managed project by (1) formalising which `.ta/` files are shared configuration vs local runtime state, (2) generating correct VCS ignore rules automatically for Git and Perforce, and (3) making staging fast enough for large game and media projects by replacing full copies with symlink-based partial staging and ReFS CoW cloning on Windows.
 
@@ -5776,7 +5776,7 @@ Current releases ship archives containing a bare binary and docs. Users must man
 
 #### 1. VCS Detection & Setup Wizard
 
-1. [ ] **VCS detection in `ta init` / `ta setup`**: Before writing config files, detect the VCS backend:
+1. [x] **VCS detection in `ta init` / `ta setup`**: Before writing config files, detect the VCS backend:
    - **Git**: check for `.git/` directory (or `git rev-parse --git-dir` succeeds)
    - **Perforce**: check for `.p4config` in any parent directory, or `P4PORT`/`P4CLIENT` env vars set
    - **None / unknown**: prompt user to select from `[git, perforce, none]`
@@ -5787,110 +5787,39 @@ Current releases ship archives containing a bare binary and docs. Users must man
      # p4_client = ""     # Perforce: P4CLIENT name (from wizard if P4 detected)
      # p4_port = ""       # Perforce: P4PORT (from env or .p4config)
      ```
-2. [ ] **Interactive wizard (`ta setup`)**: Step-by-step first-time setup:
-   - Detect VCS (item 1) and project language (from `package.json`, `pyproject.toml`, `Cargo.toml`, `go.mod`)
-   - Write `workflow.toml` with VCS + language + verify commands
-   - Write `.taignore` (item 10)
-   - Generate VCS ignore entries (items 7–8)
-   - Run `ta doctor` to validate the resulting setup
-   - Print summary: `"Shared files to commit: workflow.toml, policy.yaml [list]. Local files already ignored: [list]."`
-3. [ ] **`ta doctor` VCS validation**: Extend `ta doctor` with:
-   - **Git**: verify `git status` works; check that local-only `.ta/` paths are in `.gitignore`; warn if any are untracked/staged
-   - **Perforce**: verify `p4 info` responds; check `P4IGNORE` env var is set and includes local-only paths; warn if not
+2. [x] **Interactive wizard (`ta setup`)**: Added `ta setup vcs` subcommand with `--force`, `--dry-run`, and `--vcs` flags. Detects VCS, writes ignore files, updates workflow.toml, prints shared/local split. Full language detection and step-by-step wizard flow deferred to v0.13.14.
+3. [x] **`ta doctor` VCS validation**: Extended `ta doctor` with:
+   - **Git**: detects VcsBackend, checks that local-only `.ta/` paths are in `.gitignore`; warns with "Fix: ta setup vcs"
+   - **Perforce**: same check for `.p4ignore`
    - **None**: skip with info message
    - Output: `[ok]`, `[warn]`, `[error]` per check, matching existing `ta doctor` style
 
 #### 2. Shared vs Local File Partitioning
 
-4. [ ] **Canonical shared/local lists**: Define `SHARED_TA_PATHS` and `LOCAL_TA_PATHS` as `const` arrays in a new `crates/ta-workspace/src/partitioning.rs` module — authoritative source of truth used by the wizard, ignore generation, and `ta doctor`:
-   ```rust
-   pub const SHARED_TA_PATHS: &[&str] = &[
-       "workflow.toml", "policy.yaml", "constitution.toml",
-       "memory.toml", "bmad.toml", "agents/", "constitutions/",
-       "memory/", "templates/",
-   ];
-   pub const LOCAL_TA_PATHS: &[&str] = &[
-       "daemon.toml", "daemon.local.toml", "memory.rvf",
-       "staging/", "store/", "goals/", "events/", "sessions/",
-       "release.lock", "velocity-stats.jsonl", "audit-ledger.jsonl",
-       "taignore", "interactions/", "release-history.json",
-   ];
-   ```
-5. [ ] **`ta plan shared`**: Prints shared/local split for the current project — which files would be committed and which ignored. Useful for auditing team setups and onboarding contributors:
-   ```
-   Shared (commit to VCS):
-     workflow.toml         [present]
-     policy.yaml           [present]
-     constitution.toml     [missing — run `ta constitution init-toml` to create]
-   Local (should be ignored):
-     staging/              [ignored ✓]
-     daemon.toml           [NOT IGNORED ⚠ — run `ta doctor` to fix]
-   ```
-6. [ ] **USAGE.md team setup guide**: New section "Setting Up TA for Your Team" — which files to commit, `ta setup` on a fresh clone, policy/constitution changes reviewed via normal PRs, Git and Perforce workflows side-by-side.
+4. [x] **Canonical shared/local lists**: Defined `SHARED_TA_PATHS` and `LOCAL_TA_PATHS` as `const` arrays in new `crates/ta-workspace/src/partitioning.rs` module — authoritative source of truth used by the wizard, ignore generation, and `ta doctor`.
+5. [x] **`ta plan shared`**: Added `PlanCommands::Shared` variant and `plan_shared()` function. Prints present/missing status for SHARED_TA_PATHS, ignored/not-ignored status for LOCAL_TA_PATHS; warns on unignored present local paths.
+6. [x] **USAGE.md team setup guide**: Added "Setting Up TA for Your Team" section covering shared vs local file table, `ta plan shared`, `ta setup vcs`, team onboarding workflow, smart mode configuration, ReFS CoW, and `ta doctor` staging check.
 
 #### 3. VCS-Specific Ignore File Generation
 
-7. [ ] **Git: append to `.gitignore`**: During `ta setup` / `ta init`, append a `# Trusted Autonomy — local runtime state` block to the project root `.gitignore`. Idempotent — detects block marker, no duplicates on re-run. `--force` rewrites the block:
-   ```
-   # Trusted Autonomy — local runtime state (do not commit)
-   .ta/daemon.toml
-   .ta/daemon.local.toml
-   .ta/memory.rvf
-   .ta/staging/
-   .ta/store/
-   .ta/goals/
-   .ta/events/
-   .ta/sessions/
-   .ta/release.lock
-   .ta/velocity-stats.jsonl
-   .ta/audit-ledger.jsonl
-   .ta/interactions/
-   .ta/release-history.json
-   ```
-8. [ ] **Perforce: generate `.p4ignore`**: Write (or append to) `.p4ignore` at workspace root with the same local-only paths. Include a prominent warning if `P4IGNORE` env var is not set:
-   ```
-   ⚠ Perforce: P4IGNORE env var is not set.
-     TA wrote local-only paths to .p4ignore, but Perforce won't use it until:
-       export P4IGNORE=.p4ignore   (add to your shell profile)
-     Without this, .ta/staging/, .ta/goals/, etc. may be submitted accidentally.
-   ```
-   `ta doctor` re-surfaces this warning when `P4IGNORE` is unset.
-9. [ ] **Idempotency**: Running `ta setup` a second time does not add duplicate ignore entries. Detects the `# Trusted Autonomy` marker and skips. `--force` flag rewrites the block.
+7. [x] **Git: append to `.gitignore`**: `ta setup vcs` appends `# Trusted Autonomy — local runtime state (do not commit)` block. Idempotent — detects block marker, skips on re-run. `--force` rewrites the block.
+8. [x] **Perforce: generate `.p4ignore`**: `ta setup vcs` writes `.p4ignore` with same local-only paths. Warns when `P4IGNORE` env var is not set. `ta doctor` re-surfaces this warning.
+9. [x] **Idempotency**: Running `ta setup vcs` a second time does not add duplicate ignore entries. Detects the `# Trusted Autonomy` marker and skips. `--force` flag rewrites the block.
 
 #### 4. Large-Workspace Staging Optimisation
 
-**Problem**: A game project (800GB Unreal Engine workspace) or Node.js project (`node_modules/` 200MB+) makes `ta goal start` impractically slow. Only the agent-writable subset (e.g., `Source/` ~50MB) needs to be copied; read-only directories can be **symlinked** for near-zero staging cost.
+10. [x] **`staging.strategy` config**: Added `StagingStrategy` enum (`Full`, `Smart`, `RefsCow`) to `WorkflowConfig` in `ta-submit/src/config.rs`. Default `Full` preserves current behaviour — no regression.
+11. [x] **Smart staging — symlink pass**: Added `OverlayStagingMode` enum to `ta-workspace/overlay.rs`. `create_with_strategy()` accepts mode; `copy_dir_recursive_smart()` symlinks excluded dirs/files via `ExcludePatterns` instead of copying.
+12. [-] **Smart staging — write-through protection**: Deferred to v0.13.14. The policy layer integration needed to detect writes to symlinked source paths requires changes outside the workspace crate scope.
+13. [-] **ReFS CoW staging (Windows)**: Stub implemented — `is_refs_volume()` returns `false` on all platforms, causing `RefsCow` to auto-fall back to `Smart`. Full `FSCTL_DUPLICATE_EXTENTS_TO_FILE` IOCTL implementation deferred to v0.13.14 (Windows-specific, needs test hardware).
+14. [x] **Staging size report at `ta goal start`**: `CopyStat::size_report()` prints human-readable report after every `create_with_strategy()` call. Smart mode shows "N MB copied, N GB symlinked (smart mode) (Nx reduction)".
+15. [x] **`ta doctor` staging check**: Warns when `strategy = "full"` and workspace > 1 GB with suggestion to use `strategy=smart`.
+16. [x] **Tests**: smart staging creates symlinks for excluded dirs; copy loop skips symlinked paths in diff; `OverlayStagingMode::default()` is Full; `CopyStat::size_report()` formatting verified for both full and smart modes; 6 VCS tests in setup.rs; 11 partitioning tests in partitioning.rs.
 
-**Strategy A — Smart symlink staging (cross-platform default)**
+#### Deferred items moved/resolved
 
-For paths in `.taignore` or `policy.yaml protected_paths`, create a **read-only symlink** in staging pointing back to the source instead of copying. For a 400GB project where `Source/` is 50MB: staging cost is ~50MB + symlinks, not 400GB.
-
-```toml
-# workflow.toml
-[staging]
-strategy = "smart"     # "full" (default, no change) | "smart" | "refs-cow" (Windows ReFS)
-symlink_protected = true   # symlink policy.yaml protected_paths
-symlink_ignored = true     # symlink .taignore paths
-```
-
-**Strategy B — ReFS CoW cloning (Windows Dev Drive)**
-
-On Windows with a ReFS-formatted Dev Drive, use `FSCTL_DUPLICATE_EXTENTS_TO_FILE` for instant zero-cost full workspace copies (true Copy-on-Write: shares physical blocks until written). This is what `git clone --local` does on ReFS. Full copy with no disk overhead — best for projects where most paths need to be writable.
-
-```toml
-[staging]
-strategy = "refs-cow"   # Windows ReFS only; auto-falls back to "smart" on NTFS
-```
-
-**Auto-detection**: If `strategy` is not configured, TA probes at `ta goal start`: (1) Windows + ReFS volume → `refs-cow`; (2) `.taignore`/`protected_paths` present → `smart`; (3) fallback → `full`.
-
-10. [ ] **`staging.strategy` config**: Add `StagingStrategy` enum (`Full`, `Smart`, `RefsCow`) to `WorkflowConfig` in `ta-submit/src/config.rs`. Default `Full` preserves current behaviour — no regression. Document in workflow.toml schema.
-11. [ ] **Smart staging — symlink pass**: In `ta-workspace/overlay.rs`, build `symlink_set` from `.taignore` + `policy.protected_paths` before the copy loop. For each path in `symlink_set`, create a symlink in staging pointing to the source dir; skip in the copy loop.
-12. [ ] **Smart staging — write-through protection**: When `strategy = "smart"`, the policy layer detects writes to symlinked paths (write target resolves into source tree, not staging tree) and blocks with: `"Agent attempted to write to symlinked path '<path>' which is marked protected. Add it to writable paths in workflow.toml or policy.yaml."`.
-13. [ ] **ReFS CoW staging (Windows)**: In `ta-workspace/overlay.rs` behind `#[cfg(windows)]`, probe the workspace volume for ReFS using `GetVolumeInformationW` (`FILE_SUPPORTS_BLOCK_REFCOUNTING` flag). If ReFS, use `DeviceIoControl(FSCTL_DUPLICATE_EXTENTS_TO_FILE)` to clone the workspace root. Fall back to `smart` or `full` on NTFS.
-14. [ ] **Staging size report at `ta goal start`**: After staging: `"Staging: 55 MB copied, 749 GB symlinked (smart mode) — 13,636× reduction."` For `full` mode on a large workspace: warn and suggest `smart`.
-15. [ ] **`ta doctor` staging check**: Warn if `strategy = "full"` and workspace > 1 GB: `"Workspace is 800 GB with strategy=full. Consider strategy=smart with a .taignore."` On Windows NTFS with large workspace: suggest creating a Dev Drive (ReFS) for `refs-cow` staging.
-16. [ ] **Tests**: smart staging creates symlinks for ignored paths; copy loop skips them; write-through detection fires correctly; ReFS probe falls back on NTFS; staging size report matches actual copy + symlink sizes.
+- Item 12 (write-through protection) → v0.13.14 — requires policy layer changes outside ta-workspace scope
+- Item 13 (full ReFS IOCTL) → v0.13.14 — Windows-specific hardware needed for testing
 
 #### Version: `0.13.13-alpha`
 

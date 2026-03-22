@@ -59,6 +59,10 @@ pub struct CopyStat {
     /// Sum of source file sizes in bytes (COW copies report the same number
     /// but consume no extra disk space until the agent modifies the files).
     pub bytes_total: u64,
+    /// Number of directories symlinked (smart mode only). Zero for full/refs-cow.
+    pub symlinks_created: usize,
+    /// Estimated bytes behind symlinks (for the staging size report message).
+    pub bytes_symlinked: u64,
 }
 
 impl CopyStat {
@@ -68,6 +72,45 @@ impl CopyStat {
             duration: Duration::ZERO,
             files_copied: 0,
             bytes_total: 0,
+            symlinks_created: 0,
+            bytes_symlinked: 0,
+        }
+    }
+
+    /// Format a human-readable staging size report.
+    pub fn size_report(&self) -> String {
+        if self.symlinks_created > 0 {
+            let copied_mb = self.bytes_total as f64 / (1024.0 * 1024.0);
+            let symlinked_gb = self.bytes_symlinked as f64 / (1024.0 * 1024.0 * 1024.0);
+            let reduction = if self.bytes_total > 0 && self.bytes_symlinked > 0 {
+                let ratio =
+                    (self.bytes_total + self.bytes_symlinked) as f64 / self.bytes_total as f64;
+                format!("  ({:.0}× reduction)", ratio)
+            } else {
+                String::new()
+            };
+            format!(
+                "Staging: {:.1} MB copied, {:.1} GB symlinked (smart mode){} in {:.1}s",
+                copied_mb,
+                symlinked_gb,
+                reduction,
+                self.duration.as_secs_f64()
+            )
+        } else if self.strategy.is_cow() {
+            format!(
+                "Staging: {} files ({:.1} MB) via {} in {:.1}s",
+                self.files_copied,
+                self.bytes_total as f64 / (1024.0 * 1024.0),
+                self.strategy.description(),
+                self.duration.as_secs_f64()
+            )
+        } else {
+            format!(
+                "Staging: {} files ({:.1} MB) copied in {:.1}s",
+                self.files_copied,
+                self.bytes_total as f64 / (1024.0 * 1024.0),
+                self.duration.as_secs_f64()
+            )
         }
     }
 }

@@ -6876,6 +6876,122 @@ See [PLAN.md](../PLAN.md) for full details on each phase.
 
 ---
 
+## Setting Up TA for Your Team
+
+TA distinguishes between **shared configuration** (checked into VCS, reviewed as normal PRs) and **local runtime state** (machine-specific, should be ignored by your VCS). This section explains the split, how to configure your VCS ignore rules, and how to optimize staging for large workspaces.
+
+### Shared vs Local Files
+
+**Commit these to VCS** — they encode team policy and agent definitions:
+
+| File / Directory | Purpose |
+|---|---|
+| `.ta/workflow.toml` | Staging strategy, verify commands, channel config |
+| `.ta/policy.yaml` | Action governance and auto-approval rules |
+| `.ta/constitution.toml` | Behavioral contract for agents |
+| `.ta/memory.toml` | Persistent memory backend config |
+| `.ta/agents/` | Agent configuration files |
+| `.ta/constitutions/` | Constitution documents |
+| `.ta/templates/` | Project templates |
+
+**Never commit these** — they are local runtime state and change on every machine:
+
+| File / Directory | Why not commit |
+|---|---|
+| `.ta/staging/` | Agent workspaces (gigabytes on game projects) |
+| `.ta/goals/` | Goal run history and state files |
+| `.ta/events/` | Event stream log |
+| `.ta/daemon.toml` | Machine-local daemon configuration |
+| `.ta/audit-ledger.jsonl` | Audit log (environment-specific) |
+| `.ta/velocity-stats.jsonl` | Per-machine velocity stats |
+
+To audit the current split for your project:
+
+```bash
+ta plan shared
+```
+
+### Generating VCS Ignore Rules
+
+Run this once per project clone to add the TA block to your VCS ignore file:
+
+```bash
+ta setup vcs            # auto-detect Git or Perforce, update .gitignore / .p4ignore
+ta setup vcs --dry-run  # preview what would change without writing
+ta setup vcs --force    # rewrite the TA block (e.g. after upgrading TA)
+```
+
+For Git projects, this appends a block to `.gitignore`:
+
+```
+# Trusted Autonomy — local runtime state (do not commit)
+.ta/daemon.toml
+.ta/daemon.local.toml
+.ta/staging/
+.ta/goals/
+.ta/events/
+...
+```
+
+For Perforce projects, it writes the same entries to `.p4ignore`. If `P4IGNORE` is not set, TA prints a reminder:
+
+```
+⚠ Perforce: P4IGNORE env var is not set.
+  TA wrote local-only paths to .p4ignore, but Perforce won't use it until:
+    export P4IGNORE=.p4ignore   (add to your shell profile)
+```
+
+### Team Onboarding Workflow
+
+When a teammate clones the repo for the first time:
+
+```bash
+git clone <repo>
+cd <project>
+ta setup vcs          # add local state to .gitignore
+ta setup wizard       # generate .ta/workflow.toml, policy.yaml, etc.
+ta doctor             # verify everything looks healthy
+ta daemon start       # start the local TA daemon
+```
+
+Policy and constitution changes work like any other code change — agents propose them via draft, the team reviews and merges via the normal PR flow.
+
+### Large-Workspace Staging (Smart Mode)
+
+By default (`strategy = "full"`), `ta goal start` copies the entire project into a staging directory. For large workspaces (Unreal Engine, Node projects with `node_modules/`, etc.) this can be slow or impractical.
+
+**Smart mode** symlinks excluded directories instead of copying them. Only the agent-writable subset is physically copied:
+
+```toml
+# .ta/workflow.toml
+[staging]
+strategy = "smart"    # symlink .taignore / excluded dirs
+```
+
+With a `.taignore` or `DEFAULT_EXCLUDES` (includes `node_modules/`, `target/`, etc.):
+
+```
+Staging: 55 MB copied, 749 GB symlinked (smart mode)  (13,636× reduction) in 0.3s
+```
+
+The agent sees the full project layout. Files behind symlinks are read-only (any write attempt will be flagged). Files in the agent-writable area are fully staged and diffed normally.
+
+**Windows ReFS Dev Drive**: On a Windows machine with a ReFS-formatted Dev Drive, use `strategy = "refs-cow"` for instant zero-cost clones via Copy-on-Write. Falls back to `smart` automatically on NTFS volumes.
+
+```toml
+[staging]
+strategy = "refs-cow"   # Windows ReFS only; auto-falls back to "smart" on NTFS
+```
+
+**`ta doctor` staging check**: `ta doctor` warns when `strategy = "full"` and the workspace exceeds 1 GB:
+
+```
+  Staging strategy... full (workspace is 42 GB — consider strategy=smart with a .taignore)
+    Add to .ta/workflow.toml: [staging]\nstrategy = "smart"
+```
+
+---
+
 ## Troubleshooting
 
 ### Agent cannot access files
