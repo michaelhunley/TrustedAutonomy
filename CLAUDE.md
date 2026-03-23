@@ -91,7 +91,7 @@ All outcomes must be **observable** (with details and logging) and **actionable*
 
 ## Current State
 
-- **Current version**: `0.14.2-alpha`
+- **Current version**: `0.13.17.2-alpha`
 - See **PLAN.md** for the canonical development roadmap with per-phase status
 - `ta plan list` / `ta plan status` show current progress
 - Goals can link to plan phases: `ta run "title" --phase 4b`
@@ -101,9 +101,9 @@ All outcomes must be **observable** (with details and logging) and **actionable*
 
 When completing a phase, you MUST update versions as part of the work:
 
-1. **`apps/ta-cli/Cargo.toml`**: Update `version` to the phase's target version **only if it is higher than the current workspace version**. Never set the version to a lower value — if the workspace is at `0.14.2-alpha` and the phase is `v0.13.8`, do **not** change the version. Only bump forward (e.g., from `0.14.2-alpha` to `0.14.3-alpha`).
+1. **`apps/ta-cli/Cargo.toml`**: Update `version` to the phase's target version. Version numbers follow the plan phase number directly (e.g., completing phase `v0.13.17.3` → `version = "0.13.17.3-alpha"`). The version must always match the last completed plan phase.
 
-   **Anti-regression rule scope**: This rule applies to agent-mediated goals only. Human-initiated version changes (e.g., pinning to a specific semver for a public release, then re-bumping) are permitted with an explicit commit message explaining the intent.
+   **Anti-regression rule scope**: Agents must not set the version to a value that would skip or re-order plan phases. Human-initiated version changes (e.g., re-aligning after divergence, pinning for a public release) are permitted with an explicit commit message explaining the intent.
 
 2. **This file (`CLAUDE.md`)**: Update "Current version" above only when you bumped the version in step 1.
 3. **`PLAN.md`**: Mark the phase `<!-- status: done -->` (done automatically by `ta draft apply --phase`)
@@ -113,12 +113,11 @@ Version format: `MAJOR.MINOR.PATCH-alpha` (semver). See `PLAN.md` "Versioning & 
 
 ### Plan Phase Numbers vs Binary Semver
 
-Plan phase IDs (e.g., `v0.13.17.2`) and the binary semver (e.g., `0.14.3-alpha`) are **two separate tracks** that should stay in sync going forward but may diverge temporarily when phases are implemented out of order.
+Plan phase IDs and the binary semver are **the same track** — the version in `Cargo.toml` must always match the last completed plan phase. Completing `v0.13.17.2` → set `version = "0.13.17.2-alpha"`. Completing `v0.14.0` → set `version = "0.14.0-alpha"`.
 
-**Current divergence**: v0.14.0–v0.14.2 were implemented before completing v0.13.17.x, leaving the binary at `0.14.2-alpha` while v0.13.17.2–v0.13.17.4 are still pending. Resolution:
-- Each v0.13.17.x completion bumps binary forward by one patch (0.14.3, 0.14.4, 0.14.5).
-- After v0.13.17.3 completes: **pin binary to `0.13.17.3`** for the public release, cut tag `public-alpha-v0.13.17.3`, then immediately bump to `0.14.3-alpha` (or next appropriate version) for ongoing development.
-- Going forward: do not start a higher phase (e.g., v0.14.3) if lower phases (v0.13.17.x) still have `<!-- status: pending -->` markers. A guard for this is planned for v0.14 (`ta plan status --check-order`).
+**Resolved divergence**: v0.14.0–v0.14.2 were previously implemented before completing v0.13.17.x, leaving the binary ahead of the plan. This has been corrected: binary is now at `0.13.17.2-alpha` (human-initiated re-alignment, 2026-03-23). Going forward, the version must not advance past the current plan phase.
+
+- Do not start a higher phase (e.g., `v0.14.3`) if lower phases (`v0.13.17.x`) still have `<!-- status: pending -->` markers. A guard for this is planned (`ta plan status --check-order`, v0.14.3).
 
 ### Public Release Process (after v0.13.17.3)
 
@@ -140,10 +139,10 @@ bash install_local.sh
 git tag public-alpha-v0.13.17.3
 git push origin public-alpha-v0.13.17.3
 
-# 5. Re-bump for ongoing development
-# Edit apps/ta-cli/Cargo.toml: version = "0.14.3-alpha"
-# Edit CLAUDE.md: Current version = 0.14.3-alpha
-git commit -m "chore: bump version to 0.14.3-alpha for post-release development"
+# 5. Re-bump for ongoing development (next plan phase after 0.13.17.3)
+# Edit apps/ta-cli/Cargo.toml: version = "0.13.17.4-alpha"
+# Edit CLAUDE.md: Current version = 0.13.17.4-alpha
+git commit -m "chore: bump version to 0.13.17.4-alpha for post-release development"
 git push
 ```
 
