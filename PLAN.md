@@ -6033,6 +6033,110 @@ All items implemented except items 5 and 13 (deferred). New tests: 5 (main.rs) +
 
 ---
 
+---
+
+### v0.13.17 — Draft Evidence, Perforce Plugin & Pre-Release Hardening
+<!-- status: pending -->
+**Goal**: Harden the path from agent exit to draft review: make `ta run` inject live progress into the daemon during the draft phase, embed hard validation evidence in every draft package, ship a working Perforce VCS plugin for the game-project release, add an experimental feature flag system, fix the finalize timeout, and gate E2E pre-release tests.
+
+#### 1. `ta run` Draft-Phase Progress Injection
+
+1. [ ] **Finalize heartbeat**: During the draft phase, `ta run` writes progress into the goal's `progress_note` field (goal JSON) at each major step: "diffing N files", "running required_checks: cargo build", "packing artifacts". The watchdog reads this and includes it in `ta goal status` output — no more black box.
+2. [ ] **`run_pid` in `Finalizing` state**: Store `ta run`'s PID in the `Finalizing { run_pid: Option<u32> }` field. Watchdog: if PID is alive, never time out — only fire when the builder process is dead AND elapsed > threshold. *(Struct change and watchdog logic — landed in v0.13.17 branch.)*
+3. [ ] **`finalize_timeout_secs` in `[operations]` config**: Bump default from 300s to 1800s. Expose in `.ta/config.toml` template so teams with large workspaces can tune it. *(Wired in v0.13.17 branch.)*
+
+#### 2. Validation Evidence in Draft Package
+
+4. [ ] **`ValidationLog` in `DraftPackage`**: After the agent exits, `ta run` runs the project's `required_checks` (from `[workflow].required_checks` in config, or the four checks from CLAUDE.md if unset). Each result: `{ command, exit_code, duration_secs, stdout_tail: last 20 lines }`. Embed as `draft.validation_log`.
+5. [ ] **`ta draft view <id>`** includes the validation log section: commands, pass/fail, duration. Non-zero exit → warning banner. The log is hard evidence from `ta run` infrastructure, not self-reported by the agent.
+6. [ ] **`ta draft approve`** refuses to approve if validation_log contains a non-zero exit code, unless `--override` is passed (mirrors governance `--override` precedent).
+
+#### 3. Perforce VCS Plugin (Game Project)
+
+7. [ ] **`plugins/vcs-perforce` script**: A Python 3 script implementing the JSON-over-stdio VCS plugin protocol. Uses the `p4` CLI as its backend. Supports operations: `status` (p4 status), `diff` (p4 diff), `submit` (p4 submit with description), `shelve` (p4 shelve for draft-mode). Read `P4PORT`, `P4USER`, `P4CLIENT` from environment.
+8. [ ] **`plugins/vcs-perforce.toml` manifest**: Name, description, protocol version, required env vars, supported operations list.
+9. [ ] **Integration test with mock `p4`**: A mock `p4` script in `tests/fixtures/` that returns canned responses. The adapter test creates a workspace, wires the mock, verifies `status` → diff → submit round-trip.
+10. [ ] **USAGE.md "Using TA with Perforce" section**: P4 environment setup, plugin install path, `ta submit` with Perforce, shelving vs submitting, depot path scoping.
+11. [ ] **Release bundle includes plugin**: `release.yml` copies `plugins/vcs-perforce` into the release tarball; macOS `.dmg` and Windows `.msi` include it at the configured plugin path.
+
+#### 4. Experimental Feature Flag System
+
+12. [ ] **`[experimental]` config section** in `DaemonConfig` (landed in v0.13.17 branch): `ollama_agent = false`, `sandbox = false`. All experimental features default off.
+13. [ ] **`ta run --agent ollama` gate**: If `experimental.ollama_agent = false`, emit a clear error: "ta-agent-ollama is an experimental preview. Enable with `experimental.ollama_agent = true` in .ta/config.toml". No silent fallback.
+14. [ ] **Sandbox gate**: `ta run --sandbox` (or sandbox auto-applied from config) emits a warning banner if `experimental.sandbox = false`: "Sandbox is experimental — see docs/sandbox-experimental.md for known limitations." Sandbox still runs if `experimental.sandbox = true`.
+15. [ ] **Personal dev `.ta/config.toml`**: Committed personal config that enables `ollama_agent = true` and `sandbox = true` for the TrustedAutonomy repo itself.
+
+#### 5. Branch Prefix Default Fix
+
+16. [ ] **Default `branch_prefix = "feature/"`**: Changed from `ta/` in init.rs, new.rs, setup.rs templates. *(Landed in v0.13.17 branch.)*
+
+#### 6. Community Context — Full Agent Coverage & MCP Tool
+
+17. [ ] **Community section in `inject_agent_context_file()`**: Pass `community_section` into the generic context writer used by Codex (AGENTS.md) and other `context_file`-based agents. Currently missing — Codex gets no community context at all.
+18. [ ] **Community section in `inject_context_env()`**: Append community context to the `TA_GOAL_CONTEXT` env var written for Ollama and `Env`-mode agents. Currently missing.
+19. [ ] **`ta-community-hub` MCP server**: Expose `community_search(query, intent)` and `community_get(id)` as actual MCP tools backed by the local cache. Without this, the CLAUDE.md injection tells Claude to call a function that doesn't exist — agents can't actually query community resources via tool use. Register this MCP server in the injected `.mcp.json` (alongside `ta-memory`).
+20. [ ] **Agent observation write-back**: When the agent writes `.ta/community_feedback.json` (structured observations: `{resource, doc_id, observation: "endpoint deprecated", severity: "warning"}`), `ingest_memory_out`-style collector picks it up on agent exit and appends entries to the local cache with `source: "agent-observed"`. Feeds into future `ta community sync --push` for upstream contribution. Deferred write-back to external systems → v0.14.3.5.
+
+#### 7. E2E Pre-Release Test Suite
+
+21. [ ] **`tests/e2e/` directory**: Integration tests that run against a live daemon and real filesystem. Marked `#[ignore]` by default — run with `cargo test -- --ignored --test-threads=1`.
+22. [ ] **`test_dependency_graph_e2e`**: Creates a real workflow with `depends_on` graph (3 sub-goals, one dependency chain, one parallel), runs `ta workflow run`, verifies ordering from goal events.
+23. [ ] **`test_ollama_agent_mock_e2e`**: Spins up a mock HTTP server (wiremock) at localhost that returns canned tool_call responses. Runs `ta run --agent ollama` against it. Verifies `[goal started]` is emitted, at least one tool call is dispatched, draft is built.
+24. [ ] **`test_draft_validation_log_e2e`**: Runs a real goal with `required_checks = ["echo ok"]`. Verifies the draft package contains a `validation_log` entry with `exit_code: 0`.
+25. [ ] **Pre-release checklist in USAGE.md**: `./dev "cargo test -- --ignored"` listed as required before any public release.
+
+#### Deferred items moved/resolved
+- Community read-write write-back to external systems → v0.14.3.5 (same phase as Supermemory — natural fit)
+- Live Ollama E2E with real models (v0.13.16 item 5) → still deferred; E2E mock test (item 23 above) covers the code path without requiring a live instance
+
+#### Version: `0.13.17-alpha`
+
+---
+
+### v0.13.17.1 — v0.13.17 Complete Implementation
+<!-- status: pending -->
+**Goal**: Implement all remaining v0.13.17 items not included in the v0.13.17 scaffold PR. The scaffold (PR #264) added the struct/config changes and PLAN.md — this phase wires them end-to-end.
+
+#### 1. Finalize-Phase Observability (from v0.13.17 items 1–3)
+
+1. [ ] **Finalize heartbeat in `ta run`**: During the draft-build phase (after agent exits), write `progress_note` into the goal JSON at each step: "diffing N files", "running required_checks: cargo build --workspace", "packing N artifacts". Use `GoalRunStore::update_progress_note()` (new helper). Watchdog and `ta goal status` read this field.
+2. [ ] **`ValidationLog` in `DraftPackage`**: After the agent exits, `ta run` runs the project's `required_checks` from `[workflow].required_checks` config (default: four checks from CLAUDE.md). Each entry: `ValidationEntry { command, exit_code, duration_secs, stdout_tail }`. Embed as `pkg.validation_log`. Skip if `--skip-validation` flag is set.
+3. [ ] **`ta draft view` shows validation log**: After the summary section, print validation evidence: `✓ cargo build (47s)` or `✗ cargo test (exit 1)`. Warn if any check failed.
+4. [ ] **`ta draft approve` validation gate**: Refuse approval if `validation_log` contains a non-zero `exit_code`, unless `--override` is passed. Error: "Draft has failed validation checks — use `--override` to approve anyway."
+
+#### 2. Experimental Flag Gates (from v0.13.17 items 13–15)
+
+5. [ ] **Ollama agent gate**: In the framework resolution in `run.rs`, after resolving framework to `ollama`, read `ExperimentalConfig` from daemon config. If `ollama_agent = false`, bail with: "ta-agent-ollama is an experimental preview. Enable with `[experimental]\nollama_agent = true` in .ta/config.toml. See docs/USAGE.md for known limitations."
+6. [ ] **Sandbox gate**: In sandbox apply path, if `experimental.sandbox = false`, print warning banner but proceed (don't block — sandbox is opt-in from config anyway). If `experimental.sandbox = true`, proceed silently.
+7. [ ] **Personal dev `.ta/config.toml`**: Add `[experimental]\nollama_agent = true\nsandbox = true` to the committed `.ta/config.toml` for this repo, so the TrustedAutonomy repo itself can test both features.
+
+#### 3. Community Context — Full Agent Coverage (from v0.13.17 items 17–20)
+
+8. [ ] **Community section in `inject_agent_context_file()`**: Pass `source_dir` into the function and call `build_community_context_section()`. Codex (AGENTS.md) and other `context_file`-based agents now receive the community knowledge section.
+9. [ ] **Community section in `inject_context_env()`**: Append community context to the content written to `TA_GOAL_CONTEXT`. Ollama and env-mode agents now receive community context.
+10. [ ] **`ta-community-hub` MCP server**: New crate `crates/ta-community-hub-mcp` (or module in `ta-mcp-gateway`) exposing two tools: `community_search(query: str, intent: Option<str>) → Vec<SearchResult>` and `community_get(id: str) → String`. Backed by the local cache in `.ta/community-cache/`. Register in injected `.mcp.json` alongside `ta-memory`. Claude Code and Codex can now actually call these tools.
+11. [ ] **Agent observation write-back**: On agent exit, if `.ta/community_feedback.json` exists in staging, parse it as `Vec<{resource, doc_id, observation, severity}>` and append entries to the local community cache with `source: "agent-observed"` and current timestamp. Emit count in `ta run` exit summary.
+
+#### 4. Perforce VCS Plugin (from v0.13.17 items 7–11)
+
+12. [ ] **`plugins/vcs-perforce`**: Python 3 script implementing the JSON-over-stdio VCS protocol. Uses `p4` CLI as backend. Operations: `capabilities` (returns supported ops list), `status` (p4 status), `diff` (p4 diff -du), `submit` (p4 submit -d "<description>"), `shelve` (p4 shelve). Reads `P4PORT`, `P4USER`, `P4CLIENT` from environment. Exits with structured error JSON if `p4` not found or env not set.
+13. [ ] **`plugins/vcs-perforce.toml`**: Manifest with name, version, description, protocol_version, required_env, supported_operations.
+14. [ ] **Integration test with mock `p4`**: `tests/fixtures/mock-p4` script that returns canned responses for status/diff/submit. Test creates workspace, wires mock, verifies round-trip via `ExternalVcsAdapter`.
+15. [ ] **USAGE.md "Using TA with Perforce"**: P4 env setup, plugin install (`cp plugins/vcs-perforce ~/.config/ta/plugins/vcs/`), `ta submit` with Perforce, shelving workflow, depot path scoping.
+16. [ ] **Release bundle includes plugin**: `release.yml` copies `plugins/vcs-perforce` into tarball and DMG. Windows MSI: install to `%PROGRAMFILES%\TrustedAutonomy\plugins\vcs\`.
+
+#### 5. E2E Pre-Release Test Suite (from v0.13.17 items 21–25)
+
+17. [ ] **`tests/e2e/mod.rs`**: E2E test harness. Starts a real daemon in a temp workspace, provides `wait_for_goal_state()` helper. `#[ignore]` on all tests — run with `cargo test -- --ignored`.
+18. [ ] **`test_dependency_graph_e2e`**: Workflow with 3 sub-goals and a `depends_on` chain. Verify execution order from goal event log.
+19. [ ] **`test_ollama_agent_mock_e2e`**: Mock HTTP Ollama server (wiremock crate) returning one tool_call response then `stop`. Runs `ta run --agent ollama --experimental`. Verifies draft built.
+20. [ ] **`test_draft_validation_log_e2e`**: Goal with `required_checks = ["echo validation-ok"]`. Verifies `DraftPackage.validation_log` has one entry with `exit_code: 0` and `stdout_tail` contains "validation-ok".
+21. [ ] **USAGE.md pre-release checklist**: `./dev "cargo test -- --ignored --test-threads=1"` listed as required step before public releases.
+
+#### Version: `0.13.17.1-alpha`
+
+---
+
 > **⬇ PUBLIC BETA** — v0.13.x complete: runtime flexibility (local models, containers), enterprise governance (audit ledger, action governance, compliance), community ecosystem, and goal workflow automation. TA is ready for team and enterprise deployments.
 
 ---
@@ -6345,6 +6449,90 @@ plugin  = "ta-memory-supermemory"   # binary name; discovered from plugins/memor
 10. [ ] **USAGE.md**: "Memory backend plugins" section — protocol spec, plugin discovery dirs, `ta memory plugin list`, building a custom plugin, Supermemory quick-start. "Writing your own memory plugin" — minimal example in any language.
 
 #### Version: `0.14.3-alpha.5`
+
+---
+
+### v0.14.6 — Constitution Deduplication via Agent Review
+<!-- status: pending -->
+**Goal**: Add a `ta constitution review` command that runs a lightweight agent pass over the project constitution, identifies duplicate or conflicting rules, and proposes a deduplicated version via the standard draft workflow. The review output feeds back through `ta draft view/approve/apply` — no special approval flow needed.
+
+#### Problem
+Constitutions grow rule sets from multiple sources: `extends = "ta-default"` inheritance, per-language templates, manual additions, and phase completions. Over time rules overlap (e.g., "never commit to main" appears in both the base and the language template). The user can't easily see the duplication because rules are spread across inherited sources. Merging them by hand is tedious and error-prone.
+
+#### Design
+
+`ta constitution review` stages the following in a single draft:
+1. Loads the final effective rule set (after `extends` inheritance).
+2. Runs a short-context agent pass (`ta_run` internal, not a full goal) to identify:
+   - Exact duplicates (identical text after normalization)
+   - Semantic near-duplicates (same constraint, different phrasing) — agent uses its own judgment
+   - Conflicting rules (two rules that can't both be satisfied)
+3. Proposes a merged `constitution.toml` with:
+   - Deduplicated rules (one canonical form per constraint)
+   - A `# merged from: <sources>` comment on each merged rule
+   - Conflicts surfaced as `# CONFLICT: <rule-a> vs <rule-b>` with a recommendation
+4. Packages the proposed file as a draft artifact for user review.
+
+#### Items
+
+1. [ ] **`ta constitution review` command**: Runs the agent review and opens a draft. `--dry-run` prints the proposed changes without creating a draft. `--model <model>` to override the default model.
+2. [ ] **Exact duplicate detection**: Normalize rule text (lowercase, strip punctuation), hash, deduplicate in Rust before the agent pass. Report count before/after.
+3. [ ] **Agent semantic review**: Short prompt to the configured model with all effective rules. Agent returns JSON: `{ "duplicates": [{"rule_a": "...", "rule_b": "...", "canonical": "..."}], "conflicts": [...] }`. TA validates the JSON response structure before acting on it.
+4. [ ] **Merged `constitution.toml` generation**: Rust-side merge from agent output. `# merged from: <source>` annotations generated by TA (not the agent — agent can hallucinate sources). Write to staging.
+5. [ ] **Draft integration**: The merged file is a `DraftArtifact` with `action = "modify"`. `ta draft view` shows the constitution diff. `ta draft apply` writes it back to `.ta/constitution.toml`.
+6. [ ] **Tests**: Exact dedup (unit). JSON response validation (unit). Draft artifact round-trip (unit). CLI integration test (`--dry-run` produces output without staging changes).
+7. [ ] **USAGE.md**: "Deduplicating Your Constitution" section with example before/after.
+
+#### Version: `0.14.6-alpha`
+
+---
+
+### v0.14.7 — Draft View Polish & Agent Decision Log
+<!-- status: pending -->
+**Goal**: Transform `ta draft view` from a flat diff dump into a structured, navigable review surface. Add an **Agent Decision Log** — a first-class draft artifact where the agent records the key implementation decisions it made and the alternatives it considered. Introduce hierarchical output with collapsible sections in HTML/GUI views.
+
+#### Problem
+Today `ta draft view` prints a flat list of changed files, an AI summary, and raw diffs. For non-trivial goals this becomes a wall of text. Reviewers can't quickly scan: "what actually changed architecturally?", "why did the agent choose this approach?", "what were the tradeoffs?". There's no way to collapse sections or drill in. The validation log (v0.13.17) adds evidence but also adds more lines to scroll through.
+
+#### Design
+
+The draft view output gets a **three-tier hierarchy**:
+
+```
+Draft <id>  ·  feature/fix-auth  ·  approved by: —
+├── Summary (1 paragraph AI-generated)
+├── Agent Decision Log            ← new
+│   ├── Decision: "Used Ed25519 instead of RSA"
+│   │   ├── Alternatives considered: RSA-2048, ECDSA P-256
+│   │   └── Rationale: "Ed25519 is faster, smaller keys, already in Cargo.lock"
+│   └── Decision: "Did not modify existing tests"
+│       └── Rationale: "Tests cover the old interface; new interface has its own tests"
+├── Validation Evidence            ← v0.13.17
+│   ├── ✓ cargo build --workspace (47s)
+│   └── ✓ cargo test --workspace (312s, 847 passed)
+└── Changed Files (12)
+    ├── [M] crates/ta-goal/src/goal_run.rs (+28, -4)
+    │   └── diff (collapsed by default in HTML/GUI)
+    └── [A] crates/ta-goal/src/attestation.rs (+142, -0)
+        └── diff (collapsed by default)
+```
+
+In terminal: indented text, `▸` expand markers (no interaction, but readable structure).
+In HTML (`ta draft view --html`): collapsible `<details>/<summary>` for each section — files, decisions, diffs. Section state persists in `localStorage`.
+In future GUI: native collapse via the same JSON structure.
+
+#### Items
+
+1. [ ] **`AgentDecisionLog` in `DraftPackage`**: `Vec<DecisionEntry { decision: String, alternatives: Vec<String>, rationale: String, confidence: Option<f32> }>`. Agent populates this by writing a `DECISIONS.json` file to the staging workspace during its run; `ta draft build` picks it up if present.
+2. [ ] **Convention for agent to write decisions**: CLAUDE.md injection (via `ta run`) includes a standard section: "When making a significant implementation choice, write a decision record to `.ta-decisions.json` in the format `{decision, alternatives, rationale}`. Decisions are optional but recommended for non-obvious choices."
+3. [ ] **`ta draft view` hierarchical terminal output**: Structured with section headers, indentation, file change counts. Diffs are collapsed by default (show file + stats only); `--full-diff` shows all. `--section=decisions` shows only the decision log.
+4. [ ] **`ta draft view --html > draft.html`**: Self-contained HTML file. `<details>` for each changed file (diff inside), `<details>` for decision log entries. Inline CSS only — no external deps. Valid HTML5.
+5. [ ] **JSON output for GUI**: `ta draft view --json` emits the full `DraftPackage` as JSON with the hierarchical structure — files, decisions, validation log — so the VS Code extension (v0.15) can render it natively.
+6. [ ] **`ta draft view --section <section>`**: Filter to one section: `summary`, `decisions`, `validation`, `files`. Useful for scripting and automation.
+7. [ ] **Tests**: Decision log round-trip (unit). HTML output contains `<details>` and collapsible file sections (unit). JSON output structure (unit). `--section` filter (unit).
+8. [ ] **USAGE.md**: Updated "Reviewing a Draft" section. Screenshot-style example of the hierarchical terminal output.
+
+#### Version: `0.14.7-alpha`
 
 ---
 
