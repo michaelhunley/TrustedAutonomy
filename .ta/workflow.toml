@@ -1,0 +1,22 @@
+[verify]
+commands = [
+    "./dev 'cargo fmt --all -- --check'",
+    "./dev 'cargo clippy --workspace --all-targets -- -D warnings'",
+    "./dev 'cargo test --workspace'",
+]
+on_failure = "block"     # "block" (fail draft), "warn", or "agent" (let agent fix)
+timeout = 600            # seconds per command
+
+[submit]
+adapter = "git"          # "git" or "none" (default: "none")
+auto_commit = true       # Commit on every ta pr apply
+auto_push = true         # Push after commit
+auto_review = true       # Open a PR after push
+
+[submit.git]
+branch_prefix = "feature/"  # Branch naming: feature/<goal-slug>
+target_branch = "main"   # PR target branch
+merge_strategy = "squash" # squash, merge, or rebase
+remote = "origin"        # Git remote name
+pr_template = ".ta/pr-template.md"  # PR body template with {summary}, {why}, etc.
+auto_merge = true        # Enable GitHub auto-merge (merges when CI passes)

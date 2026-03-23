@@ -39,7 +39,26 @@ result-*
 .ta/*.log
 .ta/*.lock
 .ta/change_summary.json
-# .ta/agents/, .ta/plugins/, .ta/config.toml — these ARE committed (team-shared config)
+# Local operational data — machine-specific, not team-shared
+.ta/audit.jsonl
+.ta/consent.json
+.ta/daemon.toml
+.ta/*.pid
+.ta/events.jsonl
+.ta/events/
+.ta/goal-history.jsonl
+.ta/mcp_json_original
+.ta/memory.rvf
+.ta/memory/
+.ta/plan_history.jsonl
+.ta/pr_packages/
+.ta/release-history.json
+.ta/velocity-stats.jsonl
+.ta/interactive_sessions/
+# Plugin binaries are built artifacts — only config files (channel.toml) are committed
+.ta/plugins/**/ta-channel-*
+.ta/plugins/**/ta-plugin-*
+# .ta/agents/, .ta/plugins/*/channel.toml, .ta/config.toml, .ta/workflow.toml — committed (team-shared)
 
 # Claude Code local settings
 .claude/
