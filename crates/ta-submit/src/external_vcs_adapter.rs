@@ -65,6 +65,8 @@ pub struct ExternalVcsAdapter {
     timeout: Duration,
     /// Capabilities reported by the plugin at handshake time.
     capabilities: Vec<String>,
+    /// Static environment variables from the manifest's [staging_env] section (v0.13.17.3).
+    staging_env: std::collections::HashMap<String, String>,
 }
 
 impl ExternalVcsAdapter {
@@ -137,6 +139,7 @@ impl ExternalVcsAdapter {
             plugin_version: result.plugin_version,
             timeout,
             capabilities: result.capabilities,
+            staging_env: manifest.staging_env.clone(),
         })
     }
 
@@ -492,6 +495,15 @@ impl SourceAdapter for ExternalVcsAdapter {
             )))
         }
     }
+
+    fn stage_env(
+        &self,
+        _staging_dir: &Path,
+        _config: &crate::config::VcsAgentConfig,
+    ) -> Result<std::collections::HashMap<String, String>> {
+        // Return static vars from the manifest's [staging_env] section.
+        Ok(self.staging_env.clone())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -737,6 +749,7 @@ mod tests {
             timeout_secs: 30,
             min_daemon_version: None,
             source_url: None,
+            staging_env: std::collections::HashMap::new(),
         }
     }
 

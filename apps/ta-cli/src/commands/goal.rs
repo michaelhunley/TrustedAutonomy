@@ -1257,6 +1257,9 @@ fn show_status(
             if let Some(ref note) = g.progress_note {
                 println!("Progress: {}", note);
             }
+            if let Some(ref vcs) = g.vcs_isolation {
+                println!("VCS:      {}", vcs);
+            }
             println!("Agent:    {}", g.agent_id);
             println!("Created:  {}", g.created_at.to_rfc3339());
             println!("Updated:  {}", g.updated_at.to_rfc3339());

@@ -179,8 +179,40 @@ impl SourceAdapter for GitAdapter {
     fn commit(&self, goal: &GoalRun, pr: &DraftPackage, message: &str) -> Result<CommitResult> {
         tracing::info!("GitAdapter: committing changes");
 
-        // Add all changes (staging workspace is already filtered by .taignore)
-        self.git_cmd(&["add", "."])?;
+        // Build list of explicit artifact paths from draft package.
+        // Using explicit paths avoids accidentally staging unrelated files.
+        // Non-fs URIs (mailto://, drive://, etc.) are excluded — only real
+        // filesystem paths are staged.
+        let artifact_paths: Vec<String> = pr
+            .changes
+            .artifacts
+            .iter()
+            .filter_map(|a| {
+                a.resource_uri
+                    .strip_prefix("fs://workspace/")
+                    .map(|p| p.to_string())
+            })
+            .collect();
+
+        if artifact_paths.is_empty() {
+            // Fall back to `git add .` when there are no fs:// artifacts
+            // (e.g. all artifacts are external URIs like mailto://).
+            self.git_cmd(&["add", "."])?;
+        } else {
+            let mut add_args = vec!["add"];
+            for p in &artifact_paths {
+                add_args.push(p.as_str());
+            }
+            self.git_cmd(&add_args)?;
+
+            // Always stage PLAN.md if it exists and was modified — it is written
+            // by the apply process (plan-phase update) and is not an artifact in
+            // the draft package, but must be part of the commit.
+            if self.work_dir.join("PLAN.md").exists() {
+                // `git add PLAN.md` is a no-op if it wasn't modified.
+                let _ = self.git_cmd(&["add", "PLAN.md"]);
+            }
+        }
 
         // Check if there are changes to commit
         let status = self.git_cmd(&["status", "--porcelain"])?;
@@ -532,6 +564,114 @@ impl SourceAdapter for GitAdapter {
             )));
         }
         Ok(())
+    }
+
+    fn stage_env(
+        &self,
+        staging_dir: &Path,
+        config: &crate::config::VcsAgentConfig,
+    ) -> Result<std::collections::HashMap<String, String>> {
+        let mut env = std::collections::HashMap::new();
+
+        // Always set author identity so the agent's git commits are clearly labeled.
+        env.insert("GIT_AUTHOR_NAME".to_string(), "TA Agent".to_string());
+        env.insert("GIT_COMMITTER_NAME".to_string(), "TA Agent".to_string());
+        env.insert("GIT_AUTHOR_EMAIL".to_string(), "ta-agent@local".to_string());
+        env.insert(
+            "GIT_COMMITTER_EMAIL".to_string(),
+            "ta-agent@local".to_string(),
+        );
+
+        match config.git_mode.as_str() {
+            "none" => {
+                // Block all git operations.
+                env.insert("GIT_DIR".to_string(), "/dev/null".to_string());
+            }
+            "inherit-read" => {
+                // Allow reading from the parent repo but block writes via ceiling.
+                if config.ceiling_always {
+                    if let Some(parent) = staging_dir.parent() {
+                        env.insert(
+                            "GIT_CEILING_DIRECTORIES".to_string(),
+                            parent.to_string_lossy().to_string(),
+                        );
+                    }
+                }
+            }
+            _ => {
+                // "isolated" (default): init a fresh git repo in the staging dir.
+                let git_dir = staging_dir.join(".git");
+                if !git_dir.exists() {
+                    // Init the repo — try with -b main first, fall back without it
+                    // for older git versions.
+                    let init_output = std::process::Command::new("git")
+                        .args(["init", "-b", "main"])
+                        .current_dir(staging_dir)
+                        .output()
+                        .map_err(|e| SubmitError::VcsError(format!("git init failed: {}", e)))?;
+                    if !init_output.status.success() {
+                        let init2 = std::process::Command::new("git")
+                            .args(["init"])
+                            .current_dir(staging_dir)
+                            .output()
+                            .map_err(|e| {
+                                SubmitError::VcsError(format!("git init failed: {}", e))
+                            })?;
+                        if !init2.status.success() {
+                            let stderr = String::from_utf8_lossy(&init2.stderr);
+                            return Err(SubmitError::VcsError(format!(
+                                "git init in staging dir failed: {}",
+                                stderr
+                            )));
+                        }
+                    }
+                    // Configure local identity so commits work without global config.
+                    let _ = std::process::Command::new("git")
+                        .args(["config", "user.name", "TA Agent"])
+                        .current_dir(staging_dir)
+                        .output();
+                    let _ = std::process::Command::new("git")
+                        .args(["config", "user.email", "ta-agent@local"])
+                        .current_dir(staging_dir)
+                        .output();
+
+                    if config.init_baseline_commit {
+                        // Create a baseline commit so `git diff` has something to compare
+                        // against. Use -A to add all files (staging .taignore excludes .ta/).
+                        let _ = std::process::Command::new("git")
+                            .args(["add", "-A"])
+                            .current_dir(staging_dir)
+                            .output();
+                        let _ = std::process::Command::new("git")
+                            .args(["commit", "--allow-empty", "-m", "pre-agent baseline"])
+                            .current_dir(staging_dir)
+                            .env("GIT_AUTHOR_NAME", "TA Agent")
+                            .env("GIT_AUTHOR_EMAIL", "ta-agent@local")
+                            .env("GIT_COMMITTER_NAME", "TA Agent")
+                            .env("GIT_COMMITTER_EMAIL", "ta-agent@local")
+                            .output();
+                    }
+                }
+
+                // Pin the agent to the staging repo.
+                env.insert("GIT_DIR".to_string(), git_dir.to_string_lossy().to_string());
+                env.insert(
+                    "GIT_WORK_TREE".to_string(),
+                    staging_dir.to_string_lossy().to_string(),
+                );
+                // Ceiling prevents git from looking outside staging_dir.
+                if config.ceiling_always {
+                    if let Some(parent) = staging_dir.parent() {
+                        env.insert(
+                            "GIT_CEILING_DIRECTORIES".to_string(),
+                            parent.to_string_lossy().to_string(),
+                        );
+                    }
+                }
+            }
+        }
+
+        Ok(env)
     }
 
     fn check_review(&self, review_id: &str) -> Result<Option<ReviewStatus>> {
@@ -1132,5 +1272,122 @@ mod tests {
         // Should be a short hash (7+ chars)
         assert!(!rev.is_empty());
         assert_ne!(rev, "unknown");
+    }
+
+    // ── VCS isolation tests (v0.13.17.3) ─────────────────────────────────────
+
+    #[test]
+    fn test_git_none_mode_sets_dev_null() {
+        let dir = tempdir().unwrap();
+        let adapter = GitAdapter::new(dir.path());
+        let config = crate::config::VcsAgentConfig {
+            git_mode: "none".to_string(),
+            ..Default::default()
+        };
+        let env = adapter.stage_env(dir.path(), &config).unwrap();
+        assert_eq!(env.get("GIT_DIR").map(|s| s.as_str()), Some("/dev/null"));
+        assert!(!env.contains_key("GIT_WORK_TREE"));
+    }
+
+    #[test]
+    fn test_git_inherit_read_sets_ceiling() {
+        let dir = tempdir().unwrap();
+        let adapter = GitAdapter::new(dir.path());
+        let config = crate::config::VcsAgentConfig {
+            git_mode: "inherit-read".to_string(),
+            ceiling_always: true,
+            ..Default::default()
+        };
+        let env = adapter.stage_env(dir.path(), &config).unwrap();
+        assert!(env.contains_key("GIT_CEILING_DIRECTORIES"));
+        let ceiling = env.get("GIT_CEILING_DIRECTORIES").unwrap();
+        assert_eq!(ceiling, dir.path().parent().unwrap().to_str().unwrap());
+    }
+
+    #[test]
+    fn test_git_isolated_inits_repo() {
+        let dir = tempdir().unwrap();
+        let adapter = GitAdapter::new(dir.path());
+        let config = crate::config::VcsAgentConfig {
+            git_mode: "isolated".to_string(),
+            init_baseline_commit: false, // skip commit for speed
+            ..Default::default()
+        };
+        let env = adapter.stage_env(dir.path(), &config).unwrap();
+        // A .git directory should now exist in the staging dir.
+        assert!(
+            dir.path().join(".git").exists(),
+            ".git should be created by isolated mode"
+        );
+        // GIT_DIR should point to the staging .git.
+        let git_dir = env.get("GIT_DIR").unwrap();
+        assert!(
+            git_dir.contains(".git"),
+            "GIT_DIR should point to staging .git"
+        );
+        // GIT_WORK_TREE should be the staging dir.
+        let work_tree = env.get("GIT_WORK_TREE").unwrap();
+        assert_eq!(work_tree, dir.path().to_str().unwrap());
+    }
+
+    #[test]
+    fn test_git_isolated_sets_ceiling() {
+        let dir = tempdir().unwrap();
+        let adapter = GitAdapter::new(dir.path());
+        let config = crate::config::VcsAgentConfig {
+            git_mode: "isolated".to_string(),
+            ceiling_always: true,
+            init_baseline_commit: false,
+            ..Default::default()
+        };
+        let env = adapter.stage_env(dir.path(), &config).unwrap();
+        assert!(
+            env.contains_key("GIT_CEILING_DIRECTORIES"),
+            "GIT_CEILING_DIRECTORIES should be set in isolated mode"
+        );
+    }
+
+    #[test]
+    fn test_git_ceiling_prevents_upward_traversal() {
+        let dir = tempdir().unwrap();
+        let adapter = GitAdapter::new(dir.path());
+        let config = crate::config::VcsAgentConfig {
+            git_mode: "isolated".to_string(),
+            ceiling_always: true,
+            init_baseline_commit: false,
+            ..Default::default()
+        };
+        let env = adapter.stage_env(dir.path(), &config).unwrap();
+        let ceiling = env.get("GIT_CEILING_DIRECTORIES").unwrap();
+        // The ceiling must be above the staging dir (its parent), not the staging
+        // dir itself — otherwise git could still discover the developer's .git above.
+        let staging_path = dir.path().to_str().unwrap();
+        assert_ne!(
+            ceiling.as_str(),
+            staging_path,
+            "GIT_CEILING_DIRECTORIES should be parent of staging dir, not staging dir itself"
+        );
+    }
+
+    #[test]
+    fn test_artifact_path_extraction_from_uris() {
+        // Verify the logic for extracting fs:// artifact paths used in commit().
+        // Non-fs URIs should be excluded so we only add real filesystem paths.
+        let uris = [
+            "fs://workspace/src/main.rs",
+            "fs://workspace/Cargo.toml",
+            "mailto://nowhere",         // non-fs, should be excluded
+            "fs://workspace/README.md", // fs, should be included
+        ];
+        let fs_paths: Vec<String> = uris
+            .iter()
+            .filter_map(|uri| uri.strip_prefix("fs://workspace/").map(|p| p.to_string()))
+            .collect();
+        assert_eq!(fs_paths.len(), 3);
+        assert!(fs_paths.contains(&"src/main.rs".to_string()));
+        assert!(fs_paths.contains(&"Cargo.toml".to_string()));
+        assert!(fs_paths.contains(&"README.md".to_string()));
+        // non-fs URI is filtered out
+        assert!(!fs_paths.iter().any(|p| p.contains("mailto")));
     }
 }

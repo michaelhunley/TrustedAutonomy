@@ -77,6 +77,21 @@ pub struct VcsPluginManifest {
     /// Source URL for remote install / upgrade.
     #[serde(default)]
     pub source_url: Option<String>,
+
+    /// Static environment variable overrides to inject when TA runs an agent
+    /// for this VCS system (v0.13.17.3).
+    ///
+    /// These vars are merged into the agent's process environment before spawn.
+    /// Useful for VCS tools that use well-known env vars for client/workspace
+    /// selection (e.g., `P4CLIENT`, `SVN_SSH`, `HG_PLAIN`).
+    ///
+    /// ```toml
+    /// [staging_env]
+    /// P4CLIENT = ""           # clear live workspace
+    /// SVN_SSH = "ssh -q"      # quiet mode for SVN+SSH
+    /// ```
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub staging_env: std::collections::HashMap<String, String>,
 }
 
 fn default_version() -> String {
@@ -309,6 +324,7 @@ pub fn find_vcs_plugin(adapter_name: &str, project_root: &Path) -> Option<Discov
                 timeout_secs: 30,
                 min_daemon_version: None,
                 source_url: None,
+                staging_env: std::collections::HashMap::new(),
             },
             plugin_dir: None,
             source: VcsPluginSource::Path,
@@ -387,6 +403,7 @@ description = "Perforce adapter"
             timeout_secs: 30,
             min_daemon_version: None,
             source_url: None,
+            staging_env: std::collections::HashMap::new(),
         };
         let err = manifest.validate().unwrap_err();
         assert!(err.to_string().contains("vcs"));
@@ -405,6 +422,7 @@ description = "Perforce adapter"
             timeout_secs: 30,
             min_daemon_version: None,
             source_url: None,
+            staging_env: std::collections::HashMap::new(),
         };
         let err = manifest.validate().unwrap_err();
         assert!(matches!(err, VcsPluginError::MissingCommand { .. }));
@@ -423,6 +441,7 @@ description = "Perforce adapter"
             timeout_secs: 30,
             min_daemon_version: None,
             source_url: None,
+            staging_env: std::collections::HashMap::new(),
         };
         assert!(manifest.has_protected_targets());
     }
@@ -440,6 +459,7 @@ description = "Perforce adapter"
             timeout_secs: 30,
             min_daemon_version: None,
             source_url: None,
+            staging_env: std::collections::HashMap::new(),
         };
         assert!(!manifest.has_protected_targets());
     }

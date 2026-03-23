@@ -293,6 +293,23 @@ pub trait SourceAdapter: Send + Sync {
     fn verify_not_on_protected_target(&self) -> Result<()> {
         Ok(())
     }
+
+    /// Produce environment variables to inject into the agent process so it
+    /// operates on the staging directory instead of the developer's real VCS
+    /// workspace (v0.13.17.3).
+    ///
+    /// Called by `ta run` before spawning the agent. The returned vars are
+    /// merged into the agent's process environment.
+    ///
+    /// Default: no-op (returns empty map). VCS adapters that support isolation
+    /// should override this method.
+    fn stage_env(
+        &self,
+        _staging_dir: &Path,
+        _config: &crate::config::VcsAgentConfig,
+    ) -> Result<HashMap<String, String>> {
+        Ok(HashMap::new())
+    }
 }
 
 /// Result of merging a review (PR, shelved CL, etc.) into the target branch.

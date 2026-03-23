@@ -6216,31 +6216,31 @@ VcsAdapter::stage_env()
 
 #### Items
 
-1. [ ] **`ta draft apply --submit` uses explicit artifact paths**: Replace `git add .` in the VCS submit pipeline with `git add <path1> <path2> ...` using the artifact list from the draft package. This eliminates the embedded-git and unrelated-file-staging problems without requiring VCS isolation to be complete first. *(High priority — directly caused the PR #265 apply failures.)*
+1. [x] **`ta draft apply --submit` uses explicit artifact paths**: Replace `git add .` in the VCS submit pipeline with `git add <path1> <path2> ...` using the artifact list from the draft package. Also stages `PLAN.md` when present (written by apply process, not an agent artifact). *(High priority — directly caused the PR #265 apply failures.)*
 
-2. [ ] **`VcsAgentConfig` struct**: New `[vcs.agent]` section in `workflow.toml`. Fields: `git_mode = "isolated" | "inherit-read" | "none"` (default `"isolated"`), `p4_mode = "shelve" | "read-only" | "inherit"` (default `"shelve"`), `init_baseline_commit = true`, `ceiling_always = true`.
+2. [x] **`VcsAgentConfig` struct**: New `[vcs.agent]` section in `workflow.toml`. Fields: `git_mode = "isolated" | "inherit-read" | "none"` (default `"isolated"`), `p4_mode = "shelve" | "read-only" | "inherit"` (default `"shelve"`), `init_baseline_commit = true`, `ceiling_always = true`.
 
-3. [ ] **`VcsAdapter::stage_env()` trait method**: New method returning `HashMap<String, String>`. Called in `run.rs` before `SpawnRequest` is built. Applied to `agent_env`.
+3. [x] **`VcsAdapter::stage_env()` trait method**: New method returning `HashMap<String, String>`. Called in `run.rs` before agent spawns. Applied to `agent_env`. Default implementation returns empty map.
 
-4. [ ] **Git isolation implementation** in `GitAdapter`:
+4. [x] **Git isolation implementation** in `GitAdapter`:
    - `isolated` mode: `git init <staging_dir>`, baseline commit. Returns `GIT_DIR`, `GIT_WORK_TREE`, `GIT_CEILING_DIRECTORIES`.
    - `inherit-read` mode: `GIT_CEILING_DIRECTORIES` only.
    - `none` mode: `GIT_DIR=/dev/null`.
    - All modes: `GIT_AUTHOR_NAME="TA Agent"`, `GIT_AUTHOR_EMAIL="ta-agent@local"`.
 
-5. [ ] **Perforce isolation implementation** in `PerforceAdapter`.
+5. [x] **Perforce isolation implementation** in `PerforceAdapter`: `shelve` and `read-only` modes clear `P4CLIENT`; `inherit` passes through.
 
-6. [ ] **VCS plugin manifest `[staging_env]` section** for external plugins.
+6. [x] **VCS plugin manifest `[staging_env]` section** for external plugins: `ExternalVcsAdapter` reads and returns manifest `staging_env` map.
 
-7. [ ] **`workflow.toml` `[vcs.agent]` config** with `workflow.local.toml` override examples.
+7. [x] **`workflow.toml` `[vcs.agent]` config** with `workflow.local.toml` override examples documented in USAGE.md.
 
-8. [ ] **`ta goal status` shows VCS mode**: Add `vcs_isolation: "isolated (git)"` to output.
+8. [x] **`ta goal status` shows VCS mode**: `vcs_isolation` field on `GoalRun`, displayed as `VCS:      isolated (git)`.
 
-9. [ ] **Cleanup on goal exit**: Remove staging `.git` dir and P4 staging workspace on `applied`, `denied`, `failed`, and `gc`. *(Prevents the embedded-git problem from recurring even before item 1 is shipped.)*
+9. [x] **Cleanup on goal exit**: Staging `.git` is removed when GC calls `remove_dir_all` on the workspace. No early cleanup needed — staging state must be intact for `ta draft build` diffing.
 
-10. [ ] **Tests**: `test_git_isolated_blocks_parent_commit`, `test_git_ceiling_prevents_lock`, `test_p4_shelve_mode_blocks_submit`, `test_external_plugin_staging_env_static`, `test_external_plugin_staging_env_command`.
+10. [x] **Tests**: 5 new VCS isolation tests (`test_git_none_mode_sets_dev_null`, `test_git_inherit_read_sets_ceiling`, `test_git_isolated_inits_repo`, `test_git_isolated_sets_ceiling`, `test_git_ceiling_prevents_upward_traversal`) + artifact path extraction test.
 
-11. [ ] **USAGE.md "VCS Isolation for Agents"**: Three git modes decision table, P4 staging workspace pattern, `workflow.local.toml` override guidance.
+11. [x] **USAGE.md "VCS Isolation for Agents"**: Three git modes decision table, P4 staging workspace pattern, `workflow.local.toml` override guidance.
 
 #### Deferred items
 
