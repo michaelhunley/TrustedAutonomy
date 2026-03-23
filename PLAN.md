@@ -6240,52 +6240,80 @@ The current `.ta/goal-history.jsonl` is a compact index written only on the happ
 
 ---
 
-### v0.14.3.5 — Pluggable Memory Backends (Supermemory & External Stores)
+### v0.14.3.5 — Pluggable Memory Backends (External Plugin Protocol)
 <!-- status: pending -->
 <!-- enterprise: yes — semantic memory sync across teams and sessions -->
-**Goal**: Extract `MemoryStore` behind an `ExternalMemoryBackend` trait and ship Supermemory as the first external backend. Teams can sync agent memory across machines, share knowledge between agents, and query semantic memory via the cloud or a self-hosted store — without changing how agents write memory.
+**Goal**: Add an external binary plugin protocol for memory backends — the same pattern as VCS plugins — so anyone can ship a memory backend (Supermemory, Redis, Notion, Postgres, …) as a standalone binary without modifying or recompiling TA. Ship `ta-memory-supermemory` as the first reference implementation. Also add config dispatch so the right backend is selected at runtime.
 
 #### Problem
-The current `MemoryStore` in `crates/ta-memory` is file-backed only (`.ta/memory/`). Memory is local to one machine and one developer. There is no way to share relevant memory entries across a team or between cloud agents. The `MemoryBridge` in `ta-agent-ollama` uses the same flat-file snapshot pattern. Neither supports semantic vector search across a large corpus.
+The current `MemoryStore` in `crates/ta-memory` is file-backed only (`.ta/memory/`). Memory is local to one machine and one developer. There is no plugin extension point — adding a new backend requires a PR to TA's workspace. The `MemoryBridge` in `ta-agent-ollama` uses the same flat-file snapshot pattern. Neither supports semantic vector search across a large corpus.
 
 #### Architecture
 
-`MemoryStore` is **already a trait** in `crates/ta-memory/src/store.rs` with two existing implementations (`FsMemoryStore`, `RuVectorStore`). The missing piece is **config dispatch** — every call site today does `FsMemoryStore::new(...)` directly (~10 places). This phase adds a factory function and a Supermemory backend:
+`MemoryStore` is **already a trait** (`crates/ta-memory/src/store.rs`) with `FsMemoryStore` and `RuVectorStore` implementations. The missing pieces are a **config dispatch factory** and an **external plugin adapter** — mirroring `ExternalVcsAdapter`:
 
 ```
 crates/ta-memory/src/lib.rs
   └── MemoryStore (trait — already exists)
-        ├── FsMemoryStore        (already exists)
-        ├── RuVectorStore        (already exists, feature-gated)
-        └── SupermemoryBackend   (new — crates/ta-memory-supermemory)
-              └── memory_store_from_config() → Box<dyn MemoryStore>  (new factory)
+        ├── FsMemoryStore          (already exists, default)
+        ├── RuVectorStore          (already exists, feature-gated)
+        └── ExternalMemoryAdapter  (new — wraps any binary plugin)
+              └── memory_store_from_config() → Box<dyn MemoryStore>
+
+Plugin discovery (same pattern as VCS plugins):
+  .ta/plugins/memory/ta-memory-supermemory
+  ~/.config/ta/plugins/memory/ta-memory-redis
+  $PATH: ta-memory-*
+```
+
+**JSON-over-stdio protocol** (one request/response per line):
+```json
+// TA → plugin (stdin)
+{"op":"store",  "key":"...", "value":{...}, "tags":[...], "source":"..."}
+{"op":"recall", "key":"..."}
+{"op":"lookup", "query":{"prefix":"...", "tags":[...], "limit":10}}
+{"op":"forget", "key":"..."}
+{"op":"semantic_search", "query":"...", "k":5}
+{"op":"stats"}
+
+// plugin → TA (stdout)
+{"ok":true,  "entry":{...}}
+{"ok":true,  "entries":[...]}
+{"ok":false, "error":"connection refused: check SUPERMEMORY_API_KEY"}
 ```
 
 Config (`.ta/config.toml`):
 ```toml
 [memory]
-backend = "supermemory"
-supermemory_api_key = "env:SUPERMEMORY_API_KEY"
-supermemory_base_url = "https://api.supermemory.ai"   # or self-hosted
+backend = "plugin"
+plugin  = "ta-memory-supermemory"   # binary name; discovered from plugins/memory/ dirs
+
+# Or use built-in backends:
+# backend = "file"      # default — FsMemoryStore
+# backend = "ruvector"  # local HNSW — RuVectorStore (feature-gated)
 ```
 
 #### Items
 
-1. [ ] **`memory_store_from_config()` factory**: Reads `[memory] backend` from `.ta/config.toml` and returns `Box<dyn MemoryStore>`. Default: `FsMemoryStore` (zero behaviour change). Replace the ~10 hardcoded `FsMemoryStore::new(...)` call sites in `run.rs`, `memory.rs`, `draft.rs`, `context.rs` with the factory.
+1. [ ] **`ExternalMemoryAdapter`** in `crates/ta-memory/src/external_adapter.rs`: Spawns the plugin binary, writes JSON requests to stdin, reads responses from stdout. Implements `MemoryStore`. Plugin discovery: `.ta/plugins/memory/`, `~/.config/ta/plugins/memory/`, `$PATH`. Same lifecycle pattern as `ExternalVcsAdapter`.
 
-2. [ ] **New crate `crates/ta-memory-supermemory`**: `SupermemoryBackend` implementing `MemoryStore`. `SupermemoryClient` wraps the REST API (`POST /v1/memories` add, `GET /v1/search` lookup, `DELETE /v1/memories/{id}` forget) via `reqwest`. Bearer token from `$SUPERMEMORY_API_KEY` or config. `semantic_search()` delegates to Supermemory's hybrid search.
+2. [ ] **`memory_store_from_config()` factory**: Reads `[memory] backend` from `.ta/config.toml` → `Box<dyn MemoryStore>`. Default: `FsMemoryStore`. Replace the ~10 hardcoded `FsMemoryStore::new(...)` call sites in `run.rs`, `memory.rs`, `draft.rs`, `context.rs`.
 
-3. [ ] **`ta-agent-ollama` `MemoryBridge` update**: When `TA_MEMORY_BACKEND=supermemory`, the bridge calls the daemon's memory REST API (already running) instead of reading a flat snapshot file. Agent context injection path unchanged — agents don't see the difference.
+3. [ ] **Reference plugin `plugins/ta-memory-supermemory`**: Standalone Rust binary implementing the JSON-over-stdio protocol, calling the Supermemory REST API (`POST /v1/memories`, `GET /v1/search`, `DELETE /v1/memories/{id}`). Ships as an installable plugin — not compiled into TA's workspace by default.
 
-4. [ ] **`ta memory sync`**: Push all local `FsMemoryStore` entries to the configured external backend. Used when teams migrate from file to Supermemory. `--dry-run` shows what would be pushed.
+4. [ ] **`ta memory plugin list`**: Shows discovered memory plugins, their paths, and a `--probe` health check (sends `{"op":"stats"}` and prints the response).
 
-5. [ ] **`.gitignore` fix**: Replace blanket `.ta/` exclusion with surgical per-subdir rules — exclude `.ta/staging/`, `.ta/goals/`, `.ta/store/`, `.ta/*.log`, `.ta/*.lock`; allow `.ta/agents/`, `.ta/plugins/`, `.ta/config.toml` to be committed. Done in this phase.
+5. [ ] **`ta-agent-ollama` `MemoryBridge` update**: When `TA_MEMORY_BACKEND=plugin`, the bridge calls the daemon's memory REST API instead of reading a flat snapshot file. Agent context injection path unchanged.
 
-6. [ ] **`agents/` bundled manifest dir**: Top-level `agents/` directory in the TA repo for first-party agent manifests (committed, shipped with install). Start with `agents/gsd.toml` (get-shit-done), `agents/codex.toml`. `ta agent install` checks the bundled dir before the remote registry.
+6. [ ] **`ta memory sync`**: Push all local `FsMemoryStore` entries to the configured backend. Used when teams migrate from file to an external plugin. `--dry-run` shows what would be pushed.
 
-7. [ ] **Tests**: `SupermemoryBackend` unit tests with `mockito`. Config dispatch test (`backend="file"` → `FsMemoryStore`, `backend="supermemory"` → `SupermemoryBackend`). `ta memory sync` dry-run test.
+7. [ ] **`.gitignore` fix**: *(Already done in prior commit — surgical `.ta/` rules, `agents/` and `.ta/agents/` committable.)*
 
-8. [ ] **USAGE.md**: "Using Supermemory as a shared memory backend" section — API key setup, config, `ta memory sync`, team sharing workflow. "Bundled agent manifests" section explaining `agents/` dir and `ta agent install`.
+8. [ ] **`agents/` bundled manifest dir**: *(Already done — `agents/gsd.toml`, `agents/codex.toml` in repo.)*
+
+9. [ ] **Tests**: `ExternalMemoryAdapter` with a mock plugin binary (similar to VCS adapter tests). Config dispatch test. `ta memory sync` dry-run. `ta memory plugin list` probe.
+
+10. [ ] **USAGE.md**: "Memory backend plugins" section — protocol spec, plugin discovery dirs, `ta memory plugin list`, building a custom plugin, Supermemory quick-start. "Writing your own memory plugin" — minimal example in any language.
 
 #### Version: `0.14.3-alpha.5`
 
