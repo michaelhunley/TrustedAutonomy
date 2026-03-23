@@ -208,6 +208,10 @@ pub enum DraftCommands {
         /// Useful when a follow-up draft's parent was never applied.
         #[arg(long)]
         chain: bool,
+        /// Bypass pre-apply artifact safety checks (dramatic shrinkage, critical file
+        /// replacement). Use when the shrinkage is intentional (e.g., intentional rewrite).
+        #[arg(long)]
+        force_apply: bool,
     },
     /// Amend an artifact in a draft (replace content, apply patch, or drop).
     Amend {
@@ -259,6 +263,16 @@ pub enum DraftCommands {
         /// Who is closing the draft.
         #[arg(long, default_value = "human-reviewer")]
         closed_by: String,
+        /// Close all stale drafts (Approved or PendingReview) older than the configured threshold.
+        /// Requires confirmation unless --yes is passed.
+        #[arg(long)]
+        stale: bool,
+        /// Age threshold in days for --stale (overrides gc.stale_threshold_days config).
+        #[arg(long)]
+        older_than: Option<u64>,
+        /// Skip confirmation prompt for --stale.
+        #[arg(long)]
+        yes: bool,
     },
     /// Garbage-collect stale staging directories for terminal-state drafts.
     Gc {
@@ -268,6 +282,10 @@ pub enum DraftCommands {
         /// Archive staging dirs to .ta/archive/ instead of deleting.
         #[arg(long)]
         archive: bool,
+        /// Also close stale draft records (Approved/PendingReview older than threshold).
+        /// Combined with staging GC for a full cleanup in one pass.
+        #[arg(long)]
+        drafts: bool,
     },
     /// Lightweight follow-up for PR iteration on an existing feature branch.
     FollowUp {
@@ -400,9 +418,28 @@ pub fn check_stale_drafts(config: &GatewayConfig) {
         return;
     };
 
+    // v0.13.17.2: Use two thresholds:
+    // - hint_days: when to warn the user (early notice)
+    // - threshold_days: what `--stale` actually shows
+    // Only suggest `--stale` when it would return results (threshold met).
     let hint_days = workflow_config.gc.stale_hint_days as i64;
-    let stale_cutoff = Utc::now() - Duration::days(hint_days);
-    let stale_count = packages
+    let threshold_days = workflow_config.gc.stale_threshold_days as i64;
+    let now = Utc::now();
+    let hint_cutoff = now - Duration::days(hint_days);
+    let stale_cutoff = now - Duration::days(threshold_days);
+
+    let hint_count = packages
+        .iter()
+        .filter(|p| {
+            matches!(
+                p.status,
+                DraftStatus::Approved { .. } | DraftStatus::PendingReview
+            ) && p.created_at < hint_cutoff
+        })
+        .count();
+
+    // Only show the `--stale` suggestion when `--stale` would actually return results.
+    let stale_command_count = packages
         .iter()
         .filter(|p| {
             matches!(
@@ -412,11 +449,18 @@ pub fn check_stale_drafts(config: &GatewayConfig) {
         })
         .count();
 
-    if stale_count > 0 {
-        eprintln!(
-            "hint: {} draft(s) approved/pending but not applied for {}+ days — run `ta draft list --stale`",
-            stale_count, hint_days
-        );
+    if hint_count > 0 {
+        if stale_command_count > 0 {
+            eprintln!(
+                "hint: {} draft(s) approved/pending but not applied for {}+ days — run `ta draft list --stale`",
+                hint_count, hint_days
+            );
+        } else {
+            eprintln!(
+                "hint: {} draft(s) approved/pending but not applied for {}+ days — run `ta draft list` to review",
+                hint_count, hint_days
+            );
+        }
     }
 }
 
@@ -508,6 +552,7 @@ pub fn execute(cmd: &DraftCommands, config: &GatewayConfig) -> anyhow::Result<()
             require_review,
             watch,
             chain,
+            force_apply,
         } => {
             let resolved = resolve_draft_id_flexible(config, id.as_deref())?;
 
@@ -597,6 +642,7 @@ pub fn execute(cmd: &DraftCommands, config: &GatewayConfig) -> anyhow::Result<()
                     discuss: discuss_patterns,
                 },
                 phase.as_deref(),
+                *force_apply,
             )?;
 
             // --watch: poll until merged, then auto-sync.
@@ -642,11 +688,23 @@ pub fn execute(cmd: &DraftCommands, config: &GatewayConfig) -> anyhow::Result<()
             id,
             reason,
             closed_by,
+            stale,
+            older_than,
+            yes,
         } => {
-            let resolved = resolve_draft_id_flexible(config, id.as_deref())?;
-            close_package(config, &resolved, reason.as_deref(), closed_by)
+            if *stale {
+                close_stale_drafts(config, *older_than, reason.as_deref(), closed_by, *yes)
+                    .map(|_| ())
+            } else {
+                let resolved = resolve_draft_id_flexible(config, id.as_deref())?;
+                close_package(config, &resolved, reason.as_deref(), closed_by)
+            }
         }
-        DraftCommands::Gc { dry_run, archive } => gc_packages(config, *dry_run, *archive),
+        DraftCommands::Gc {
+            dry_run,
+            archive,
+            drafts,
+        } => gc_packages(config, *dry_run, *archive, *drafts),
         DraftCommands::FollowUp {
             id,
             agent,
@@ -984,9 +1042,15 @@ pub(crate) fn build_package(
     };
     let goal_id = goal.goal_run_id.to_string();
 
-    if !matches!(goal.state, GoalRunState::Running) {
+    // v0.13.17.2: Accept both Running and Finalizing — the Finalizing state means
+    // ta run exited and is building the draft; manual `ta draft build` during recovery
+    // should work without requiring a state transition back to Running.
+    if !matches!(
+        goal.state,
+        GoalRunState::Running | GoalRunState::Finalizing { .. }
+    ) {
         anyhow::bail!(
-            "Goal is in {} state (must be running to build PR)",
+            "Goal is in {} state (must be running or finalizing to build draft)",
             goal.state
         );
     }
@@ -1761,7 +1825,8 @@ fn apply_chain(
                 reject: &[],
                 discuss: &[],
             },
-            None, // phase_override
+            None,  // phase_override
+            false, // force_apply
         )?;
     }
 
@@ -2993,6 +3058,7 @@ fn apply_package(
     conflict_resolution: ta_workspace::ConflictResolution,
     patterns: SelectiveReviewPatterns,
     phase_override: Option<&str>,
+    force_apply: bool,
 ) -> anyhow::Result<()> {
     let package_id = resolve_draft_id(id, config)?;
     eprintln!("[apply] Loading draft package {}...", package_id);
@@ -3306,6 +3372,23 @@ fn apply_package(
         for uri in &artifact_uris {
             if let Some(rel) = uri.strip_prefix("fs://workspace/") {
                 rollback_guard.snapshot_file(&target_dir.join(rel));
+            }
+        }
+
+        // v0.13.17.2: Pre-apply artifact safety checks — catch destructive changes
+        // before they reach the filesystem. Blocked by --force-apply.
+        if !force_apply && !dry_run {
+            if let Err(e) = run_apply_safety_checks(
+                &artifact_uris,
+                &goal.workspace_path,
+                &target_dir,
+                &pkg.goal.title,
+            ) {
+                eprintln!("[safety] {}", e);
+                eprintln!(
+                    "[safety] Use --force-apply to bypass these safety checks if the changes are intentional."
+                );
+                anyhow::bail!("Pre-apply safety check failed — apply aborted.");
             }
         }
 
@@ -4552,6 +4635,116 @@ fn fix_package(
     Ok(())
 }
 
+// ── Pre-apply artifact safety checks (v0.13.17.2) ──────────────────
+
+/// Critical files that warrant a lower shrinkage threshold (50% instead of 80%).
+const CRITICAL_FILES: &[&str] = &[
+    ".gitignore",
+    "Cargo.toml",
+    "flake.nix",
+    "CLAUDE.md",
+    "Cargo.lock",
+];
+
+/// Check artifacts for destructive changes before applying them to the filesystem.
+///
+/// Returns an error string if any artifact fails a safety check.
+/// The caller should print the error and offer `--force-apply` as a bypass.
+///
+/// Checks:
+/// 1. Dramatic shrinkage: file shrinks >80% in line count.
+/// 2. Critical file replacement: known-critical file loses >50% of content.
+fn run_apply_safety_checks(
+    artifact_uris: &[String],
+    workspace_path: &std::path::Path,
+    target_dir: &std::path::Path,
+    goal_title: &str,
+) -> Result<(), String> {
+    let mut violations: Vec<String> = Vec::new();
+
+    for uri in artifact_uris {
+        let Some(rel) = uri.strip_prefix("fs://workspace/") else {
+            continue;
+        };
+
+        let source_path = target_dir.join(rel);
+        let staged_path = workspace_path.join(rel);
+
+        // Only check files that already exist in source (new files are fine).
+        if !source_path.exists() {
+            continue;
+        }
+        // Only check text files (skip binaries).
+        if is_binary_file(&source_path) || is_binary_file(&staged_path) {
+            continue;
+        }
+
+        let source_content = match std::fs::read_to_string(&source_path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let staged_content = match std::fs::read_to_string(&staged_path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        let source_lines = source_content.lines().count();
+        let staged_lines = staged_content.lines().count();
+
+        if source_lines == 0 {
+            continue;
+        }
+
+        let file_name = std::path::Path::new(rel)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(rel);
+
+        let is_critical = CRITICAL_FILES
+            .iter()
+            .any(|f| file_name.eq_ignore_ascii_case(f) || rel.eq_ignore_ascii_case(f));
+
+        // Compute shrinkage as percentage.
+        let shrinkage_pct = if staged_lines < source_lines {
+            (source_lines - staged_lines) * 100 / source_lines
+        } else {
+            0
+        };
+
+        let threshold = if is_critical { 50 } else { 80 };
+
+        if shrinkage_pct >= threshold {
+            violations.push(format!(
+                "Artifact '{}' shrank {}% ({} → {} lines).{} use --force-apply to override.",
+                rel,
+                shrinkage_pct,
+                source_lines,
+                staged_lines,
+                if is_critical {
+                    " This is a critical file —"
+                } else {
+                    " This looks destructive —"
+                }
+            ));
+        }
+    }
+
+    if violations.is_empty() {
+        Ok(())
+    } else {
+        let msg = format!(
+            "Pre-apply safety check failed for goal '{}':\n{}",
+            goal_title,
+            violations
+                .iter()
+                .map(|v| format!("  - {}", v))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        Err(msg)
+    }
+}
+
 // ── Draft close (v0.3.6) ────────────────────────────────────────────
 
 /// Close a draft without applying it (abandoned, hand-merged, or obsolete).
@@ -4609,10 +4802,94 @@ fn close_package(
     Ok(())
 }
 
+// ── Draft close --stale (v0.13.17.2) ────────────────────────────────
+
+/// Close all stale draft records (Approved or PendingReview) older than the configured threshold.
+///
+/// Returns the number of drafts closed.
+fn close_stale_drafts(
+    config: &GatewayConfig,
+    older_than: Option<u64>,
+    reason: Option<&str>,
+    closed_by: &str,
+    skip_confirm: bool,
+) -> anyhow::Result<usize> {
+    let workflow_config = ta_submit::WorkflowConfig::load_or_default(
+        &config.workspace_root.join(".ta/workflow.toml"),
+    );
+    let days = older_than.unwrap_or(workflow_config.gc.stale_threshold_days);
+    let cutoff = Utc::now() - Duration::days(days as i64);
+
+    let packages = load_all_packages(config)?;
+    let stale: Vec<&DraftPackage> = packages
+        .iter()
+        .filter(|p| {
+            matches!(
+                p.status,
+                DraftStatus::Approved { .. } | DraftStatus::PendingReview
+            ) && p.created_at < cutoff
+        })
+        .collect();
+
+    if stale.is_empty() {
+        println!("No stale drafts found (threshold: {} days).", days);
+        return Ok(0);
+    }
+
+    println!("{} stale draft(s) (older than {} days):", stale.len(), days);
+    for p in &stale {
+        let age_days = (Utc::now() - p.created_at).num_days();
+        println!(
+            "  {} — \"{}\" ({}, {} days old)",
+            &p.package_id.to_string()[..8],
+            truncate(&p.goal.title, 40),
+            p.status,
+            age_days
+        );
+    }
+    println!();
+
+    if !skip_confirm {
+        use std::io::Write;
+        print!("Close {} draft(s)? [y/N] ", stale.len());
+        std::io::stdout().flush().ok();
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+        if !input.trim().eq_ignore_ascii_case("y") {
+            println!("Aborted — no drafts closed.");
+            return Ok(0);
+        }
+    }
+
+    let close_reason = reason.unwrap_or("stale — closed by ta draft close --stale");
+    let mut closed = 0usize;
+    for p in &stale {
+        let id = p.package_id.to_string();
+        match close_package(config, &id, Some(close_reason), closed_by) {
+            Ok(()) => {
+                closed += 1;
+                println!("Closed draft {}.", &id[..8]);
+            }
+            Err(e) => {
+                eprintln!("Warning: could not close {}: {}", &id[..8], e);
+            }
+        }
+    }
+
+    println!("\nClosed {} stale draft(s).", closed);
+    Ok(closed)
+}
+
 // ── Draft garbage collection (v0.3.6) ───────────────────────────────
 
 /// Garbage-collect stale staging directories for drafts in terminal states.
-fn gc_packages(config: &GatewayConfig, dry_run: bool, archive: bool) -> anyhow::Result<()> {
+/// With `close_drafts=true`, also closes stale draft records as part of the GC pass.
+fn gc_packages(
+    config: &GatewayConfig,
+    dry_run: bool,
+    archive: bool,
+    close_drafts: bool,
+) -> anyhow::Result<()> {
     let workflow_config = ta_submit::WorkflowConfig::load_or_default(
         &config.workspace_root.join(".ta/workflow.toml"),
     );
@@ -4761,6 +5038,20 @@ fn gc_packages(config: &GatewayConfig, dry_run: bool, archive: bool) -> anyhow::
         }
     }
 
+    // v0.13.17.2: --drafts: close stale draft records as part of GC.
+    let drafts_closed = if close_drafts {
+        close_stale_drafts(
+            config,
+            None, // use config default
+            Some("closed by ta draft gc --drafts"),
+            "ta-gc",
+            true, // skip confirmation in non-interactive GC
+        )
+        .unwrap_or(0)
+    } else {
+        0
+    };
+
     if dry_run {
         println!(
             "\n{} staging dir(s) would be removed. {} orphaned package(s) would be removed.",
@@ -4773,6 +5064,9 @@ fn gc_packages(config: &GatewayConfig, dry_run: bool, archive: bool) -> anyhow::
             if archive { "archived" } else { "removed" },
             orphaned_count,
         );
+        if close_drafts {
+            println!("{} stale draft record(s) closed.", drafts_closed);
+        }
         if skipped > 0 {
             println!("{} skipped (archive already exists).", skipped);
         }
@@ -6778,7 +7072,8 @@ fn run() {
             false, // dry_run
             ta_workspace::ConflictResolution::Abort,
             SelectiveReviewPatterns::default(),
-            None,
+            None,  // phase_override
+            false, // force_apply
         )
         .unwrap();
 
@@ -6869,7 +7164,8 @@ fn run() {
             false, // dry_run
             ta_workspace::ConflictResolution::Abort,
             SelectiveReviewPatterns::default(),
-            None,
+            None,  // phase_override
+            false, // force_apply
         )
         .unwrap();
 
@@ -7023,7 +7319,8 @@ fn run() {
             false, // dry_run
             ta_workspace::ConflictResolution::Abort,
             SelectiveReviewPatterns::default(),
-            None,
+            None,  // phase_override
+            false, // force_apply
         );
 
         // Apply must have returned an error.
@@ -7290,7 +7587,8 @@ fn run() {
                 reject: &[],
                 discuss: &[],
             },
-            None,
+            None,  // phase_override
+            false, // force_apply
         )
         .unwrap();
 
@@ -7355,7 +7653,8 @@ fn run() {
                 reject: &["config.toml".to_string()],
                 discuss: &[],
             },
-            None,
+            None,  // phase_override
+            false, // force_apply
         )
         .unwrap();
 
@@ -7417,7 +7716,8 @@ fn run() {
                 reject: &[],
                 discuss: &[],
             },
-            None,
+            None,  // phase_override
+            false, // force_apply
         )
         .unwrap();
 
@@ -7478,7 +7778,8 @@ fn run() {
                 reject: &["important.txt".to_string()],
                 discuss: &[],
             },
-            None,
+            None,  // phase_override
+            false, // force_apply
         )
         .unwrap();
 
@@ -7578,7 +7879,8 @@ fn run() {
                 reject: &["src/lib.rs".to_string()],
                 discuss: &[],
             },
-            None,
+            None,  // phase_override
+            false, // force_apply
         );
 
         assert!(result.is_err());
@@ -8577,7 +8879,8 @@ fn run() {
             false, // dry_run
             ta_workspace::ConflictResolution::Abort,
             SelectiveReviewPatterns::default(),
-            None,
+            None,  // phase_override
+            false, // force_apply
         )
         .unwrap();
 
@@ -8681,7 +8984,8 @@ fn run() {
             false, // dry_run
             ta_workspace::ConflictResolution::Abort,
             SelectiveReviewPatterns::default(),
-            None,
+            None,  // phase_override
+            false, // force_apply
         )
         .unwrap();
 
@@ -9087,7 +9391,8 @@ fn run() {
             false, // dry_run
             ta_workspace::ConflictResolution::Abort,
             SelectiveReviewPatterns::default(),
-            None,
+            None,  // phase_override
+            false, // force_apply
         )
         .unwrap();
 
