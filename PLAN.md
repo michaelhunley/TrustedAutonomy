@@ -6240,6 +6240,51 @@ The current `.ta/goal-history.jsonl` is a compact index written only on the happ
 
 ---
 
+### v0.14.3.5 — Pluggable Memory Backends (Supermemory & External Stores)
+<!-- status: pending -->
+<!-- enterprise: yes — semantic memory sync across teams and sessions -->
+**Goal**: Extract `MemoryStore` behind an `ExternalMemoryBackend` trait and ship Supermemory as the first external backend. Teams can sync agent memory across machines, share knowledge between agents, and query semantic memory via the cloud or a self-hosted store — without changing how agents write memory.
+
+#### Problem
+The current `MemoryStore` in `crates/ta-memory` is file-backed only (`.ta/memory/`). Memory is local to one machine and one developer. There is no way to share relevant memory entries across a team or between cloud agents. The `MemoryBridge` in `ta-agent-ollama` uses the same flat-file snapshot pattern. Neither supports semantic vector search across a large corpus.
+
+#### Architecture
+```
+ta-memory/src/lib.rs
+  └── MemoryStore
+        ├── FileMemoryBackend     (current, always available)
+        └── ExternalMemoryBackend (trait, dispatched from config)
+              └── SupermemoryBackend  (crates/ta-memory-supermemory)
+```
+
+Config:
+```toml
+[memory]
+backend = "supermemory"
+supermemory_api_key = "env:SUPERMEMORY_API_KEY"
+supermemory_base_url = "https://api.supermemory.ai"   # or self-hosted
+```
+
+#### Items
+
+1. [ ] **`ExternalMemoryBackend` trait** in `crates/ta-memory/src/lib.rs`: methods `add(entry)`, `search(query, limit)`, `delete(id)`, `list(filter)`. `MemoryStore` dispatches to the configured backend when set; falls back to file backend when unset.
+
+2. [ ] **New crate `crates/ta-memory-supermemory`**: `SupermemoryClient` wrapping Supermemory REST API (`POST /v1/memories`, `GET /v1/search`, `DELETE /v1/memories/{id}`) via `reqwest`. Bearer token auth from config or `$SUPERMEMORY_API_KEY`. Implements `ExternalMemoryBackend`.
+
+3. [ ] **Config dispatch**: `MemoryBackendConfig` enum in `.ta/config.toml` (`[memory] backend`). `MemoryStore::new_from_config()` reads config and constructs the right backend. Default: `file` (no breakage for existing users).
+
+4. [ ] **`ta-agent-ollama` `MemoryBridge` update**: When `TA_MEMORY_BACKEND=supermemory`, the bridge calls the daemon's memory REST API instead of reading a flat snapshot file. Goal context injection path unchanged.
+
+5. [ ] **`ta memory sync`**: One-shot command that pushes all local file-backed memory entries to the configured external backend. Useful for teams onboarding from file to Supermemory.
+
+6. [ ] **Tests**: `SupermemoryClient` unit tests with `mockito`. `ExternalMemoryBackend` dispatch integration tests. `ta memory sync` dry-run test.
+
+7. [ ] **USAGE.md**: "Using Supermemory as a shared memory backend" section — API key setup, config, `ta memory sync`, team sharing workflow.
+
+#### Version: `0.14.3-alpha.5`
+
+---
+
 ## v0.15 — IDE Integration & Developer Experience
 
 > **Focus**: First-class IDE integration for VS Code, JetBrains (PyCharm, WebStorm, IntelliJ), and Neovim. TA transitions from a pure CLI tool to an embedded development workflow component with sidebar panels, inline draft review, and one-click goal approval.
