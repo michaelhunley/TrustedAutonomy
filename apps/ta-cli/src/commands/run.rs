@@ -2325,11 +2325,17 @@ pub fn execute(
         goal_current.state,
         ta_goal::GoalRunState::Running | ta_goal::GoalRunState::Finalizing { .. }
     ) {
-        // Write progress note before diffing (v0.13.17).
-        if let Ok(store) = GoalRunStore::new(&config.goals_dir) {
-            let _ = store.update_progress_note(goal.goal_run_id, "diffing workspace files");
-        }
+        // v0.13.17 / v0.13.17.2: Emit structured progress notes at each finalize step.
+        // Daemon stores the latest note; `ta goal status` and `ta goal list` display it.
+        let update_finalize_note = |note: &str| {
+            if let Ok(store) = GoalRunStore::new(&config.goals_dir) {
+                let _ = store.update_progress_note(goal.goal_run_id, note);
+            }
+        };
 
+        update_finalize_note("diffing workspace files");
+
+        update_finalize_note("building draft package");
         super::draft::execute(
             &super::draft::DraftCommands::Build {
                 goal_id: goal_id.clone(),
@@ -2361,6 +2367,12 @@ pub fn execute(
                     }
                 }
             }
+        }
+
+        // v0.13.17.2: Final progress note — draft is ready with its ID.
+        if let Some(draft_id) = find_latest_draft_id(config, &goal_id) {
+            let short_id = &draft_id[..8.min(draft_id.len())];
+            update_finalize_note(&format!("draft ready — ID: {}", short_id));
         }
 
         true

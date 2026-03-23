@@ -644,10 +644,10 @@ fn list_goals(
     let packages = load_all_packages_silent(config);
 
     println!(
-        "{:<24} {:<10} {:<22} {:<12} {:<10} {:<10} {:<14}",
+        "{:<24} {:<10} {:<22} {:<26} {:<10} {:<10} {:<14}",
         "TAG", "ID", "TITLE", "STATE", "HEALTH", "DRAFT", "VCS"
     );
-    println!("{}", "-".repeat(102));
+    println!("{}", "-".repeat(116));
 
     for g in &goals {
         let tag = g.display_tag();
@@ -676,15 +676,25 @@ fn list_goals(
         // Find the latest draft for this goal.
         let (draft_col, vcs_col) = goal_draft_vcs_columns(g, &packages);
 
+        // v0.13.17.2: Show "ta-building-draft [Xs]" for Finalizing goals instead of
+        // the raw "finalizing" state, which was previously indistinguishable from a
+        // red "no heartbeat" banner in some display contexts.
+        let state_display = if let GoalRunState::Finalizing {
+            finalize_started_at,
+            ..
+        } = &g.state
+        {
+            let elapsed = (chrono::Utc::now() - *finalize_started_at)
+                .num_seconds()
+                .unsigned_abs();
+            format!("building-draft [{}s]", elapsed)
+        } else {
+            g.state.to_string()
+        };
+
         println!(
-            "{:<24} {:<10} {:<22} {:<12} {:<10} {:<10} {:<14}",
-            tag,
-            id_short,
-            title_display,
-            g.state.to_string(),
-            health,
-            draft_col,
-            vcs_col,
+            "{:<24} {:<10} {:<22} {:<26} {:<10} {:<10} {:<14}",
+            tag, id_short, title_display, state_display, health, draft_col, vcs_col,
         );
     }
     println!("\n{} goal(s) total.", goals.len());
@@ -1173,17 +1183,39 @@ fn diagnose_goal(
         }
         GoalRunState::Finalizing {
             finalize_started_at,
+            run_pid,
             ..
         } => {
             let elapsed = (*now - *finalize_started_at).num_seconds().unsigned_abs();
+            // v0.13.17.2: Always show Finalizing goals in recover (option: rebuild draft).
+            // Previously only showed if elapsed > 1800s — but even fresh Finalizing goals
+            // should be recoverable so users can manually rebuild without state transitions.
+            let pid_status = if let Some(pid) = run_pid {
+                if is_process_alive(*pid) {
+                    format!(
+                        "ta run process (PID {}) is alive — draft build in progress",
+                        pid
+                    )
+                } else {
+                    format!(
+                        "ta run process (PID {}) is dead — draft build may have been interrupted",
+                        pid
+                    )
+                }
+            } else {
+                "no ta run PID recorded".to_string()
+            };
             if elapsed > 1800 {
-                return Some(format!(
-                    "Draft creation has been in progress for {}s (threshold: 1800s) — may be stuck. \
-                     Run: ta goal recover <id>",
-                    elapsed
-                ));
+                Some(format!(
+                    "Draft creation stuck for {}s (threshold: 1800s). {}.",
+                    elapsed, pid_status
+                ))
+            } else {
+                Some(format!(
+                    "Goal is building draft ({}s elapsed). {}. Use recover to rebuild if stuck.",
+                    elapsed, pid_status
+                ))
             }
-            None
         }
         _ => None,
     }
@@ -1209,7 +1241,22 @@ fn show_status(
             println!("Goal Run: {}", g.goal_run_id);
             println!("Title:    {}", g.title);
             println!("Objective: {}", g.objective);
-            println!("State:    {}", g.state);
+            // v0.13.17.2: Show enriched state for Finalizing goals.
+            if let GoalRunState::Finalizing {
+                finalize_started_at,
+                ..
+            } = &g.state
+            {
+                let elapsed = (chrono::Utc::now() - *finalize_started_at)
+                    .num_seconds()
+                    .unsigned_abs();
+                println!("State:    TA Building Draft [{}s elapsed]", elapsed);
+            } else {
+                println!("State:    {}", g.state);
+            }
+            if let Some(ref note) = g.progress_note {
+                println!("Progress: {}", note);
+            }
             println!("Agent:    {}", g.agent_id);
             println!("Created:  {}", g.created_at.to_rfc3339());
             println!("Updated:  {}", g.updated_at.to_rfc3339());

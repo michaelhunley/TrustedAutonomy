@@ -6143,34 +6143,34 @@ All items implemented except items 5 and 13 (deferred). New tests: 5 (main.rs) +
 ---
 
 ### v0.13.17.2 — Finalizing Phase Display, Draft Safety Checks & GC Cleanup
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Fix the UX gap where `Finalizing` goals show a red "no heartbeat" banner; make `ta draft build` and `ta goal recover` accept `Finalizing` goals; emit progress notes during the finalize pipeline; fix the stale-draft hint/`--stale` threshold mismatch; add `ta draft close --stale`; and add pre-apply safety checks that catch destructive artifact changes before they reach the filesystem.
 
 #### Items
 
-1. [ ] **`GoalRunState::Finalizing` progress notes**: In the finalize pipeline (`run.rs`), emit structured `progress_note` events at each step: "Running validation checks", "Building draft package", "Draft ready — ID: `<draft-id>`". Daemon stores the latest progress note in the goal state; `ta goal status` and `ta goal list` display it.
+1. [x] **`GoalRunState::Finalizing` progress notes**: In `run.rs`, emit structured progress notes at each finalize step: "diffing workspace files", "building draft package", "draft ready — ID: `<draft-id>`". `update_finalize_note()` closure updates goal state via `GoalRunStore::update_progress_note()`; `ta goal status` displays the note.
 
-2. [ ] **"TA Building Draft" display in `ta goal list`**: When a goal is in `Finalizing` state, display `[TA Building Draft]` with elapsed time instead of the red `[Agent is working (no heartbeat)]` banner. Three display sites to update: `ta goal list`, `ta goal status`, and the shell TUI goal row.
+2. [x] **"TA Building Draft" display in `ta goal list`**: When a goal is in `Finalizing` state, `list_goals()` now shows `building-draft [Xs]` with elapsed time in the STATE column (width widened from 12 to 26). `show_status()` displays `"TA Building Draft [Xs elapsed]"` plus the current `progress_note`. Shell TUI inherits from goal state display.
 
-3. [ ] **`ta draft build` accepts `Finalizing` state**: Remove the `if !matches!(goal.state, GoalRunState::Running)` guard at `draft.rs:987` (or equivalent). Accept both `Running` and `Finalizing` states. This directly fixes the manual recovery workaround required for goal `0e21daea` (had to edit goal JSON to `running` before `ta draft build` would proceed).
+3. [x] **`ta draft build` accepts `Finalizing` state**: Guard updated from `!matches!(goal.state, GoalRunState::Running)` to accept `Running | Finalizing { .. }`. Error message updated to "must be running or finalizing to build draft".
 
-4. [ ] **`ta goal recover` option 1 handles `Finalizing`**: The "rebuild draft" option in `ta goal recover` should accept goals in `Finalizing` state without requiring a state transition. Currently fails with "must be running to build PR".
+4. [x] **`ta goal recover` handles `Finalizing`**: `diagnose_goal()` now always returns `Some(...)` for goals in `Finalizing` state (not just timeout-exceeded ones), with PID liveness context. `ta goal recover` now lists and offers rebuild for any Finalizing goal. Since `ta draft build` now accepts Finalizing (item 3), rebuild works without state transition.
 
-5. [ ] **`finalize_timeout_secs` observability**: When the finalize watchdog fires, emit a structured event with: which operation was in progress (validation vs. draft build), elapsed time, configured timeout, and the `run_pid` value that was checked. Print this context in `ta goal status` for failed goals.
+5. [x] **`finalize_timeout_secs` observability**: `check_finalizing_goal()` in watchdog now reads `progress_note` from goal state (the last step before interruption), includes `run_pid` with liveness check, and adds all context to the `Failed { reason }` string and `HealthIssue.detail`. `ta goal status` displays the full reason for failed goals.
 
-6. [ ] **Align stale-draft hint threshold with `--stale` flag**: The startup hint fires at 3 days but `ta draft list --stale` uses a different threshold and reports "No stale drafts found". Verify the two-value config (`gc.stale_hint_days` / `gc.stale_threshold_days` from v0.13.2) is wired end-to-end; the hint text should only suggest `ta draft list --stale` when `--stale` would actually return results.
+6. [x] **Align stale-draft hint threshold with `--stale` flag**: `check_stale_drafts()` now computes two counts — hint count (using `stale_hint_days`) and stale-command count (using `stale_threshold_days`). The `--stale` suggestion is only shown when the stale-command count > 0. When only hint-count drafts exist, the hint says "run `ta draft list` to review" instead.
 
-7. [ ] **`ta draft close --stale` and `ta draft gc --drafts`**: `ta draft gc` only removes staging directories — it never closes stale draft *records*, so the stale hint fires forever after gc runs. Add:
-   - `ta draft close --stale [--older-than <days>]`: closes all `Approved` and `PendingReview` drafts exceeding the stale threshold, with a confirmation prompt. Prints a summary: "Closed 3 stale drafts."
-   - `ta draft gc --drafts`: closes stale draft records as part of gc (non-interactive). Integrates with `ta goal gc` so one pass handles both staging dirs and stale draft records.
+7. [x] **`ta draft close --stale` and `ta draft gc --drafts`**: Added `--stale`, `--older-than <days>`, and `--yes` flags to `ta draft close`. Added `--drafts` flag to `ta draft gc`. New `close_stale_drafts()` function with interactive confirmation (bypassed by `--yes`). `gc_packages()` calls `close_stale_drafts()` when `--drafts` is set.
 
-8. [ ] **Pre-apply artifact safety checks**: Before `ta draft apply` copies any file to the source tree, run a set of sanity checks on each artifact in the draft package:
-   - **Dramatic shrinkage**: If an existing file shrinks by more than 80% in line count (e.g. `.gitignore` going from 109 → 1 line), block apply and print: `"Artifact .gitignore shrank 99% (109 → 1 lines). This looks destructive — use --force-apply to override."` *(Root cause of v0.13.17.1 incident where agent replaced .gitignore with a single `.git` line.)*
-   - **Critical file replacement**: Flag if a known-critical file (`.gitignore`, `Cargo.toml`, `flake.nix`, `CLAUDE.md`) loses >50% of its content.
-   - **Goal alignment check** (supervisor review): Before building the draft, compare the set of changed files against the goal's stated objective. If files outside the stated scope are substantially modified (e.g., `.gitignore` when the goal was "implement ValidationLog"), emit a `WARNING` in the validation log and `ta draft view` output: `"Out-of-scope change: .gitignore was modified but is unrelated to goal objective 'Implement v0.13.17.1'. Review carefully."` This is the lightweight "is this chain aligned with the project and goal objectives?" supervisor pass — not a blocking gate (user may override), but a visible signal.
-   - Configurable in `[workflow] apply_safety_checks = true` (default on).
+8. [x] **Pre-apply artifact safety checks**: New `run_apply_safety_checks()` function checks each artifact URI before `overlay.apply_with_conflict_check()`: blocks on >80% line-count shrinkage (or >50% for `CRITICAL_FILES`: `.gitignore`, `Cargo.toml`, `flake.nix`, `CLAUDE.md`, `Cargo.lock`). New `--force-apply` flag on `ta draft apply` bypasses checks. All call sites updated (13 test callsites + chain + pr.rs).
+   - Note: goal-alignment check (out-of-scope file detection) deferred to v0.13.17.4 (Supervisor Agent).
 
-#### Version: `0.13.17.2-alpha`
+#### Deferred items
+
+- **Goal alignment out-of-scope warning** → v0.13.17.4 (Supervisor Agent phase handles AI-powered alignment review).
+- **`apply_safety_checks` config flag** → superseded by `--force-apply` CLI flag (simpler, per-apply control).
+
+#### Version: `0.14.3-alpha`
 
 ---
 

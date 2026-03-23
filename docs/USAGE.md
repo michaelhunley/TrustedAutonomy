@@ -1352,6 +1352,11 @@ ta run "Rework auth to use JWT per review feedback" --follow-up
 ta draft close <draft-id>
 ta draft close <draft-id> --reason "Hand-merged upstream"
 
+# Batch-close all stale drafts (older than stale_threshold_days)
+ta draft close --stale
+ta draft close --stale --older-than 14       # Override threshold (days)
+ta draft close --stale --yes                 # Skip confirmation prompt
+
 # Find forgotten drafts
 ta draft list --stale
 
@@ -1359,6 +1364,7 @@ ta draft list --stale
 ta draft gc --dry-run       # Preview
 ta draft gc                 # Remove
 ta draft gc --archive       # Archive instead of delete
+ta draft gc --drafts        # Also batch-close stale drafts in the same pass
 
 # Clean up zombie goals (stuck in running, missing staging)
 ta goal gc --dry-run                  # Preview what would be cleaned
@@ -1377,7 +1383,7 @@ stale_hint_days = 3         # When startup hint fires (default: 3 days, informat
 health_check = true         # One-line warning on startup if stale drafts exist
 ```
 
-`stale_hint_days` and `stale_threshold_days` are independent: the startup hint can fire early (e.g., after a weekend) without `ta draft list --stale` showing anything yet. Set `stale_hint_days = 5` to reduce noise if you find the Monday-morning reminder too aggressive.
+`stale_hint_days` and `stale_threshold_days` serve different purposes: the startup hint fires early (e.g., after a weekend) without `ta draft list --stale` showing anything yet. `stale_hint_days` controls when the ambient reminder appears; `stale_threshold_days` controls what `--stale` and `close --stale` act on. Set `stale_hint_days = 5` to reduce noise if you find the Monday-morning reminder too aggressive.
 
 ### Unified Garbage Collection (`ta gc`)
 
@@ -3091,6 +3097,29 @@ ta draft apply <draft-id>
 ta draft apply <draft-id> --conflict-resolution abort           # Default
 ta draft apply <draft-id> --conflict-resolution force-overwrite # Dangerous
 ta draft apply <draft-id> --conflict-resolution merge           # Git adapter
+```
+
+### Pre-Apply Safety Checks
+
+Before copying files, `ta draft apply` runs safety checks to catch suspicious artifacts:
+
+- Any file shrinking by more than **80%** is flagged as a probable unintended truncation.
+- Critical workspace files (`Cargo.toml`, `.gitignore`, `flake.nix`, `CLAUDE.md`, `Cargo.lock`) use a tighter **50%** threshold.
+- Binary files are skipped (size changes are expected).
+
+If a check fires, the apply is blocked with a specific message:
+
+```
+safety check failed: src/lib.rs would shrink by 93% (2 400 → 160 bytes).
+This looks like an accidental truncation. Review the diff with:
+  ta draft view <id>
+Then re-run apply or use --force-apply to bypass this check.
+```
+
+To bypass the check (e.g., you intentionally deleted most of a file):
+
+```bash
+ta draft apply <draft-id> --force-apply
 ```
 
 ### External Diff Handlers

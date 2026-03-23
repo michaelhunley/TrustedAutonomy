@@ -630,14 +630,38 @@ fn check_finalizing_goal(
         return;
     }
 
+    // v0.13.17.2: Emit structured context about which operation timed out.
+    let pid_context = match run_pid {
+        Some(pid) => format!(
+            "run_pid={} ({})",
+            pid,
+            if is_process_alive(pid) {
+                "alive"
+            } else {
+                "dead"
+            }
+        ),
+        None => "run_pid=none (no builder PID recorded)".to_string(),
+    };
+
+    // Read current progress note to know which operation was in progress.
+    let progress_note = store
+        .get(goal.goal_run_id)
+        .ok()
+        .flatten()
+        .and_then(|g| g.progress_note.clone())
+        .unwrap_or_else(|| "(no progress note)".to_string());
+
     // Timeout exceeded — draft creation was interrupted or very slow.
     let detail = format!(
-        "Goal '{}' has been in Finalizing state for {}s (timeout: {}s). \
-         Draft creation may have been interrupted. \
+        "Goal '{}' has been in Finalizing state for {}s (timeout: {}s, {}). \
+         Last operation: '{}'. Draft creation may have been interrupted. \
          Run: ta goal recover {}",
         goal.display_tag(),
         elapsed_secs,
         config.finalize_timeout_secs,
+        pid_context,
+        progress_note,
         &goal.goal_run_id.to_string()[..8],
     );
 
@@ -645,6 +669,8 @@ fn check_finalizing_goal(
         goal_id = %goal.goal_run_id,
         elapsed_secs = elapsed_secs,
         timeout_secs = config.finalize_timeout_secs,
+        run_pid = ?run_pid,
+        last_operation = %progress_note,
         prev_state = "finalizing",
         new_state = "failed",
         reason = "finalize_timeout",
@@ -658,9 +684,12 @@ fn check_finalizing_goal(
     });
 
     let reason = format!(
-        "Finalizing timed out after {}s — draft creation may have been interrupted. \
+        "Finalizing timed out after {}s (timeout: {}s, {}). Last operation: '{}'. \
          Run: ta goal recover {}",
         elapsed_secs,
+        config.finalize_timeout_secs,
+        pid_context,
+        progress_note,
         &goal.goal_run_id.to_string()[..8],
     );
     if let Err(e) = store.transition(goal.goal_run_id, GoalRunState::Failed { reason }) {
