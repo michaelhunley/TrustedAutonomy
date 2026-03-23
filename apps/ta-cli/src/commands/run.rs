@@ -102,6 +102,16 @@ struct AgentLaunchConfig {
     ///   runtime = "process"
     #[serde(default)]
     runtime: ta_runtime::RuntimeConfig,
+
+    /// Whether this agent sends heartbeats to the daemon (v0.13.14).
+    ///
+    /// When `false` (default), the watchdog disables stale-based detection for goals
+    /// run by this agent and only acts on zombie conditions (PID gone without clean exit).
+    /// Claude Code and most built-in agents do not send heartbeats, so this defaults to `false`.
+    ///
+    /// When `true`, goals with no state update for `stale_threshold_secs` emit `GoalStale`.
+    #[serde(default)]
+    heartbeat_required: bool,
 }
 
 /// Auto-answer configuration for interactive prompts (v0.10.18.5).
@@ -208,6 +218,8 @@ fn builtin_agent_config(agent_id: &str) -> AgentLaunchConfig {
             auto_answers: Vec::new(),
             context_file: None,
             runtime: Default::default(),
+            // Claude Code does not send heartbeats — disable stale checking (v0.13.14).
+            heartbeat_required: false,
         },
         "codex" => AgentLaunchConfig {
             command: "codex".to_string(),
@@ -230,6 +242,7 @@ fn builtin_agent_config(agent_id: &str) -> AgentLaunchConfig {
             auto_answers: Vec::new(),
             context_file: None,
             runtime: Default::default(),
+            heartbeat_required: false,
         },
         "claude-flow" => AgentLaunchConfig {
             command: "npx".to_string(),
@@ -285,6 +298,7 @@ fn builtin_agent_config(agent_id: &str) -> AgentLaunchConfig {
             ],
             context_file: None,
             runtime: Default::default(),
+            heartbeat_required: false,
         },
         _ => AgentLaunchConfig {
             command: agent_id.to_string(),
@@ -303,6 +317,7 @@ fn builtin_agent_config(agent_id: &str) -> AgentLaunchConfig {
             auto_answers: Vec::new(),
             context_file: None,
             runtime: Default::default(),
+            heartbeat_required: false,
         },
     }
 }
@@ -335,6 +350,7 @@ fn framework_to_launch_config(manifest: &ta_runtime::AgentFrameworkManifest) -> 
         auto_answers: Vec::new(),
         context_file: None,
         runtime: Default::default(),
+        heartbeat_required: false,
     }
 }
 
@@ -1270,10 +1286,13 @@ pub fn execute(
             .clone()
     };
 
-    // Mark as macro goal if --macro was specified.
-    if macro_goal {
+    // Mark as macro goal if --macro was specified, and store heartbeat_required (v0.13.14).
+    {
         let mut updated_goal = goal.clone();
-        updated_goal.is_macro = true;
+        if macro_goal {
+            updated_goal.is_macro = true;
+        }
+        updated_goal.heartbeat_required = agent_config.heartbeat_required;
         goal_store.save(&updated_goal)?;
     }
 
@@ -1657,10 +1676,23 @@ pub fn execute(
 
     match launch_result {
         Ok((exit, guidance_log)) => {
-            // Clear agent PID now that the process has exited (v0.11.2.4).
+            // Atomically clear agent PID and transition to Finalizing (v0.13.14).
+            //
+            // This single write closes the watchdog race: by transitioning from
+            // Running → Finalizing before the slow draft-build starts, the watchdog
+            // will see Finalizing (not Running) and skip liveness checks until the
+            // draft is built and state transitions to PrReady. Without this, the
+            // watchdog could detect PID gone + state=Running and mark the goal Failed
+            // while draft creation is still in progress.
             if let Ok(store) = GoalRunStore::new(&config.goals_dir) {
                 if let Ok(Some(mut g)) = store.get(goal.goal_run_id) {
                     g.agent_pid = None;
+                    if matches!(g.state, ta_goal::GoalRunState::Running) {
+                        let _ = g.transition(ta_goal::GoalRunState::Finalizing {
+                            exit_code: exit.code().unwrap_or(-1),
+                            finalize_started_at: chrono::Utc::now(),
+                        });
+                    }
                     let _ = store.save(&g);
                 }
             }
@@ -2179,7 +2211,11 @@ pub fn execute(
     let goal_current = goal_store
         .get(goal.goal_run_id)?
         .unwrap_or_else(|| goal.clone());
-    let draft_built = if matches!(goal_current.state, ta_goal::GoalRunState::Running) {
+    // v0.13.14: Also build draft when state is Finalizing (set just above on agent exit).
+    let draft_built = if matches!(
+        goal_current.state,
+        ta_goal::GoalRunState::Running | ta_goal::GoalRunState::Finalizing { .. }
+    ) {
         super::draft::execute(
             &super::draft::DraftCommands::Build {
                 goal_id: goal_id.clone(),
@@ -2429,6 +2465,7 @@ fn execute_resume(
             auto_answers: Vec::new(),
             context_file: None,
             runtime: Default::default(),
+            heartbeat_required: false,
         };
 
         launch_agent_interactive(&resume_config, staging_path, "", &mut session_store)

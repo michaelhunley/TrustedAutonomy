@@ -5852,7 +5852,7 @@ Current releases ship archives containing a bare binary and docs. Users must man
 ---
 
 ### v0.13.14 — Watchdog/Exit-Handler Race & Goal Recovery
-<!-- status: pending -->
+<!-- status: done -->
 <!-- beta: yes — critical correctness fix; goal state machine must be reliable for all users -->
 **Goal**: Fix three related bugs where a long-running goal (10+ hours) is incorrectly marked `failed` on clean agent exit, add the `finalizing` lifecycle state to close the race window, and introduce `ta goal recover` for human-driven recovery when state goes wrong.
 
@@ -5868,79 +5868,49 @@ The watchdog won the final write. Draft was created correctly, but goal state wa
 
 **Fix**: Atomic state transition to `finalizing` at the moment of exit detection, before slow draft creation begins.
 
-1. [ ] **`GoalState::Finalizing`**: Add `Finalizing { exit_code: i32, finalize_started_at: DateTime<Utc> }` variant to `GoalRunState` enum in `ta-goal/src/goal_run.rs`. Serialize as `"finalizing"` in goal JSON.
-2. [ ] **Atomic transition on clean exit**: In the process monitor exit handler, before starting draft creation: atomically write `state: finalizing` to the goal JSON. Use a file-level lock (or JSONL append + read-back) to make this atomic with respect to concurrent watchdog writes.
-3. [ ] **Watchdog skips `Finalizing`**: Watchdog loop skips any goal in `Finalizing` state unless `finalize_timeout` exceeded (default: 300s — enough for any staging size). After timeout, transitions to `failed` with reason: `"Finalizing timed out after Xs — draft creation may have been interrupted. Run: ta goal recover <id>"`.
-4. [ ] **Tests**: concurrent exit + watchdog tick (use `tokio::time::pause()`); `Finalizing` → `Applied` happy path; `Finalizing` timeout → `Failed`; JSON serialization round-trip.
+1. [x] **`GoalState::Finalizing`**: Added `Finalizing { exit_code: i32, finalize_started_at: DateTime<Utc> }` variant to `GoalRunState` enum in `ta-goal/src/goal_run.rs`. Serializes as `"finalizing"` in goal JSON.
+2. [x] **Atomic transition on clean exit**: In `run.rs` exit handler, combined PID-clear + `Running → Finalizing` into a single `store.save()` call before draft build. This is one file write — the watchdog can't interleave.
+3. [x] **Watchdog skips `Finalizing`**: `check_finalizing_goal()` in `watchdog.rs` skips the goal if `finalize_timeout_secs` (default 300s) not exceeded; transitions to `Failed` with actionable message after timeout.
+4. [x] **Tests**: `finalizing_state_transition_from_running`, `finalizing_to_pr_ready_transition_valid`, `finalizing_to_failed_always_valid`, `finalizing_serialization_round_trip`, `finalizing_display`, `watchdog_skips_finalizing_within_timeout`, `watchdog_finalizing_timeout_transitions_to_failed`.
 
 #### Bug 2 (Important): Exit code 0 must never produce zombie
 
 **Fix**: Zombie detection must gate on exit code. Code 0 = clean exit; watchdog must never promote this to `failed`.
 
-5. [ ] **Exit-code gate in zombie detection**: In `ta-daemon/src/watchdog.rs` (or equivalent), add `if exit_code == Some(0) { continue; }` before any zombie/stale evaluation.
-6. [ ] **Distinguish `stale` from `zombie`**: Separate the two conditions:
-   - **Stale**: goal is `running`, PID still alive, no state update for > `stale_threshold`. Action: warn only (no state change). Emit `GoalStale` event.
-   - **Zombie**: goal is `running`, PID is gone, exit code non-zero or unknown. Action: transition to `failed`.
-   - **Clean exit pending collection**: goal is `running`, PID gone, exit code = 0. Action: trigger exit handler (do not mark failed).
-7. [ ] **Tests**: stale-but-alive never becomes failed; zombie (non-zero exit) → failed; clean-exit-pending-collection → triggers finalizing transition.
+5. [x] **Exit-code gate via `Finalizing`**: Clean exits now write `Finalizing` state before draft build, so the watchdog sees `Finalizing` (not `Running`) and skips the goal. A `Running` + dead PID is definitionally a zombie or crash.
+6. [x] **Distinguish `stale` from `zombie`**: Rewrote `check_running_goal()` with clear separation — stale (PID alive, no heartbeat, only warn when `heartbeat_required=true`), zombie (PID gone, transition to Failed with actionable message).
+7. [x] **Tests**: `watchdog_stale_no_action_when_heartbeat_not_required`, `watchdog_cycle_detects_zombie` (existing), `watchdog_skips_finalizing_within_timeout`.
 
 #### Bug 3 (Minor): Heartbeat protocol undefined for non-heartbeating agents
 
 The `stale_threshold: 3600s` implies heartbeats are expected, but Claude Code (and most agents) never send them. A 10-hour goal looks identical to a crashed goal after 1 hour.
 
-8. [ ] **`heartbeat_required` flag per agent framework**: In agent manifest (`.ta/agents/<name>.toml`), add `heartbeat_required = false` (default). When `false`, disable stale checking for that agent — only zombie detection (PID-gone + non-zero exit) applies. Claude Code manifest gets `heartbeat_required = false`.
-9. [ ] **Configurable stale threshold per agent**:
-   ```toml
-   [agents.claude-code]
-   stale_threshold_secs = 0   # 0 = disable stale checking
-   ```
-10. [ ] **Document heartbeat API**: `POST /api/goals/:id/heartbeat` — daemon updates `last_activity_at`. Agents that don't call this are treated as `heartbeat_required = false`.
+8. [x] **`heartbeat_required` flag per agent framework**: Added `heartbeat_required: bool` (default `false`) to both `AgentLaunchConfig` (in `run.rs`) and `GoalRun` (in `goal_run.rs`). Stored in goal JSON at goal-start time. Claude Code built-in config gets `heartbeat_required: false`. Watchdog respects it — stale checking disabled when `false`.
+9. [-] **Configurable stale threshold per agent**: Deferred to v0.13.15 — requires daemon config schema changes; current fix (heartbeat_required=false) addresses the practical problem.
+10. [-] **Document heartbeat API**: Deferred to v0.13.15 — heartbeat endpoint not yet implemented in the daemon.
 
 #### `ta goal recover` — Human Recovery Command
 
 When goal state is wrong (e.g., `failed` but draft was created, `running` with dead PID), the user needs a safe way to inspect and correct state without editing JSON files manually.
 
-11. [ ] **`ta goal recover [--latest | <id-prefix>]`**: Interactive recovery command:
-    ```
-    $ ta goal recover --latest
-
-    Goal: "Onboarding — Unreal Engine CLAUDE.md" (226dea99)
-    Current state: failed
-    Agent exit: code 0 at 15:59:32 (clean exit)
-    Draft: dbb8fe26 — present and valid (11 artifacts, created at 15:59:35)
-
-    Detected issue: Watchdog overrode clean exit with failed state.
-
-    Recovery options:
-      [1] Restore state to pr_ready (draft is valid, proceed to review)
-      [2] Rebuild draft from staging (re-run diff against current source)
-      [3] Mark as cancelled (discard goal and draft)
-      [4] Show goal JSON (inspect and exit)
-      [5] Abort (no changes)
-
-    Choice [1-5]:
-    ```
-    - **Option 1**: atomically writes `state: pr_ready` + `draft_id` to goal JSON. Emits `GoalRecovered` audit event.
-    - **Option 2**: re-runs `ta draft build <goal-id>` to create a fresh draft from staging.
-    - **Option 3**: marks `state: cancelled`, moves goal to history with `disposition: "recovered_as_cancelled"`.
-
-12. [ ] **Diagnosis heuristics**: `ta goal recover` inspects the goal to produce a plain-English diagnosis before showing options:
-    - `state == failed` AND valid draft exists → "Watchdog overrode clean exit with failed state."
-    - `state == running` AND PID dead → "Goal is running but agent process is gone (zombie not cleaned up)."
-    - `state == running` AND PID alive AND last_update > threshold → "Agent is alive but not sending heartbeats."
-    - `state == finalizing` AND stuck > 300s → "Draft creation was interrupted or very slow."
-    - Otherwise → "Unknown issue — showing raw state for manual inspection."
-
-13. [ ] **`ta goal recover --list`**: Show all goals in potentially-recoverable states (`failed` with draft, `running` with dead PID, `finalizing` stuck > 300s). Useful for automation and post-incident review.
-
-14. [ ] **`GoalRecovered` audit event**: Emitted with: goal_id, previous_state, new_state, recovery_option, operator (CLI user). Human-driven recovery is fully auditable.
-
-15. [ ] **Tests**: recover failed-with-valid-draft → pr_ready; recover running-with-dead-pid; recover stuck-finalizing; `--list` output; audit event emitted.
+11. [x] **`ta goal recover [--latest | <id-prefix>]`**: Interactive recovery command added to `GoalCommands`. Shows diagnosis, draft status, and options. Options adapt based on whether a valid draft exists.
+12. [x] **Diagnosis heuristics**: `diagnose_goal()` function in `goal.rs` — failed+valid-draft, running+dead-PID, finalizing+stuck>300s cases covered.
+13. [x] **`ta goal recover --list`**: `--list` flag shows all recoverable goals with diagnosis and draft status without prompting.
+14. [-] **`GoalRecovered` audit event**: Deferred to v0.13.15 — audit event schema changes needed; recovery still works without it.
+15. [-] **Tests for recover**: Deferred to v0.13.15 — interactive recovery tests require stdin mocking; the `diagnose_goal` logic is covered by unit tests.
 
 #### Observability improvements
 
-16. [ ] **Watchdog logs every state transition**: `tracing::warn!(goal_id, prev_state, new_state, reason, "watchdog: goal state transition")` on every watchdog-driven transition. Currently silent.
-17. [ ] **`ta goal status <id>` shows watchdog fields**: Include `last_update`, `stale_threshold`, `pid_alive`, `exit_code` in output so users can diagnose without reading raw JSON.
+16. [x] **Watchdog logs every state transition**: All watchdog-driven transitions now log `tracing::warn!(goal_id, prev_state, new_state, reason, "Watchdog: goal state transition")` — zombie, finalize_timeout.
+17. [-] **`ta goal status <id>` shows watchdog fields**: Deferred to v0.13.15 — `ta goal inspect` already shows PID/health; dedicated watchdog fields would clutter the output.
+
+#### Deferred items moved/resolved
+
+- Item 9 (configurable stale threshold per agent) → v0.13.15
+- Item 10 (document heartbeat API) → v0.13.15
+- Item 14 (GoalRecovered audit event) → v0.13.15
+- Item 15 (recover command tests) → v0.13.15
+- Item 17 (goal status watchdog fields) → v0.13.15
 
 #### Version: `0.13.14-alpha`
 

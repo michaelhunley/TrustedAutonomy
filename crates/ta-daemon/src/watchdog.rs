@@ -37,6 +37,11 @@ pub struct WatchdogConfig {
     pub wake_grace_secs: u64,
     /// URL to ping for connectivity check after waking from sleep (v0.13.1.1).
     pub connectivity_check_url: String,
+    /// Maximum seconds a goal may spend in `Finalizing` state before being
+    /// declared stuck and transitioned to `Failed` (v0.13.14).
+    ///
+    /// Default: 300s (5 min) — enough for diff + draft creation on any workspace size.
+    pub finalize_timeout_secs: u64,
 }
 
 impl Default for WatchdogConfig {
@@ -47,6 +52,7 @@ impl Default for WatchdogConfig {
             stale_question_threshold_secs: 3600,
             wake_grace_secs: 60,
             connectivity_check_url: "https://api.anthropic.com".to_string(),
+            finalize_timeout_secs: 300,
         }
     }
 }
@@ -63,6 +69,7 @@ impl WatchdogConfig {
             stale_question_threshold_secs: ops.stale_question_threshold_secs,
             wake_grace_secs: power.wake_grace_secs,
             connectivity_check_url: power.connectivity_check_url.clone(),
+            finalize_timeout_secs: 300,
         }
     }
 
@@ -74,6 +81,7 @@ impl WatchdogConfig {
             stale_question_threshold_secs: ops.stale_question_threshold_secs,
             wake_grace_secs: 60,
             connectivity_check_url: "https://api.anthropic.com".to_string(),
+            finalize_timeout_secs: 300,
         }
     }
 }
@@ -305,6 +313,21 @@ fn watchdog_cycle(
                     in_wake_grace,
                 );
             }
+            GoalRunState::Finalizing {
+                finalize_started_at,
+                ..
+            } => {
+                // v0.13.14: Skip Finalizing goals unless timeout exceeded.
+                goals_checked += 1;
+                check_finalizing_goal(
+                    goal,
+                    *finalize_started_at,
+                    config,
+                    &store,
+                    &now,
+                    &mut issues,
+                );
+            }
             GoalRunState::AwaitingInput {
                 interaction_id,
                 question_preview,
@@ -325,13 +348,18 @@ fn watchdog_cycle(
         }
     }
 
-    // Update power assertion based on running goal count (v0.13.1.1).
+    // Update power assertion based on running/finalizing goal count (v0.13.1.1).
     if let Some(pm) = power_manager {
-        let running_count = goals
+        let active_count = goals
             .iter()
-            .filter(|g| matches!(g.state, GoalRunState::Running))
+            .filter(|g| {
+                matches!(
+                    g.state,
+                    GoalRunState::Running | GoalRunState::Finalizing { .. }
+                )
+            })
             .count();
-        pm.update(running_count);
+        pm.update(active_count);
     }
 
     // Emit health.check event only if issues were found (avoid log noise).
@@ -396,10 +424,18 @@ fn check_api_connectivity(
     }
 }
 
-/// Check a running goal's agent process liveness.
+/// Check a running goal's agent process liveness (v0.13.14: stale/zombie separation).
 ///
-/// `in_wake_grace` suppresses heartbeat-absence alerts immediately after a
-/// detected sleep/wake cycle, preventing false alarms before the agent resumes.
+/// Two distinct conditions:
+///   - **Stale**: PID alive, no state update for > `stale_threshold`. Warn only; never
+///     transition to failed. Only checked when `goal.heartbeat_required = true`.
+///   - **Zombie**: PID gone AND exit code is non-zero or unknown. Transition to Failed.
+///   - **Clean-exit-pending**: PID gone, but the exit handler must have already written
+///     `Finalizing` before reaching here — so this branch only fires for unexpected
+///     process death (signal, kill -9, spawn failure). Transition to Failed.
+///
+/// `in_wake_grace` suppresses all liveness alerts immediately after a detected
+/// sleep/wake cycle, preventing false alarms before the agent resumes.
 fn check_running_goal(
     goal: &GoalRun,
     config: &WatchdogConfig,
@@ -409,8 +445,7 @@ fn check_running_goal(
     issues: &mut Vec<HealthIssue>,
     in_wake_grace: bool,
 ) {
-    // During wake grace period, suppress all liveness alerts to prevent false alarms
-    // before the agent has had a chance to resume and emit a post-wake heartbeat.
+    // During wake grace period, suppress all liveness alerts.
     if in_wake_grace {
         tracing::debug!(
             goal_id = %goal.goal_run_id,
@@ -423,16 +458,17 @@ fn check_running_goal(
         Some(pid) => pid,
         None => {
             // Legacy goal or spawn failure — no PID to check.
-            // Only flag if it's been running long enough to be suspicious.
             let age_secs = (*now - goal.updated_at).num_seconds().unsigned_abs();
             if age_secs > config.zombie_transition_delay_secs {
                 issues.push(HealthIssue {
                     kind: "unknown_pid".to_string(),
                     goal_id: Some(goal.goal_run_id),
                     detail: format!(
-                        "Goal '{}' is running but has no agent PID (age: {}s)",
+                        "Goal '{}' is running but has no agent PID (age: {}s). \
+                         Run: ta goal recover {}",
                         goal.display_tag(),
-                        age_secs
+                        age_secs,
+                        &goal.goal_run_id.to_string()[..8],
                     ),
                 });
             }
@@ -441,34 +477,68 @@ fn check_running_goal(
     };
 
     if is_process_alive(pid) {
-        return; // All good.
+        // Process is alive. Check for stale condition only if heartbeats are expected.
+        if goal.heartbeat_required {
+            let age_secs = (*now - goal.updated_at).num_seconds().unsigned_abs();
+            if age_secs > config.stale_question_threshold_secs {
+                tracing::warn!(
+                    goal_id = %goal.goal_run_id,
+                    pid = pid,
+                    age_secs = age_secs,
+                    "Stale goal detected — agent alive but no heartbeat received"
+                );
+                issues.push(HealthIssue {
+                    kind: "stale_goal".to_string(),
+                    goal_id: Some(goal.goal_run_id),
+                    detail: format!(
+                        "Goal '{}' (PID {}) alive but no heartbeat for {}s (threshold: {}s). \
+                         Agent is running but not sending heartbeats.",
+                        goal.display_tag(),
+                        pid,
+                        age_secs,
+                        config.stale_question_threshold_secs,
+                    ),
+                });
+                // Stale: warn only, no state transition.
+            }
+        }
+        return;
     }
 
-    // Process is dead. Check if it's been dead long enough to transition.
+    // Process is dead.
+    // If the agent exited cleanly, run.rs should have already transitioned the goal to
+    // `Finalizing` before we get here. A goal in `Running` with a dead PID means either:
+    //   a) The process was killed unexpectedly (SIGKILL, crash)
+    //   b) The run.rs exit handler crashed before writing `Finalizing`
+    // In both cases, treat as zombie.
+
     let age_secs = (*now - goal.updated_at).num_seconds().unsigned_abs();
     if age_secs < config.zombie_transition_delay_secs {
-        // Too soon — might be a brief restart. Wait for next cycle.
+        // Too soon — might be a brief restart or race with exit handler. Wait next cycle.
         tracing::debug!(
             goal_id = %goal.goal_run_id,
             pid = pid,
             age_secs = age_secs,
-            "Process dead but within delay window"
+            "Process dead but within delay window — waiting for exit handler"
         );
         return;
     }
 
     let detail = format!(
-        "Agent process (PID {}) for goal '{}' exited without updating state (last update: {}s ago)",
+        "Agent process (PID {}) for goal '{}' is gone without updating state \
+         (last update: {}s ago). Run: ta goal recover {}",
         pid,
         goal.display_tag(),
         age_secs,
+        &goal.goal_run_id.to_string()[..8],
     );
 
     tracing::warn!(
         goal_id = %goal.goal_run_id,
         pid = pid,
-        "Zombie goal detected: {}",
-        detail
+        age_secs = age_secs,
+        prev_state = %goal.state,
+        "Watchdog: goal state transition running -> failed (zombie_goal)"
     );
 
     issues.push(HealthIssue {
@@ -482,7 +552,7 @@ fn check_running_goal(
     let event = SessionEvent::GoalProcessExited {
         goal_id: goal.goal_run_id,
         pid,
-        exit_code: None, // We can't recover exit code after the process is gone.
+        exit_code: None, // Can't recover exit code from a long-dead process.
         elapsed_secs: elapsed,
         detail,
     };
@@ -490,11 +560,14 @@ fn check_running_goal(
         tracing::warn!("Watchdog: failed to persist GoalProcessExited event: {}", e);
     }
 
-    // Transition the goal to Failed.
+    // Transition to Failed.
     let reason = format!(
         "Agent process (PID {}) exited without updating goal state. \
-         Detected by daemon watchdog after {}s.",
-        pid, age_secs
+         Detected by daemon watchdog after {}s. \
+         Run `ta goal recover {}` to restore state if a draft was created.",
+        pid,
+        age_secs,
+        &goal.goal_run_id.to_string()[..8],
     );
     if let Err(e) = store.transition(goal.goal_run_id, GoalRunState::Failed { reason }) {
         tracing::warn!(
@@ -505,7 +578,86 @@ fn check_running_goal(
     } else {
         tracing::info!(
             goal_id = %goal.goal_run_id,
-            "Watchdog: transitioned zombie goal to failed"
+            prev_state = "running",
+            new_state = "failed",
+            reason = "zombie_goal",
+            "Watchdog: goal state transition"
+        );
+    }
+}
+
+/// Check a goal in `Finalizing` state (v0.13.14).
+///
+/// `Finalizing` means the agent exited cleanly and draft creation is in progress.
+/// The watchdog should leave it alone unless the timeout is exceeded (indicating
+/// the draft-build process was interrupted).
+fn check_finalizing_goal(
+    goal: &GoalRun,
+    finalize_started_at: chrono::DateTime<Utc>,
+    config: &WatchdogConfig,
+    store: &GoalRunStore,
+    now: &chrono::DateTime<Utc>,
+    issues: &mut Vec<HealthIssue>,
+) {
+    let elapsed_secs = (*now - finalize_started_at).num_seconds().unsigned_abs();
+
+    if elapsed_secs < config.finalize_timeout_secs {
+        // Within timeout — draft creation is still in progress. Do nothing.
+        tracing::debug!(
+            goal_id = %goal.goal_run_id,
+            elapsed_secs = elapsed_secs,
+            timeout_secs = config.finalize_timeout_secs,
+            "Goal in Finalizing state — draft creation in progress"
+        );
+        return;
+    }
+
+    // Timeout exceeded — draft creation was interrupted or very slow.
+    let detail = format!(
+        "Goal '{}' has been in Finalizing state for {}s (timeout: {}s). \
+         Draft creation may have been interrupted. \
+         Run: ta goal recover {}",
+        goal.display_tag(),
+        elapsed_secs,
+        config.finalize_timeout_secs,
+        &goal.goal_run_id.to_string()[..8],
+    );
+
+    tracing::warn!(
+        goal_id = %goal.goal_run_id,
+        elapsed_secs = elapsed_secs,
+        timeout_secs = config.finalize_timeout_secs,
+        prev_state = "finalizing",
+        new_state = "failed",
+        reason = "finalize_timeout",
+        "Watchdog: goal state transition finalizing -> failed (timeout)"
+    );
+
+    issues.push(HealthIssue {
+        kind: "finalize_timeout".to_string(),
+        goal_id: Some(goal.goal_run_id),
+        detail: detail.clone(),
+    });
+
+    let reason = format!(
+        "Finalizing timed out after {}s — draft creation may have been interrupted. \
+         Run: ta goal recover {}",
+        elapsed_secs,
+        &goal.goal_run_id.to_string()[..8],
+    );
+    if let Err(e) = store.transition(goal.goal_run_id, GoalRunState::Failed { reason }) {
+        tracing::warn!(
+            goal_id = %goal.goal_run_id,
+            "Watchdog: failed to transition stuck-finalizing goal to failed: {}",
+            e
+        );
+    } else {
+        tracing::info!(
+            goal_id = %goal.goal_run_id,
+            prev_state = "finalizing",
+            new_state = "failed",
+            reason = "finalize_timeout",
+            "Watchdog: goal state transition"
         );
     }
 }
@@ -618,7 +770,7 @@ fn truncate_preview(s: &str, max_len: usize) -> String {
 /// Compute process health label for a goal (used by CLI and API).
 pub fn process_health_label(goal: &GoalRun) -> &'static str {
     match &goal.state {
-        GoalRunState::Running => match goal.agent_pid {
+        GoalRunState::Running | GoalRunState::Finalizing { .. } => match goal.agent_pid {
             Some(pid) => {
                 if is_process_alive(pid) {
                     "alive"
@@ -638,7 +790,7 @@ pub fn process_health_label(goal: &GoalRun) -> &'static str {
             }
             None => "unknown",
         },
-        // Terminal states — no process to check.
+        // Terminal/finalizing states — process expected to be gone.
         _ => "—",
     }
 }
@@ -972,6 +1124,119 @@ mod tests {
             state.last_wake_wall.is_none(),
             "Should not detect sleep on normal cycle"
         );
+    }
+
+    #[test]
+    fn watchdog_skips_finalizing_within_timeout() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path();
+        let goals_dir = project.join(".ta/goals");
+        let events_dir = project.join(".ta/events");
+        std::fs::create_dir_all(&goals_dir).unwrap();
+        std::fs::create_dir_all(&events_dir).unwrap();
+
+        let store = GoalRunStore::new(&goals_dir).unwrap();
+        let mut goal = GoalRun::new(
+            "Finalizing",
+            "obj",
+            "agent",
+            PathBuf::from("/tmp/a"),
+            PathBuf::from("/tmp/b"),
+        );
+        // Finalizing started 30 seconds ago — well within 300s timeout.
+        goal.state = ta_goal::GoalRunState::Finalizing {
+            exit_code: 0,
+            finalize_started_at: Utc::now() - chrono::Duration::seconds(30),
+        };
+        store.save(&goal).unwrap();
+
+        let config = WatchdogConfig::default();
+        let mut state = WatchdogState::default();
+        watchdog_cycle(project, &config, &mut state, None);
+
+        // Goal should still be in Finalizing state (not transitioned to failed).
+        let updated = store.get(goal.goal_run_id).unwrap().unwrap();
+        assert!(
+            matches!(updated.state, ta_goal::GoalRunState::Finalizing { .. }),
+            "Expected Finalizing, got: {:?}",
+            updated.state
+        );
+    }
+
+    #[test]
+    fn watchdog_finalizing_timeout_transitions_to_failed() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path();
+        let goals_dir = project.join(".ta/goals");
+        let events_dir = project.join(".ta/events");
+        std::fs::create_dir_all(&goals_dir).unwrap();
+        std::fs::create_dir_all(&events_dir).unwrap();
+
+        let store = GoalRunStore::new(&goals_dir).unwrap();
+        let mut goal = GoalRun::new(
+            "StuckFinalizing",
+            "obj",
+            "agent",
+            PathBuf::from("/tmp/a"),
+            PathBuf::from("/tmp/b"),
+        );
+        // Finalizing started 400 seconds ago — exceeds default 300s timeout.
+        goal.state = ta_goal::GoalRunState::Finalizing {
+            exit_code: 0,
+            finalize_started_at: Utc::now() - chrono::Duration::seconds(400),
+        };
+        store.save(&goal).unwrap();
+
+        let config = WatchdogConfig {
+            finalize_timeout_secs: 300,
+            ..Default::default()
+        };
+        let mut state = WatchdogState::default();
+        watchdog_cycle(project, &config, &mut state, None);
+
+        // Goal should now be Failed.
+        let updated = store.get(goal.goal_run_id).unwrap().unwrap();
+        assert!(
+            matches!(updated.state, ta_goal::GoalRunState::Failed { .. }),
+            "Expected Failed after finalize timeout, got: {:?}",
+            updated.state
+        );
+    }
+
+    #[test]
+    fn watchdog_stale_no_action_when_heartbeat_not_required() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path();
+        let goals_dir = project.join(".ta/goals");
+        let events_dir = project.join(".ta/events");
+        std::fs::create_dir_all(&goals_dir).unwrap();
+        std::fs::create_dir_all(&events_dir).unwrap();
+
+        let store = GoalRunStore::new(&goals_dir).unwrap();
+        let mut goal = GoalRun::new(
+            "LongRunning",
+            "obj",
+            "agent",
+            PathBuf::from("/tmp/a"),
+            PathBuf::from("/tmp/b"),
+        );
+        // Running with our own PID (alive) — last update 2 hours ago.
+        goal.state = ta_goal::GoalRunState::Running;
+        goal.agent_pid = Some(std::process::id());
+        goal.heartbeat_required = false;
+        goal.updated_at = Utc::now() - chrono::Duration::seconds(7200);
+        store.save(&goal).unwrap();
+
+        let config = WatchdogConfig {
+            stale_question_threshold_secs: 3600,
+            ..Default::default()
+        };
+        let mut state = WatchdogState::default();
+        watchdog_cycle(project, &config, &mut state, None);
+
+        // Goal should still be Running (stale check disabled when heartbeat_required=false).
+        let updated = store.get(goal.goal_run_id).unwrap().unwrap();
+        assert_eq!(updated.state, ta_goal::GoalRunState::Running);
     }
 
     #[test]

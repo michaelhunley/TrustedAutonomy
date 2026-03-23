@@ -266,6 +266,25 @@ pub enum GoalCommands {
         /// Text to deliver to the agent's stdin.
         text: String,
     },
+
+    /// Recover a goal from an incorrect state (v0.13.14).
+    ///
+    /// Handles common failure modes:
+    ///   - `failed` state with a valid draft (watchdog race)
+    ///   - `running` with a dead agent PID (zombie not cleaned up)
+    ///   - `finalizing` stuck > 300s (draft creation interrupted)
+    ///
+    /// Use `--list` to see all recoverable goals without prompting.
+    Recover {
+        /// Goal ID or prefix. Omit to use --latest.
+        id: Option<String>,
+        /// Show all recoverable goals without prompting for recovery.
+        #[arg(long)]
+        list: bool,
+        /// Recover the most recently affected goal.
+        #[arg(long)]
+        latest: bool,
+    },
 }
 
 /// Access constitution subcommands (v0.4.3).
@@ -420,6 +439,9 @@ pub fn execute(cmd: &GoalCommands, config: &GatewayConfig) -> anyhow::Result<()>
             threshold_days,
         } => gc_goals(&store, config, *dry_run, *include_staging, *threshold_days),
         GoalCommands::Input { id, text } => goal_input(config, id, text),
+        GoalCommands::Recover { id, list, latest } => {
+            goal_recover(config, &store, id.as_deref(), *list, *latest)
+        }
     }
 }
 
@@ -858,6 +880,311 @@ fn goal_input(config: &GatewayConfig, id: &str, text: &str) -> anyhow::Result<()
                 hint
             )
         }
+    }
+}
+
+/// Recover a goal from an incorrect state (v0.13.14).
+///
+/// Handles:
+///   - `failed` with valid draft → restore to `pr_ready`
+///   - `running` with dead PID → rebuild draft or cancel
+///   - `finalizing` stuck > 300s → rebuild draft or cancel
+fn goal_recover(
+    config: &GatewayConfig,
+    store: &GoalRunStore,
+    id: Option<&str>,
+    list_only: bool,
+    latest: bool,
+) -> anyhow::Result<()> {
+    let all_goals = store.list()?;
+    let now = chrono::Utc::now();
+
+    // --- Collect recoverable goals ---
+    let mut recoverable: Vec<(&GoalRun, String)> = Vec::new();
+    for goal in &all_goals {
+        let diagnosis = diagnose_goal(goal, &now, config);
+        if let Some(diag) = diagnosis {
+            recoverable.push((goal, diag));
+        }
+    }
+
+    if list_only {
+        if recoverable.is_empty() {
+            println!("No goals in potentially-recoverable states.");
+        } else {
+            println!("{} recoverable goal(s):", recoverable.len());
+            println!();
+            for (goal, diag) in &recoverable {
+                let short_id = &goal.goal_run_id.to_string()[..8];
+                println!("  {} — {} ({})", short_id, goal.title, goal.state);
+                println!("    {}", diag);
+                if let Some(pkg_id) = goal.pr_package_id {
+                    let short_pkg = &pkg_id.to_string()[..8];
+                    let pkg_path = config
+                        .workspace_root
+                        .join(".ta/pr_packages")
+                        .join(format!("{}.json", pkg_id));
+                    if pkg_path.exists() {
+                        println!("    Draft: {} (present)", short_pkg);
+                    } else {
+                        println!("    Draft: {} (missing)", short_pkg);
+                    }
+                }
+                println!();
+            }
+        }
+        return Ok(());
+    }
+
+    // --- Select goal to recover ---
+    let target: &GoalRun = if let Some(id_prefix) = id {
+        // User specified an ID prefix.
+        let goal_id = resolve_goal_id(id_prefix, store)?;
+        all_goals
+            .iter()
+            .find(|g| g.goal_run_id == goal_id)
+            .ok_or_else(|| anyhow::anyhow!("Goal {} not found", id_prefix))?
+    } else if latest || id.is_none() {
+        // Use the most recently updated recoverable goal.
+        recoverable.first().map(|(g, _)| *g).ok_or_else(|| {
+            anyhow::anyhow!(
+                "No recoverable goals found. Use `ta goal recover --list` to inspect all goals."
+            )
+        })?
+    } else {
+        anyhow::bail!("Specify a goal ID or use --latest / --list");
+    };
+
+    let diag = diagnose_goal(target, &now, config).unwrap_or_else(|| {
+        format!(
+            "Unknown issue — showing raw state for manual inspection (state: {})",
+            target.state
+        )
+    });
+
+    // --- Show diagnosis ---
+    println!();
+    println!(
+        "Goal: \"{}\" ({})",
+        target.title,
+        &target.goal_run_id.to_string()[..8]
+    );
+    println!("Current state: {}", target.state);
+    if let Some(pid) = target.agent_pid {
+        println!("Agent PID: {}", pid);
+    }
+    if let Some(pkg_id) = target.pr_package_id {
+        let pkg_path = config
+            .workspace_root
+            .join(".ta/pr_packages")
+            .join(format!("{}.json", pkg_id));
+        let pkg_status = if pkg_path.exists() {
+            "present and valid"
+        } else {
+            "file missing"
+        };
+        println!("Draft: {} — {}", &pkg_id.to_string()[..8], pkg_status);
+    } else {
+        println!("Draft: none");
+    }
+    println!();
+    println!("Detected issue: {}", diag);
+    println!();
+
+    // --- Choose recovery action ---
+    let has_valid_draft = target.pr_package_id.is_some_and(|pkg_id| {
+        config
+            .workspace_root
+            .join(".ta/pr_packages")
+            .join(format!("{}.json", pkg_id))
+            .exists()
+    });
+
+    if has_valid_draft {
+        println!("Recovery options:");
+        println!("  [1] Restore state to pr_ready (draft is valid, proceed to review)");
+        println!("  [2] Rebuild draft from staging (re-run diff against current source)");
+        println!("  [3] Mark as cancelled (discard goal and draft)");
+        println!("  [4] Show goal JSON (inspect and exit)");
+        println!("  [5] Abort (no changes)");
+        println!();
+        print!("Choice [1-5]: ");
+    } else {
+        println!("Recovery options:");
+        println!("  [1] Rebuild draft from staging (re-run diff against current source)");
+        println!("  [2] Mark as cancelled (discard goal and draft)");
+        println!("  [3] Show goal JSON (inspect and exit)");
+        println!("  [4] Abort (no changes)");
+        println!();
+        print!("Choice [1-4]: ");
+    }
+
+    use std::io::Write;
+    std::io::stdout().flush().ok();
+
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input)?;
+    let choice: u32 = input.trim().parse().unwrap_or(0);
+
+    if has_valid_draft {
+        match choice {
+            1 => {
+                // Option 1: restore to pr_ready
+                let pkg_id = target.pr_package_id.unwrap();
+                if let Ok(Some(mut g)) = store.get(target.goal_run_id) {
+                    // Force state to pr_ready directly (bypass normal state machine since
+                    // we're recovering from an incorrect state).
+                    g.state = GoalRunState::PrReady;
+                    g.pr_package_id = Some(pkg_id);
+                    g.updated_at = chrono::Utc::now();
+                    store.save(&g)?;
+                    println!();
+                    println!(
+                        "Restored goal {} to pr_ready state.",
+                        &target.goal_run_id.to_string()[..8]
+                    );
+                    println!("Draft {} is ready for review.", &pkg_id.to_string()[..8]);
+                    println!("Run: ta draft view {}", &pkg_id.to_string()[..8]);
+                }
+            }
+            2 => {
+                // Option 2: rebuild draft
+                println!();
+                println!("Rebuilding draft from staging...");
+                super::draft::execute(
+                    &super::draft::DraftCommands::Build {
+                        goal_id: target.goal_run_id.to_string(),
+                        summary: format!("Recovered draft for: {}", target.title),
+                        latest: false,
+                    },
+                    config,
+                )?;
+                println!("Draft rebuilt. Run `ta draft list` to review.");
+            }
+            3 => {
+                // Option 3: cancel
+                if let Ok(Some(mut g)) = store.get(target.goal_run_id) {
+                    g.state = GoalRunState::Failed {
+                        reason: "Cancelled by user via ta goal recover".to_string(),
+                    };
+                    g.updated_at = chrono::Utc::now();
+                    store.save(&g)?;
+                    println!();
+                    println!(
+                        "Goal {} marked as cancelled.",
+                        &target.goal_run_id.to_string()[..8]
+                    );
+                }
+            }
+            4 => {
+                println!();
+                println!("{}", serde_json::to_string_pretty(target)?);
+            }
+            _ => {
+                println!("Aborted — no changes made.");
+            }
+        }
+    } else {
+        match choice {
+            1 => {
+                println!();
+                println!("Rebuilding draft from staging...");
+                super::draft::execute(
+                    &super::draft::DraftCommands::Build {
+                        goal_id: target.goal_run_id.to_string(),
+                        summary: format!("Recovered draft for: {}", target.title),
+                        latest: false,
+                    },
+                    config,
+                )?;
+                println!("Draft rebuilt. Run `ta draft list` to review.");
+            }
+            2 => {
+                if let Ok(Some(mut g)) = store.get(target.goal_run_id) {
+                    g.state = GoalRunState::Failed {
+                        reason: "Cancelled by user via ta goal recover".to_string(),
+                    };
+                    g.updated_at = chrono::Utc::now();
+                    store.save(&g)?;
+                    println!();
+                    println!(
+                        "Goal {} marked as cancelled.",
+                        &target.goal_run_id.to_string()[..8]
+                    );
+                }
+            }
+            3 => {
+                println!();
+                println!("{}", serde_json::to_string_pretty(target)?);
+            }
+            _ => {
+                println!("Aborted — no changes made.");
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Produce a plain-English diagnosis for a goal in a potentially-recoverable state.
+///
+/// Returns `None` if the goal is not in a recoverable state.
+fn diagnose_goal(
+    goal: &GoalRun,
+    now: &chrono::DateTime<chrono::Utc>,
+    config: &GatewayConfig,
+) -> Option<String> {
+    match &goal.state {
+        GoalRunState::Failed { .. } => {
+            // Check if a valid draft exists — indicates watchdog race.
+            if let Some(pkg_id) = goal.pr_package_id {
+                let pkg_path = config
+                    .workspace_root
+                    .join(".ta/pr_packages")
+                    .join(format!("{}.json", pkg_id));
+                if pkg_path.exists() {
+                    return Some(
+                        "Watchdog overrode clean exit with failed state — draft is valid."
+                            .to_string(),
+                    );
+                }
+            }
+            None
+        }
+        GoalRunState::Running => {
+            // Check if PID is dead.
+            if let Some(pid) = goal.agent_pid {
+                if !is_process_alive(pid) {
+                    return Some(format!(
+                        "Goal is running but agent process PID {} is gone (zombie not cleaned up).",
+                        pid
+                    ));
+                }
+            } else {
+                let age_secs = (*now - goal.updated_at).num_seconds().unsigned_abs();
+                if age_secs > 3600 {
+                    return Some(format!(
+                        "Goal is running with no PID for {}s — may have been orphaned.",
+                        age_secs
+                    ));
+                }
+            }
+            None
+        }
+        GoalRunState::Finalizing {
+            finalize_started_at,
+            ..
+        } => {
+            let elapsed = (*now - *finalize_started_at).num_seconds().unsigned_abs();
+            if elapsed > 300 {
+                return Some(format!(
+                    "Draft creation has been in progress for {}s (threshold: 300s) — may be stuck.",
+                    elapsed
+                ));
+            }
+            None
+        }
+        _ => None,
     }
 }
 
@@ -1533,7 +1860,9 @@ fn is_process_alive(pid: u32) -> bool {
 ///   "—"       — terminal state (no process to check)
 fn process_health_label(goal: &ta_goal::GoalRun) -> &'static str {
     match &goal.state {
-        GoalRunState::Running | GoalRunState::AwaitingInput { .. } => match goal.agent_pid {
+        GoalRunState::Running
+        | GoalRunState::Finalizing { .. }
+        | GoalRunState::AwaitingInput { .. } => match goal.agent_pid {
             Some(pid) => {
                 if is_process_alive(pid) {
                     "alive"
