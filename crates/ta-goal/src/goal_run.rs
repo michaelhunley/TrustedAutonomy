@@ -63,6 +63,20 @@ pub enum GoalRunState {
         question_preview: String,
     },
 
+    /// Agent exited cleanly; draft creation is in progress (v0.13.14).
+    ///
+    /// This state closes the watchdog race: the exit handler atomically
+    /// writes `Finalizing` before starting the (slow) draft build, so the
+    /// watchdog will not mark the goal `Failed` while the build is ongoing.
+    ///
+    /// The watchdog skips `Finalizing` goals unless `finalize_timeout_secs`
+    /// (default 300s) is exceeded, at which point it transitions to `Failed`
+    /// with a message directing the user to `ta goal recover`.
+    Finalizing {
+        exit_code: i32,
+        finalize_started_at: DateTime<Utc>,
+    },
+
     /// Goal failed at some point.
     Failed { reason: String },
 }
@@ -80,6 +94,7 @@ impl fmt::Display for GoalRunState {
             GoalRunState::Merged => write!(f, "merged"),
             GoalRunState::Completed => write!(f, "completed"),
             GoalRunState::AwaitingInput { .. } => write!(f, "awaiting_input"),
+            GoalRunState::Finalizing { .. } => write!(f, "finalizing"),
             GoalRunState::Failed { .. } => write!(f, "failed"),
         }
     }
@@ -125,6 +140,12 @@ impl GoalRunState {
                 | (GoalRunState::AwaitingInput { .. }, GoalRunState::Running)
                 // Agent completes from interactive state
                 | (GoalRunState::AwaitingInput { .. }, GoalRunState::PrReady)
+                // v0.13.14: Running → Finalizing (exit handler takes over draft creation)
+                | (GoalRunState::Running, GoalRunState::Finalizing { .. })
+                // Finalizing → PrReady (draft built successfully)
+                | (GoalRunState::Finalizing { .. }, GoalRunState::PrReady)
+                // Recover: Finalizing → Running (manual recovery after timeout/interrupt)
+                | (GoalRunState::Finalizing { .. }, GoalRunState::Running)
         )
     }
 }
@@ -227,6 +248,18 @@ pub struct GoalRun {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_pid: Option<u32>,
 
+    /// Whether this agent sends heartbeats to the daemon (v0.13.14).
+    ///
+    /// When `false` (default), the watchdog disables stale-based detection for this goal
+    /// and only acts on zombie conditions (PID gone + non-zero exit). Claude Code and most
+    /// agent frameworks do not send heartbeats, so this defaults to `false`.
+    ///
+    /// When `true`, a goal with no state update for `stale_threshold_secs` emits a
+    /// `GoalStale` event. This is intended for custom agents that explicitly call
+    /// `POST /api/goals/:id/heartbeat` to signal liveness.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub heartbeat_required: bool,
+
     /// PR URL created by `ta draft apply` (v0.11.3).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pr_url: Option<String>,
@@ -312,6 +345,7 @@ impl GoalRun {
             thread_id: None,
             project_name: None,
             agent_pid: None,
+            heartbeat_required: false,
             pr_url: None,
             pr_package_id: None,
             created_at: now,
@@ -679,6 +713,102 @@ mod tests {
         assert!(!json.contains("\"tag\""));
         let restored: GoalRun = serde_json::from_str(&json).unwrap();
         assert!(restored.tag.is_none());
+    }
+
+    #[test]
+    fn finalizing_state_transition_from_running() {
+        let mut gr = test_goal_run();
+        gr.transition(GoalRunState::Configured).unwrap();
+        gr.transition(GoalRunState::Running).unwrap();
+        let now = chrono::Utc::now();
+        gr.transition(GoalRunState::Finalizing {
+            exit_code: 0,
+            finalize_started_at: now,
+        })
+        .unwrap();
+        assert!(matches!(
+            gr.state,
+            GoalRunState::Finalizing { exit_code: 0, .. }
+        ));
+    }
+
+    #[test]
+    fn finalizing_to_pr_ready_transition_valid() {
+        let mut gr = test_goal_run();
+        gr.transition(GoalRunState::Configured).unwrap();
+        gr.transition(GoalRunState::Running).unwrap();
+        gr.transition(GoalRunState::Finalizing {
+            exit_code: 0,
+            finalize_started_at: chrono::Utc::now(),
+        })
+        .unwrap();
+        gr.transition(GoalRunState::PrReady).unwrap();
+        assert_eq!(gr.state, GoalRunState::PrReady);
+    }
+
+    #[test]
+    fn finalizing_to_failed_always_valid() {
+        let mut gr = test_goal_run();
+        gr.transition(GoalRunState::Configured).unwrap();
+        gr.transition(GoalRunState::Running).unwrap();
+        gr.transition(GoalRunState::Finalizing {
+            exit_code: 0,
+            finalize_started_at: chrono::Utc::now(),
+        })
+        .unwrap();
+        gr.transition(GoalRunState::Failed {
+            reason: "timeout".to_string(),
+        })
+        .unwrap();
+        assert!(matches!(gr.state, GoalRunState::Failed { .. }));
+    }
+
+    #[test]
+    fn finalizing_serialization_round_trip() {
+        let mut gr = test_goal_run();
+        let start = chrono::Utc::now();
+        gr.state = GoalRunState::Finalizing {
+            exit_code: 0,
+            finalize_started_at: start,
+        };
+        let json = serde_json::to_string_pretty(&gr).unwrap();
+        assert!(json.contains("\"finalizing\""), "state tag missing");
+        assert!(json.contains("\"exit_code\""));
+        let restored: GoalRun = serde_json::from_str(&json).unwrap();
+        assert!(matches!(
+            restored.state,
+            GoalRunState::Finalizing { exit_code: 0, .. }
+        ));
+    }
+
+    #[test]
+    fn finalizing_display() {
+        let state = GoalRunState::Finalizing {
+            exit_code: 0,
+            finalize_started_at: chrono::Utc::now(),
+        };
+        assert_eq!(state.to_string(), "finalizing");
+    }
+
+    #[test]
+    fn heartbeat_required_defaults_false() {
+        let gr = test_goal_run();
+        assert!(!gr.heartbeat_required);
+        let json = serde_json::to_string_pretty(&gr).unwrap();
+        // False value is skipped (skip_serializing_if)
+        assert!(!json.contains("heartbeat_required"));
+        let restored: GoalRun = serde_json::from_str(&json).unwrap();
+        assert!(!restored.heartbeat_required);
+    }
+
+    #[test]
+    fn heartbeat_required_serialization_round_trip() {
+        let mut gr = test_goal_run();
+        gr.heartbeat_required = true;
+        let json = serde_json::to_string_pretty(&gr).unwrap();
+        assert!(json.contains("\"heartbeat_required\""));
+        let restored: GoalRun = serde_json::from_str(&json).unwrap();
+        assert!(restored.heartbeat_required);
     }
 
     #[test]

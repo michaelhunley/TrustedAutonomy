@@ -575,9 +575,9 @@ fn goal_to_candidate(
         GoalRunState::Failed { reason } => {
             (format!("failed: {}", truncate(reason, 40)), None, vec![])
         }
-        GoalRunState::Running | GoalRunState::AwaitingInput { .. } => {
-            ("in progress".to_string(), None, vec![])
-        }
+        GoalRunState::Running
+        | GoalRunState::Finalizing { .. }
+        | GoalRunState::AwaitingInput { .. } => ("in progress".to_string(), None, vec![]),
         GoalRunState::PrReady | GoalRunState::UnderReview => {
             // Check if draft was denied.
             if let Some(d) = draft {
