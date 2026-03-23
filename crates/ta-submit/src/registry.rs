@@ -502,6 +502,7 @@ echo '{"ok":true,"result":{"plugin_version":"0.1.0","protocol_version":1,"adapte
             timeout_secs: 30,
             min_daemon_version: None,
             source_url: None,
+            staging_env: std::collections::HashMap::new(),
         };
         // Should not panic or error — just logs.
         enforce_section15_plugin(&manifest);
@@ -520,6 +521,7 @@ echo '{"ok":true,"result":{"plugin_version":"0.1.0","protocol_version":1,"adapte
             timeout_secs: 30,
             min_daemon_version: None,
             source_url: None,
+            staging_env: std::collections::HashMap::new(),
         };
         // Should warn (logged) but not fail.
         enforce_section15_plugin(&manifest);

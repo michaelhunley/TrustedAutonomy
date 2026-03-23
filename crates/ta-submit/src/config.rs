@@ -66,6 +66,10 @@ pub struct WorkflowConfig {
     #[serde(default)]
     pub governance: GovernanceConfig,
 
+    /// VCS configuration (v0.13.17.3)
+    #[serde(default)]
+    pub vcs: VcsConfig,
+
     /// Commands to run after agent exit to produce hard validation evidence (v0.13.17).
     ///
     /// Each command is run in the staging workspace. Results are embedded in the
@@ -235,6 +239,87 @@ impl Default for GovernanceConfig {
             override_identity: None,
         }
     }
+}
+
+/// VCS environment isolation configuration for spawned agents (v0.13.17.3).
+///
+/// Controls how TA configures the agent's VCS environment so it operates
+/// on the staging directory instead of the developer's real repository.
+///
+/// ```toml
+/// [vcs.agent]
+/// git_mode = "isolated"   # "isolated" | "inherit-read" | "none"
+/// p4_mode = "shelve"      # "shelve" | "read-only" | "inherit"
+/// init_baseline_commit = true
+/// ceiling_always = true
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VcsAgentConfig {
+    /// Git isolation mode.
+    ///
+    /// - `"isolated"` (default): `git init` in staging with a baseline commit.
+    ///   Agent gets its own isolated `.git`. `GIT_CEILING_DIRECTORIES` blocks
+    ///   upward traversal into the developer's real repo.
+    /// - `"inherit-read"`: Sets `GIT_CEILING_DIRECTORIES` only. Agent can read
+    ///   parent git history (log, blame) but write operations are scoped away.
+    /// - `"none"`: Sets `GIT_DIR=/dev/null`. All git operations fail immediately.
+    #[serde(default = "default_git_mode")]
+    pub git_mode: String,
+
+    /// Perforce isolation mode.
+    ///
+    /// - `"shelve"` (default): Agent uses a dedicated staging P4 workspace.
+    ///   Submit is blocked; shelve is allowed.
+    /// - `"read-only"`: Injects `P4CLIENT=` (empty). No P4 writes possible.
+    /// - `"inherit"`: Agent inherits the developer's P4CLIENT. Only for
+    ///   workflows that explicitly need live P4 access.
+    #[serde(default = "default_p4_mode")]
+    pub p4_mode: String,
+
+    /// Whether to create an initial "pre-agent" baseline commit in isolated git mode.
+    ///
+    /// When `true` (default), `git init` + `git add -A` + `git commit -m "pre-agent baseline"`
+    /// runs before the agent starts. The agent can then use `git diff`, `git log`, etc.
+    /// against a clean history.
+    #[serde(default = "default_true")]
+    pub init_baseline_commit: bool,
+
+    /// Whether to always set `GIT_CEILING_DIRECTORIES` regardless of mode.
+    ///
+    /// When `true` (default), `GIT_CEILING_DIRECTORIES` is set to the staging dir's
+    /// parent even in `inherit-read` and `isolated` modes, preventing git from
+    /// traversing into parent directories beyond the ceiling.
+    #[serde(default = "default_true")]
+    pub ceiling_always: bool,
+}
+
+fn default_git_mode() -> String {
+    "isolated".to_string()
+}
+fn default_p4_mode() -> String {
+    "shelve".to_string()
+}
+fn default_true() -> bool {
+    true
+}
+
+impl Default for VcsAgentConfig {
+    fn default() -> Self {
+        Self {
+            git_mode: default_git_mode(),
+            p4_mode: default_p4_mode(),
+            init_baseline_commit: true,
+            ceiling_always: true,
+        }
+    }
+}
+
+/// VCS configuration section (v0.13.17.3).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct VcsConfig {
+    /// Agent environment isolation settings.
+    #[serde(default)]
+    pub agent: VcsAgentConfig,
 }
 
 /// Submit adapter configuration

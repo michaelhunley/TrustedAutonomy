@@ -282,6 +282,15 @@ pub struct GoalRun {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub progress_note: Option<String>,
 
+    /// VCS isolation mode active for this goal's agent (v0.13.17.3).
+    ///
+    /// Set by `ta run` after calling `stage_env()`. Examples:
+    /// - `"isolated (git)"` — agent has its own `.git` in staging
+    /// - `"inherit-read (git)"` — agent can read but not write to parent git
+    /// - `"none (git)"` — all git operations blocked
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vcs_isolation: Option<String>,
+
     /// When this goal run was created.
     pub created_at: DateTime<Utc>,
 
@@ -364,6 +373,7 @@ impl GoalRun {
             pr_url: None,
             pr_package_id: None,
             progress_note: None,
+            vcs_isolation: None,
             created_at: now,
             updated_at: now,
         }

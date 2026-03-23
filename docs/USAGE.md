@@ -2416,6 +2416,60 @@ allow_network = ["api.anthropic.com", "api.github.com"]
 
 **Network filtering note**: On macOS, `allow_network` is a declaration (used for auditing) but the sandbox profile currently allows all outbound when any host is listed. Hostname-level network filtering (L7 proxy) is planned for v0.14.1.
 
+### VCS Isolation for Agents (`[vcs.agent]`)
+
+When TA spawns an agent in a staging workspace, the agent inherits your shell's VCS environment by default. This can cause index-lock collisions, accidental commits to your main branch, or Perforce submits to your live changelist. TA's VCS isolation prevents these problems by injecting a scoped environment before the agent starts.
+
+Configure in `.ta/workflow.toml`:
+
+```toml
+[vcs.agent]
+git_mode = "isolated"   # default
+```
+
+**Git isolation modes:**
+
+| Mode | Behavior | When to use |
+|------|----------|-------------|
+| `isolated` (default) | `git init` in the staging directory with a "pre-agent baseline" commit. Agent has its own `.git` and can use `git diff`, `git log`, `git add`, `git commit` against isolated history. `GIT_CEILING_DIRECTORIES` prevents upward traversal. | Most projects |
+| `inherit-read` | Sets `GIT_CEILING_DIRECTORIES` only. Agent can read parent git history (`git log`, `git blame`) but write operations are scoped away. | Read-heavy agents that need project history |
+| `none` | Sets `GIT_DIR=/dev/null`. All git commands fail immediately. | Strict sandboxing |
+
+**Perforce isolation modes:**
+
+```toml
+[vcs.agent]
+p4_mode = "shelve"   # default
+```
+
+| Mode | Behavior |
+|------|----------|
+| `shelve` (default) | Agent's `P4CLIENT` is cleared. P4 writes are blocked; only reads work. |
+| `read-only` | Injects empty `P4CLIENT`. No P4 writes possible. |
+| `inherit` | Agent inherits your live `P4CLIENT`. Use only if the workflow explicitly needs live P4 access. |
+
+**Additional options:**
+
+```toml
+[vcs.agent]
+git_mode = "isolated"
+init_baseline_commit = true   # Create "pre-agent baseline" commit before agent starts
+ceiling_always = true         # Always set GIT_CEILING_DIRECTORIES
+```
+
+**Per-machine override:** To override without modifying the committed `workflow.toml`, create `.ta/workflow.local.toml` (gitignored):
+
+```toml
+[vcs.agent]
+git_mode = "inherit-read"   # override for this machine only
+```
+
+**Checking active isolation mode:** The active mode appears in `ta goal status` output:
+
+```
+VCS:      isolated (git)
+```
+
 ### Commit Co-Authorship
 
 Every commit made through `ta draft apply` includes a `Co-Authored-By` trailer. This gives TA shared credit alongside the human author in GitHub's contribution graph, PR history, and `git log`.

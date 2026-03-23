@@ -393,6 +393,34 @@ impl SourceAdapter for PerforceAdapter {
             ))),
         }
     }
+
+    fn stage_env(
+        &self,
+        _staging_dir: &std::path::Path,
+        config: &crate::config::VcsAgentConfig,
+    ) -> crate::adapter::Result<std::collections::HashMap<String, String>> {
+        let mut env = std::collections::HashMap::new();
+        match config.p4_mode.as_str() {
+            "inherit" => {
+                // No env changes — agent inherits developer's P4CLIENT.
+            }
+            "read-only" => {
+                // Clear P4CLIENT so writes are rejected.
+                env.insert("P4CLIENT".to_string(), String::new());
+            }
+            _ => {
+                // "shelve" (default): clear P4CLIENT to prevent accidental submits.
+                // A real P4 staging workspace must be created server-side separately.
+                // This env injection blocks the agent from using the developer's live
+                // workspace while still allowing p4 reads via P4PORT/P4USER.
+                env.insert("P4CLIENT".to_string(), String::new());
+                tracing::info!(
+                    "Perforce staging mode: shelve — P4CLIENT cleared for agent isolation"
+                );
+            }
+        }
+        Ok(env)
+    }
 }
 
 #[cfg(test)]

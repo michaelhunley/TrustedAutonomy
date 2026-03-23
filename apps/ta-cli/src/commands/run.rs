@@ -1464,6 +1464,58 @@ pub fn execute(
     // Merge framework env extras into agent_config so they are passed to the process.
     agent_config.env.extend(framework_env_extras);
 
+    // VCS environment isolation (v0.13.17.3).
+    // Inject VCS env vars before the agent spawns to prevent index-lock
+    // collisions and accidental commits to the developer's real repo.
+    {
+        use ta_submit::SourceAdapter;
+        let workflow_toml = config.workspace_root.join(".ta/workflow.toml");
+        let wf = ta_submit::WorkflowConfig::load_or_default(&workflow_toml);
+        let vcs_config = wf.vcs.agent.clone();
+
+        // Only apply if the project is a git repo (detected by .git/ in source).
+        let source_is_git = config.workspace_root.join(".git").exists()
+            || goal
+                .source_dir
+                .as_ref()
+                .map(|d| d.join(".git").exists())
+                .unwrap_or(false);
+
+        if source_is_git && vcs_config.git_mode != "inherit" {
+            let git_adapter = ta_submit::GitAdapter::new(&staging_path);
+            match git_adapter.stage_env(&staging_path, &vcs_config) {
+                Ok(vcs_env) => {
+                    if !vcs_env.is_empty() {
+                        tracing::info!(
+                            mode = %vcs_config.git_mode,
+                            vars = vcs_env.len(),
+                            "VCS isolation: injecting git env vars"
+                        );
+                        agent_config.env.extend(vcs_env);
+                        // Record isolation mode on the goal record.
+                        let vcs_isolation_label = format!("{} (git)", vcs_config.git_mode);
+                        let goals_dir_for_vcs = config.goals_dir.clone();
+                        if let Ok(store) = ta_goal::GoalRunStore::new(&goals_dir_for_vcs) {
+                            if let Ok(Some(mut g)) = store.get(goal.goal_run_id) {
+                                g.vcs_isolation = Some(vcs_isolation_label.clone());
+                                let _ = store.save(&g);
+                            }
+                        }
+                        if !quiet {
+                            println!("VCS isolation: {} mode", vcs_config.git_mode);
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "VCS isolation setup failed — agent will inherit VCS env"
+                    );
+                }
+            }
+        }
+    }
+
     // Emit GoalStarted event to FsEventStore (v0.9.4.1).
     // Skip when reusing an existing goal — the MCP tool already emitted GoalStarted.
     if existing_goal_id.is_none() {
