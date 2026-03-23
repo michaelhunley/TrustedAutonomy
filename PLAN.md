@@ -5156,14 +5156,14 @@ This is conceptually a **git staging area for DB mutations**: the overlay is the
 
 14. [x] **Staged contributions**: `community_annotate` → `.ta/community-staging/<resource>/annotations/`.  `community_feedback` → `.ta/community-staging/<resource>/feedback/`. `community_suggest` → `.ta/community-staging/<resource>/suggestions/`. All include frontmatter with resource, goal_id, created_at.
 15. [x] **Draft callouts**: Staged artifacts under `.ta/community-staging/` are captured in the draft diff as modified files and visible in `ta draft view` with their `resource_uri: "community://..."`.
-16. [ ] **Upstream PR on apply**: Creating GitHub PRs from staged contributions on `ta draft apply`. → Deferred to v0.13.7+. The staging files and `resource_uri` scheme are already in place for when this is wired.
-17. [ ] **Contribution audit trail**: Logging community contributions to the audit ledger. → Deferred to v0.14.3 (Compliance-Ready Audit Ledger).
+16. [-] **Upstream PR on apply**: Creating GitHub PRs from staged contributions on `ta draft apply`. → v0.13.15 (fix pass) — staging files and `resource_uri` scheme are in place; needs git adapter wiring in `apply`.
+17. [-] **Contribution audit trail**: Logging community contributions to the audit ledger. → v0.14.3 (Compliance-Ready Audit Ledger).
 
 #### 5. CLI & Shell Integration
 
 18. [x] **`ta community` CLI commands**: `ta community list`, `ta community sync [name]`, `ta community search <query>`, `ta community get <id>` — all implemented in `apps/ta-cli/src/commands/community.rs`.
-19. [ ] **Tab completion**: Resource name completion in shell. → Deferred to v0.13.7 (shell improvements).
-20. [ ] **Status bar integration**: `[community: searching...]` badge. → Deferred to v0.13.7 (shell improvements).
+19. [-] **Tab completion**: Resource name completion in shell. → v0.13.15 — not implemented in v0.13.7.
+20. [-] **Status bar integration**: `[community: searching...]` badge. → v0.13.15 — not implemented in v0.13.7.
 
 #### Completed
 
@@ -5178,10 +5178,10 @@ This is conceptually a **git staging area for DB mutations**: the overlay is the
 
 #### Deferred items moved/resolved
 
-- Item 16 (Upstream PR on apply) → v0.13.7+ — staging infrastructure in place
+- Item 16 (Upstream PR on apply) → v0.13.15 (staging infrastructure in place, git adapter wiring needed)
 - Item 17 (Contribution audit trail) → v0.14.3 (Compliance-Ready Audit Ledger)
-- Item 19 (Tab completion) → v0.13.7 shell improvements
-- Item 20 (Status bar integration) → v0.13.7 shell improvements
+- Item 19 (Tab completion) → v0.13.15 (not implemented in v0.13.7)
+- Item 20 (Status bar integration) → v0.13.15 (not implemented in v0.13.7)
 
 #### Tests added (32 total)
 
@@ -5279,15 +5279,15 @@ Decompose a goal into independent sub-goals, run them in parallel (separate stag
 8. [x] **Parallel staging**: Each sub-goal runs as an independent agent (no follow-up chain), each gets its own staging directory created by `ta run`. `SwarmState` tracks per-sub-goal staging paths.
 9. [x] **Per-agent validation**: `per_agent_gates` evaluated after each sub-goal via `evaluate_gates()`. Failed sub-goals are flagged and reported but don't block remaining sub-goals.
 10. [x] **Integration agent**: `--integrate` flag triggers an integration agent after all sub-goals complete. Receives all passed staging paths in objective. Builds final draft with `ta draft build --latest`.
-11. [ ] **Dependency graph**: Sub-goals with declared dependencies — swarm scheduler ordering. → v0.13.7.2 (deferred; current implementation runs all sub-goals sequentially)
-12. [ ] **Progress dashboard**: Live swarm status in `ta shell` status bar. → v0.13.7.2 (deferred; `SwarmState.print_summary()` provides a CLI summary today)
+11. [-] **Dependency graph**: Sub-goals with declared dependencies — swarm scheduler ordering. → v0.13.16 (local model + advanced swarm phase; current impl runs sub-goals sequentially)
+12. [-] **Progress dashboard**: Live swarm status in `ta shell` status bar. → v0.13.16 (v0.13.7.2 was not created; `SwarmState.print_summary()` provides CLI summary today)
 
 #### Track 3: Office Workflow Routing
 
 Map departments, project types, or goal categories to default workflows.
 
 **Planning items**:
-13. [ ] **Department → workflow mapping in office config**: `.ta/office.yaml` `departments` section. → v0.13.7.3 (deferred)
+13. [-] **Department → workflow mapping in office config**: `.ta/office.yaml` `departments` section. → v0.13.16 (v0.13.7.3 was not created)
 14. [x] **Project-level workflow default**: `resolve_workflow()` now reads `channels.default_workflow` from `.ta/config.yaml`. Used when no explicit `--workflow` flag is provided. Resolution order: explicit flag → config file → `single-agent`.
 15. [x] **Workflow library**: `WorkflowCatalog` in `ta-workflow::definition` ships `single-agent`, `serial-phases`, `swarm`, `approval-chain` as built-in named workflows. Users can create custom YAML definitions in `.ta/workflows/`.
 16. [x] **`ta workflow list --builtin`**: Lists all built-in workflow names and descriptions. Usage: `ta workflow list --builtin`.
@@ -5299,6 +5299,12 @@ Map departments, project types, or goal categories to default workflows.
 - **Workflow versioning**: Do workflows need versioning for reproducibility?
 - **Cross-project workflows**: Can an office workflow span multiple projects (e.g., "update API + update client")?
 - **Cost/resource limits**: Parallel swarms can be expensive. Should there be concurrency limits per project/office?
+
+#### Deferred items moved/resolved
+
+- Item 11 (Sub-goal dependency graph) → v0.13.16 (Advanced Swarm + Local Model phase)
+- Item 12 (Live swarm progress dashboard in shell) → v0.13.16
+- Item 13 (Department → workflow mapping in office.yaml) → v0.13.16
 
 #### Version: `0.13.7-alpha`
 
@@ -5400,8 +5406,8 @@ ta run "write tests" --model ollama/phi4-mini   # shorthand: model implies ta-ag
 11. [x] MCP memory server: `inject_memory_mcp_server()` — adds `ta-memory` MCP server entry to `.mcp.json` before agent launch (additive, no backup/restore needed)
 12. [x] Context-mode serializer: `inject_memory_context()` — appends memory section to context file using existing `build_memory_context_section_for_inject()`
 13. [x] Exit-file ingestion: `ingest_memory_out()` — after agent exits reads `$TA_MEMORY_OUT` if present, parses entries, stores via `FsMemoryStore`; logs ingested count
-14. [ ] `ta-agent-ollama` memory tools: include `memory_read`/`memory_write`/`memory_search` in its native tool set, backed by TA's memory REST API
-15. [ ] Memory relevance tuning: `[memory]` manifest section can set `max_entries`, `recency_days`, `tags` filter to control what gets injected into context-mode agents
+14. [-] `ta-agent-ollama` memory tools: include `memory_read`/`memory_write`/`memory_search` in its native tool set, backed by TA's memory REST API → v0.13.16 (Local Model Agent)
+15. [-] Memory relevance tuning: `[memory]` manifest section can set `max_entries`, `recency_days`, `tags` filter to control what gets injected into context-mode agents → v0.13.16
 
 **Configuration levels**
 16. [x] `[agent]` section in `daemon.toml`: `default_framework` (default "claude-code"), `qa_framework` (default "claude-code") fields added to `AgentConfig`
@@ -5410,12 +5416,12 @@ ta run "write tests" --model ollama/phi4-mini   # shorthand: model implies ta-ag
 19. [x] Precedence enforcement and logging: `tracing::info!` on framework selection with `source` field (goal-flag/workflow/project/user-config/default); printed to user via `println!` for non-claude-code selections
 
 **`ta-agent-ollama` implementation**
-20. [ ] New crate `crates/ta-agent-ollama` — binary implementing tool-use loop against any OpenAI-compat endpoint
-21. [ ] Core tool set: bash_exec, file_read, file_write, file_list, web_fetch, memory_read, memory_write, memory_search
-22. [ ] Startup: read context from `--context-file` or `$TA_GOAL_CONTEXT`, include in system prompt; emit sentinel to stderr
-23. [ ] Model validation: probe `/v1/models` + test function-calling call on startup; emit clear error if model doesn't support tools
-24. [ ] Graceful degradation: if model has no function calling, fall back to CoT-with-parsing mode (best-effort) with a warning
-25. [ ] Validated with: Qwen2.5-Coder-7B, Phi-4-mini, Kimi K2.5, Llama3.1-8B (via Ollama and llama.cpp server)
+20. [-] New crate `crates/ta-agent-ollama` — binary implementing tool-use loop against any OpenAI-compat endpoint → v0.13.16
+21. [-] Core tool set: bash_exec, file_read, file_write, file_list, web_fetch, memory_read, memory_write, memory_search → v0.13.16
+22. [-] Startup: read context from `--context-file` or `$TA_GOAL_CONTEXT`, include in system prompt; emit sentinel to stderr → v0.13.16
+23. [-] Model validation: probe `/v1/models` + test function-calling call on startup; emit clear error if model doesn't support tools → v0.13.16
+24. [-] Graceful degradation: if model has no function calling, fall back to CoT-with-parsing mode (best-effort) with a warning → v0.13.16
+25. [-] Validated with: Qwen2.5-Coder-7B, Phi-4-mini, Kimi K2.5, Llama3.1-8B (via Ollama and llama.cpp server) → v0.13.16
 
 **Easy onboarding — model-as-agent path**
 26. [x] `ta agent new --model ollama/qwen2.5-coder:7b` — generates ready-to-use TOML manifest in `~/.config/ta/agents/`, prints Ollama connection instructions and next steps
@@ -5424,21 +5430,29 @@ ta run "write tests" --model ollama/phi4-mini   # shorthand: model implies ta-ag
 29. [x] `ta agent doctor <name>` — checks command on PATH, Ollama endpoint reachability, API keys (ANTHROPIC_API_KEY, OPENAI_API_KEY); prints actionable fix instructions
 
 **Cross-language project scaffolding**
-35. [ ] **`ta new --template <lang>`**: `ta new` gains language-specific project templates that pre-populate `workflow.toml` with sensible verify commands and a starter `.ta/constitution.toml`. Templates: `python`, `typescript`, `nodejs`, `rust` (existing default), `generic`.
+35. [-] **`ta new --template <lang>`**: `ta new` gains language-specific project templates that pre-populate `workflow.toml` with sensible verify commands and a starter `.ta/constitution.toml`. Templates: `python`, `typescript`, `nodejs`, `rust` (existing default), `generic`. → v0.13.15
    - `python`: verify commands = `["ruff check .", "mypy src/", "pytest"]`; constitution inject/restore patterns for Python conventions; `.taignore` with `__pycache__/`, `.venv/`, `*.egg-info/`, `dist/`, `.mypy_cache/`
    - `typescript`/`nodejs`: verify commands = `["tsc --noEmit", "npm test"]` (or `pnpm`/`yarn` variant); `.taignore` with `node_modules/`, `.next/`, `dist/`, `build/`, `.turbo/`
    - `generic`: empty verify commands; minimal constitution; basic `.taignore`
-36. [ ] **`ta init --template <lang>`**: Same as `ta new` but for an existing project — writes only the `.ta/` config files without touching source. Detects language automatically from presence of `package.json`, `pyproject.toml`, `Cargo.toml`, `go.mod` and suggests the matching template.
-37. [ ] **`.taignore` — overlay exclusion patterns**: `.ta/taignore` (or `.taignore` at project root) lists glob patterns excluded from staging copies and diffs — analogous to `.gitignore`. The overlay workspace (`ta-workspace/overlay.rs`) reads this file before copying and skips matching paths. **This is the single highest-impact change for non-Rust adoption**: `node_modules/` (200MB+), `.venv/`, `__pycache__/`, `.next/`, `dist/`, `build/` copied to every staging directory make first-time staging extremely slow and bloated. Default exclusions (always applied regardless of `.taignore`): `.git/`, `.ta/`. Language templates (item 35) write a `.taignore` appropriate for the detected language. `ta goal status` shows staging size and excluded path count so users can tune it.
+36. [-] **`ta init --template <lang>`**: Same as `ta new` but for an existing project — writes only the `.ta/` config files without touching source. Detects language automatically from presence of `package.json`, `pyproject.toml`, `Cargo.toml`, `go.mod` and suggests the matching template. → v0.13.15
+37. [-] **`.taignore` — overlay exclusion patterns**: `.ta/taignore` (or `.taignore` at project root) lists glob patterns excluded from staging copies and diffs — analogous to `.gitignore`. The overlay workspace (`ta-workspace/overlay.rs`) reads this file before copying and skips matching paths. **This is the single highest-impact change for non-Rust adoption**: `node_modules/` (200MB+), `.venv/`, `__pycache__/`, `.next/`, `dist/`, `build/` copied to every staging directory make first-time staging extremely slow and bloated. Default exclusions (always applied regardless of `.taignore`): `.git/`, `.ta/`. Language templates (item 35) write a `.taignore` appropriate for the detected language. `ta goal status` shows staging size and excluded path count so users can tune it. → v0.13.15
 
 **Sharing + registry**
-30. [ ] Framework manifests publishable to the plugin registry (v0.12.4 registry) — same install flow as VCS plugins
-31. [ ] `ta agent install <registry-name>` — fetch manifest + any companion binary, verify SHA256, run `ta agent test`
-32. [ ] `ta agent publish <path>` — validate + submit to registry
+30. [-] Framework manifests publishable to the plugin registry (v0.12.4 registry) — same install flow as VCS plugins → v0.13.16
+31. [-] `ta agent install <registry-name>` — fetch manifest + any companion binary, verify SHA256, run `ta agent test` → v0.13.16
+32. [-] `ta agent publish <path>` — validate + submit to registry → v0.13.16
 
 **Research + validation**
-33. [ ] Research spike: Ollama vs llama.cpp server vs vLLM vs LM Studio — API compatibility, tool-calling support, macOS/Linux support, startup time, model availability. Document in `docs/agent-framework-options.md`.
-34. [ ] End-to-end validation: Qwen2.5-Coder-7B completes a real `ta run` goal with memory write-back; memory entries visible in next goal's context
+33. [-] Research spike: Ollama vs llama.cpp server vs vLLM vs LM Studio — API compatibility, tool-calling support, macOS/Linux support, startup time, model availability. Document in `docs/agent-framework-options.md`. → v0.13.16
+34. [-] End-to-end validation: Qwen2.5-Coder-7B completes a real `ta run` goal with memory write-back; memory entries visible in next goal's context → v0.13.16
+
+#### Deferred items moved/resolved
+
+- Items 14–15 (ollama memory tools, memory relevance tuning) → v0.13.16 (Local Model Agent)
+- Items 20–25 (`ta-agent-ollama` crate, tool set, startup, validation, degradation, validation matrix) → v0.13.16
+- Items 30–32 (framework manifest registry, install, publish) → v0.13.16
+- Items 33–34 (research spike, end-to-end validation) → v0.13.16
+- Items 35–37 (`ta new/init --template`, `.taignore`) → v0.13.15 (cross-language onboarding pass)
 
 #### Version: `0.13.8-alpha`
 
@@ -5517,20 +5531,27 @@ on_failure = "ask_follow_up"  # propose a follow-up goal (pairs with v0.13.1 aut
    - `ProjectConstitutionConfig` struct in `apps/ta-cli/src/commands/constitution.rs` with `ValidationStep`, `ConstitutionRule`, `ConstitutionScan`, `ConstitutionRelease`.
 2. [x] **`ta constitution init-toml`**: Scaffolding command. Writes `.ta/constitution.toml` with TA's default rules as a starting point. Users edit for their project's patterns.
 3. [x] **Draft-time scanner reads `constitution.toml`**: `scan_for_violations()` reads inject/restore function names from `ProjectConstitutionConfig`. Projects with different conventions get correct scanning.
-4. [ ] **Release pipeline reads `checklist_gate`**: The release checklist gate step (v0.11.4.4 item 9) is enabled/disabled by `constitution.toml`. The checklist content is generated from the declared rules, not hardcoded. → deferred to follow-up phase
-5. [ ] **Parallel agent review during release**: When `agent_review = true` in `constitution.toml`, the release pipeline fans out two agents concurrently: the existing release notes writer, and a lighter constitution reviewer. Its output is appended to the release draft as a "Constitution Review" section. → deferred to follow-up phase
+4. [-] **Release pipeline reads `checklist_gate`**: The release checklist gate step (v0.11.4.4 item 9) is enabled/disabled by `constitution.toml`. The checklist content is generated from the declared rules, not hardcoded. → v0.13.15
+5. [-] **Parallel agent review during release**: When `agent_review = true` in `constitution.toml`, the release pipeline fans out two agents concurrently: the existing release notes writer, and a lighter constitution reviewer. Its output is appended to the release draft as a "Constitution Review" section. → v0.13.15
 6. [x] **`ta constitution check-toml`**: CLI command to run the scanner outside of draft build — useful for CI integration and pre-commit hooks. Exit code 0 = clean, 1 = violations found when `on_violation = "block"`. Output is machine-readable JSON with `--json` flag.
-7. [ ] **Inheritance**: `constitution.toml` can `extends = "ta-default"` to inherit TA's rules and only override specific sections. TA ships a built-in `ta-default` profile. → partial (`extends` field is stored but not yet applied at load time); deferred to follow-up phase
-8. [x] **Documentation**: Added "Constitution Config (`constitution.toml`)" section to `docs/USAGE.md`. Full web-service worked example deferred to follow-up phase.
-9. [ ] **`ta constitution init-toml --template <lang>`**: Language-specific constitution templates so Python/TypeScript/Node projects get relevant defaults rather than Rust-centric examples. Templates:
+7. [-] **Inheritance**: `constitution.toml` can `extends = "ta-default"` to inherit TA's rules and only override specific sections. TA ships a built-in `ta-default` profile. Partial: `extends` field is stored but not applied at load time. → v0.13.15
+8. [x] **Documentation**: Added "Constitution Config (`constitution.toml`)" section to `docs/USAGE.md`. Full web-service worked example deferred to v0.13.15.
+9. [-] **`ta constitution init-toml --template <lang>`**: Language-specific constitution templates so Python/TypeScript/Node projects get relevant defaults rather than Rust-centric examples. Templates:
    - `python`: `inject_fns`/`restore_fns` use Python conventions (e.g., `setup_env`, `teardown_env`); scan includes `src/`, `app/`; excludes `__pycache__/`, `.venv/`
    - `typescript`/`nodejs`: patterns for async setup/teardown; scans `src/`, `lib/`; excludes `node_modules/`, `dist/`
    - `rust`: existing TA defaults (current behaviour)
    - `generic`: minimal rules with descriptive comments as a starting point
-   Auto-detects language if `--template` omitted (same detection logic as `ta init --template`, v0.13.8 item 36).
-10. [ ] **USAGE.md cross-language worked examples**: Add a "Using TA with Python / TypeScript / Node.js" section showing complete `workflow.toml`, `.taignore`, and `constitution.toml` for each ecosystem. Covers: verify command setup, common pitfalls (`node_modules` exclusion, virtualenv placement), and a full first-goal walkthrough.
+   Auto-detects language if `--template` omitted (same detection logic as `ta init --template`, v0.13.8 item 36). → v0.13.15
+10. [-] **USAGE.md cross-language worked examples**: Add a "Using TA with Python / TypeScript / Node.js" section showing complete `workflow.toml`, `.taignore`, and `constitution.toml` for each ecosystem. Covers: verify command setup, common pitfalls (`node_modules` exclusion, virtualenv placement), and a full first-goal walkthrough. → v0.13.15
 
 **Files**: `.ta/constitution.toml` (new), `apps/ta-cli/src/commands/` (init, check, draft build scan, release step), `crates/ta-workspace/src/` (scanner crate or module).
+
+#### Deferred items moved/resolved
+
+- Item 4 (release pipeline checklist_gate) → v0.13.15 (cross-language & constitution completion)
+- Item 5 (parallel agent review during release) → v0.13.15
+- Item 7 (constitution inheritance `extends`) → v0.13.15 (stub already in code)
+- Items 9–10 (language-specific templates, cross-language USAGE.md) → v0.13.15
 
 #### Version: `0.13.9-alpha`
 
@@ -5662,8 +5683,8 @@ Current releases ship archives containing a bare binary and docs. Users must man
 6. [x] **Update required-assets validation**: `.msi` and `.dmg` treated as optional (non-fatal) in asset check; required archives unchanged
 7. [x] **Update release body template**: Installers (`.dmg`, `.msi`) as primary download options in release notes
 8. [x] **Update USAGE.md**: Added Option A (installer), Option B (one-liner), Option C (manual tar.gz) for Install section; updated Windows instructions
-9. [ ] **Bundle USAGE.html in MSI** (installed to `%ProgramFiles%\TrustedAutonomy\docs\`) → deferred to v0.13.12
-10. [ ] **Homebrew tap** → deferred to v0.14.x
+9. [-] **Bundle USAGE.html in MSI** (installed to `%ProgramFiles%\TrustedAutonomy\docs\`) → v0.13.15 (not completed in v0.13.12)
+10. [-] **Homebrew tap** → v0.14.x
 11. [x] **System requirements in USAGE.md**: Added "System Requirements" section with platform table and agent framework requirements table
 
     **USAGE.md section** (under Installation):
@@ -5694,6 +5715,11 @@ Current releases ship archives containing a bare binary and docs. Users must man
 #### Release infrastructure fixes (landed ahead of full v0.13.11)
 10. [x] **Version stamped into USAGE.md at release time**: Release workflow now `sed`-replaces the `**Version**:` line in USAGE.md with the actual tag before packaging, so USAGE.html and the bundled USAGE.md always show the correct version. (Was hardcoded as `0.10.18-alpha.1` in all previous releases.)
 11. [x] **Docker option marked Coming Soon in header**: `**Option C -- Docker** *(Coming Soon)*` in USAGE.md install section.
+
+#### Deferred items moved/resolved
+
+- Item 9 (Bundle USAGE.html in MSI) → v0.13.15 (not completed in v0.13.12)
+- Item 10 (Homebrew tap) → v0.14.x
 
 #### Version: `0.13.11-alpha`
 
@@ -5780,12 +5806,12 @@ Current releases ship archives containing a bare binary and docs. Users must man
    - **Git**: check for `.git/` directory (or `git rev-parse --git-dir` succeeds)
    - **Perforce**: check for `.p4config` in any parent directory, or `P4PORT`/`P4CLIENT` env vars set
    - **None / unknown**: prompt user to select from `[git, perforce, none]`
-   - Detected VCS written to `workflow.toml` under `[source]`:
+   - Detected VCS written to `workflow.toml` under `[submit]`:
      ```toml
-     [source]
-     vcs = "git"          # "git" | "perforce" | "none"
-     # p4_client = ""     # Perforce: P4CLIENT name (from wizard if P4 detected)
-     # p4_port = ""       # Perforce: P4PORT (from env or .p4config)
+     [submit]
+     adapter = "git"      # "git" | "perforce" | "none"
+     # [submit.perforce]
+     # workspace = ""     # P4CLIENT workspace name (personal — set in local.workflow.toml)
      ```
 2. [x] **Interactive wizard (`ta setup`)**: Added `ta setup vcs` subcommand with `--force`, `--dry-run`, and `--vcs` flags. Detects VCS, writes ignore files, updates workflow.toml, prints shared/local split. Full language detection and step-by-step wizard flow deferred to v0.13.14.
 3. [x] **`ta doctor` VCS validation**: Extended `ta doctor` with:
