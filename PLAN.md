@@ -6266,20 +6266,38 @@ Plugin discovery (same pattern as VCS plugins):
   $PATH: ta-memory-*
 ```
 
-**JSON-over-stdio protocol** (one request/response per line):
+**Operation schema** (transport-agnostic — same operations over all transports):
 ```json
-// TA → plugin (stdin)
+// TA → plugin
 {"op":"store",  "key":"...", "value":{...}, "tags":[...], "source":"..."}
 {"op":"recall", "key":"..."}
 {"op":"lookup", "query":{"prefix":"...", "tags":[...], "limit":10}}
 {"op":"forget", "key":"..."}
-{"op":"semantic_search", "query":"...", "k":5}
+{"op":"semantic_search", "query":"...", "embedding":[0.021,-0.134,...], "k":5}
 {"op":"stats"}
 
-// plugin → TA (stdout)
+// plugin → TA
 {"ok":true,  "entry":{...}}
 {"ok":true,  "entries":[...]}
 {"ok":false, "error":"connection refused: check SUPERMEMORY_API_KEY"}
+```
+
+Note: `semantic_search` includes an optional pre-computed `embedding` field. When present, the plugin can use it directly — no re-embedding needed. Over AMP, this field comes from the `intent_embedding` in the AMP envelope.
+
+**Transport layers** (plugin declares preference in its manifest):
+| Transport | When to use | How |
+|---|---|---|
+| `stdio` | Simple backends, any language, zero setup | JSON newline-delimited on stdin/stdout |
+| `unix-socket` | Local daemon, lower latency, persistent connection | JSON framed over `.ta/mcp.sock` or dedicated socket |
+| `amp` | Embedding-native, full audit trail, multi-agent routing | AMP messages over `.ta/amp.sock` (when AMP broker active) |
+
+AMP transport is the long-term target for memory plugins that do semantic work — the `intent_embedding` in the AMP envelope IS the semantic search vector, eliminating the tokenize→embed round-trip. Every memory operation over AMP is also automatically logged to the audit trail.
+
+Plugin manifest transport declaration (future, post-AMP broker):
+```toml
+# ta-memory-supermemory.toml
+[transport]
+preferred = ["amp", "unix-socket", "stdio"]   # tries in order at startup
 ```
 
 Config (`.ta/config.toml`):
@@ -6295,7 +6313,9 @@ plugin  = "ta-memory-supermemory"   # binary name; discovered from plugins/memor
 
 #### Items
 
-1. [ ] **`ExternalMemoryAdapter`** in `crates/ta-memory/src/external_adapter.rs`: Spawns the plugin binary, writes JSON requests to stdin, reads responses from stdout. Implements `MemoryStore`. Plugin discovery: `.ta/plugins/memory/`, `~/.config/ta/plugins/memory/`, `$PATH`. Same lifecycle pattern as `ExternalVcsAdapter`.
+1. [ ] **`ExternalMemoryAdapter`** in `crates/ta-memory/src/external_adapter.rs`: Spawns the plugin binary, speaks the transport-agnostic operation schema. Initial transport: JSON-over-stdio. Internal transport abstraction (`MemoryTransport` enum: `Stdio`, `UnixSocket`, `Amp`) so unix-socket and AMP transports can be added without changing the adapter API or plugin operation schema. Plugin discovery: `.ta/plugins/memory/`, `~/.config/ta/plugins/memory/`, `$PATH`. Same lifecycle as `ExternalVcsAdapter`.
+
+   > **AMP transport** (deferred to when AMP broker is active — v0.14.x or later): `semantic_search` ops carry pre-computed `intent_embedding` from the AMP envelope, eliminating re-embedding. Every memory op is an AMP event → automatic audit trail. Plugin declares `preferred = ["amp", "unix-socket", "stdio"]` in its manifest; adapter negotiates on startup.
 
 2. [ ] **`memory_store_from_config()` factory**: Reads `[memory] backend` from `.ta/config.toml` → `Box<dyn MemoryStore>`. Default: `FsMemoryStore`. Replace the ~10 hardcoded `FsMemoryStore::new(...)` call sites in `run.rs`, `memory.rs`, `draft.rs`, `context.rs`.
 
