@@ -7030,6 +7030,9 @@ TA has a working end-to-end workflow: staging isolation, agent wrapping, draft r
 | v0.13.14 | Watchdog/exit-handler race & goal recovery (`ta goal recover`) | Done |
 | v0.13.15 | Fix pass, cross-language onboarding & constitution completion | Done |
 | v0.13.16 | Local model agent (ta-agent-ollama, experimental) & advanced swarm orchestration | Done |
+| v0.13.17 | Draft evidence, Perforce plugin & pre-release hardening (scaffold) | Done |
+| v0.13.17.1 | Complete v0.13.17 — validation log, community MCP, E2E tests | Pending |
+| v0.13.17.2 | VCS environment isolation for spawned agents (git isolated mode, P4 staging workspace) | Pending |
 | v0.14.0 | Agent sandboxing — macOS sandbox-exec, Linux bwrap (experimental) | Done |
 | v0.14.1 | Hardware attestation & verifiable audit trails (Ed25519, `ta audit verify-attestation`) | Done |
 | v0.14.2 | Multi-party approval & threshold governance (`ta draft approve --as`, `--override`) | Done |
