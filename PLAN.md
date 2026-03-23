@@ -6070,17 +6070,24 @@ All items implemented except items 5 and 13 (deferred). New tests: 5 (main.rs) +
 
 16. [ ] **Default `branch_prefix = "feature/"`**: Changed from `ta/` in init.rs, new.rs, setup.rs templates. *(Landed in v0.13.17 branch.)*
 
-#### 6. E2E Pre-Release Test Suite
+#### 6. Community Context — Full Agent Coverage & MCP Tool
 
-17. [ ] **`tests/e2e/` directory**: Integration tests that run against a live daemon and real filesystem. Marked `#[ignore]` by default — run with `cargo test -- --ignored --test-threads=1`.
-18. [ ] **`test_dependency_graph_e2e`**: Creates a real workflow with `depends_on` graph (3 sub-goals, one dependency chain, one parallel), runs `ta workflow run`, verifies ordering from goal events.
-19. [ ] **`test_ollama_agent_mock_e2e`**: Spins up a mock HTTP server (wiremock) at localhost that returns canned tool_call responses. Runs `ta run --agent ollama` against it. Verifies `[goal started]` is emitted, at least one tool call is dispatched, draft is built.
-20. [ ] **`test_draft_validation_log_e2e`**: Runs a real goal with `required_checks = ["echo ok"]`. Verifies the draft package contains a `validation_log` entry with `exit_code: 0`.
-21. [ ] **Pre-release checklist in USAGE.md**: `./dev "cargo test -- --ignored"` listed as required before any public release.
+17. [ ] **Community section in `inject_agent_context_file()`**: Pass `community_section` into the generic context writer used by Codex (AGENTS.md) and other `context_file`-based agents. Currently missing — Codex gets no community context at all.
+18. [ ] **Community section in `inject_context_env()`**: Append community context to the `TA_GOAL_CONTEXT` env var written for Ollama and `Env`-mode agents. Currently missing.
+19. [ ] **`ta-community-hub` MCP server**: Expose `community_search(query, intent)` and `community_get(id)` as actual MCP tools backed by the local cache. Without this, the CLAUDE.md injection tells Claude to call a function that doesn't exist — agents can't actually query community resources via tool use. Register this MCP server in the injected `.mcp.json` (alongside `ta-memory`).
+20. [ ] **Agent observation write-back**: When the agent writes `.ta/community_feedback.json` (structured observations: `{resource, doc_id, observation: "endpoint deprecated", severity: "warning"}`), `ingest_memory_out`-style collector picks it up on agent exit and appends entries to the local cache with `source: "agent-observed"`. Feeds into future `ta community sync --push` for upstream contribution. Deferred write-back to external systems → v0.14.3.5.
+
+#### 7. E2E Pre-Release Test Suite
+
+21. [ ] **`tests/e2e/` directory**: Integration tests that run against a live daemon and real filesystem. Marked `#[ignore]` by default — run with `cargo test -- --ignored --test-threads=1`.
+22. [ ] **`test_dependency_graph_e2e`**: Creates a real workflow with `depends_on` graph (3 sub-goals, one dependency chain, one parallel), runs `ta workflow run`, verifies ordering from goal events.
+23. [ ] **`test_ollama_agent_mock_e2e`**: Spins up a mock HTTP server (wiremock) at localhost that returns canned tool_call responses. Runs `ta run --agent ollama` against it. Verifies `[goal started]` is emitted, at least one tool call is dispatched, draft is built.
+24. [ ] **`test_draft_validation_log_e2e`**: Runs a real goal with `required_checks = ["echo ok"]`. Verifies the draft package contains a `validation_log` entry with `exit_code: 0`.
+25. [ ] **Pre-release checklist in USAGE.md**: `./dev "cargo test -- --ignored"` listed as required before any public release.
 
 #### Deferred items moved/resolved
-- Community read-write write-back → v0.14.3.5 (Pluggable Memory Backends — community hub write-back is a natural fit alongside Supermemory)
-- Live Ollama E2E with real models (v0.13.16 item 5) → still deferred; E2E mock test (item 19 above) covers the code path without requiring a live instance
+- Community read-write write-back to external systems → v0.14.3.5 (same phase as Supermemory — natural fit)
+- Live Ollama E2E with real models (v0.13.16 item 5) → still deferred; E2E mock test (item 23 above) covers the code path without requiring a live instance
 
 #### Version: `0.13.17-alpha`
 
