@@ -102,11 +102,50 @@ All outcomes must be **observable** (with details and logging) and **actionable*
 When completing a phase, you MUST update versions as part of the work:
 
 1. **`apps/ta-cli/Cargo.toml`**: Update `version` to the phase's target version **only if it is higher than the current workspace version**. Never set the version to a lower value — if the workspace is at `0.14.2-alpha` and the phase is `v0.13.8`, do **not** change the version. Only bump forward (e.g., from `0.14.2-alpha` to `0.14.3-alpha`).
+
+   **Anti-regression rule scope**: This rule applies to agent-mediated goals only. Human-initiated version changes (e.g., pinning to a specific semver for a public release, then re-bumping) are permitted with an explicit commit message explaining the intent.
+
 2. **This file (`CLAUDE.md`)**: Update "Current version" above only when you bumped the version in step 1.
 3. **`PLAN.md`**: Mark the phase `<!-- status: done -->` (done automatically by `ta draft apply --phase`)
 4. **`docs/USAGE.md`**: Update with any new commands, flags, config options, or workflow changes. USAGE.md is the user onboarding guide — write feature documentation as "how to" sections, not version-annotated changelogs. Keep version references out of feature descriptions (use the Roadmap section for version tracking). When adding a new workflow or command, add it to the appropriate section with a clear code example.
 
 Version format: `MAJOR.MINOR.PATCH-alpha` (semver). See `PLAN.md` "Versioning & Release Policy" for the full mapping of phases to versions. Sub-phases use pre-release dot notation: `v0.4.1.2` → `0.4.1-alpha.2`.
+
+### Plan Phase Numbers vs Binary Semver
+
+Plan phase IDs (e.g., `v0.13.17.2`) and the binary semver (e.g., `0.14.3-alpha`) are **two separate tracks** that should stay in sync going forward but may diverge temporarily when phases are implemented out of order.
+
+**Current divergence**: v0.14.0–v0.14.2 were implemented before completing v0.13.17.x, leaving the binary at `0.14.2-alpha` while v0.13.17.2–v0.13.17.4 are still pending. Resolution:
+- Each v0.13.17.x completion bumps binary forward by one patch (0.14.3, 0.14.4, 0.14.5).
+- After v0.13.17.3 completes: **pin binary to `0.13.17.3`** for the public release, cut tag `public-alpha-v0.13.17.3`, then immediately bump to `0.14.3-alpha` (or next appropriate version) for ongoing development.
+- Going forward: do not start a higher phase (e.g., v0.14.3) if lower phases (v0.13.17.x) still have `<!-- status: pending -->` markers. A guard for this is planned for v0.14 (`ta plan status --check-order`).
+
+### Public Release Process (after v0.13.17.3)
+
+```bash
+# 1. Verify all v0.13.17.x phases are marked done in PLAN.md
+ta plan status
+
+# 2. Pin version for the release
+# Edit apps/ta-cli/Cargo.toml: version = "0.13.17.3"
+# Edit CLAUDE.md: Current version = 0.13.17.3
+git commit -m "chore: pin version to 0.13.17.3 for public release"
+
+# 3. Build, test, install
+./dev cargo test --workspace
+./dev cargo build --release --workspace
+bash install_local.sh
+
+# 4. Trigger release workflow (creates GitHub release + uploads assets)
+git tag public-alpha-v0.13.17.3
+git push origin public-alpha-v0.13.17.3
+
+# 5. Re-bump for ongoing development
+# Edit apps/ta-cli/Cargo.toml: version = "0.14.3-alpha"
+# Edit CLAUDE.md: Current version = 0.14.3-alpha
+git commit -m "chore: bump version to 0.14.3-alpha for post-release development"
+git push
+```
 
 ### How It Works (Overlay Flow)
 1. `ta goal start "title" --phase 4b` → copies project to `.ta/staging/`

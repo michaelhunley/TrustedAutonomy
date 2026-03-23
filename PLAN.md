@@ -6325,6 +6325,18 @@ skip_if_no_constitution = true    # don't fail if constitution file is absent
 
 > **⬇ PUBLIC BETA** — v0.13.x complete: runtime flexibility (local models, containers), enterprise governance (audit ledger, action governance, compliance), community ecosystem, and goal workflow automation. TA is ready for team and enterprise deployments.
 
+### Public Release: `public-alpha-v0.13.17.3`
+
+**Trigger**: After v0.13.17.3 merges and all v0.13.17.x phases are `<!-- status: done -->`.
+
+**Steps**:
+1. Pin binary version to `0.13.17.3` in `apps/ta-cli/Cargo.toml` and `CLAUDE.md`
+2. Push tag `public-alpha-v0.13.17.3` → triggers release workflow
+3. Verify assets: macOS DMG, Linux tarball, Windows MSI, checksums
+4. Re-bump to `0.14.3-alpha` for ongoing development
+
+**Note on version divergence**: Binary was at `0.14.2-alpha` when this milestone is reached (v0.14.0–v0.14.2 were implemented mid-v0.13.x series). The public release intentionally pins to `0.13.17.3` to signal the v0.13 series completion. See CLAUDE.md "Plan Phase Numbers vs Binary Semver" for rationale.
+
 ---
 
 ## v0.14 — Enterprise Readiness
@@ -6422,6 +6434,24 @@ These are addressed across v0.14.4–v0.14.5.
 - Item 5 → community: Shamir's Secret Sharing is a significant independent cryptography module
 
 #### Version: `0.14.2-alpha`
+
+---
+
+### v0.14.3 — Plan Phase Ordering Enforcement
+<!-- status: pending -->
+**Goal**: Prevent the version divergence that occurred when v0.14.0–v0.14.2 were implemented before completing v0.13.17.x. TA should warn (or block) when a goal targets a phase that is numerically later than an incomplete earlier phase.
+
+#### Items
+
+1. [ ] **`ta plan status --check-order`**: Walk all plan phases in numeric order. If a phase with a higher version number is `<!-- status: done -->` while a lower-numbered phase is still `<!-- status: pending -->`, print a warning: `"Phase v0.14.2 is done but v0.13.17.2 is still pending — phases are out of order."` Exit code 0 (warn only, not blocking).
+
+2. [ ] **`ta run` phase-order guard**: Before starting a goal with `--phase X`, run the order check. If out-of-order, print the warning and prompt: `"Start anyway? [y/N]"`. Configurable: `[workflow] enforce_phase_order = "warn" | "block" | "off"` (default `"warn"`).
+
+3. [ ] **Phase dependency declarations**: Allow phases to declare `depends_on = ["v0.13.17.3"]` in PLAN.md frontmatter or a companion `plan-deps.toml`. `ta plan status` shows dependency chains. `ta run` blocks if a declared dependency is not done (regardless of version order).
+
+4. [ ] **Version-phase sync check**: `ta plan status --check-versions` verifies the workspace binary version matches the highest completed phase. If `0.13.17.3` is done but binary is `0.14.2-alpha`, print: `"Binary version (0.14.2-alpha) is ahead of highest sequential completed phase (0.13.17.3). Consider pinning for release — see CLAUDE.md 'Public Release Process'."`.
+
+#### Version: `0.14.3-alpha`
 
 ---
 
