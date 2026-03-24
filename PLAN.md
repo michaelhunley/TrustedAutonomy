@@ -7141,25 +7141,52 @@ ta template install ./my-local-template        # local path
 
 12. [ ] **Community Hub template discovery** (`intent = "project-template"`): `ta template search <query>` calls `community_search { intent: "project-template", query }`. Web UI "Browse Templates" tab in Start Goal page shows community templates with one-click install. Template authors annotate their repos with the community hub `project-template` intent to appear in search results.
 
-13. [ ] **Reference template repos** (TA-contributed, not bundled): TA creates and maintains reference repos — `ta-community/ta-template-blender`, `ta-community/ta-template-godot`, `ta-community/ta-template-unity-csharp`, `ta-community/ta-template-python-library` — as separate GitHub repos. Not bundled in the binary. `ta template list --available` lists them. USAGE.md documents install steps. These repos are the definitive examples of the template format.
+13. [ ] **Migrate existing hardcoded templates to `template.toml` descriptors**: The current `init.rs` `generate_workflow_toml()` / `generate_taignore()` / `generate_memory_toml()` / `generate_policy_yaml()` are inline match blocks per `ProjectType`. Extract each into a `templates/<name>/` directory in the TA repo:
+    ```
+    templates/
+      rust-workspace/    template.toml  workflow.toml  .taignore  memory.toml  policy.yaml
+      typescript/        template.toml  workflow.toml  .taignore  ...
+      python/            ...
+      go/                ...
+      unreal-cpp/        template.toml  workflow.toml  .taignore  memory.toml  policy.yaml
+      unity-csharp/      ...
+      generic/           ...
+    ```
+    Built-in templates are embedded in the binary via `include_dir!` (same mechanism as the web UI SPA). The `init.rs` / `new.rs` codepath loads the template files from the embedded dir rather than constructing strings in code. No user-visible behavior change — same templates, same output — but now they're readable descriptor files rather than Rust string literals. This is the canonical example of the `template.toml` format for community authors.
 
-14. [ ] **Tests**: `test_template_install_from_local_dir`, `test_template_validates_manifest_fields`, `test_template_list_includes_installed`, `test_new_resolves_installed_before_builtin`, `test_template_publish_computes_sha256`.
+14. [ ] **`template.toml` extended fields for `init`-style templates**: Add fields that cover the existing `init.rs` behaviors:
+    ```toml
+    [files]
+    workflow_toml = "workflow.toml"     # copied to .ta/workflow.toml
+    taignore = ".taignore"              # copied to project root
+    memory_toml = "memory.toml"        # copied to .ta/memory.toml (optional)
+    policy_yaml = "policy.yaml"        # copied to .ta/policy.yaml (optional)
+    mcp_json = ".mcp.json"             # copied to project root (optional)
+
+    [onboarding]
+    goal_prompt = "onboarding-goal.md" # run as first agent goal on `ta init` (optional)
+    ```
+    The `onboarding.goal_prompt` file replaces the hardcoded onboarding goal prompts currently in `init.rs` for unreal-cpp and unity-csharp.
+
+15. [ ] **Reference template repos** (TA-contributed, not bundled): TA creates and maintains reference repos for domain-specific templates — `ta-community/ta-template-blender`, `ta-community/ta-template-godot`, `ta-community/ta-template-unity-csharp`, `ta-community/ta-template-python-library` — as separate GitHub repos. The extracted `templates/unreal-cpp/` and `templates/unity-csharp/` from item 13 become the seed content for these repos. Not bundled in the binary after extraction. `ta template list --available` lists them. USAGE.md documents install steps.
+
+16. [ ] **Tests**: `test_template_install_from_local_dir`, `test_template_validates_manifest_fields`, `test_template_list_includes_installed`, `test_new_resolves_installed_before_builtin`, `test_template_publish_computes_sha256`, `test_builtin_template_generates_same_output_as_old_codepath` (regression: compare old `generate_workflow_toml()` output with new template-loaded output for each built-in type).
 
 #### 3. Guided Plan Creation Wizard
 
-15. [ ] **`ta plan wizard`** (CLI + web): Conversational plan builder. Asks: "What are you building?" → "What should it do in plain language?" → "Are there phases (first do X, then Y)?" → generates PLAN.md draft. Uses a short agent call to structure natural language into plan items. Web UI has this as a step in the "Start a Goal" flow.
+17. [ ] **`ta plan wizard`** (CLI + web): Conversational plan builder. Asks: "What are you building?" → "What should it do in plain language?" → "Are there phases (first do X, then Y)?" → generates PLAN.md draft. Uses a short agent call to structure natural language into plan items. Web UI has this as a step in the "Start a Goal" flow.
 
-16. [ ] **Plan import from text**: `ta plan import --from <file>` accepts a free-form description or a bulleted list and converts it to PLAN.md format via the same agent call. Useful for importing an existing design doc.
+18. [ ] **Plan import from text**: `ta plan import --from <file>` accepts a free-form description or a bulleted list and converts it to PLAN.md format via the same agent call. Useful for importing an existing design doc.
 
 #### 4. Simplified Publish Workflow
 
-17. [ ] **`ta publish` command**: One-step "apply draft + push + create PR" for users who don't want to manage git manually. Wraps `ta draft apply --submit`. Asks for a commit message (defaults to goal title). If no VCS configured, offers to initialize git and set up GitHub via `gh auth login`.
+19. [ ] **`ta publish` command**: One-step "apply draft + push + create PR" for users who don't want to manage git manually. Wraps `ta draft apply --submit`. Asks for a commit message (defaults to goal title). If no VCS configured, offers to initialize git and set up GitHub via `gh auth login`.
 
-18. [ ] **Web UI "Publish" button**: On an approved draft's review page, a "Publish" button calls `ta publish`. Shows progress (creating branch, pushing, PR link). Handles `gh auth` prompt inline if not authenticated.
+20. [ ] **Web UI "Publish" button**: On an approved draft's review page, a "Publish" button calls `ta publish`. Shows progress (creating branch, pushing, PR link). Handles `gh auth` prompt inline if not authenticated.
 
 #### 5. Creator Walkthrough Documentation
 
-19. [ ] **`docs/tutorials/blender-plugin-walkthrough.md`**: Complete end-to-end guide:
+21. [ ] **`docs/tutorials/blender-plugin-walkthrough.md`**: Complete end-to-end guide:
     - Install TA (DMG/MSI)
     - Open Web UI (`http://localhost:PORT/ui` auto-opens)
     - Browse Templates → install `blender-addon` with one click
@@ -7170,9 +7197,9 @@ ta template install ./my-local-template        # local path
     - Publish to GitHub
     - Screenshots/screen recordings embedded as static images in `docs/assets/`
 
-20. [ ] **`docs/tutorials/README.md`**: Index of tutorials by audience (creators, developers, enterprise). Links from main USAGE.md "Tutorials" section.
+22. [ ] **`docs/tutorials/README.md`**: Index of tutorials by audience (creators, developers, enterprise). Links from main USAGE.md "Tutorials" section.
 
-21. [ ] **USAGE.md "Getting Started (No Terminal)"**: Brief section with a link to the web UI + tutorials for non-CLI users. Placed prominently near the top.
+23. [ ] **USAGE.md "Getting Started (No Terminal)"**: Brief section with a link to the web UI + tutorials for non-CLI users. Placed prominently near the top.
 
 #### Deferred
 
