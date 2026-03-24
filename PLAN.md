@@ -6175,7 +6175,7 @@ All items implemented except items 5 and 13 (deferred). New tests: 5 (main.rs) +
 ---
 
 ### v0.13.17.3 — VCS Environment Isolation for Spawned Agents
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Give every spawned agent a fully isolated VCS environment scoped to its staging directory. Agents should be able to use git, p4, and other VCS tools naturally inside the staging copy without ever touching the developer's real repository or workspace. Prevents index-lock collisions, accidental commits to main, and P4 submit-to-wrong-workspace bugs.
 
 #### Problem
