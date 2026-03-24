@@ -6319,21 +6319,94 @@ skip_if_no_constitution = true    # don't fail if constitution file is absent
 - **Supervisor-to-agent feedback loop**: If supervisor blocks, optionally re-spawn the main agent with the supervisor findings as context ("here's what was wrong, fix it"). Deferred — this is the retry loop in `code-project-workflow.md` and needs the workflow engine (v0.14.x).
 - **Multi-supervisor consensus**: Run 3 supervisors in parallel (code quality, security, constitution) and aggregate verdicts. Deferred to v0.14.x workflow parallel execution.
 
-#### Version: `0.13.17.4-alpha`
+#### Version: `0.13.17-alpha.4`
+
+---
+
+### v0.13.17.5 — Gitignored Artifact Detection & Human Review Gate
+<!-- status: pending -->
+**Goal**: (1) Fix the root cause: TA-injected files like `.mcp.json` must not appear in the diff that feeds `ta draft build`. (2) Catch any gitignored file that does reach `git add` and handle it gracefully instead of aborting the entire commit.
+
+#### Problem
+
+Two compounding bugs caused `.mcp.json` to repeatedly appear in draft artifact lists and then break `git add`:
+
+**Bug 1 — Asymmetric injection/restore**: `inject_mcp_server_config()` runs for all goals but `restore_mcp_server_config()` only runs when `macro_goal = true` (`run.rs:1949`). For regular goals TA still injects `.mcp.json`, but never restores it. The injected content (staging paths, TA server entries) remains in staging at diff time, so `ta draft build` sees `.mcp.json` as changed and includes it as an artifact. The restore fallback tries to strip `ta-memory` / `ta-community-hub` keys, but leaves the main `ta` and `claude-flow` entries, so the file still differs.
+
+**Bug 2 — `git add` fails hard on gitignored paths**: `ta draft apply --submit` passes all artifact paths to a single `git add <path1> <path2> ...` call. If any path is gitignored, git aborts the entire command with a non-zero exit. TA treats this as a fatal error and marks apply as failed — but the "apply complete" message may already have printed. Nothing was staged or committed.
+
+Both bugs must be fixed: Bug 1 prevents `.mcp.json` from entering the artifact list in the first place; Bug 2 is a defense-in-depth fallback for any TA-managed or gitignored file that slips through.
+
+#### Design
+
+```
+Draft artifact list
+       │
+       ▼
+[gitignore filter]  ← new step before git add
+       │
+       ├── not ignored → git add (as before)
+       │
+       └── gitignored → classify:
+              │
+              ├── known-safe-to-drop (e.g. .mcp.json, *.local.toml)
+              │       → drop silently, log at debug level
+              │
+              └── unexpected-ignored (e.g. a source file that got gitignored by mistake)
+                      → print warning in apply output
+                      → show in `ta draft view` under a new "Ignored Artifacts" section
+                      → require human acknowledgement before apply completes
+```
+
+**Known-safe-to-drop list** (hardcoded, extendable via `[submit.ignored_artifact_patterns]`):
+- `.mcp.json` — daemon runtime config, always gitignored
+- `*.local.toml` — personal overrides, always gitignored
+- `.ta/daemon.toml`, `.ta/*.pid`, `.ta/*.lock` — runtime state
+
+#### Items
+
+**Bug 1 fix — symmetric injection/restore:**
+
+1. [ ] **Make `restore_mcp_server_config` unconditional**: Remove the `if macro_goal` guard at `run.rs:1949`. Restore runs after every agent exit whenever `.ta/mcp_json_original` backup exists (the backup is only written when injection ran, so the guard is redundant and wrong).
+
+2. [ ] **Exclude TA-injected files from the overlay diff**: Add `.mcp.json`, `CLAUDE.md` (restored separately), and `settings.local.json` to the overlay diff's built-in exclusion list in `ta-workspace`. These files are TA infrastructure, not agent work product — if an agent explicitly edits `.mcp.json` (unusual), that change should be captured separately. Add a `ta_managed_files()` constant shared by overlay.rs and draft build.
+
+3. [ ] **Restore completeness check**: After `restore_mcp_server_config()`, verify the staging `.mcp.json` matches the source's `.mcp.json` (or is absent if source had none). If they differ, log a warning: `"Warning: .mcp.json restore may be incomplete — staging differs from source. Staging path: {path}"`. This catches future injection/restore asymmetries before they reach the diff.
+
+**Bug 2 fix — gitignore-aware git add:**
+
+4. [ ] **`filter_gitignored_artifacts(paths, workspace_root) -> (to_add, ignored)`**: Use `git check-ignore --stdin` to classify each artifact path. Returns two lists: paths to add, and paths that are gitignored.
+
+5. [ ] **Known-safe drop list**: Paths matching known-safe patterns are silently dropped from `git add`. Log at `tracing::debug`. Known-safe: `.mcp.json`, `*.local.toml`, `.ta/daemon.toml`, `.ta/*.pid`, `.ta/*.lock`.
+
+6. [ ] **Unexpected-ignored warning**: For gitignored paths NOT on the known-safe list, print: `"Warning: artifact {path} is gitignored — dropping from git add. Was this intentional?"`. Record in apply output.
+
+7. [ ] **`ta draft view` "Ignored Artifacts" section**: If any artifacts were gitignored, show them. Unexpected-ignored artifacts highlighted in yellow: "This file is gitignored — it was NOT committed. Check if the .gitignore entry is correct."
+
+8. [ ] **Never fail git add due to gitignored path**: If the filtered list is empty (all artifacts gitignored), complete with a warning: `"All artifacts were gitignored — nothing was committed."` — not an error.
+
+9. [ ] **Test coverage**:
+   - `test_restore_runs_for_non_macro_goal`: Non-macro goal with injected .mcp.json → restore runs, staging matches source before diff.
+   - `test_mcp_json_absent_from_draft_artifacts`: End-to-end: agent goal with .mcp.json injection → `ta draft build` artifact list does not include `.mcp.json`.
+   - `test_known_safe_dropped_silently`: Draft with `.mcp.json` artifact → drops from git add, no warning.
+   - `test_unexpected_ignored_warns`: Source file that is gitignored → warning printed, shown in draft view.
+   - `test_all_ignored_completes_with_warning`: All artifacts gitignored → apply completes with warning, no panic.
+
+#### Version: `0.13.17-alpha.5`
 
 ---
 
 > **⬇ PUBLIC BETA** — v0.13.x complete: runtime flexibility (local models, containers), enterprise governance (audit ledger, action governance, compliance), community ecosystem, and goal workflow automation. TA is ready for team and enterprise deployments.
 
-### Public Release: `public-alpha-v0.13.17.3`
+### Public Release: `public-alpha-v0.13.17.5`
 
-**Trigger**: After v0.13.17.3 merges and all v0.13.17.x phases are `<!-- status: done -->`.
+**Trigger**: After all v0.13.17.x phases (through v0.13.17.5) are `<!-- status: done -->`.
 
 **Steps**:
-1. Pin binary version to `0.13.17.3` in `apps/ta-cli/Cargo.toml` and `CLAUDE.md`
-2. Push tag `public-alpha-v0.13.17.3` → triggers release workflow
+1. Pin binary version to `0.13.17-alpha.5` in `Cargo.toml` and `CLAUDE.md`
+2. Push tag `public-alpha-v0.13.17.5` → triggers release workflow
 3. Verify assets: macOS DMG, Linux tarball, Windows MSI, checksums
-4. Re-bump to `0.14.3-alpha` for ongoing development
+4. Re-bump to `0.13.17-alpha.6` (or `0.14.0-alpha` if v0.14.x begins) for ongoing development
 
 **Note on version divergence**: Binary was at `0.14.2-alpha` when this milestone is reached (v0.14.0–v0.14.2 were implemented mid-v0.13.x series). The public release intentionally pins to `0.13.17.3` to signal the v0.13 series completion. See CLAUDE.md "Plan Phase Numbers vs Binary Semver" for rationale.
 
@@ -6450,6 +6523,8 @@ These are addressed across v0.14.4–v0.14.5.
 3. [ ] **Phase dependency declarations**: Allow phases to declare `depends_on = ["v0.13.17.3"]` in PLAN.md frontmatter or a companion `plan-deps.toml`. `ta plan status` shows dependency chains. `ta run` blocks if a declared dependency is not done (regardless of version order).
 
 4. [ ] **Version-phase sync check**: `ta plan status --check-versions` verifies the workspace binary version matches the highest completed phase. If `0.13.17.3` is done but binary is `0.14.2-alpha`, print: `"Binary version (0.14.2-alpha) is ahead of highest sequential completed phase (0.13.17.3). Consider pinning for release — see CLAUDE.md 'Public Release Process'."`.
+
+5. [ ] **Remove deprecated `auto_commit`/`auto_push` fields from `SubmitConfig`**: Delete the two deprecated bool fields from `crates/ta-submit/src/config.rs`, remove the backward-compat branches from `effective_auto_submit()`, and update `workflow.toml` to use `auto_submit = true` instead. Update docs and any test fixtures using the old keys. The new canonical form is `auto_submit = true` (or rely on the default: submit when adapter ≠ "none").
 
 #### Version: `0.14.3-alpha`
 
