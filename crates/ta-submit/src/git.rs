@@ -155,6 +155,99 @@ impl GitAdapter {
     pub fn detect(project_root: &Path) -> bool {
         project_root.join(".git").exists()
     }
+
+    /// Known-safe artifact patterns that are silently dropped from `git add`
+    /// when gitignored (v0.13.17.5). These are TA infrastructure files that
+    /// should never reach a commit.
+    fn is_known_safe_ignored(path: &str) -> bool {
+        // Exact filename matches
+        if path == ".mcp.json" || path == "daemon.toml" {
+            return true;
+        }
+        // *.local.toml files anywhere
+        if path.ends_with(".local.toml") {
+            return true;
+        }
+        // .ta/ runtime state files
+        if let Some(rest) = path.strip_prefix(".ta/") {
+            if rest.ends_with(".pid") || rest.ends_with(".lock") || rest == "daemon.toml" {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Filter artifact paths using `git check-ignore --stdin` (v0.13.17.5).
+    ///
+    /// Returns `(to_add, ignored)` where:
+    /// - `to_add`: paths not gitignored — pass these to `git add`
+    /// - `ignored`: paths that are gitignored, with `known_safe` classified
+    fn filter_gitignored_artifacts(
+        &self,
+        paths: &[String],
+    ) -> (Vec<String>, Vec<ta_changeset::IgnoredArtifact>) {
+        if paths.is_empty() {
+            return (vec![], vec![]);
+        }
+
+        // Run `git check-ignore --stdin` — prints only the ignored paths.
+        let input = paths.join("\n");
+        let output = Command::new("git")
+            .args(["check-ignore", "--stdin"])
+            .current_dir(&self.work_dir)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .and_then(|mut child| {
+                use std::io::Write;
+                if let Some(stdin) = child.stdin.take() {
+                    let mut stdin = stdin;
+                    let _ = stdin.write_all(input.as_bytes());
+                }
+                child.wait_with_output()
+            });
+
+        let ignored_set: std::collections::HashSet<String> = match output {
+            Ok(out) => std::str::from_utf8(&out.stdout)
+                .unwrap_or("")
+                .lines()
+                .map(|l| l.trim().to_string())
+                .filter(|l| !l.is_empty())
+                .collect(),
+            Err(_) => {
+                // If git check-ignore fails (e.g., not a git repo), assume nothing is ignored.
+                tracing::debug!("git check-ignore failed — assuming no artifacts are gitignored");
+                std::collections::HashSet::new()
+            }
+        };
+
+        let mut to_add = Vec::new();
+        let mut ignored = Vec::new();
+
+        for path in paths {
+            if ignored_set.contains(path.as_str()) {
+                let known_safe = Self::is_known_safe_ignored(path);
+                if known_safe {
+                    tracing::debug!(path = %path, "dropping known-safe gitignored artifact from git add");
+                } else {
+                    eprintln!(
+                        "Warning: artifact '{}' is gitignored — dropping from git add. \
+                         Was this intentional?",
+                        path
+                    );
+                }
+                ignored.push(ta_changeset::IgnoredArtifact {
+                    path: path.clone(),
+                    known_safe,
+                });
+            } else {
+                to_add.push(path.clone());
+            }
+        }
+
+        (to_add, ignored)
+    }
 }
 
 impl SourceAdapter for GitAdapter {
@@ -194,24 +287,53 @@ impl SourceAdapter for GitAdapter {
             })
             .collect();
 
+        // Filter out gitignored paths before calling git add (v0.13.17.5).
+        // Known-safe paths (.mcp.json, *.local.toml, .ta/ runtime files) are
+        // silently dropped. Unexpected-ignored paths emit a warning.
+        let ignored_artifacts = if artifact_paths.is_empty() {
+            vec![]
+        } else {
+            let (to_add, ignored) = self.filter_gitignored_artifacts(&artifact_paths);
+            if to_add.is_empty() {
+                // All artifacts were gitignored — complete with warning, not an error.
+                if !ignored.is_empty() {
+                    let unknown_count = ignored.iter().filter(|a| !a.known_safe).count();
+                    if unknown_count > 0 {
+                        eprintln!(
+                            "Warning: all {} artifact(s) were gitignored — nothing was committed.",
+                            ignored.len()
+                        );
+                    }
+                }
+                // Still attempt to stage PLAN.md and then check if there's anything to commit.
+                if self.work_dir.join("PLAN.md").exists() {
+                    let _ = self.git_cmd(&["add", "PLAN.md"]);
+                }
+                return Ok(CommitResult {
+                    commit_id: String::new(),
+                    message: "All artifacts were gitignored — nothing was committed.".to_string(),
+                    metadata: std::collections::HashMap::new(),
+                    ignored_artifacts: ignored,
+                });
+            } else {
+                let mut add_args = vec!["add"];
+                for p in &to_add {
+                    add_args.push(p.as_str());
+                }
+                self.git_cmd(&add_args)?;
+
+                // Always stage PLAN.md if it exists and was modified.
+                if self.work_dir.join("PLAN.md").exists() {
+                    let _ = self.git_cmd(&["add", "PLAN.md"]);
+                }
+            }
+            ignored
+        };
+
         if artifact_paths.is_empty() {
             // Fall back to `git add .` when there are no fs:// artifacts
             // (e.g. all artifacts are external URIs like mailto://).
             self.git_cmd(&["add", "."])?;
-        } else {
-            let mut add_args = vec!["add"];
-            for p in &artifact_paths {
-                add_args.push(p.as_str());
-            }
-            self.git_cmd(&add_args)?;
-
-            // Always stage PLAN.md if it exists and was modified — it is written
-            // by the apply process (plan-phase update) and is not an artifact in
-            // the draft package, but must be part of the commit.
-            if self.work_dir.join("PLAN.md").exists() {
-                // `git add PLAN.md` is a no-op if it wasn't modified.
-                let _ = self.git_cmd(&["add", "PLAN.md"]);
-            }
         }
 
         // Check if there are changes to commit
@@ -248,6 +370,7 @@ impl SourceAdapter for GitAdapter {
             commit_id: commit_id.clone(),
             message: format!("Committed as {}", &commit_id[..8]),
             metadata: [("full_hash".to_string(), commit_id)].into_iter().collect(),
+            ignored_artifacts,
         })
     }
 
@@ -1389,5 +1512,92 @@ mod tests {
         assert!(fs_paths.contains(&"README.md".to_string()));
         // non-fs URI is filtered out
         assert!(!fs_paths.iter().any(|p| p.contains("mailto")));
+    }
+
+    // ── v0.13.17.5: gitignore filtering tests ─────────────────────
+
+    /// test_known_safe_dropped_silently (plan item 9.3):
+    /// Known-safe paths (.mcp.json, *.local.toml, .ta/ runtime files) are
+    /// classified as known_safe=true by is_known_safe_ignored().
+    #[test]
+    fn test_known_safe_classification() {
+        assert!(GitAdapter::is_known_safe_ignored(".mcp.json"));
+        assert!(GitAdapter::is_known_safe_ignored("settings.local.toml"));
+        assert!(GitAdapter::is_known_safe_ignored("project.local.toml"));
+        assert!(GitAdapter::is_known_safe_ignored(".ta/daemon.toml"));
+        assert!(GitAdapter::is_known_safe_ignored(".ta/agent.pid"));
+        assert!(GitAdapter::is_known_safe_ignored(".ta/staging.lock"));
+        // Non-known-safe paths.
+        assert!(!GitAdapter::is_known_safe_ignored("src/main.rs"));
+        assert!(!GitAdapter::is_known_safe_ignored("Cargo.toml"));
+        assert!(!GitAdapter::is_known_safe_ignored("secret.txt"));
+    }
+
+    /// test_filter_gitignored_artifacts — .mcp.json gitignored → known_safe=true (plan item 9.3).
+    #[test]
+    fn test_known_safe_dropped_silently() {
+        let dir = tempdir().unwrap();
+        init_git_repo(dir.path()).unwrap();
+
+        // Add .mcp.json to .gitignore.
+        std::fs::write(dir.path().join(".gitignore"), ".mcp.json\n").unwrap();
+
+        let adapter = GitAdapter::new(dir.path());
+        let paths = vec![".mcp.json".to_string(), "README.md".to_string()];
+        let (to_add, ignored) = adapter.filter_gitignored_artifacts(&paths);
+
+        assert_eq!(to_add, vec!["README.md".to_string()]);
+        assert_eq!(ignored.len(), 1);
+        assert_eq!(ignored[0].path, ".mcp.json");
+        assert!(
+            ignored[0].known_safe,
+            ".mcp.json must be classified as known_safe"
+        );
+    }
+
+    /// test_unexpected_ignored_warns (plan item 9.4):
+    /// A source file that happens to be gitignored is classified as known_safe=false.
+    #[test]
+    fn test_unexpected_ignored() {
+        let dir = tempdir().unwrap();
+        init_git_repo(dir.path()).unwrap();
+
+        // Add a source file to .gitignore (unusual but possible).
+        std::fs::write(dir.path().join(".gitignore"), "src/secret.rs\n").unwrap();
+
+        let adapter = GitAdapter::new(dir.path());
+        let paths = vec!["src/secret.rs".to_string(), "README.md".to_string()];
+        let (to_add, ignored) = adapter.filter_gitignored_artifacts(&paths);
+
+        assert_eq!(to_add, vec!["README.md".to_string()]);
+        assert_eq!(ignored.len(), 1);
+        assert_eq!(ignored[0].path, "src/secret.rs");
+        assert!(
+            !ignored[0].known_safe,
+            "src/secret.rs must be unexpected-ignored"
+        );
+    }
+
+    /// test_all_ignored_completes_with_warning (plan item 9.5):
+    /// When all artifacts are gitignored, filter returns empty to_add list.
+    /// The commit() caller handles this gracefully (no panic, no error).
+    #[test]
+    fn test_all_ignored_returns_empty_to_add() {
+        let dir = tempdir().unwrap();
+        init_git_repo(dir.path()).unwrap();
+
+        std::fs::write(
+            dir.path().join(".gitignore"),
+            ".mcp.json\nsettings.local.toml\n",
+        )
+        .unwrap();
+
+        let adapter = GitAdapter::new(dir.path());
+        let paths = vec![".mcp.json".to_string(), "settings.local.toml".to_string()];
+        let (to_add, ignored) = adapter.filter_gitignored_artifacts(&paths);
+
+        assert!(to_add.is_empty(), "all paths should be filtered out");
+        assert_eq!(ignored.len(), 2);
+        assert!(ignored.iter().all(|a| a.known_safe), "both are known-safe");
     }
 }

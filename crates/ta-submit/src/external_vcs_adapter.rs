@@ -281,6 +281,7 @@ impl SourceAdapter for ExternalVcsAdapter {
             commit_id: result.commit_id,
             message: result.message,
             metadata: result.metadata,
+            ignored_artifacts: vec![],
         })
     }
 

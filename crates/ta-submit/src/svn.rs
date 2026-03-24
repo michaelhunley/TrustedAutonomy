@@ -93,6 +93,7 @@ impl SourceAdapter for SvnAdapter {
             commit_id: format!("r{}", rev),
             message: format!("Committed revision {}", rev),
             metadata: [("revision".to_string(), rev)].into_iter().collect(),
+            ignored_artifacts: vec![],
         })
     }
 

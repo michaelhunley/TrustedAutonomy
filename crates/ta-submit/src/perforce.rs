@@ -148,6 +148,7 @@ impl SourceAdapter for PerforceAdapter {
             ]
             .into_iter()
             .collect(),
+            ignored_artifacts: vec![],
         })
     }
 

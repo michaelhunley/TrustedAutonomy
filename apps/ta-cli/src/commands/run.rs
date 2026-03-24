@@ -1560,9 +1560,10 @@ pub fn execute(
         if agent_config.injects_settings {
             restore_claude_settings(&staging_path)?;
         }
-        if macro_goal {
-            restore_mcp_server_config(&staging_path)?;
-        }
+        // Restore MCP config unconditionally (v0.13.17.5 Bug 1 fix).
+        // restore_mcp_server_config() is a no-op when no backup exists,
+        // so calling it for non-macro goals is safe.
+        restore_mcp_server_config(&staging_path)?;
 
         println!("\nWorkspace ready. To use manually:");
         println!("  cd {}", staging_path.display());
@@ -1602,9 +1603,8 @@ pub fn execute(
                 if agent_config.injects_settings {
                     let _ = restore_claude_settings(&staging_path);
                 }
-                if macro_goal {
-                    let _ = restore_mcp_server_config(&staging_path);
-                }
+                // Unconditional restore (v0.13.17.5 Bug 1 fix): no-op if no backup exists.
+                let _ = restore_mcp_server_config(&staging_path);
                 return Err(anyhow::anyhow!(
                     "Pre-launch command exited with status {}. \
                      Injected files have been cleaned up.",
@@ -1619,9 +1619,8 @@ pub fn execute(
                 if agent_config.injects_settings {
                     let _ = restore_claude_settings(&staging_path);
                 }
-                if macro_goal {
-                    let _ = restore_mcp_server_config(&staging_path);
-                }
+                // Unconditional restore (v0.13.17.5 Bug 1 fix): no-op if no backup exists.
+                let _ = restore_mcp_server_config(&staging_path);
                 return Err(anyhow::anyhow!(
                     "Failed to run pre-launch command '{}': {}. \
                      Injected files have been cleaned up.",
@@ -1882,9 +1881,8 @@ pub fn execute(
                 if agent_config.injects_settings {
                     restore_claude_settings(&staging_path)?;
                 }
-                if macro_goal {
-                    restore_mcp_server_config(&staging_path)?;
-                }
+                // Unconditional restore (v0.13.17.5 Bug 1 fix): no-op if no backup exists.
+                restore_mcp_server_config(&staging_path)?;
 
                 println!(
                     "\n'{}' command not found. To use manually:",
@@ -1927,9 +1925,8 @@ pub fn execute(
             if agent_config.injects_settings {
                 let _ = restore_claude_settings(&staging_path);
             }
-            if macro_goal {
-                let _ = restore_mcp_server_config(&staging_path);
-            }
+            // Unconditional restore (v0.13.17.5 Bug 1 fix): no-op if no backup exists.
+            let _ = restore_mcp_server_config(&staging_path);
             return Err(anyhow::anyhow!(
                 "Failed to launch {}: {}. Injected files have been cleaned up.",
                 agent_config.command,
@@ -1945,8 +1942,40 @@ pub fn execute(
     if agent_config.injects_settings {
         restore_claude_settings(&staging_path)?;
     }
-    if macro_goal {
-        restore_mcp_server_config(&staging_path)?;
+    // Unconditional restore (v0.13.17.5 Bug 1 fix): the guard `if macro_goal` was wrong.
+    // inject_mcp_server_config() also runs for memory-MCP goals (non-macro), so the
+    // backup may exist for any goal type. restore_mcp_server_config() checks for the
+    // backup file first and is a no-op when it doesn't exist.
+    restore_mcp_server_config(&staging_path)?;
+
+    // 6a-restore-check: Verify .mcp.json was restored correctly (v0.13.17.5 item 3).
+    // If staging differs from source after restore, log a warning — catches any future
+    // inject/restore asymmetries before they reach the diff.
+    {
+        let source_dir = goal.source_dir.as_deref().unwrap_or(&config.workspace_root);
+        let staging_mcp = staging_path.join(".mcp.json");
+        let source_mcp = source_dir.join(".mcp.json");
+        match (staging_mcp.exists(), source_mcp.exists()) {
+            (true, true) => {
+                let staging_content = std::fs::read(&staging_mcp).unwrap_or_default();
+                let source_content = std::fs::read(&source_mcp).unwrap_or_default();
+                if staging_content != source_content {
+                    tracing::warn!(
+                        staging = %staging_mcp.display(),
+                        "Warning: .mcp.json restore may be incomplete — staging differs from source. \
+                         This file will be excluded from the diff."
+                    );
+                }
+            }
+            (true, false) => {
+                tracing::warn!(
+                    staging = %staging_mcp.display(),
+                    "Warning: .mcp.json exists in staging but not in source after restore. \
+                     This file will be excluded from the diff."
+                );
+            }
+            _ => {} // Both absent or only source has it — nothing to check.
+        }
     }
 
     // 6a. Log the file-change count in staging vs source (v0.12.6 item 7).
@@ -5559,6 +5588,7 @@ pre_launch:
             parent_draft_id: None,
             pending_approvals: vec![],
             supervisor_review: None,
+            ignored_artifacts: vec![],
         };
 
         // Save the draft package.
@@ -5718,6 +5748,7 @@ pre_launch:
             parent_draft_id: None,
             pending_approvals: vec![],
             supervisor_review: None,
+            ignored_artifacts: vec![],
         };
 
         super::super::draft::save_package(&config, &parent_draft).unwrap();
@@ -6028,5 +6059,109 @@ non_interactive_env:
             // my-server was present before inject_memory and there was no backup,
             // so restore only strips ta-memory; other keys survive.
         }
+    }
+
+    // ── v0.13.17.5: Bug 1 fix — restore_mcp unconditional ─────────
+
+    /// test_restore_runs_for_non_macro_goal (plan item 9.1):
+    /// inject_mcp_server_config() + restore_mcp_server_config() must round-trip
+    /// correctly even when the caller is not a macro goal. After restore, staging
+    /// .mcp.json must match the original.
+    #[test]
+    fn restore_runs_for_non_macro_goal() {
+        let staging = tempfile::TempDir::new().unwrap();
+        let mcp_path = staging.path().join(MCP_JSON_PATH);
+
+        // Simulate a pre-existing .mcp.json (user's original config).
+        let original_content = r#"{"mcpServers": {"user-server": {"command": "user-cmd"}}}"#;
+        std::fs::write(&mcp_path, original_content).unwrap();
+
+        // Inject TA server config (runs for all goals, not just macro goals).
+        inject_mcp_server_config(staging.path()).unwrap();
+
+        // After inject, backup should exist and .mcp.json should contain TA entries.
+        let backup_path = staging.path().join(MCP_JSON_BACKUP);
+        assert!(backup_path.exists(), "backup must exist after inject");
+        let injected = std::fs::read_to_string(&mcp_path).unwrap();
+        assert!(
+            injected.contains("ta"),
+            ".mcp.json must have TA entry after inject"
+        );
+
+        // Restore (called unconditionally — simulates non-macro goal path).
+        restore_mcp_server_config(staging.path()).unwrap();
+
+        // After restore, .mcp.json must match original exactly.
+        assert!(mcp_path.exists(), ".mcp.json must exist after restore");
+        let restored = std::fs::read_to_string(&mcp_path).unwrap();
+        assert_eq!(
+            restored, original_content,
+            "staging .mcp.json must match source after restore"
+        );
+        assert!(
+            !backup_path.exists(),
+            "backup must be removed after restore"
+        );
+    }
+
+    /// test_mcp_json_absent_from_draft_artifacts (plan item 9.2):
+    /// The overlay diff excludes .mcp.json (TA_MANAGED_FILES) even if staging
+    /// has a modified .mcp.json. Simulates Bug 1 scenario.
+    #[test]
+    fn mcp_json_excluded_from_overlay_diff() {
+        use ta_workspace::{ExcludePatterns, OverlayWorkspace};
+
+        let source = tempfile::TempDir::new().unwrap();
+        let staging = tempfile::TempDir::new().unwrap();
+
+        // Create source files.
+        std::fs::write(source.path().join("main.rs"), "fn main() {}").unwrap();
+        std::fs::write(source.path().join(".mcp.json"), r#"{"mcpServers": {}}"#).unwrap();
+
+        // Copy source to staging (simulates overlay creation).
+        std::fs::write(
+            staging.path().join("main.rs"),
+            "fn main() { println!(\"hi\"); }",
+        )
+        .unwrap();
+        // .mcp.json in staging differs (simulates TA injection residue).
+        std::fs::write(
+            staging.path().join(".mcp.json"),
+            r#"{"mcpServers": {"ta": {"command": "/usr/bin/ta", "args": ["serve"]}}}"#,
+        )
+        .unwrap();
+
+        let overlay = OverlayWorkspace::open(
+            "test-goal".to_string(),
+            source.path(),
+            staging.path(),
+            ExcludePatterns::defaults(),
+        );
+        let changes = overlay.diff_all().unwrap();
+
+        // .mcp.json must NOT appear in the diff.
+        let mcp_in_diff = changes.iter().any(|c| {
+            let path = match c {
+                ta_workspace::overlay::OverlayChange::Modified { path, .. } => path,
+                ta_workspace::overlay::OverlayChange::Created { path, .. } => path,
+                ta_workspace::overlay::OverlayChange::Deleted { path } => path,
+            };
+            path == ".mcp.json"
+        });
+        assert!(
+            !mcp_in_diff,
+            ".mcp.json must be excluded from overlay diff (TA-managed file)"
+        );
+
+        // main.rs change SHOULD appear.
+        let main_in_diff = changes.iter().any(|c| {
+            let path = match c {
+                ta_workspace::overlay::OverlayChange::Modified { path, .. } => path,
+                ta_workspace::overlay::OverlayChange::Created { path, .. } => path,
+                ta_workspace::overlay::OverlayChange::Deleted { path } => path,
+            };
+            path == "main.rs"
+        });
+        assert!(main_in_diff, "main.rs change must appear in diff");
     }
 }

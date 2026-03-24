@@ -1443,6 +1443,7 @@ pub(crate) fn build_package(
         parent_draft_id: None, // Set below if this is a follow-up.
         pending_approvals: vec![],
         supervisor_review: None,
+        ignored_artifacts: vec![],
     };
 
     // v0.12.2.1: Track parent_draft_id and compute composited diff for follow-up chains.
@@ -2495,6 +2496,36 @@ fn view_package(
             println!(
                 "  Use `ta draft approve --override` if you want to approve despite the block verdict."
             );
+        }
+    }
+
+    // Show ignored artifacts if any (v0.13.17.5).
+    if !pkg.ignored_artifacts.is_empty() {
+        println!();
+        println!("IGNORED ARTIFACTS ({}):", pkg.ignored_artifacts.len());
+        println!("{}", "=".repeat(60));
+        let unexpected: Vec<_> = pkg
+            .ignored_artifacts
+            .iter()
+            .filter(|a| !a.known_safe)
+            .collect();
+        let known_safe: Vec<_> = pkg
+            .ignored_artifacts
+            .iter()
+            .filter(|a| a.known_safe)
+            .collect();
+        if !unexpected.is_empty() {
+            println!("WARNING: The following files are gitignored and were NOT committed.");
+            println!("Check whether the .gitignore entry is intentional.");
+            for a in &unexpected {
+                println!("  [!] {} — gitignored, dropped from commit", a.path);
+            }
+        }
+        if !known_safe.is_empty() && effective_detail != DetailLevel::Top {
+            println!("Known-safe (TA infrastructure, silently dropped):");
+            for a in &known_safe {
+                println!("  [-] {}", a.path);
+            }
         }
     }
 
@@ -3887,6 +3918,7 @@ fn apply_package(
                 let mut vcs_commit_sha = None;
                 let mut vcs_review_url = None;
                 let mut vcs_review_id = None;
+                let mut commit_ignored_artifacts: Vec<ta_changeset::IgnoredArtifact> = vec![];
 
                 match adapter.commit(goal, &pkg, &commit_msg) {
                     Ok(result) => {
@@ -3896,6 +3928,27 @@ fn apply_package(
                             .get("full_hash")
                             .cloned()
                             .or(Some(result.commit_id.clone()));
+                        // Capture ignored artifacts for draft view (v0.13.17.5).
+                        if !result.ignored_artifacts.is_empty() {
+                            let unexpected_count = result
+                                .ignored_artifacts
+                                .iter()
+                                .filter(|a| !a.known_safe)
+                                .count();
+                            if unexpected_count > 0 {
+                                eprintln!(
+                                    "[warn] {} artifact(s) were gitignored and dropped from the commit:",
+                                    unexpected_count
+                                );
+                                for a in result.ignored_artifacts.iter().filter(|a| !a.known_safe) {
+                                    eprintln!(
+                                        "  - {} (gitignored — was this intentional?)",
+                                        a.path
+                                    );
+                                }
+                            }
+                            commit_ignored_artifacts = result.ignored_artifacts;
+                        }
                     }
                     Err(e) => {
                         eprintln!("Stage/commit failed: {}", e);
@@ -4028,26 +4081,39 @@ fn apply_package(
                     }
                 }
 
-                // Save VCS tracking info on the draft package (v0.11.2.3).
-                if !vcs_branch.is_empty() || vcs_commit_sha.is_some() || vcs_review_url.is_some() {
+                // Save VCS tracking info and ignored artifacts on the draft package.
+                // (v0.11.2.3 for VCS, v0.13.17.5 for ignored_artifacts)
+                let needs_pkg_save = !vcs_branch.is_empty()
+                    || vcs_commit_sha.is_some()
+                    || vcs_review_url.is_some()
+                    || !commit_ignored_artifacts.is_empty();
+                if needs_pkg_save {
                     use ta_changeset::VcsTrackingInfo;
-                    let vcs_info = VcsTrackingInfo {
-                        branch: if vcs_branch.is_empty() {
-                            "unknown".to_string()
-                        } else {
-                            vcs_branch
-                        },
-                        review_url: vcs_review_url,
-                        review_id: vcs_review_id,
-                        review_state: Some("open".to_string()),
-                        commit_sha: vcs_commit_sha,
-                        last_checked: Utc::now(),
-                    };
-                    // Store PR URL on the goal for cross-reference (v0.11.3).
-                    // Extract review_url before moving vcs_info.
-                    let _review_url = vcs_info.review_url.clone();
-                    pkg.vcs_status = Some(vcs_info);
-                    // Re-save the draft package with VCS info.
+                    if !vcs_branch.is_empty()
+                        || vcs_commit_sha.is_some()
+                        || vcs_review_url.is_some()
+                    {
+                        let vcs_info = VcsTrackingInfo {
+                            branch: if vcs_branch.is_empty() {
+                                "unknown".to_string()
+                            } else {
+                                vcs_branch
+                            },
+                            review_url: vcs_review_url,
+                            review_id: vcs_review_id,
+                            review_state: Some("open".to_string()),
+                            commit_sha: vcs_commit_sha,
+                            last_checked: Utc::now(),
+                        };
+                        // Store PR URL on the goal for cross-reference (v0.11.3).
+                        let _review_url = vcs_info.review_url.clone();
+                        pkg.vcs_status = Some(vcs_info);
+                    }
+                    // Store ignored artifacts for `ta draft view` (v0.13.17.5).
+                    if !commit_ignored_artifacts.is_empty() {
+                        pkg.ignored_artifacts = commit_ignored_artifacts;
+                    }
+                    // Re-save the draft package with updated info.
                     let pkg_path = config
                         .pr_packages_dir
                         .join(format!("{}.json", pkg.package_id));

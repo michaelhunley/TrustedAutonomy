@@ -523,6 +523,7 @@ mod tests {
             parent_draft_id: None,
             pending_approvals: vec![],
             supervisor_review: None,
+            ignored_artifacts: vec![],
         }
     }
 

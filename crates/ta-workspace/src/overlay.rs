@@ -1143,6 +1143,17 @@ fn walk_dir_relative(
     Ok(())
 }
 
+/// TA-managed files that are injected/restored around every agent run and must
+/// never appear in overlay diffs (v0.13.17.5).
+///
+/// These are TA infrastructure files, not agent work product. They are
+/// modified by TA before the agent launches and restored before diffing,
+/// so any residual differences indicate a restore failure — not a real change.
+pub const TA_MANAGED_FILES: &[&str] = &[
+    ".mcp.json",           // TA MCP server config — injected for every agent
+    "settings.local.json", // Claude Code settings — injected with TA overrides
+];
+
 /// Check if a path should be skipped when diffing.
 /// We skip infrastructure directories — these are internal state, not agent work product.
 /// V1 TEMPORARY: Also checks exclude patterns for build artifacts that
@@ -1158,6 +1169,14 @@ fn should_skip_for_diff(path: &str, excludes: &ExcludePatterns) -> bool {
             || path.starts_with(&format!("{}/", dir))
             || path.starts_with(&format!("{}\\", dir))
         {
+            return true;
+        }
+    }
+
+    // TA-managed files are injected/restored by TA infrastructure — exclude
+    // them from diffs so they never appear as agent-authored changes (v0.13.17.5).
+    for managed in TA_MANAGED_FILES {
+        if path == *managed {
             return true;
         }
     }

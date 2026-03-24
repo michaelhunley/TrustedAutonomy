@@ -39,6 +39,7 @@ impl SourceAdapter for NoneAdapter {
             commit_id: format!("none-{}", goal.goal_run_id),
             message: message.to_string(),
             metadata: Default::default(),
+            ignored_artifacts: vec![],
         })
     }
 

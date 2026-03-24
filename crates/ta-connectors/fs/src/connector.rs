@@ -310,6 +310,7 @@ impl<S: ChangeStore> FsConnector<S> {
             parent_draft_id: None,
             pending_approvals: vec![],
             supervisor_review: None,
+            ignored_artifacts: vec![],
         };
 
         Ok(package)

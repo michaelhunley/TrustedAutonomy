@@ -6396,11 +6396,75 @@ Draft artifact list
 
 ---
 
+### v0.13.17.6 — Supervisor Agent Auth & Multi-Agent Support
+<!-- status: pending -->
+**Goal**: Make the supervisor work for all users regardless of credential method, and support the same agent types (claude-code, codex, ollama, custom manifest) that the main goal agent supports. The supervisor should feel like a first-class agent configuration, not a special case.
+
+#### Problem
+
+1. **Auth mismatch**: `run_builtin_supervisor()` calls `api.anthropic.com` directly with `ANTHROPIC_API_KEY`. Subscription users (Claude Code OAuth) have no API key → permanent WARN fallback. Users with an API key work, but the mechanism is inconsistent with how every other agent in TA runs.
+
+2. **No agent choice**: `[supervisor] agent = "builtin"` is the only functional option. `agent = "codex"` or `agent = "my-custom-reviewer"` either silently falls back to builtin or uses the underdocumented custom-agent JSON protocol. There is no way to say "run the supervisor using the same codex/ollama setup I use for goals."
+
+#### Design
+
+The supervisor runner should mirror `agent_launch_config()` from `run.rs` — given an agent name, resolve how to invoke it headlessly, pass the prompt, and read structured output. Each agent type brings its own credential method:
+
+| `[supervisor] agent` | Invocation | Credential |
+|---|---|---|
+| `"builtin"` (default) | `claude --print --output-format stream-json` | Claude Code subscription or API key — whichever `claude` CLI is configured with |
+| `"claude-code"` | same as `"builtin"` | same |
+| `"codex"` | `codex --approval-mode full-auto --quiet` | `OPENAI_API_KEY` or Codex subscription |
+| `"ollama"` | `ta agent run <ollama-agent>` headless | local, no key |
+| `"<manifest-name>"` | resolve `.ta/agents/<name>.toml`, spawn headless | whatever the manifest specifies |
+
+For `"builtin"` / `"claude-code"`, TA never reads or requires `ANTHROPIC_API_KEY` — it delegates entirely to the `claude` binary, which handles its own auth (subscription OAuth, API key from env, API key from `~/.claude/` config, etc.).
+
+**Credential config** (optional, in `[supervisor]`):
+```toml
+[supervisor]
+agent = "codex"             # which agent runs the supervisor
+# Optional: override the API key env var for this agent only.
+# If omitted, the agent binary's own credential resolution applies.
+api_key_env = "OPENAI_API_KEY"   # checked but not required — binary handles it
+```
+
+#### Items
+
+1. [ ] **Refactor `run_builtin_supervisor()` → `invoke_supervisor_agent(config, prompt)`**: Dispatch on `config.agent`:
+   - `"builtin"` | `"claude-code"` → spawn `claude --print --output-format stream-json "<prompt>"`, read stdout, parse last JSON object with `verdict`/`findings`/`summary` keys.
+   - `"codex"` → spawn `codex --approval-mode full-auto "<prompt>"`, parse output similarly.
+   - `"ollama"` → invoke via `ta agent run` headless path.
+   - Any other string → treat as agent manifest name, use existing `run_custom_supervisor()` path.
+
+2. [ ] **Remove `reqwest` direct API call and `ANTHROPIC_API_KEY` check**: Delete `call_anthropic_supervisor()` and the `reqwest` blocking client. Remove `reqwest` from `ta-changeset/Cargo.toml` if unused elsewhere.
+
+3. [ ] **`claude` CLI response parsing**: The `--output-format stream-json` stdout is a stream of JSON events. Parse the final `result` event (type: `"result"`, subtype: `"success"`) and extract the text content. If the text contains a JSON object with `verdict`/`findings`/`summary`, use it; otherwise treat the full text as `summary` with `verdict: warn`.
+
+4. [ ] **`[supervisor] api_key_env`** config field: Optional. When set, TA checks that env var exists before spawning the agent and prints a clear message if missing: `"Supervisor agent 'codex' requires OPENAI_API_KEY — set it or change [supervisor] agent."`. Does not pass the key to the binary (the binary reads it itself); this is purely a pre-flight check for better UX.
+
+5. [ ] **`[supervisor] agent = "codex"` support**: Wire up the codex headless invocation. Codex outputs text; wrap the full response as `summary`, attempt JSON extraction for structured verdict.
+
+6. [ ] **Fallback behavior unchanged**: Any invocation failure (binary not found, timeout, parse error, non-zero exit) still falls back to `SupervisorVerdict::Warn` with a descriptive finding. Never block a draft build on supervisor failure.
+
+7. [ ] **Update USAGE.md "Supervisor Agent"**: Document all supported `agent` values, the credential model (TA delegates to the binary — no API key configuration needed for subscription users), and the optional `api_key_env` pre-flight check.
+
+8. [ ] **Tests**:
+   - `test_builtin_invokes_claude_cli`: Mock `claude` binary in PATH returning valid stream-json, verify `SupervisorVerdict::Pass` parsed correctly.
+   - `test_builtin_no_api_key_env_required`: Verify no `ANTHROPIC_API_KEY` check in the claude path.
+   - `test_codex_agent_dispatch`: `agent = "codex"` → codex binary invoked (not claude).
+   - `test_missing_binary_falls_back_to_warn`: `claude` not in PATH → `SupervisorVerdict::Warn`, finding describes the error.
+   - `test_api_key_env_preflight_warn`: `api_key_env = "OPENAI_API_KEY"` and var not set → warn with actionable message before spawn attempt.
+
+#### Version: `0.13.17-alpha.6`
+
+---
+
 > **⬇ PUBLIC BETA** — v0.13.x complete: runtime flexibility (local models, containers), enterprise governance (audit ledger, action governance, compliance), community ecosystem, and goal workflow automation. TA is ready for team and enterprise deployments.
 
-### Public Release: `public-alpha-v0.13.17.5`
+### Public Release: `public-alpha-v0.13.17.6`
 
-**Trigger**: After all v0.13.17.x phases (through v0.13.17.5) are `<!-- status: done -->`.
+**Trigger**: After all v0.13.17.x phases (through v0.13.17.6) are `<!-- status: done -->`.
 
 **Steps**:
 1. Pin binary version to `0.13.17-alpha.5` in `Cargo.toml` and `CLAUDE.md`

@@ -3327,6 +3327,25 @@ target_branch = "main"
 
 The deprecated `--git-commit` and `--git-push` flags still work as aliases for `--submit`.
 
+#### Gitignored Artifact Handling
+
+When `ta draft apply --submit` runs `git add`, it first filters artifact paths through `git check-ignore`. Gitignored paths are handled gracefully instead of aborting the commit:
+
+- **Known-safe paths** (`.mcp.json`, `*.local.toml`, `.ta/daemon.toml`, `.ta/*.pid`, `.ta/*.lock`) are silently dropped — these are TA infrastructure files that should never reach a commit.
+- **Unexpected-ignored paths** (source files accidentally gitignored) emit a warning and appear in `ta draft view` under an "Ignored Artifacts" section:
+
+```
+IGNORED ARTIFACTS (1):
+============================================================
+WARNING: The following files are gitignored and were NOT committed.
+Check whether the .gitignore entry is intentional.
+  [!] src/config.rs — gitignored, dropped from commit
+```
+
+- If **all artifacts are gitignored**, `ta draft apply` completes with a warning rather than failing: `"All artifacts were gitignored — nothing was committed."`
+
+TA also excludes `.mcp.json` and `settings.local.json` from overlay diffs entirely (they are injected/restored by TA infrastructure and are never agent work product).
+
 ### Release Pipeline
 
 TA includes a YAML-driven release pipeline:
@@ -7330,6 +7349,7 @@ TA has a working end-to-end workflow: staging isolation, agent wrapping, draft r
 | v0.13.14 | Watchdog/exit-handler race & goal recovery (`ta goal recover`) | Done |
 | v0.13.15 | Fix pass, cross-language onboarding & constitution completion | Done |
 | v0.13.16 | Local model agent (ta-agent-ollama, experimental) & advanced swarm orchestration | Done |
+| v0.13.17.5 | Gitignored artifact detection & human review gate — `.mcp.json` excluded from diffs, gitignore-aware `git add`, `ta draft view` ignored artifacts section | Done |
 | v0.14.0 | Agent sandboxing — macOS sandbox-exec, Linux bwrap (experimental) | Done |
 | v0.14.1 | Hardware attestation & verifiable audit trails (Ed25519, `ta audit verify-attestation`) | Done |
 | v0.14.2 | Multi-party approval & threshold governance (`ta draft approve --as`, `--override`) | Done |

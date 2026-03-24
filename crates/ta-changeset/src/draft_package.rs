@@ -531,6 +531,14 @@ pub struct DraftPackage {
     /// Present when supervisor is enabled; `None` when disabled or skipped.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supervisor_review: Option<crate::supervisor_review::SupervisorReview>,
+
+    /// Gitignored artifacts encountered during apply --submit (v0.13.17.5).
+    /// Populated by the VCS adapter when `git add` would fail on ignored paths.
+    /// Known-safe artifacts (.mcp.json, *.local.toml, .ta/ runtime files) are
+    /// recorded here but silently dropped from the commit.
+    /// Unexpected-ignored artifacts are highlighted in `ta draft view`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ignored_artifacts: Vec<IgnoredArtifact>,
 }
 
 /// VCS tracking information for post-apply lifecycle monitoring (v0.11.2.3).
@@ -563,6 +571,17 @@ pub struct VerificationWarning {
     pub exit_code: Option<i32>,
     /// Captured stderr/stdout output (truncated to 2000 chars).
     pub output: String,
+}
+
+/// A gitignored artifact encountered during `ta draft apply --submit` (v0.13.17.5).
+///
+/// Classified as either known-safe (silently dropped) or unexpected (requires attention).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct IgnoredArtifact {
+    /// Relative path of the artifact that was gitignored.
+    pub path: String,
+    /// Whether the path matched the known-safe drop list (e.g., .mcp.json).
+    pub known_safe: bool,
 }
 
 /// Result of one `required_checks` entry run after agent exit (v0.13.17).
@@ -744,6 +763,7 @@ mod tests {
             parent_draft_id: None,
             pending_approvals: vec![],
             supervisor_review: None,
+            ignored_artifacts: vec![],
         }
     }
 

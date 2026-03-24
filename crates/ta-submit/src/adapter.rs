@@ -55,6 +55,12 @@ pub struct CommitResult {
     /// Adapter-specific metadata
     #[serde(default)]
     pub metadata: HashMap<String, String>,
+
+    /// Gitignored artifacts that were dropped from this commit (v0.13.17.5).
+    /// Known-safe paths (.mcp.json, *.local.toml, .ta/ runtime files) are
+    /// dropped silently; unexpected-ignored paths trigger a warning.
+    #[serde(default)]
+    pub ignored_artifacts: Vec<ta_changeset::IgnoredArtifact>,
 }
 
 /// Result of a push operation
