@@ -7103,43 +7103,76 @@ The Web UI was scoped as a "separate project" in the PLAN.md future section, but
 
 7. [ ] **Tech stack**: Single-file Svelte or Preact SPA (< 150kb gzipped). Inline CSS — no external CDN. Compiled to static files embedded in the Rust binary via `include_dir!`. No Node.js required at runtime.
 
-#### 2. Creative Tool Project Templates
+#### 2. Installable Template Plugin System
 
-8. [ ] **Blender addon template** (`ta new --template blender-addon`): Python package with `__init__.py` containing `bl_info` dict, `register()`/`unregister()` stubs, a `panels.py` with a sample UI panel, `operators.py` with a sample operator, and a `tests/` dir. `workflow.toml` uses Python verify commands (`python -m py_compile`, `blender --background --python-expr`). USAGE.md: "TA with Blender" section.
+Domain-specific templates (Blender, Unity, Godot, game engines) must not be hardcoded into TA. They evolve independently of TA's release cycle, are maintained by their communities, and there are too many to bundle. TA defines the format; the community publishes templates; users install what they need. This follows the same pattern as `ta agent install/publish` (v0.13.16).
 
-9. [ ] **Godot GDScript template** (`ta new --template godot-gdscript`): `project.godot`, `addons/<name>/plugin.cfg`, main scene, `res://` paths in `workflow.toml`. Verify: `gdscript --check *.gd`.
+**Template manifest** (`template.toml` at the root of a template directory):
+```toml
+name = "blender-addon"
+version = "1.2.0"
+description = "Blender Python addon — bl_info, register/unregister, panel, operator, tests"
+tags = ["blender", "python", "creative", "3d"]
+author = "TA Community"
+ta_version_min = "0.14.8-alpha"
+post_copy_script = "scripts/setup.sh"  # optional
 
-10. [ ] **Unity C# template** (`ta new --template unity-csharp`): `.asmdef`, `Editor/` and `Runtime/` directories, Unity package manifest (`package.json`). Verify: `dotnet build`.
+[verify]
+commands = ["python -m py_compile src/**/*.py"]
+```
 
-11. [ ] **Plain Python library template** (`ta new --template python-library`): `pyproject.toml`, `src/<name>/`, `tests/`, `ruff.toml`. Verify: `ruff check .`, `pytest`.
+**Install sources** (same resolution order as `ta agent install`):
+```bash
+ta template install blender-addon              # registry lookup by name
+ta template install github:ta-community/ta-template-blender  # GitHub repo
+ta template install https://example.com/t.tar.gz             # direct URL
+ta template install ./my-local-template        # local path
+```
+
+**Storage**: `~/.config/ta/templates/<name>/` (global) or `.ta/templates/<name>/` (project-local). `ta new --template <name>` resolves installed templates before built-ins.
+
+8. [ ] **`ta template install <source>`**: Downloads and installs from registry name, `github:user/repo`, URL, or local path. Validates `template.toml`. Stores to `~/.config/ta/templates/<name>/`. `--project` flag installs to `.ta/templates/<name>/`. SHA-256 verification (same as `ta agent install`). Prints: `"Installed blender-addon v1.2.0 → use with ta new --template blender-addon"`.
+
+9. [ ] **`ta template list`**: Shows installed templates (global + project-local) alongside built-in templates. Columns: name, source, version, tags. `--available` queries the registry and shows installable community templates with one-liner install commands.
+
+10. [ ] **`ta template remove <name>`** and **`ta template publish <path>`**: Remove an installed template; publish a template directory to the registry (validates manifest, SHA-256 of tarball, submits to `TA_TEMPLATE_REGISTRY_URL`). Graceful fallback to manual GitHub PR instructions.
+
+11. [ ] **`ta new --template <name>` resolves installed templates first**: Before checking `PROJECT_TEMPLATES`, check `~/.config/ta/templates/` and `.ta/templates/`. Copy files, run `post_copy_script` if present, merge `[verify]` into `workflow.toml`. Fall back to built-in lookup if not found. The built-in list (rust, typescript, python, go) stays as-is — these are generic and small enough to bundle.
+
+12. [ ] **Community Hub template discovery** (`intent = "project-template"`): `ta template search <query>` calls `community_search { intent: "project-template", query }`. Web UI "Browse Templates" tab in Start Goal page shows community templates with one-click install. Template authors annotate their repos with the community hub `project-template` intent to appear in search results.
+
+13. [ ] **Reference template repos** (TA-contributed, not bundled): TA creates and maintains reference repos — `ta-community/ta-template-blender`, `ta-community/ta-template-godot`, `ta-community/ta-template-unity-csharp`, `ta-community/ta-template-python-library` — as separate GitHub repos. Not bundled in the binary. `ta template list --available` lists them. USAGE.md documents install steps. These repos are the definitive examples of the template format.
+
+14. [ ] **Tests**: `test_template_install_from_local_dir`, `test_template_validates_manifest_fields`, `test_template_list_includes_installed`, `test_new_resolves_installed_before_builtin`, `test_template_publish_computes_sha256`.
 
 #### 3. Guided Plan Creation Wizard
 
-12. [ ] **`ta plan wizard`** (CLI + web): Conversational plan builder. Asks: "What are you building?" → "What should it do in plain language?" → "Are there phases (first do X, then Y)?" → generates PLAN.md draft. Uses a short agent call to structure natural language into plan items. Web UI has this as a step in the "Start a Goal" flow.
+15. [ ] **`ta plan wizard`** (CLI + web): Conversational plan builder. Asks: "What are you building?" → "What should it do in plain language?" → "Are there phases (first do X, then Y)?" → generates PLAN.md draft. Uses a short agent call to structure natural language into plan items. Web UI has this as a step in the "Start a Goal" flow.
 
-13. [ ] **Plan import from text**: `ta plan import --from <file>` accepts a free-form description or a bulleted list and converts it to PLAN.md format via the same agent call. Useful for importing an existing design doc.
+16. [ ] **Plan import from text**: `ta plan import --from <file>` accepts a free-form description or a bulleted list and converts it to PLAN.md format via the same agent call. Useful for importing an existing design doc.
 
 #### 4. Simplified Publish Workflow
 
-14. [ ] **`ta publish` command**: One-step "apply draft + push + create PR" for users who don't want to manage git manually. Wraps `ta draft apply --submit`. Asks for a commit message (defaults to goal title). If no VCS configured, offers to initialize git and set up GitHub via `gh auth login`.
+17. [ ] **`ta publish` command**: One-step "apply draft + push + create PR" for users who don't want to manage git manually. Wraps `ta draft apply --submit`. Asks for a commit message (defaults to goal title). If no VCS configured, offers to initialize git and set up GitHub via `gh auth login`.
 
-15. [ ] **Web UI "Publish" button**: On an approved draft's review page, a "Publish" button calls `ta publish`. Shows progress (creating branch, pushing, PR link). Handles `gh auth` prompt inline if not authenticated.
+18. [ ] **Web UI "Publish" button**: On an approved draft's review page, a "Publish" button calls `ta publish`. Shows progress (creating branch, pushing, PR link). Handles `gh auth` prompt inline if not authenticated.
 
 #### 5. Creator Walkthrough Documentation
 
-16. [ ] **`docs/tutorials/blender-plugin-walkthrough.md`**: Complete end-to-end guide:
+19. [ ] **`docs/tutorials/blender-plugin-walkthrough.md`**: Complete end-to-end guide:
     - Install TA (DMG/MSI)
-    - Open Web UI
+    - Open Web UI (`http://localhost:PORT/ui` auto-opens)
+    - Browse Templates → install `blender-addon` with one click
     - Create project with Blender addon template
-    - Use Plan Wizard to describe the addon
+    - Use Plan Wizard to describe the addon in plain language
     - Run the agent, watch progress in browser
     - Review the diff visually, approve changes
     - Publish to GitHub
     - Screenshots/screen recordings embedded as static images in `docs/assets/`
 
-17. [ ] **`docs/tutorials/README.md`**: Index of tutorials by audience (creators, developers, enterprise). Links from main USAGE.md "Tutorials" section.
+20. [ ] **`docs/tutorials/README.md`**: Index of tutorials by audience (creators, developers, enterprise). Links from main USAGE.md "Tutorials" section.
 
-18. [ ] **USAGE.md "Getting Started (No Terminal)"**: Brief section with a link to the web UI + tutorials for non-CLI users. Placed prominently near the top.
+21. [ ] **USAGE.md "Getting Started (No Terminal)"**: Brief section with a link to the web UI + tutorials for non-CLI users. Placed prominently near the top.
 
 #### Deferred
 
