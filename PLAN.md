@@ -6324,7 +6324,7 @@ skip_if_no_constitution = true    # don't fail if constitution file is absent
 ---
 
 ### v0.13.17.5 — Gitignored Artifact Detection & Human Review Gate
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: (1) Fix the root cause: TA-injected files like `.mcp.json` must not appear in the diff that feeds `ta draft build`. (2) Catch any gitignored file that does reach `git add` and handle it gracefully instead of aborting the entire commit.
 
 #### Problem
