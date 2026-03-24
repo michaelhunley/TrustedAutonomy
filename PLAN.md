@@ -6325,13 +6325,17 @@ skip_if_no_constitution = true    # don't fail if constitution file is absent
 
 ### v0.13.17.5 — Gitignored Artifact Detection & Human Review Gate
 <!-- status: pending -->
-**Goal**: Before `ta draft apply` runs `git add`, check every artifact path in the draft manifest against `.gitignore`. For each gitignored path: silently drop it from the `git add` list if it is known-safe (see below), or surface it to the human reviewer if the file has meaningful content changes. Never let a gitignored artifact silently fail the entire `git add` command.
+**Goal**: (1) Fix the root cause: TA-injected files like `.mcp.json` must not appear in the diff that feeds `ta draft build`. (2) Catch any gitignored file that does reach `git add` and handle it gracefully instead of aborting the entire commit.
 
 #### Problem
 
-`ta draft apply --submit` builds a `git add <path1> <path2> ...` command from the draft's artifact list. If any path is gitignored, `git add` prints an error and aborts — even if every other path would have staged correctly. This caused the v0.13.17.4 PR creation to fail because `.mcp.json` (gitignored) was in the artifact list.
+Two compounding bugs caused `.mcp.json` to repeatedly appear in draft artifact lists and then break `git add`:
 
-The silent failure is the real bug: apply said "complete" but no PR was created.
+**Bug 1 — Asymmetric injection/restore**: `inject_mcp_server_config()` runs for all goals but `restore_mcp_server_config()` only runs when `macro_goal = true` (`run.rs:1949`). For regular goals TA still injects `.mcp.json`, but never restores it. The injected content (staging paths, TA server entries) remains in staging at diff time, so `ta draft build` sees `.mcp.json` as changed and includes it as an artifact. The restore fallback tries to strip `ta-memory` / `ta-community-hub` keys, but leaves the main `ta` and `claude-flow` entries, so the file still differs.
+
+**Bug 2 — `git add` fails hard on gitignored paths**: `ta draft apply --submit` passes all artifact paths to a single `git add <path1> <path2> ...` call. If any path is gitignored, git aborts the entire command with a non-zero exit. TA treats this as a fatal error and marks apply as failed — but the "apply complete" message may already have printed. Nothing was staged or committed.
+
+Both bugs must be fixed: Bug 1 prevents `.mcp.json` from entering the artifact list in the first place; Bug 2 is a defense-in-depth fallback for any TA-managed or gitignored file that slips through.
 
 #### Design
 
@@ -6361,21 +6365,32 @@ Draft artifact list
 
 #### Items
 
-1. [ ] **`filter_gitignored_artifacts(paths, workspace_root) -> (to_add, ignored)`**: Use `git check-ignore --stdin` to classify each artifact path. Returns two lists: paths to add, and paths that are gitignored.
+**Bug 1 fix — symmetric injection/restore:**
 
-2. [ ] **Known-safe drop list**: Hardcode the patterns above. Paths matching known-safe patterns are silently dropped. Log at `tracing::debug` level: `"Dropping gitignored artifact (known safe): {path}"`.
+1. [ ] **Make `restore_mcp_server_config` unconditional**: Remove the `if macro_goal` guard at `run.rs:1949`. Restore runs after every agent exit whenever `.ta/mcp_json_original` backup exists (the backup is only written when injection ran, so the guard is redundant and wrong).
 
-3. [ ] **Unexpected-ignored warning**: For gitignored paths NOT on the known-safe list, print a warning during apply: `"Warning: artifact {path} is gitignored — dropping from git add. Was this intentional?"`. Record in the apply output so it's visible to the user.
+2. [ ] **Exclude TA-injected files from the overlay diff**: Add `.mcp.json`, `CLAUDE.md` (restored separately), and `settings.local.json` to the overlay diff's built-in exclusion list in `ta-workspace`. These files are TA infrastructure, not agent work product — if an agent explicitly edits `.mcp.json` (unusual), that change should be captured separately. Add a `ta_managed_files()` constant shared by overlay.rs and draft build.
 
-4. [ ] **`ta draft view` "Ignored Artifacts" section**: If any artifacts were gitignored (safe or unexpected), show them under a collapsible section. Unexpected-ignored artifacts are highlighted in yellow with a note: "This file is gitignored — it was NOT committed. Check if the .gitignore entry is correct."
+3. [ ] **Restore completeness check**: After `restore_mcp_server_config()`, verify the staging `.mcp.json` matches the source's `.mcp.json` (or is absent if source had none). If they differ, log a warning: `"Warning: .mcp.json restore may be incomplete — staging differs from source. Staging path: {path}"`. This catches future injection/restore asymmetries before they reach the diff.
 
-5. [ ] **Never fail git add due to gitignored path**: The filter runs before `git add`. The `git add` command only receives non-ignored paths. If the filtered list is empty (all artifacts were gitignored), complete with a warning rather than an error: `"All artifacts were gitignored — nothing was committed. Check the draft's artifact list."`.
+**Bug 2 fix — gitignore-aware git add:**
 
-6. [ ] **Test coverage**:
-   - `test_known_safe_dropped_silently`: Draft with `.mcp.json` artifact → drops from git add, no warning printed.
-   - `test_unexpected_ignored_warns`: Draft with a source file that happens to be gitignored → warning printed, shown in draft view.
-   - `test_all_ignored_completes_with_warning`: All artifacts gitignored → apply completes (no panic/error), user sees clear message.
-   - `test_gitignore_filter_does_not_affect_non_ignored`: Normal artifacts pass through unchanged.
+4. [ ] **`filter_gitignored_artifacts(paths, workspace_root) -> (to_add, ignored)`**: Use `git check-ignore --stdin` to classify each artifact path. Returns two lists: paths to add, and paths that are gitignored.
+
+5. [ ] **Known-safe drop list**: Paths matching known-safe patterns are silently dropped from `git add`. Log at `tracing::debug`. Known-safe: `.mcp.json`, `*.local.toml`, `.ta/daemon.toml`, `.ta/*.pid`, `.ta/*.lock`.
+
+6. [ ] **Unexpected-ignored warning**: For gitignored paths NOT on the known-safe list, print: `"Warning: artifact {path} is gitignored — dropping from git add. Was this intentional?"`. Record in apply output.
+
+7. [ ] **`ta draft view` "Ignored Artifacts" section**: If any artifacts were gitignored, show them. Unexpected-ignored artifacts highlighted in yellow: "This file is gitignored — it was NOT committed. Check if the .gitignore entry is correct."
+
+8. [ ] **Never fail git add due to gitignored path**: If the filtered list is empty (all artifacts gitignored), complete with a warning: `"All artifacts were gitignored — nothing was committed."` — not an error.
+
+9. [ ] **Test coverage**:
+   - `test_restore_runs_for_non_macro_goal`: Non-macro goal with injected .mcp.json → restore runs, staging matches source before diff.
+   - `test_mcp_json_absent_from_draft_artifacts`: End-to-end: agent goal with .mcp.json injection → `ta draft build` artifact list does not include `.mcp.json`.
+   - `test_known_safe_dropped_silently`: Draft with `.mcp.json` artifact → drops from git add, no warning.
+   - `test_unexpected_ignored_warns`: Source file that is gitignored → warning printed, shown in draft view.
+   - `test_all_ignored_completes_with_warning`: All artifacts gitignored → apply completes with warning, no panic.
 
 #### Version: `0.13.17-alpha.5`
 
