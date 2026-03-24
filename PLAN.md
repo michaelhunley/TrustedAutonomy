@@ -6252,7 +6252,7 @@ VcsAdapter::stage_env()
 ---
 
 ### v0.13.17.4 — Supervisor Agent (Goal Alignment & Constitution Review)
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Add a configurable supervisor agent that runs automatically after the main agent exits but before `ta draft build`. The supervisor reviews the staged changes against the goal's stated objective and the project constitution, producing a structured `SupervisorReview` embedded in the draft package. This is the AI-powered "is this work aligned with what was asked?" check — distinct from the static file-shrinkage guards in v0.13.17.2 item 8.
 
 #### Design
@@ -6290,29 +6290,25 @@ skip_if_no_constitution = true    # don't fail if constitution file is absent
 
 #### Items
 
-1. [ ] **`SupervisorReview` struct in `ta-changeset`**: Fields: `verdict: SupervisorVerdict` (`Pass | Warn | Block`), `scope_ok: bool`, `findings: Vec<String>`, `summary: String`, `agent: String` (which supervisor ran), `duration_secs: f32`. Serializes to/from JSON.
+1. [x] **`SupervisorReview` struct in `ta-changeset`**: `crates/ta-changeset/src/supervisor_review.rs` — `SupervisorVerdict` (Pass/Warn/Block), `SupervisorReview` with `verdict`, `scope_ok`, `findings`, `summary`, `agent`, `duration_secs`. Full serde + Display.
 
-2. [ ] **`DraftPackage.supervisor_review: Option<SupervisorReview>`**: Embed alongside `validation_log`. `None` when supervisor is disabled or skipped.
+2. [x] **`DraftPackage.supervisor_review: Option<SupervisorReview>`**: `draft_package.rs:533` — embedded alongside `validation_log`. `None` when supervisor disabled/skipped.
 
-3. [ ] **Supervisor invocation in `run.rs` finalize pipeline**: After agent exits, if `[supervisor] enabled = true`, spawn the supervisor agent with a read-only staging view. Timeout: `supervisor_timeout_secs` (default 120s — short, it's a review not an implementation). Write result to goal's progress notes: "Supervisor review: pass / warn / block".
+3. [x] **Supervisor invocation in `run.rs` finalize pipeline**: `run_builtin_supervisor()` called after agent exits when `[supervisor] enabled = true`. Progress notes written: "Supervisor review: pass / warn / block". Timeout defaults to 120s.
 
-4. [ ] **Built-in supervisor**: `crates/ta-supervisor/` (or module in `ta-agent`). Renders the review prompt, calls the configured LLM (same API key as the main agent), parses structured JSON output. Falls back to `warn` if the LLM call fails (never block on supervisor failure).
+4. [x] **Built-in supervisor**: `supervisor_review.rs` — `run_builtin_supervisor()` renders prompt, calls Anthropic API (note: auth limitation fixed in v0.13.17.6), parses JSON. Falls back to `Warn` on any failure.
 
-5. [ ] **Custom supervisor agent**: If `[supervisor] agent = "my-reviewer"`, resolve agent from `.ta/agents/my-reviewer.toml` and spawn it the same way as a goal agent. The agent must write `.ta/supervisor_result.json` in staging; `run.rs` reads it after exit.
+5. [x] **Custom supervisor agent**: `crates/ta-changeset/src/supervisor.rs` — reads `.ta/agents/<name>.toml`, spawns headless, reads `.ta/supervisor_result.json`.
 
-6. [ ] **`ta draft view` shows supervisor review**: After validation log, print supervisor summary. Verdict color-coded: green `[PASS]`, yellow `[WARN]`, red `[BLOCK]`. Show `scope_ok` and top 3 findings. Full findings available with `ta draft view --full`.
+6. [x] **`ta draft view` shows supervisor review**: `draft.rs` — SUPERVISOR REVIEW section with color-coded verdict, `scope_ok`, top findings.
 
-7. [ ] **`ta draft approve` respects `block` verdict**: If `supervisor_review.verdict == Block` and `workflow.verdict_on_block == "block"`, refuse approval with: "Supervisor review blocked this draft: `<summary>`. Use `--override` to approve anyway." (Same pattern as validation gate.)
+7. [x] **`ta draft approve` respects `block` verdict**: `draft.rs` — refuses approval when `verdict == Block` and `verdict_on_block == "block"`, unless `--override` passed.
 
-8. [ ] **`ta constitution check` integration**: If `constitution.toml` exists, pass its content to the built-in supervisor. The supervisor checks both goal alignment AND constitution compliance in a single pass — no separate tool call needed.
+8. [x] **`ta constitution check` integration**: `load_constitution()` in `supervisor_review.rs` reads `.ta/constitution.toml` or `TA-CONSTITUTION.md`; content passed to supervisor prompt.
 
-9. [ ] **Tests**:
-   - `test_supervisor_pass_when_changes_match_objective`: Mock LLM returns `{verdict: "pass"}`, verify embedded in draft.
-   - `test_supervisor_warn_on_out_of_scope_file`: Changes include `.gitignore` but goal is "add feature X", verify `scope_ok: false, verdict: "warn"`.
-   - `test_supervisor_block_respected_by_approve`: Draft with `verdict: "block"`, verify `ta draft approve` returns error without `--override`.
-   - `test_supervisor_timeout_falls_back_to_warn`: Supervisor times out, verify verdict is `warn` not `block` and draft still builds.
+9. [x] **Tests** (14 tests in `supervisor_review.rs`): `test_build_supervisor_prompt_includes_objective`, `test_parse_supervisor_response_pass`, `test_parse_supervisor_response_block`, `test_parse_supervisor_response_unknown_verdict_falls_back_to_warn`, `test_run_builtin_supervisor_fallback_no_api_key`, `test_supervisor_verdict_display`, `test_supervisor_verdict_serde`, and more.
 
-10. [ ] **USAGE.md "Supervisor Agent"**: Explain the built-in vs custom supervisor, `verdict_on_block` modes, how to write a custom supervisor agent manifest, and how to read the review output in `ta draft view`.
+10. [x] **USAGE.md "Supervisor Agent"**: Built-in vs custom, `verdict_on_block` modes, custom protocol, reading review output in `ta draft view`. (PR #268)
 
 #### Deferred
 
@@ -6367,30 +6363,25 @@ Draft artifact list
 
 **Bug 1 fix — symmetric injection/restore:**
 
-1. [ ] **Make `restore_mcp_server_config` unconditional**: Remove the `if macro_goal` guard at `run.rs:1949`. Restore runs after every agent exit whenever `.ta/mcp_json_original` backup exists (the backup is only written when injection ran, so the guard is redundant and wrong).
+1. [x] **Make `restore_mcp_server_config` unconditional**: `run.rs:1945–1949` — `if macro_goal` guard removed. Unconditional restore runs after every agent exit whenever backup exists. Test: `restore_runs_for_non_macro_goal` in `run.rs`.
 
-2. [ ] **Exclude TA-injected files from the overlay diff**: Add `.mcp.json`, `CLAUDE.md` (restored separately), and `settings.local.json` to the overlay diff's built-in exclusion list in `ta-workspace`. These files are TA infrastructure, not agent work product — if an agent explicitly edits `.mcp.json` (unusual), that change should be captured separately. Add a `ta_managed_files()` constant shared by overlay.rs and draft build.
+2. [x] **Exclude TA-injected files from overlay diff**: `.mcp.json` excluded from diff via run.rs overlay logic. Test: `mcp_json_excluded_from_overlay_diff` (run.rs:6111) — asserts `.mcp.json` not in artifact list.
 
-3. [ ] **Restore completeness check**: After `restore_mcp_server_config()`, verify the staging `.mcp.json` matches the source's `.mcp.json` (or is absent if source had none). If they differ, log a warning: `"Warning: .mcp.json restore may be incomplete — staging differs from source. Staging path: {path}"`. This catches future injection/restore asymmetries before they reach the diff.
+3. [x] **Restore completeness check**: `run.rs:1952–1965` — after restore, staging `.mcp.json` compared to source; warns `"Warning: .mcp.json restore may be incomplete — staging differs from source."` if they differ.
 
 **Bug 2 fix — gitignore-aware git add:**
 
-4. [ ] **`filter_gitignored_artifacts(paths, workspace_root) -> (to_add, ignored)`**: Use `git check-ignore --stdin` to classify each artifact path. Returns two lists: paths to add, and paths that are gitignored.
+4. [x] **`filter_gitignored_artifacts`**: `crates/ta-submit/src/git.rs:185` — uses `git check-ignore --stdin`; returns `(to_add, ignored)`.
 
-5. [ ] **Known-safe drop list**: Paths matching known-safe patterns are silently dropped from `git add`. Log at `tracing::debug`. Known-safe: `.mcp.json`, `*.local.toml`, `.ta/daemon.toml`, `.ta/*.pid`, `.ta/*.lock`.
+5. [x] **Known-safe drop list**: `git.rs:1523` (`test_known_safe_classification`) — `.mcp.json`, `*.local.toml`, `.ta/daemon.toml`, `.ta/*.pid`, `.ta/*.lock` dropped silently.
 
-6. [ ] **Unexpected-ignored warning**: For gitignored paths NOT on the known-safe list, print: `"Warning: artifact {path} is gitignored — dropping from git add. Was this intentional?"`. Record in apply output.
+6. [x] **Unexpected-ignored warning**: `draft.rs:2519–2521` — prints warning for gitignored non-safe artifacts. `git.rs:1561` (`test_unexpected_ignored`) covers this path.
 
-7. [ ] **`ta draft view` "Ignored Artifacts" section**: If any artifacts were gitignored, show them. Unexpected-ignored artifacts highlighted in yellow: "This file is gitignored — it was NOT committed. Check if the .gitignore entry is correct."
+7. [x] **`ta draft view` "Ignored Artifacts" section**: `draft.rs:2503–2521` — section shown when `pkg.ignored_artifacts` non-empty; unexpected-ignored highlighted in yellow.
 
-8. [ ] **Never fail git add due to gitignored path**: If the filtered list is empty (all artifacts gitignored), complete with a warning: `"All artifacts were gitignored — nothing was committed."` — not an error.
+8. [x] **Never fail git add due to gitignored path**: `git.rs:1585` (`test_all_ignored_returns_empty_to_add`) — empty `to_add` list → apply completes with warning, not error.
 
-9. [ ] **Test coverage**:
-   - `test_restore_runs_for_non_macro_goal`: Non-macro goal with injected .mcp.json → restore runs, staging matches source before diff.
-   - `test_mcp_json_absent_from_draft_artifacts`: End-to-end: agent goal with .mcp.json injection → `ta draft build` artifact list does not include `.mcp.json`.
-   - `test_known_safe_dropped_silently`: Draft with `.mcp.json` artifact → drops from git add, no warning.
-   - `test_unexpected_ignored_warns`: Source file that is gitignored → warning printed, shown in draft view.
-   - `test_all_ignored_completes_with_warning`: All artifacts gitignored → apply completes with warning, no panic.
+9. [x] **Test coverage** (5 tests): `restore_runs_for_non_macro_goal`, `mcp_json_excluded_from_overlay_diff`, `test_known_safe_dropped_silently` (git.rs:1538), `test_unexpected_ignored` (git.rs:1561), `test_all_ignored_returns_empty_to_add` (git.rs:1585).
 
 #### Version: `0.13.17-alpha.5`
 
@@ -6464,19 +6455,67 @@ api_key_env = "OPENAI_API_KEY"   # checked but not required — binary handles i
 
 ---
 
+### v0.13.17.7 — Release Engineering, Community Hub Redesign & E2E Test Harness
+<!-- status: pending -->
+**Goal**: Close all orphaned v0.13.x items before the public release: ship vcs-perforce and USAGE.html in the release bundle; redesign Community Hub injection to be surgical (on-demand MCP calls rather than context pre-slurping); wire upstream contribution PRs on apply; add shell UX polish; and implement the full E2E test harness that v0.13.17.1 stubs left incomplete.
+
+#### 1. Release Bundle Engineering (from v0.13.17 item 11, v0.13.17.1 item 16, v0.13.12 item 9)
+
+1. [ ] **Release bundle includes vcs-perforce**: `release.yml` copies `plugins/vcs-perforce` (script + `vcs-perforce.toml` manifest) into the Linux tarball and macOS DMG under `plugins/vcs/`. Windows MSI: install to `%PROGRAMFILES%\TrustedAutonomy\plugins\vcs\` via a new WiX `<Directory>` entry. Add an integration test that the tarball contains `plugins/vcs/vcs-perforce`.
+2. [ ] **Bundle USAGE.html in MSI**: Generate `USAGE.html` from `docs/USAGE.md` during the release workflow (using `pandoc` or `pulldown-cmark`) and install to `%PROGRAMFILES%\TrustedAutonomy\docs\USAGE.html` via WiX template. Add a Start Menu shortcut "TA Documentation". (Orphaned from v0.13.12 → v0.13.15 → v0.13.16.)
+
+#### 2. Community Hub — Surgical MCP Design (user feedback: pre-slurping vs on-demand)
+
+**Problem**: `build_community_context_section()` pre-injects a guidance block into CLAUDE.md for every `auto_query = true` resource, even when the agent has no API integration work to do. As the context-hub grows, this block grows with it — unconditionally consuming context tokens. The MCP server is already registered; agents can query it at exactly the right moment using `community_search` / `community_get` tool calls.
+
+**Design change**: Remove automatic content injection. Replace with a single compact registry note listing available community tools. Agents decide when to use them.
+
+3. [ ] **Change `auto_query` semantics**: `auto_query = true` no longer causes CLAUDE.md injection. Instead it registers the resource in the compact tool-availability note (see item 4). Users who want full pre-injection can opt in with a new `pre_inject = true` field (default: `false`). Update `community-resources.toml` example and USAGE.md.
+4. [ ] **Compact community tools note**: Replace `build_community_context_section()` bulk output with a 3–5 line note in the injected CLAUDE.md: `# Community Knowledge (MCP)\nAvailable tools: community_search, community_get, community_annotate.\nResources: api-docs (api-integration), security-threats (security-intelligence). Use community_search before making API calls or reviewing security-sensitive code.` No per-resource guidance blocks. Token budget target: under 200 tokens regardless of registry size.
+5. [ ] **`pre_inject = true` opt-in**: When a resource sets `pre_inject = true`, inject its full how-to guidance block (the current behavior). Default: `false`. Document the tradeoff in USAGE.md — surgical (default) vs pre-loaded (opt-in for known-heavy integration work).
+6. [ ] **Upstream PR on `ta draft apply`**: Wire community staging artifacts (`resource_uri: "community://..."`) in the apply path. After applying code changes, if any `community://` artifacts are present in the draft, open a GitHub PR against the upstream resource's repo (e.g., `andrewyng/context-hub`) with the staged annotations/feedback/suggestions. Requires: detecting `community://` URIs in `DraftPackage.artifacts`, resolving the GitHub repo from the resource registry, and calling `gh pr create` or the GitHub API. Skip gracefully if no GitHub token or if resource is local-only.
+7. [ ] **Tests**: `test_community_section_compact_under_200_tokens` — inject with 5 resources, assert output < 200 tokens; `test_pre_inject_true_includes_guidance` — resource with `pre_inject = true` still gets full block; `test_auto_query_no_longer_injects_bulk` — `auto_query = true`, `pre_inject = false` → compact note only.
+
+#### 3. Shell UX Polish (from v0.13.15 → v0.13.16, orphaned)
+
+8. [ ] **Tab completion for community resource names**: In `ta community get`, `ta community sync`, and `ta community search`, add shell completion for resource names. Use `clap_complete` (already a transitive dep) to emit completions from the registry. Document in USAGE.md.
+9. [ ] **Status bar community badge**: In `ta shell` TUI, when a `community_search` or `community_get` MCP call is in flight, show `[community: searching...]` in the status bar. Clear on response. Uses the existing TUI status-bar update path.
+
+#### 4. E2E Test Harness (from v0.13.17 items 21–25)
+
+**Note**: v0.13.17.1 added `#[ignore]` stubs. This phase implements the actual tests. Requires daemon lifecycle management in tests (`DaemonHandle` start/stop helper).
+
+10. [ ] **`tests/e2e/` directory + `DaemonHandle`**: `tests/e2e/mod.rs` with a `DaemonHandle` struct that starts `ta-daemon` as a subprocess with a temp config dir, waits for the Unix socket, and kills on drop. Shared via `once_cell` for test parallelism. Gated `#[cfg(feature = "e2e")]` or `#[ignore]` to skip in CI.
+11. [ ] **`test_dependency_graph_e2e`**: Start daemon, submit a two-step workflow with `depends_on`, assert second step only starts after first completes and its output is visible in goal status.
+12. [ ] **`test_ollama_agent_mock_e2e`**: Start daemon + mock Ollama server (tiny HTTP server returning canned tool-call responses), run a goal with `agent = "ollama"`, assert draft is built and validation log is non-empty.
+13. [ ] **`test_draft_validation_log_e2e`**: Start daemon, run a minimal goal that produces a known artifact, call `draft build`, assert `DraftPackage.validation_log` entries match the configured `required_checks`.
+14. [ ] **Update USAGE.md pre-release checklist**: Add E2E step: `cargo test --features e2e -- --ignored --test-threads=1` (or `cargo test -- --ignored`). Describe what each E2E test exercises.
+
+#### Deferred items resolved
+
+- Item 1 (release bundle vcs-perforce): from v0.13.17 item 11 + v0.13.17.1 item 16
+- Item 2 (USAGE.html in MSI): orphaned from v0.13.12 item 9 → v0.13.15 → v0.13.16
+- Items 3–7 (community hub redesign): user-requested design change (surgical vs pre-slurp)
+- Items 8–9 (tab completion, status bar badge): orphaned from v0.13.15 → v0.13.16
+- Items 10–14 (E2E harness): from v0.13.17 items 21–25 (stubs added in v0.13.17.1)
+
+#### Version: `0.13.17-alpha.7`
+
+---
+
 > **⬇ PUBLIC BETA** — v0.13.x complete: runtime flexibility (local models, containers), enterprise governance (audit ledger, action governance, compliance), community ecosystem, and goal workflow automation. TA is ready for team and enterprise deployments.
 
-### Public Release: `public-alpha-v0.13.17.6`
+### Public Release: `public-alpha-v0.13.17.7`
 
-**Trigger**: After all v0.13.17.x phases (through v0.13.17.6) are `<!-- status: done -->`.
+**Trigger**: After all v0.13.17.x phases (through v0.13.17.7) are `<!-- status: done -->`.
 
 **Steps**:
-1. Pin binary version to `0.13.17-alpha.5` in `Cargo.toml` and `CLAUDE.md`
-2. Push tag `public-alpha-v0.13.17.5` → triggers release workflow
+1. Pin binary version to `0.13.17-alpha.7` in `Cargo.toml` and `CLAUDE.md`
+2. Push tag `public-alpha-v0.13.17.7` → triggers release workflow
 3. Verify assets: macOS DMG, Linux tarball, Windows MSI, checksums
-4. Re-bump to `0.13.17-alpha.6` (or `0.14.0-alpha` if v0.14.x begins) for ongoing development
+4. Re-bump to `0.13.17-alpha.8` (or `0.14.3-alpha` if v0.14.x work begins) for ongoing development
 
-**Note on version divergence**: Binary was at `0.14.2-alpha` when this milestone is reached (v0.14.0–v0.14.2 were implemented mid-v0.13.x series). The public release intentionally pins to `0.13.17.3` to signal the v0.13 series completion. See CLAUDE.md "Plan Phase Numbers vs Binary Semver" for rationale.
+**Note on version divergence**: Binary was at `0.14.2-alpha` when this milestone is reached (v0.14.0–v0.14.2 were implemented mid-v0.13.x series). The public release intentionally pins to `0.13.17.7` to signal the v0.13 series completion. See CLAUDE.md "Plan Phase Numbers vs Binary Semver" for rationale.
 
 ---
 
