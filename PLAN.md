@@ -7113,6 +7113,49 @@ In future GUI: native collapse via the same JSON structure.
 
 ---
 
+### v0.14.7.1 — Shell UX Fixes
+<!-- status: pending -->
+**Goal**: Fix a cluster of persistent TUI shell regressions: cursor-aware paste, agent working indicator clearing, scroll-to-bottom auto-tail resumption, keyboard scroll navigation on Mac, and an unusable scrollbar.
+
+#### Problems
+
+**1. Paste always forces to end — should be cursor-aware (regression from v0.12.2)**
+v0.12.2 implemented "force cursor to end before paste" as a blunt fix for the case where the user had scrolled up and forgotten where the cursor was. Desired behaviour:
+- Cursor **on the input line** → insert at cursor position.
+- Cursor **outside the input line** (output area, scrolled up) → move to end of input, then append.
+
+**2. "Agent is working" indicator persists after draft is built**
+v0.12.3 claimed this fixed but it regresses. `AgentOutputDone` fires before the draft build step; the indicator either re-enters a working state during build, or `active_tailing_goals` is not cleared when the goal moves to `PrReady`. The fix must watch `DraftBuilt` and all terminal goal states.
+
+**3. Auto-tail / scroll-to-bottom tracking is unreliable**
+When a user scrolls up to read history and then returns to the bottom, auto-tail does not reliably resume following new output. The "at bottom" detection threshold is likely off-by-one or uses an incorrect comparator, so the view stays anchored at the old scroll position rather than following new lines. Also: when a new goal starts streaming and the user is already at the bottom, the view sometimes does not auto-scroll for the first several lines.
+
+**4. Home/End (scroll-to-top / scroll-to-bottom) keyboard shortcuts do not work on Mac**
+The documented shortcuts (Shift+Home / Shift+End, or similar) do not fire on a standard Mac keyboard. Mac keyboards lack dedicated Home/End keys; the Terminal emulator sends different escape sequences. The shortcuts must be remapped to keys that exist on Mac: `Cmd+Up` → scroll to top, `Cmd+Down` → scroll to bottom (standard macOS scrolling convention). Also: `PgUp` / `PgDn` must be verified on Mac — they are available via Fn+Up / Fn+Down but the escape sequences sent by Terminal.app vs iTerm2 differ.
+
+**5. Scrollbar is display-only — cannot be grabbed or dragged**
+The right-margin scrollbar renders correctly (position indicator visible while scrolling) but is not interactive: the user cannot click it to jump to a position, nor drag the thumb to scroll. For a terminal TUI this means implementing mouse click/drag on the scrollbar widget area in crossterm's mouse event handler.
+
+#### Items
+
+1. [ ] **Cursor-aware paste in TUI shell**: Track input-focus state (cursor in input row) vs scroll-focus (cursor in output pane). Paste event: if input-focused → insert at cursor; if scroll-focused → move cursor to `input_buffer.len()`, then append. Update bracketed-paste handler. 4 tests: paste-at-start, paste-at-middle, paste-at-end, paste-while-scroll-focused.
+
+2. [ ] **Cursor-aware paste in web shell**: `shell.html` `paste` listener: if `<input>` is focused and cursor is not at end, insert at `selectionStart`. If input is not focused, set focus + append.
+
+3. [ ] **Fix working indicator not clearing after draft built**: Audit `GoalRunning` → `AgentOutputDone` → `DraftBuilt` → `GoalPrReady` sequence in `shell_tui.rs`. Clear "Agent is working" on `DraftBuilt` (or `GoalPrReady` at latest). Ensure `active_tailing_goals` is purged for the goal ID on any terminal state. Extend to `GoalFailed`, `GoalCancelled`, `GoalDenied`. Add test that simulates full sequence and asserts indicator absent after `DraftBuilt`.
+
+4. [ ] **Fix auto-tail scroll-to-bottom resumption**: Audit `is_at_bottom()` comparator in `shell_tui.rs` — ensure it accounts for the exact last-visible-line index, not `scroll_offset == 0` (which is wrong when output grows). When the user scrolls back to the bottom, set `auto_scroll = true` and immediately scroll to tail. When a new goal starts streaming and the view is already at the bottom, ensure the first line triggers auto-scroll. Add test: populate buffer, scroll up, scroll back to bottom, append line, assert view follows.
+
+5. [ ] **Mac keyboard scroll navigation**: Remap scroll-to-top / scroll-to-bottom to `Cmd+Up` and `Cmd+Down` (crossterm `KeyModifiers::SUPER`). Keep `Shift+Home` / `Shift+End` as aliases for non-Mac terminals. Verify `PgUp` / `PgDn` map correctly for both Terminal.app (`Fn+Up/Down` sends `\x1b[5~` / `\x1b[6~`) and iTerm2. Add a `[shell] scroll_keys` config table for overrides. Document Mac-specific shortcuts in USAGE.md.
+
+6. [ ] **Interactive scrollbar (click + drag)**: Enable mouse events in the TUI (`crossterm::event::EnableMouseCapture`). On `MouseEvent::Down` in the scrollbar column → jump scroll position proportionally. On `MouseEvent::Drag` in the scrollbar column → update scroll position continuously. Render the thumb with a distinct highlight style when hovered. Scrollbar area is the rightmost 1-column margin already present; widen to 2 columns for easier targeting.
+
+7. [ ] **Regression tests**: (a) Full event sequence `GoalRunning` → `AgentHeartbeat` × N → `AgentOutputDone` → `DraftBuilt` — assert indicator gone after `DraftBuilt`, assert `[draft ready]` hint visible. (b) Scroll-resumption: fill buffer, scroll up, return to bottom, append line — assert `auto_scroll = true` and view follows. (c) Scrollbar click: inject `MouseEvent::Down` in scrollbar column at position 50% — assert scroll offset jumps to ~midpoint.
+
+#### Version: `0.14.7.1-alpha`
+
+---
+
 ### v0.14.8 — Creator Access: Web UI, Creative Templates & Guided Onboarding
 <!-- status: pending -->
 **Goal**: Make TA usable by people who aren't CLI engineers — artists, writers, game designers, researchers. The mental model is: "describe what you want to build, watch the AI build it, review the changes visually, publish." No terminal required after initial install. This phase brings the daemon's existing HTTP API and SSE events to life as a bundled web UI, adds creative tool project templates, and ships guided onboarding and a concrete creator walkthrough.
