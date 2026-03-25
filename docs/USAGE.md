@@ -7552,9 +7552,9 @@ TA has a working end-to-end workflow: staging isolation, agent wrapping, draft r
 | v0.14.3 | Plan phase ordering enforcement (`ta plan status --check-order`) | Done |
 | v0.14.3.1 | CLAUDE.md context budget & injection trim (`ta context size`, windowed plan checklist) | Done |
 | v0.14.3.2 | Full MCP lazy context (zero-injection plan & community) | Pending |
-| v0.14.4 | Central daemon & multi-user deployment | Pending |
-| v0.14.5 | Enterprise identity & SSO integration | Pending |
-| v0.14.6 | Compliance-ready audit ledger (builds on v0.14.4 Central Daemon) | Pending |
+| v0.14.4 | Daemon extension points — plugin surface for transport, auth, and queue backends | Pending |
+| v0.14.5 | Reserved for Secure Autonomy | Pending |
+| v0.14.6 | Rich audit ledger — complete lifecycle coverage, hash chaining, pluggable storage backends | Pending |
 | v0.14.6.5 | Pluggable memory backends (ExternalMemoryAdapter, Supermemory plugin) | Pending |
 | v0.14.7 | Draft view polish — agent decision log, collapsible HTML | Pending |
 | v0.15.0 | VS Code extension | Pending |
