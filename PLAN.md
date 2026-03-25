@@ -6797,6 +6797,12 @@ The zero-injection mode is **opt-in** via config (`[workflow] context_mode = "mc
 
 7. [ ] **`.ta/plan_history.jsonl` dirtied after every `ta draft apply`**: `record_history()` in `plan.rs` appends a phase-transition entry when `draft apply` marks a phase done. The file is never staged or committed, leaving the working tree dirty after every apply. Decision: this is per-machine runtime state (timestamps differ per developer) — add `.ta/plan_history.jsonl` to the VCS ignore block written by `ta setup vcs` (both `.gitignore` and `.p4ignore`). Also add it to the shared-vs-local table in USAGE.md.
 
+8. [ ] **`--from-step` on a step with an existing Approved draft must retry the apply, not re-run the agent**: When `ta release run --from-step N` is used and there is already an Approved draft for step N, the pipeline should skip agent spawn entirely and jump directly to `ta draft apply`. This makes `--from-step` idempotent — a failed apply is fixed by resolving the root cause and re-running, not by regenerating the content from scratch.
+
+9. [ ] **New agent run for a step with an existing Approved draft must close the prior draft first**: If the user explicitly re-runs a step that has an existing Approved draft (e.g. to regenerate rather than retry), the pipeline must close the old Approved draft (with reason "superseded by re-run") before spawning the new agent. Without this, orphaned Approved drafts accumulate silently.
+
+10. [ ] **Apply failure message must offer two distinct recovery paths**: When `ta draft apply` fails inside the release pipeline, the error message must clearly distinguish: (a) "retry the apply" — root cause is fixed, run `ta draft apply <id>` directly; (b) "regenerate" — the draft content itself is wrong, run `ta release run --from-step N` (which will close this draft and re-run the agent). Currently the message says only "re-run `ta release run`" which triggers regeneration when the user likely just needs to retry the apply.
+
 #### Version: `0.14.3.3-alpha`
 
 ---
