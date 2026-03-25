@@ -4581,7 +4581,7 @@ Audit all `push_output`, `push_heartbeat`, and `agent_output.push` call sites to
 ---
 
 ### v0.12.8 — Alpha Bug-Fixes: Discord Notification Flood Hardening & Draft CLI Disconnect
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Close two remaining rough edges discovered during public-alpha testing that are annoying enough to fix before beta.
 
 #### Bug 1 — Discord notification flood on reconnect / daemon restart
