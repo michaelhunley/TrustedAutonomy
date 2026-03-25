@@ -6831,6 +6831,34 @@ The zero-injection mode is **opt-in** via config (`[workflow] context_mode = "mc
 
 ---
 
+### v0.14.3.6 — Supervisor Streaming & Activity-Aware Timeout
+<!-- status: pending -->
+**Goal**: Replace the wall-clock timeout in `spawn_with_timeout` with an activity-based deadline that resets on every new line of stdout received from the supervisor LLM. Emit supervisor heartbeat events to the daemon during long reviews so the shell shows progress and the daemon doesn't treat the goal as stale. Fix the timeout error message to surface what actually happened.
+
+#### Problem
+
+`spawn_with_timeout` in `supervisor_review.rs` polls `child.try_wait()` every 200ms and kills the process when the wall-clock deadline is reached. It does not read stdout until after the process exits — so it cannot distinguish between "LLM is actively streaming tokens" and "LLM has completely stalled." A large diff reviewed against a detailed constitution may stream steadily for 150–300s and still be killed at 120s.
+
+The correct mental model is: the supervisor is not hung if bytes are arriving. It is only stuck if *no bytes have arrived* for some inactivity window (e.g., 60s). The overall session duration should be uncapped (or capped at something generous like 600s) while the inactivity window stays tight.
+
+Additionally, the supervisor runs synchronously inside `ta draft build`, which is inside the agent goal lifecycle. The daemon has no visibility into supervisor progress — the shell shows nothing during the review, and the stale-goal watchdog will fire on long-running goals because no heartbeat is emitted.
+
+#### Items
+
+1. [ ] **Stream stdout in `spawn_with_timeout`**: Spawn a reader thread that drains the child stdout pipe line-by-line and sends each line over a `mpsc::channel` to the main poll loop. The main loop resets `last_activity = Instant::now()` on each received line. Kill the child only when `last_activity.elapsed() > inactivity_secs` (default 60s), not when wall-clock > timeout_secs. Add a separate `max_timeout_secs` (default 600s, configurable) as an absolute ceiling. Update the `[supervisor]` config section: `inactivity_secs = 60`, `max_timeout_secs = 600`.
+
+2. [ ] **Supervisor heartbeat to daemon**: During `spawn_with_timeout`, emit a `SupervisorHeartbeat` event (via a callback or channel passed in from the call site) every time `last_activity` is updated or every 10s, whichever comes first. The heartbeat carries `{ agent, elapsed_secs, lines_received }`. `ta draft build` (the call site) wires this to `GoalEventEmitter` so the daemon receives it and the stale-goal watchdog knows the goal is active.
+
+3. [ ] **TUI progress during supervisor review**: The shell TUI subscribes to `SupervisorHeartbeat` events and displays a live indicator during draft build: `Supervisor reviewing… ⠿ (47s, 12 stream events)`. Replaces the current silence during what can be a 2–5 minute review.
+
+4. [ ] **Improved timeout error message**: When inactivity timeout fires, the error message must include: how long the process ran total, how long since the last output line, and the configurable knobs. Example: `Supervisor stalled after 47s with no output (ran for 380s total) — increase [supervisor] inactivity_secs in workflow.toml (current: 60)`.
+
+5. [ ] **Tests**: Unit test for the streaming poll loop — inject a mock child that writes lines with delays, verify deadline resets; inject a mock that goes silent for > inactivity_secs, verify kill. Unit test for heartbeat emission cadence.
+
+#### Version: `0.14.3.6-alpha`
+
+---
+
 ### v0.14.4 — Central Daemon & Multi-User Deployment
 <!-- status: pending -->
 <!-- enterprise: yes — team and cloud deployment topology -->
