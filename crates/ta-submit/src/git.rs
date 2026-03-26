@@ -451,19 +451,95 @@ impl SourceAdapter for GitAdapter {
             ));
         }
 
-        let config = SubmitConfig::default(); // TODO: pass config through
-        let target_branch = &config.git.target_branch;
+        // Use self.config (not SubmitConfig::default()) so target_branch and
+        // other git settings from workflow.toml are respected.
+        let target_branch = &self.config.git.target_branch;
+        let head_branch = self.branch_name(goal, &self.config);
 
         // Build PR body
-        let body = self.build_pr_body(goal, pr, &config)?;
+        let body = self.build_pr_body(goal, pr, &self.config)?;
 
-        tracing::info!("GitAdapter: creating PR to {}", target_branch);
+        tracing::info!(
+            "GitAdapter: creating PR {} → {}",
+            head_branch,
+            target_branch
+        );
 
-        // Create PR using gh CLI
+        // Idempotency check: if a PR already exists for this branch (e.g., from
+        // a prior apply attempt that failed after push), return the existing URL
+        // rather than failing with "already exists".
+        let existing = Command::new("gh")
+            .args([
+                "pr",
+                "list",
+                "--head",
+                &head_branch,
+                "--state",
+                "open",
+                "--json",
+                "url,number",
+                "--limit",
+                "1",
+            ])
+            .current_dir(&self.work_dir)
+            .output();
+        if let Ok(out) = existing {
+            if out.status.success() {
+                let json = String::from_utf8_lossy(&out.stdout);
+                if let Ok(prs) = serde_json::from_str::<Vec<serde_json::Value>>(json.trim()) {
+                    if let Some(existing_pr) = prs.into_iter().next() {
+                        let url = existing_pr
+                            .get("url")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let number = existing_pr
+                            .get("number")
+                            .and_then(|v| v.as_u64())
+                            .map(|n| n.to_string())
+                            .unwrap_or_else(|| {
+                                url.split('/').next_back().unwrap_or("unknown").to_string()
+                            });
+                        if !url.is_empty() {
+                            tracing::info!(
+                                "GitAdapter: PR already exists for branch {}: {}",
+                                head_branch,
+                                url
+                            );
+                            // Still attempt auto-merge in case it wasn't enabled before.
+                            if self.config.git.auto_merge {
+                                let merge_strategy = &self.config.git.merge_strategy;
+                                let merge_flag = match merge_strategy.as_str() {
+                                    "rebase" => "--rebase",
+                                    "merge" => "--merge",
+                                    _ => "--squash",
+                                };
+                                let _ = Command::new("gh")
+                                    .args(["pr", "merge", "--auto", merge_flag, &number])
+                                    .current_dir(&self.work_dir)
+                                    .output();
+                            }
+                            return Ok(ReviewResult {
+                                review_url: url.clone(),
+                                review_id: number,
+                                message: format!("PR already open (reused): {}", url),
+                                metadata: [("pr_url".to_string(), url)].into_iter().collect(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        // Create PR using gh CLI. Pass --head explicitly so the correct branch
+        // is targeted even if the working tree HEAD has drifted (e.g. daemon
+        // restart between push and PR creation).
         let output = Command::new("gh")
             .args([
                 "pr",
                 "create",
+                "--head",
+                &head_branch,
                 "--base",
                 target_branch,
                 "--title",
