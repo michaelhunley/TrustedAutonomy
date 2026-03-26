@@ -316,9 +316,13 @@ impl SourceAdapter for GitAdapter {
                         );
                     }
                 }
-                // Still attempt to stage PLAN.md and then check if there's anything to commit.
+                // Still attempt to stage PLAN.md and plan_history.jsonl and then check if there's anything to commit.
                 if self.work_dir.join("PLAN.md").exists() {
                     let _ = self.git_cmd(&["add", "PLAN.md"]);
+                }
+                let plan_history = std::path::Path::new(".ta/plan_history.jsonl");
+                if self.work_dir.join(plan_history).exists() {
+                    let _ = self.git_cmd(&["add", ".ta/plan_history.jsonl"]);
                 }
                 return Ok(CommitResult {
                     commit_id: String::new(),
@@ -333,9 +337,13 @@ impl SourceAdapter for GitAdapter {
                 }
                 self.git_cmd(&add_args)?;
 
-                // Always stage PLAN.md if it exists and was modified.
+                // Always stage PLAN.md and plan_history.jsonl if they exist and were modified.
+                // plan_history.jsonl is updated by every apply and is project audit history.
                 if self.work_dir.join("PLAN.md").exists() {
                     let _ = self.git_cmd(&["add", "PLAN.md"]);
+                }
+                if self.work_dir.join(".ta/plan_history.jsonl").exists() {
+                    let _ = self.git_cmd(&["add", ".ta/plan_history.jsonl"]);
                 }
             }
             ignored
