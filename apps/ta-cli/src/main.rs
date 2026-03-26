@@ -263,12 +263,6 @@ enum Commands {
     /// System-wide health check: toolchain, agent binaries, daemon, plugins, .ta integrity.
     Doctor,
 
-    /// Inspect and manage staging workspaces (strategy, size, file counts).
-    Staging {
-        #[command(subcommand)]
-        command: commands::staging::StagingCommands,
-    },
-
     // ── ADVANCED ────────────────────────────────────────────────────────────
     /// Review and manage PR packages (deprecated: use 'draft').
     #[command(hide = true)]
@@ -829,7 +823,6 @@ fn main() -> anyhow::Result<()> {
         Commands::Sync => commands::sync::execute(&config),
         Commands::Verify { goal_id } => commands::verify::execute(&config, goal_id.as_deref()),
         Commands::Doctor => commands::goal::doctor(&config),
-        Commands::Staging { command } => commands::staging::execute(command, &config),
         Commands::Conversation { goal_id, json } => {
             commands::conversation::execute(&config, goal_id, *json)
         }

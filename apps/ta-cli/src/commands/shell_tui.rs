@@ -4387,7 +4387,6 @@ CLI Commands (prefix with 'ta' or use directly):
   audit <cmd>        Inspect the audit trail
   release <cmd>      Run the configurable release pipeline
   setup              Interactive setup wizard
-  staging <cmd>      Inspect staging workspaces (strategy, size, file counts)
   verify             Pre-draft verification checks
   config <cmd>       Inspect and validate configuration
 

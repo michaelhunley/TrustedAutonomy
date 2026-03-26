@@ -19,23 +19,19 @@ use std::time::Instant;
 
 use crate::copy_strategy::{copy_file_with_strategy, detect_strategy, CopyStat, CopyStrategy};
 
-/// Staging mode for workspace creation (v0.13.13, extended v0.14.3.4).
+/// Staging mode for workspace creation (v0.13.13).
 ///
 /// Passed to [`OverlayWorkspace::create_with_strategy`] by callers that read
 /// `WorkflowConfig::staging.strategy`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum OverlayStagingMode {
-    /// Probe the filesystem and select the best available strategy (default, v0.14.3.4).
+    /// Byte-for-byte copy (default — always works, may be slow for large workspaces).
     #[default]
-    Auto,
-    /// Byte-for-byte copy (always works, may be slow for large workspaces).
     Full,
     /// Symlink excluded directories instead of copying — fast for large workspaces.
     Smart,
     /// Windows ReFS CoW clone — auto-falls back to `Smart` on non-ReFS volumes.
     RefsCow,
-    /// Linux FUSE overlay — writes intercepted at VFS level; falls back to `Smart` if unavailable.
-    Fuse,
 }
 
 use crate::conflict::{Conflict, ConflictResolution, FileSnapshot, SourceSnapshot};
@@ -213,14 +209,13 @@ pub struct OverlayWorkspace {
 }
 
 impl OverlayWorkspace {
-    /// Create an overlay workspace using the auto-detected best strategy.
+    /// Create an overlay workspace using the default (full copy) strategy.
     ///
     /// Copies everything from `source_dir` to `staging_root/<goal_id>/`,
     /// excluding `.ta/` (always) and configured exclude patterns.
     ///
-    /// Automatically selects the most efficient staging strategy: ReFS-CoW on Windows
-    /// ReFS volumes, FUSE overlay on Linux if available, APFS/Btrfs COW reflink if
-    /// supported, Smart (symlinks) otherwise, Full as the final fallback.
+    /// On APFS (macOS) and Btrfs (Linux), uses copy-on-write (COW) cloning.
+    /// Falls back to full byte-for-byte copy on other filesystems.
     pub fn create(
         goal_id: impl Into<String>,
         source_dir: impl AsRef<Path>,
@@ -232,20 +227,17 @@ impl OverlayWorkspace {
             source_dir,
             staging_root,
             excludes,
-            OverlayStagingMode::Auto,
+            OverlayStagingMode::Full,
         )
     }
 
-    /// Create an overlay workspace with an explicit staging strategy (v0.13.13, v0.14.3.4).
+    /// Create an overlay workspace with an explicit staging strategy (v0.13.13).
     ///
-    /// - `Auto`: probe the filesystem and select the best available strategy (v0.14.3.4).
-    /// - `Full`: full copy (always works)
+    /// - `Full`: full copy (default, always works)
     /// - `Smart`: symlink excluded directories instead of copying — near-zero staging
     ///   cost for large ignored trees (e.g., `node_modules/`, `Content/`)
     /// - `RefsCow`: Windows ReFS Dev Drive instant CoW clone (falls back to `Smart`
     ///   on non-ReFS volumes)
-    /// - `Fuse`: Linux FUSE overlay — write-intercepting VFS (falls back to `Smart`
-    ///   if FUSE is not available)
     ///
     /// After staging, prints a size report to stdout:
     /// ```text
@@ -286,9 +278,7 @@ impl OverlayWorkspace {
         let mut stat = CopyStat::new(copy_strategy);
 
         match effective_mode {
-            OverlayStagingMode::Smart | OverlayStagingMode::Fuse => {
-                // Fuse falls back to Smart for directory layout; the FUSE overlay
-                // layer intercepts writes on top of the symlink tree.
+            OverlayStagingMode::Smart => {
                 copy_dir_recursive_smart(
                     &source_dir,
                     &staging_dir,
@@ -299,7 +289,7 @@ impl OverlayWorkspace {
                 )?;
             }
             _ => {
-                // Full, Auto-resolved-to-full, or RefsCow-resolved-to-full.
+                // Full or RefsCow-resolved-to-full.
                 copy_dir_recursive(
                     &source_dir,
                     &staging_dir,
@@ -400,10 +390,20 @@ impl OverlayWorkspace {
 
         // Collect all file paths from both directories.
         let mut staging_files = Vec::new();
-        walk_dir_relative(&self.staging_dir, &self.staging_dir, &mut staging_files)?;
+        walk_dir_relative(
+            &self.staging_dir,
+            &self.staging_dir,
+            &mut staging_files,
+            &self.excludes,
+        )?;
 
         let mut source_files = Vec::new();
-        walk_dir_relative(&self.source_dir, &self.source_dir, &mut source_files)?;
+        walk_dir_relative(
+            &self.source_dir,
+            &self.source_dir,
+            &mut source_files,
+            &self.excludes,
+        )?;
 
         // Check each staging file against source.
         for path in &staging_files {
@@ -852,15 +852,12 @@ impl OverlayWorkspace {
 
 /// Resolve the effective staging mode at workspace creation time.
 ///
-/// - `Auto`: probes the filesystem and selects the best available strategy.
-/// - `RefsCow`: auto-falls back to `Smart` when not on a Windows ReFS volume.
-/// - `Fuse`: auto-falls back to `Smart` when FUSE is not available on Linux.
-fn resolve_staging_mode(mode: OverlayStagingMode, staging_dir: &Path) -> OverlayStagingMode {
+/// `RefsCow` auto-falls back to `Smart` when not on a Windows ReFS volume.
+fn resolve_staging_mode(mode: OverlayStagingMode, _staging_dir: &Path) -> OverlayStagingMode {
     match mode {
-        OverlayStagingMode::Auto => detect_best_mode(staging_dir),
         OverlayStagingMode::RefsCow => {
             // Windows ReFS CoW support — probe and fall back to Smart on NTFS.
-            if is_refs_volume(staging_dir) {
+            if is_refs_volume(_staging_dir) {
                 OverlayStagingMode::RefsCow
             } else {
                 tracing::info!(
@@ -869,280 +866,26 @@ fn resolve_staging_mode(mode: OverlayStagingMode, staging_dir: &Path) -> Overlay
                 OverlayStagingMode::Smart
             }
         }
-        OverlayStagingMode::Fuse => {
-            if is_fuse_available() {
-                OverlayStagingMode::Fuse
-            } else {
-                tracing::info!(
-                    "fuse requested but FUSE is not available — falling back to smart staging"
-                );
-                OverlayStagingMode::Smart
-            }
-        }
         other => other,
     }
 }
 
-/// Auto-detect the best available staging mode for this platform and filesystem.
-///
-/// Priority order:
-/// 1. Windows ReFS CoW (if on a ReFS volume)
-/// 2. FUSE overlay (Linux only, if FUSE module is loaded and permitted)
-/// 3. Smart (symlink-based, always available on Unix/macOS)
-/// 4. Full (final fallback — always works)
-///
-/// Note: APFS/Btrfs COW is handled at the file-copy level by `detect_strategy()`
-/// in `copy_strategy.rs` — it applies transparently within Full or Smart modes.
-fn detect_best_mode(staging_dir: &Path) -> OverlayStagingMode {
-    #[cfg(windows)]
-    if is_refs_volume(staging_dir) {
-        tracing::info!("auto strategy: selected refs-cow (ReFS volume detected)");
-        return OverlayStagingMode::RefsCow;
-    }
-
-    #[cfg(target_os = "linux")]
-    if is_fuse_available() {
-        tracing::info!("auto strategy: selected fuse (FUSE overlay available)");
-        return OverlayStagingMode::Fuse;
-    }
-
-    // Smart is the preferred fallback: symlinks cost nothing for excluded trees.
-    tracing::info!("auto strategy: selected smart (default for this platform)");
-    let _ = staging_dir;
-    OverlayStagingMode::Smart
-}
-
 /// Probe whether the given path is on a Windows ReFS volume.
 ///
-/// Uses `GetVolumeInformationW` to check `FILE_SUPPORTS_BLOCK_REFCOUNTING`.
-/// On non-Windows platforms always returns false.
+/// On non-Windows platforms always returns false (no ReFS support).
 #[allow(unused_variables)]
 fn is_refs_volume(path: &Path) -> bool {
     #[cfg(windows)]
     {
-        windows::probe_refs_volume(path)
-    }
-    #[cfg(not(windows))]
-    {
+        // GetVolumeInformationW: if FILE_SUPPORTS_BLOCK_REFCOUNTING (0x08000000) is set, it's ReFS.
+        // For now this is a stub — full ReFS IOCTL support is deferred to a later phase.
+        // Return false until the full DeviceIoControl path is implemented.
         let _ = path;
         false
     }
-}
-
-/// Probe whether FUSE overlay is available on this Linux system.
-///
-/// Checks that:
-/// 1. The `fuse-overlayfs` or `fuse3` binary is on PATH, AND
-/// 2. `/proc/filesystems` contains "fuse" (kernel module is loaded)
-///
-/// On non-Linux platforms always returns false.
-fn is_fuse_available() -> bool {
-    #[cfg(target_os = "linux")]
-    {
-        linux_fuse::probe_fuse_available()
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        false
-    }
-}
-
-// ── Public doctor-facing probe helpers ─────────────────────────
-
-/// Public helper for `ta doctor`: probe whether a path is on a ReFS volume.
-///
-/// Used by the CLI to report which strategy would be auto-selected.
-#[allow(unused_variables)]
-pub fn probe_refs_volume_for_doctor(path: &std::path::Path) -> bool {
-    #[cfg(windows)]
-    {
-        windows::probe_refs_volume(path)
-    }
     #[cfg(not(windows))]
     {
-        let _ = path;
         false
-    }
-}
-
-/// Public helper for `ta doctor`: probe whether FUSE overlay is available.
-///
-/// Used by the CLI to report which strategy would be auto-selected.
-pub fn probe_fuse_for_doctor() -> bool {
-    is_fuse_available()
-}
-
-// ── Windows ReFS CoW ────────────────────────────────────────────
-
-#[cfg(windows)]
-mod windows {
-    use std::ffi::OsStr;
-    use std::os::windows::ffi::OsStrExt;
-    use std::path::Path;
-
-    // FILE_SUPPORTS_BLOCK_REFCOUNTING: the flag that indicates ReFS (or Dev Drive).
-    // DeviceIoControl/FSCTL_DUPLICATE_EXTENTS_TO_FILE requires this capability.
-    const FILE_SUPPORTS_BLOCK_REFCOUNTING: u32 = 0x0800_0000;
-
-    /// Probe whether `path` is on a Windows ReFS volume using `GetVolumeInformationW`.
-    ///
-    /// Returns `true` if the volume filesystem supports block refcounting (ReFS or Dev Drive).
-    pub fn probe_refs_volume(path: &Path) -> bool {
-        // Get the volume root (e.g., "C:\\") from the path.
-        let root = volume_root(path);
-        let root_wide: Vec<u16> = OsStr::new(&root).encode_wide().chain(Some(0)).collect();
-
-        let mut fs_flags: u32 = 0;
-
-        // SAFETY: All parameters are valid. `GetVolumeInformationW` is a well-documented
-        // Win32 API. We pass null for the name/serial/component-length out-params we
-        // don't need, which is explicitly documented as valid.
-        let ok = unsafe {
-            windows_sys::Win32::Storage::FileSystem::GetVolumeInformationW(
-                root_wide.as_ptr(),
-                std::ptr::null_mut(), // lpVolumeNameBuffer — not needed
-                0,
-                std::ptr::null_mut(), // lpVolumeSerialNumber — not needed
-                std::ptr::null_mut(), // lpMaximumComponentLength — not needed
-                &mut fs_flags,
-                std::ptr::null_mut(), // lpFileSystemNameBuffer — not needed
-                0,
-            )
-        };
-
-        if ok == 0 {
-            // GetVolumeInformationW failed — not ReFS.
-            return false;
-        }
-
-        (fs_flags & FILE_SUPPORTS_BLOCK_REFCOUNTING) != 0
-    }
-
-    /// Clone a file using `FSCTL_DUPLICATE_EXTENTS_TO_FILE` (ReFS CoW).
-    ///
-    /// Both files must be on the same ReFS volume. Returns `true` on success.
-    /// Falls back gracefully — callers should use `std::fs::copy` if this returns `false`.
-    pub fn clone_file_refs(src: &Path, dst: &Path) -> bool {
-        use std::os::windows::io::AsRawHandle;
-
-        let src_file = match std::fs::File::open(src) {
-            Ok(f) => f,
-            Err(_) => return false,
-        };
-        let dst_file = match std::fs::File::create(dst) {
-            Ok(f) => f,
-            Err(_) => return false,
-        };
-
-        let src_size = match src_file.metadata() {
-            Ok(m) => m.len(),
-            Err(_) => return false,
-        };
-
-        if src_size == 0 {
-            // Empty file: nothing to duplicate, but the create above already made it.
-            return true;
-        }
-
-        // DUPLICATE_EXTENTS_DATA layout (from Windows SDK):
-        //   FileHandle: HANDLE (8 bytes)
-        //   SourceFileOffset: LARGE_INTEGER (8 bytes)
-        //   TargetFileOffset: LARGE_INTEGER (8 bytes)
-        //   ByteCount: LARGE_INTEGER (8 bytes)
-        #[repr(C)]
-        struct DuplicateExtentsData {
-            file_handle: isize,
-            source_file_offset: i64,
-            target_file_offset: i64,
-            byte_count: i64,
-        }
-
-        // First, set the destination file size to match the source.
-        // FSCTL_DUPLICATE_EXTENTS_TO_FILE requires the destination to be pre-allocated.
-        let set_ok = unsafe {
-            windows_sys::Win32::Storage::FileSystem::SetEndOfFile(dst_file.as_raw_handle() as _)
-        };
-        if set_ok == 0 {
-            return false;
-        }
-
-        // Prepare the DUPLICATE_EXTENTS_DATA structure.
-        let params = DuplicateExtentsData {
-            file_handle: src_file.as_raw_handle() as isize,
-            source_file_offset: 0,
-            target_file_offset: 0,
-            byte_count: src_size as i64,
-        };
-
-        // FSCTL_DUPLICATE_EXTENTS_TO_FILE = 0x98344
-        const FSCTL_DUPLICATE_EXTENTS_TO_FILE: u32 = 0x0009_8344;
-
-        let mut bytes_returned: u32 = 0;
-
-        // SAFETY: DeviceIoControl with FSCTL_DUPLICATE_EXTENTS_TO_FILE is a standard
-        // ReFS CoW API. Parameters are correctly sized and aligned.
-        let ok = unsafe {
-            windows_sys::Win32::System::IO::DeviceIoControl(
-                dst_file.as_raw_handle() as _,
-                FSCTL_DUPLICATE_EXTENTS_TO_FILE,
-                &params as *const _ as *const _,
-                std::mem::size_of::<DuplicateExtentsData>() as u32,
-                std::ptr::null_mut(),
-                0,
-                &mut bytes_returned,
-                std::ptr::null_mut(),
-            )
-        };
-
-        ok != 0
-    }
-
-    /// Extract the volume root from a path (e.g., `C:\Users\...` → `C:\`).
-    fn volume_root(path: &Path) -> String {
-        // Use the first component if it looks like a drive letter.
-        if let Some(s) = path.to_str() {
-            if s.len() >= 3 && s.as_bytes()[1] == b':' {
-                return format!("{}\\", &s[..2]);
-            }
-        }
-        // Fallback: use the path as-is (UNC paths, etc.)
-        path.to_string_lossy().to_string()
-    }
-}
-
-// ── Linux FUSE overlay ──────────────────────────────────────────
-
-#[cfg(target_os = "linux")]
-mod linux_fuse {
-    /// Probe whether FUSE overlay is usable on this system.
-    ///
-    /// Checks:
-    /// 1. `/proc/filesystems` contains "fuse" (kernel module loaded)
-    /// 2. `fuse-overlayfs` or `fusermount3` is on PATH (userspace tools available)
-    pub fn probe_fuse_available() -> bool {
-        // Check kernel support.
-        let kernel_ok = std::fs::read_to_string("/proc/filesystems")
-            .map(|s| s.contains("fuse"))
-            .unwrap_or(false);
-
-        if !kernel_ok {
-            return false;
-        }
-
-        // Check userspace tool availability.
-        let has_fuse_overlayfs = std::process::Command::new("which")
-            .arg("fuse-overlayfs")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
-
-        let has_fusermount3 = std::process::Command::new("which")
-            .arg("fusermount3")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
-
-        has_fuse_overlayfs || has_fusermount3
     }
 }
 
@@ -1377,10 +1120,16 @@ fn estimate_dir_bytes(path: &Path, depth: u8) -> u64 {
 // ── Directory walking ───────────────────────────────────────────
 
 /// Walk a directory tree and collect relative file paths.
+///
+/// Directories that should be excluded (per `excludes`) are pruned before
+/// recursing — this is both more efficient and avoids Windows path-prefix
+/// edge cases that can arise when deeply nested paths are collected and then
+/// filtered after the fact.
 fn walk_dir_relative(
     dir: &Path,
     root: &Path,
     files: &mut Vec<String>,
+    excludes: &ExcludePatterns,
 ) -> Result<(), WorkspaceError> {
     if !dir.exists() {
         return Ok(());
@@ -1399,7 +1148,19 @@ fn walk_dir_relative(
         let path = entry.path();
 
         if path.is_dir() {
-            walk_dir_relative(&path, root, files)?;
+            // Prune excluded directories early (before recursing) using the
+            // directory name alone.  This covers both exclude-pattern dirs
+            // (e.g. "target/", "node_modules/") and infra dirs (e.g. ".ta").
+            // On Windows the normalised name is compared, so forward-slash and
+            // backslash paths are handled uniformly.
+            let dir_name = path
+                .file_name()
+                .map(|n| n.to_string_lossy())
+                .unwrap_or_default();
+            if excludes.should_exclude(&dir_name) {
+                continue;
+            }
+            walk_dir_relative(&path, root, files, excludes)?;
         } else if let Ok(rel) = path.strip_prefix(root) {
             // Normalize to forward slashes so URIs are consistent across platforms.
             let rel_str = rel.to_string_lossy().replace('\\', "/");
@@ -1758,17 +1519,15 @@ mod tests {
         .unwrap();
 
         let staging_root = TempDir::new().unwrap();
-        // Use Full mode explicitly to test that excluded dirs are absent (not symlinked).
-        let overlay = OverlayWorkspace::create_with_strategy(
+        let overlay = OverlayWorkspace::create(
             "goal-1",
             source.path(),
             staging_root.path(),
             ExcludePatterns::defaults(),
-            OverlayStagingMode::Full,
         )
         .unwrap();
 
-        // In Full mode, excluded target/ and node_modules/ should be absent (not copied).
+        // target/ and node_modules/ should NOT be copied.
         assert!(!overlay.staging_dir().join("target").exists());
         assert!(!overlay.staging_dir().join("node_modules").exists());
 
@@ -1794,24 +1553,13 @@ mod tests {
 
         let excludes = ExcludePatterns::load(source.path());
         let staging_root = TempDir::new().unwrap();
-        // Use Full mode to test exclusion vs inclusion behavior precisely.
-        let overlay = OverlayWorkspace::create_with_strategy(
-            "goal-1",
-            source.path(),
-            staging_root.path(),
-            excludes,
-            OverlayStagingMode::Full,
-        )
-        .unwrap();
+        let overlay =
+            OverlayWorkspace::create("goal-1", source.path(), staging_root.path(), excludes)
+                .unwrap();
 
         // .taignore says only "secret/" — so target/ IS copied, secret/ is NOT.
         assert!(overlay.staging_dir().join("target").exists());
-        // secret/ should be absent (not copied, not symlinked).
-        let secret_path = overlay.staging_dir().join("secret");
-        assert!(
-            !secret_path.exists() && secret_path.symlink_metadata().is_err(),
-            "secret/ should be excluded from staging"
-        );
+        assert!(!overlay.staging_dir().join("secret").exists());
         // .ta/ is always excluded regardless of .taignore.
         assert!(!overlay.staging_dir().join(".ta").exists());
     }
@@ -2051,20 +1799,17 @@ mod tests {
         excludes.merge(&[".git/".to_string()]);
 
         let staging_root = TempDir::new().unwrap();
-        // Use Full mode to test that .git/ is absent (not copied) in staging.
-        let overlay = OverlayWorkspace::create_with_strategy(
+        let overlay = OverlayWorkspace::create(
             "goal-git-exclude",
             source.path(),
             staging_root.path(),
             excludes,
-            OverlayStagingMode::Full,
         )
         .unwrap();
 
-        // .git/ must NOT be copied into staging (no symlink, no copy).
-        let git_staging = overlay.staging_dir().join(".git");
+        // .git/ must NOT be copied into staging.
         assert!(
-            !git_staging.exists() && git_staging.symlink_metadata().is_err(),
+            !overlay.staging_dir().join(".git").exists(),
             ".git/ should not be copied into staging"
         );
 
@@ -2220,9 +1965,8 @@ mod tests {
     }
 
     #[test]
-    fn staging_mode_default_is_auto() {
-        // Default changed from Full to Auto in v0.14.3.4.
-        assert_eq!(OverlayStagingMode::default(), OverlayStagingMode::Auto);
+    fn staging_mode_default_is_full() {
+        assert_eq!(OverlayStagingMode::default(), OverlayStagingMode::Full);
     }
 
     #[test]

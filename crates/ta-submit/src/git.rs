@@ -287,6 +287,9 @@ impl SourceAdapter for GitAdapter {
         // Using explicit paths avoids accidentally staging unrelated files.
         // Non-fs URIs (mailto://, drive://, etc.) are excluded — only real
         // filesystem paths are staged.
+        // Deduplicate: a follow-up draft or combined parent+child diff can
+        // produce the same path more than once in the artifact list.
+        let mut seen = std::collections::HashSet::new();
         let artifact_paths: Vec<String> = pr
             .changes
             .artifacts
@@ -296,6 +299,7 @@ impl SourceAdapter for GitAdapter {
                     .strip_prefix("fs://workspace/")
                     .map(|p| p.to_string())
             })
+            .filter(|p| seen.insert(p.clone()))
             .collect();
 
         // Filter out gitignored paths before calling git add (v0.13.17.5).
@@ -327,11 +331,37 @@ impl SourceAdapter for GitAdapter {
                     ignored_artifacts: ignored,
                 });
             } else {
-                let mut add_args = vec!["add"];
-                for p in &to_add {
-                    add_args.push(p.as_str());
+                // Split paths into those that exist on disk (git add) and those
+                // that don't (deleted by the agent — git rm --cached).
+                // This handles the case where an agent renames or deletes a file:
+                // the artifact is still in the draft package but is absent from
+                // the working tree after apply copies files from staging.
+                let (existing, deleted): (Vec<_>, Vec<_>) = to_add
+                    .iter()
+                    .partition(|p| self.work_dir.join(p.as_str()).exists());
+
+                if !existing.is_empty() {
+                    let mut add_args = vec!["add"];
+                    for p in &existing {
+                        add_args.push(p.as_str());
+                    }
+                    self.git_cmd(&add_args)?;
                 }
-                self.git_cmd(&add_args)?;
+
+                if !deleted.is_empty() {
+                    // --cached: remove from index only (file is already gone from disk).
+                    // --ignore-unmatch: don't error if the path was never tracked.
+                    let mut rm_args = vec!["rm", "--cached", "--ignore-unmatch"];
+                    for p in &deleted {
+                        rm_args.push(p.as_str());
+                    }
+                    tracing::info!(
+                        count = deleted.len(),
+                        paths = ?deleted,
+                        "git rm --cached for deleted artifacts"
+                    );
+                    self.git_cmd(&rm_args)?;
+                }
 
                 // Always stage PLAN.md if it exists and was modified.
                 if self.work_dir.join("PLAN.md").exists() {

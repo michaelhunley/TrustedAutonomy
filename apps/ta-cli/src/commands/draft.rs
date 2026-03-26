@@ -8156,34 +8156,13 @@ fn run() {
         let goal = &goals[0];
         let goal_id = goal.goal_run_id.to_string();
 
-        // Verify target/ was NOT physically copied to staging.
-        // In Smart/Auto mode, target/ may exist as a symlink (not a copy) — that's fine.
-        // In Full mode, target/ should simply be absent.
-        let staging_target = goal.workspace_path.join("target");
-        let is_excluded = !staging_target.exists()
-            || staging_target
-                .symlink_metadata()
-                .map(|m| m.file_type().is_symlink())
-                .unwrap_or(false);
-        assert!(
-            is_excluded,
-            "target/ should be excluded from staging (absent or symlinked, not a real copy). \
-            workspace_path={}",
-            goal.workspace_path.display()
-        );
+        // Verify target/ was NOT copied to staging.
+        assert!(!goal.workspace_path.join("target").exists());
 
         // Modify a real source file.
         std::fs::write(goal.workspace_path.join("README.md"), "# Updated\n").unwrap();
 
         // Also create target/ in staging to simulate agent building in staging.
-        // If target/ was symlinked, remove the symlink first so we can create a real dir.
-        if staging_target
-            .symlink_metadata()
-            .map(|m| m.file_type().is_symlink())
-            .unwrap_or(false)
-        {
-            std::fs::remove_file(&staging_target).unwrap();
-        }
         std::fs::create_dir_all(goal.workspace_path.join("target/debug/incremental")).unwrap();
         std::fs::write(
             goal.workspace_path
