@@ -528,14 +528,16 @@ fn start_goal(
         // diffs or overwritten on apply.
         let excludes = super::draft::load_excludes_with_adapter(&source_dir);
 
-        // v0.13.13: Use configured staging strategy (default: Full).
+        // v0.13.13: Use configured staging strategy (default: Auto).
         let workflow = ta_submit::config::WorkflowConfig::load_or_default(&source_dir);
         let staging_mode = match workflow.staging.strategy {
+            ta_submit::config::StagingStrategy::Auto => ta_workspace::OverlayStagingMode::Auto,
             ta_submit::config::StagingStrategy::Full => ta_workspace::OverlayStagingMode::Full,
             ta_submit::config::StagingStrategy::Smart => ta_workspace::OverlayStagingMode::Smart,
             ta_submit::config::StagingStrategy::RefsCow => {
                 ta_workspace::OverlayStagingMode::RefsCow
             }
+            ta_submit::config::StagingStrategy::Fuse => ta_workspace::OverlayStagingMode::Fuse,
         };
         let overlay = OverlayWorkspace::create_with_strategy(
             &goal_id,
@@ -2761,17 +2763,44 @@ pub fn doctor(config: &GatewayConfig) -> anyhow::Result<()> {
         print!("  Staging strategy... ");
         let workflow = ta_submit::config::WorkflowConfig::load_or_default(&config.workspace_root);
         let strategy = &workflow.staging.strategy;
+        let warn_above_mb = (workflow.staging.warn_above_gb * 1024.0) as u64;
         match strategy {
+            ta_submit::config::StagingStrategy::Auto => {
+                // Auto: probe and report what would be selected.
+                #[cfg(windows)]
+                let selected = if ta_workspace::overlay::probe_refs_volume_for_doctor(
+                    &config.workspace_root,
+                ) {
+                    "refs-cow (ReFS volume detected)"
+                } else {
+                    "smart (no ReFS volume)"
+                };
+                #[cfg(target_os = "linux")]
+                let selected = if ta_workspace::overlay::probe_fuse_for_doctor() {
+                    "fuse (FUSE available)"
+                } else {
+                    "smart (FUSE not available)"
+                };
+                #[cfg(not(any(windows, target_os = "linux")))]
+                let selected = "smart (macOS/other — APFS/Btrfs COW applied per-file)";
+                println!("auto → {} (ok)", selected);
+                pass += 1;
+            }
             ta_submit::config::StagingStrategy::Full => {
-                // Warn if workspace is large (>1 GB).
+                // Warn if workspace is large (> warn_above_gb).
                 let workspace_bytes = dir_size_bytes(&config.workspace_root);
                 let workspace_mb = workspace_bytes / (1024 * 1024);
-                if workspace_mb > 1024 {
+                if warn_above_mb > 0 && workspace_mb > warn_above_mb {
                     println!(
-                        "full (workspace is {} GB — consider strategy=smart with a .taignore)",
-                        workspace_mb / 1024
+                        "full (workspace is {:.1} GB — consider strategy=smart with a .taignore)",
+                        workspace_mb as f64 / 1024.0
                     );
-                    println!("    Add to .ta/workflow.toml: [staging]\\nstrategy = \"smart\"");
+                    println!("    Add to .ta/workflow.toml: [staging]");
+                    println!("    strategy = \"smart\"");
+                    println!(
+                        "    To raise the threshold: warn_above_gb = {}",
+                        (workspace_mb as f64 / 1024.0).ceil() as u64 + 1
+                    );
                     warn += 1;
                 } else {
                     println!("full (ok)");
@@ -2785,6 +2814,24 @@ pub fn doctor(config: &GatewayConfig) -> anyhow::Result<()> {
             ta_submit::config::StagingStrategy::RefsCow => {
                 println!("refs-cow (ok — Windows ReFS CoW)");
                 pass += 1;
+            }
+            ta_submit::config::StagingStrategy::Fuse => {
+                #[cfg(target_os = "linux")]
+                {
+                    if ta_workspace::overlay::probe_fuse_for_doctor() {
+                        println!("fuse (ok — FUSE overlay available)");
+                        pass += 1;
+                    } else {
+                        println!("fuse (FUSE not available — will fall back to smart)");
+                        println!("    Install fuse-overlayfs: sudo apt install fuse-overlayfs");
+                        warn += 1;
+                    }
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    println!("fuse (not supported on this platform — will fall back to smart)");
+                    warn += 1;
+                }
             }
         }
     }

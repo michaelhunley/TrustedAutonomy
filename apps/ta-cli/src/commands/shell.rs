@@ -581,6 +581,7 @@ fn default_completions() -> Vec<String> {
         "token",
         "dev",
         "setup",
+        "staging",
         "init",
         "agent",
         "adapter",

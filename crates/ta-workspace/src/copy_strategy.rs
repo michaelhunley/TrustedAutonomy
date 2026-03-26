@@ -29,6 +29,8 @@ pub enum CopyStrategy {
     ApfsClone,
     /// Btrfs reflink via `FICLONE` ioctl (Linux, zero-cost until write).
     BtrfsReflink,
+    /// Windows ReFS CoW via `FSCTL_DUPLICATE_EXTENTS_TO_FILE` (zero-cost until write).
+    RefsClone,
 }
 
 impl CopyStrategy {
@@ -38,12 +40,13 @@ impl CopyStrategy {
             Self::Full => "full copy",
             Self::ApfsClone => "APFS clone (COW)",
             Self::BtrfsReflink => "Btrfs reflink (COW)",
+            Self::RefsClone => "ReFS clone (COW)",
         }
     }
 
     /// Returns true if this strategy uses copy-on-write (zero I/O until first write).
     pub fn is_cow(&self) -> bool {
-        matches!(self, Self::ApfsClone | Self::BtrfsReflink)
+        matches!(self, Self::ApfsClone | Self::BtrfsReflink | Self::RefsClone)
     }
 }
 
@@ -123,6 +126,11 @@ impl CopyStat {
 ///
 /// Called once per workspace creation — negligible overhead.
 pub fn detect_strategy(_staging_dir: &Path) -> CopyStrategy {
+    #[cfg(windows)]
+    if probe_refs_clone(_staging_dir) {
+        return CopyStrategy::RefsClone;
+    }
+
     #[cfg(target_os = "macos")]
     if probe_apfs_clone(_staging_dir) {
         return CopyStrategy::ApfsClone;
@@ -145,6 +153,15 @@ pub fn copy_file_with_strategy(src: &Path, dst: &Path, strategy: CopyStrategy) -
     match strategy {
         CopyStrategy::Full => std::fs::copy(src, dst),
 
+        #[cfg(windows)]
+        CopyStrategy::RefsClone => {
+            if windows::clone_file(src, dst) {
+                Ok(0) // COW: no data copied
+            } else {
+                std::fs::copy(src, dst)
+            }
+        }
+
         #[cfg(target_os = "macos")]
         CopyStrategy::ApfsClone => {
             if macos::clone_file(src, dst) {
@@ -166,6 +183,100 @@ pub fn copy_file_with_strategy(src: &Path, dst: &Path, strategy: CopyStrategy) -
         #[allow(unreachable_patterns)]
         _ => std::fs::copy(src, dst),
     }
+}
+
+// ── Windows ReFS clone (FSCTL_DUPLICATE_EXTENTS_TO_FILE) ────────
+
+#[cfg(windows)]
+mod windows {
+    use std::path::Path;
+
+    /// Clone a file using `FSCTL_DUPLICATE_EXTENTS_TO_FILE` (ReFS CoW).
+    /// Returns true on success; callers fall back to `std::fs::copy` on failure.
+    pub fn clone_file(src: &Path, dst: &Path) -> bool {
+        // Delegate to overlay.rs windows module implementation.
+        // Duplicate the logic here for use in the file-copy path.
+        use std::os::windows::io::AsRawHandle;
+
+        let src_file = match std::fs::File::open(src) {
+            Ok(f) => f,
+            Err(_) => return false,
+        };
+        let dst_file = match std::fs::File::create(dst) {
+            Ok(f) => f,
+            Err(_) => return false,
+        };
+
+        let src_size = match src_file.metadata() {
+            Ok(m) => m.len(),
+            Err(_) => return false,
+        };
+
+        if src_size == 0 {
+            return true; // Empty file already created above.
+        }
+
+        #[repr(C)]
+        struct DuplicateExtentsData {
+            file_handle: isize,
+            source_file_offset: i64,
+            target_file_offset: i64,
+            byte_count: i64,
+        }
+
+        // Pre-allocate the destination file.
+        let set_ok = unsafe {
+            windows_sys::Win32::Storage::FileSystem::SetEndOfFile(dst_file.as_raw_handle() as _)
+        };
+        if set_ok == 0 {
+            return false;
+        }
+
+        let params = DuplicateExtentsData {
+            file_handle: src_file.as_raw_handle() as isize,
+            source_file_offset: 0,
+            target_file_offset: 0,
+            byte_count: src_size as i64,
+        };
+
+        const FSCTL_DUPLICATE_EXTENTS_TO_FILE: u32 = 0x0009_8344;
+        let mut bytes_returned: u32 = 0;
+
+        // SAFETY: standard ReFS CoW API with correctly sized parameters.
+        let ok = unsafe {
+            windows_sys::Win32::System::IO::DeviceIoControl(
+                dst_file.as_raw_handle() as _,
+                FSCTL_DUPLICATE_EXTENTS_TO_FILE,
+                &params as *const _ as *const _,
+                std::mem::size_of::<DuplicateExtentsData>() as u32,
+                std::ptr::null_mut(),
+                0,
+                &mut bytes_returned,
+                std::ptr::null_mut(),
+            )
+        };
+
+        ok != 0
+    }
+}
+
+/// Probe whether ReFS clone works in `dir`.
+#[cfg(windows)]
+fn probe_refs_clone(dir: &Path) -> bool {
+    let pid = std::process::id();
+    let src = dir.join(format!(".ta-probe-{}-src", pid));
+    let dst = dir.join(format!(".ta-probe-{}-dst", pid));
+
+    if std::fs::write(&src, b"ta-cow-probe").is_err() {
+        return false;
+    }
+
+    let result = windows::clone_file(&src, &dst);
+
+    let _ = std::fs::remove_file(&src);
+    let _ = std::fs::remove_file(&dst);
+
+    result
 }
 
 // ── macOS APFS clone (clonefile(2)) ────────────────────────────
@@ -302,6 +413,19 @@ mod tests {
             assert!(CopyStrategy::BtrfsReflink.description().contains("Btrfs"));
             assert!(CopyStrategy::BtrfsReflink.is_cow());
         }
+
+        #[cfg(windows)]
+        {
+            assert!(CopyStrategy::RefsClone.description().contains("ReFS"));
+            assert!(CopyStrategy::RefsClone.is_cow());
+        }
+    }
+
+    #[test]
+    fn refs_clone_is_cow() {
+        // RefsClone must always report as COW regardless of platform.
+        assert!(CopyStrategy::RefsClone.is_cow());
+        assert!(CopyStrategy::RefsClone.description().contains("ReFS"));
     }
 
     #[test]

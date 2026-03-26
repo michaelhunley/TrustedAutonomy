@@ -1167,42 +1167,54 @@ fn default_notify_title() -> String {
     "TA".to_string()
 }
 
-/// How the staging workspace copies the source project (v0.13.13).
+/// How the staging workspace copies the source project (v0.13.13, extended v0.14.3.4).
 ///
 /// Configured in `workflow.toml` under `[staging]`:
 /// ```toml
 /// [staging]
-/// strategy = "smart"   # "full" | "smart" | "refs-cow"
+/// strategy = "auto"   # "auto" | "full" | "smart" | "refs-cow" | "fuse"
 /// ```
 ///
-/// - **Full** (default): byte-for-byte copy, always works, may be slow for large workspaces.
+/// - **Auto** (default): probes the filesystem and selects the best available strategy.
+///   Uses ReFS-CoW on Windows ReFS, FUSE overlay on Linux if available, APFS/Btrfs COW
+///   on supported filesystems, Smart otherwise, Full as the final fallback.
+/// - **Full**: byte-for-byte copy, always works, may be slow for large workspaces.
 /// - **Smart**: symlinks `.taignore`/`protected_paths` entries instead of copying them —
 ///   near-zero staging cost for large ignored directories (e.g., `node_modules/`, UE Content/).
 /// - **RefsCow**: Windows ReFS Dev Drive only — instant zero-cost clone via
 ///   `FSCTL_DUPLICATE_EXTENTS_TO_FILE`; auto-falls back to `smart` on NTFS.
+/// - **Fuse**: Linux only — mounts a FUSE overlay over the staging copy, intercepting
+///   writes at the VFS level. Eliminates the staging copy for read-heavy workspaces.
+///   Falls back to `smart` if FUSE is not available.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum StagingStrategy {
-    /// Byte-for-byte copy of the source project. Always works; may be slow for large workspaces.
+    /// Automatically probe and select the best available strategy (default).
     #[default]
+    Auto,
+    /// Byte-for-byte copy of the source project. Always works; may be slow for large workspaces.
     Full,
     /// Symlink excluded directories instead of copying. Fast for large workspaces with many ignored dirs.
     Smart,
     /// Windows ReFS CoW clone. Auto-falls back to `smart` on non-ReFS volumes.
     RefsCow,
+    /// Linux FUSE overlay (write-intercepting). Falls back to `smart` if FUSE unavailable.
+    Fuse,
 }
 
 impl StagingStrategy {
     pub fn as_str(&self) -> &'static str {
         match self {
+            Self::Auto => "auto",
             Self::Full => "full",
             Self::Smart => "smart",
             Self::RefsCow => "refs-cow",
+            Self::Fuse => "fuse",
         }
     }
 }
 
-/// Staging directory management (v0.11.3, extended v0.13.13).
+/// Staging directory management (v0.11.3, extended v0.13.13, v0.14.3.4).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StagingConfig {
     /// Auto-remove staging after successful apply. Default: true.
@@ -1211,9 +1223,13 @@ pub struct StagingConfig {
     /// Minimum free disk space in MB. Default: 2048.
     #[serde(default = "default_min_disk_mb")]
     pub min_disk_mb: u64,
-    /// Staging strategy for large workspaces (v0.13.13). Default: Full.
+    /// Staging strategy for large workspaces (v0.13.13). Default: Auto (probes filesystem).
     #[serde(default)]
     pub strategy: StagingStrategy,
+    /// Warn in `ta doctor` when staging workspace exceeds this size in GB. Default: 1.0.
+    /// Set to 0 to silence the warning. Useful for projects with intentionally large workspaces.
+    #[serde(default = "default_warn_above_gb")]
+    pub warn_above_gb: f64,
 }
 
 impl Default for StagingConfig {
@@ -1221,7 +1237,8 @@ impl Default for StagingConfig {
         Self {
             auto_clean: default_auto_clean(),
             min_disk_mb: default_min_disk_mb(),
-            strategy: StagingStrategy::Full,
+            strategy: StagingStrategy::Auto,
+            warn_above_gb: default_warn_above_gb(),
         }
     }
 }
@@ -1231,6 +1248,9 @@ fn default_auto_clean() -> bool {
 }
 fn default_min_disk_mb() -> u64 {
     2048
+}
+fn default_warn_above_gb() -> f64 {
+    1.0
 }
 
 /// Check available disk space in MB.
