@@ -2568,9 +2568,30 @@ pub fn execute(
             // Collect changed files from staging dir via change_summary.json or file walk.
             let changed_files: Vec<String> = collect_changed_files(&staging_path);
 
+            // For follow-up goals the supervisor must understand the full parent chain
+            // scope, not just the immediate goal title. Build an extended objective
+            // that includes the parent context so the supervisor doesn't incorrectly
+            // flag files that are in scope for the broader chain.
+            let supervisor_objective: String = if let Some(ctx) = follow_up_context.as_deref() {
+                // Extract just the parent goal titles from the follow-up context block
+                // (first non-empty line is the parent description).
+                let parent_summary: String = ctx
+                    .lines()
+                    .filter(|l| !l.trim().is_empty())
+                    .take(3)
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                format!(
+                    "{}\n\nContext — this is a follow-up goal. Parent chain scope:\n{}",
+                    title, parent_summary
+                )
+            } else {
+                title.to_string()
+            };
+
             // Dispatch to the appropriate supervisor agent (builtin/claude-code/codex/ollama/manifest).
             let review = ta_changeset::invoke_supervisor_agent(
-                title,
+                &supervisor_objective,
                 &changed_files,
                 constitution_text.as_deref(),
                 &run_config,

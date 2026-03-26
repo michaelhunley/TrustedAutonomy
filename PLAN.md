@@ -6885,6 +6885,34 @@ All 6 items implemented. New tests:
 
 ---
 
+### v0.14.3.6 — PR Creation Reliability & Supervisor Scope Chain
+<!-- status: pending -->
+**Goal**: Fix two regressions blocking reliable `ta draft apply` end-to-end: (1) PR creation silently breaks when `open_review()` ignores `self.config`, and (2) the supervisor scope verdict incorrectly flags follow-up goals that legitimately touch files from the parent chain scope.
+
+#### Root causes
+
+**PR creation bug** (`crates/ta-submit/src/git.rs`)
+- `open_review()` called `SubmitConfig::default()` instead of `self.config`, so `target_branch`, `auto_merge`, and other git settings from `workflow.toml` were always ignored.
+- No `--head <branch>` flag in `gh pr create` — if the working tree HEAD drifts between push and review (e.g. daemon restart), the wrong branch is targeted.
+- No idempotency: if a prior apply attempt succeeded at push but failed at PR creation, the next `ta draft apply` call fails again with "PR already exists" rather than returning the existing PR URL.
+
+**Supervisor scope bug** (`apps/ta-cli/src/commands/run.rs`)
+- The supervisor prompt receives only the immediate goal title as the objective. For follow-up goals, the parent chain scope is not included, causing the supervisor to flag files that are legitimately in scope from the parent goal.
+
+#### Items
+
+1. [x] **Fix `open_review()` to use `self.config`**: Remove `SubmitConfig::default()` call; use `self.config` for `target_branch` and all git settings.
+
+2. [x] **Add `--head <branch>` to `gh pr create`**: Derive branch name from `self.branch_name(goal, &self.config)` and pass explicitly so the correct branch is always targeted.
+
+3. [x] **PR idempotency — return existing PR**: Before `gh pr create`, check `gh pr list --head <branch> --state open`. If an open PR exists, return it (with its URL and number) rather than failing. Also attempt `gh pr merge --auto` if configured. This makes `ta draft apply` idempotent for the PR creation step.
+
+4. [x] **Supervisor follow-up scope context**: When a follow-up context exists (`follow_up_context`), prepend a parent chain summary to the supervisor objective so the supervisor understands that the broader scope includes the parent goal(s). Prevents false-positive scope drift warnings on follow-up goals that correctly touch parent-phase files.
+
+#### Version: `0.14.3.6-alpha` (sub-phase of v0.14.3)
+
+---
+
 ### v0.14.4 — Central Daemon & Multi-User Deployment
 <!-- status: pending -->
 <!-- enterprise: yes — team and cloud deployment topology -->
@@ -7221,6 +7249,10 @@ The right-margin scrollbar renders correctly (position indicator visible while s
 6. [ ] **Interactive scrollbar (click + drag)**: Enable mouse events in the TUI (`crossterm::event::EnableMouseCapture`). On `MouseEvent::Down` in the scrollbar column → jump scroll position proportionally. On `MouseEvent::Drag` in the scrollbar column → update scroll position continuously. Render the thumb with a distinct highlight style when hovered. Scrollbar area is the rightmost 1-column margin already present; widen to 2 columns for easier targeting.
 
 7. [ ] **Regression tests**: (a) Full event sequence `GoalRunning` → `AgentHeartbeat` × N → `AgentOutputDone` → `DraftBuilt` — assert indicator gone after `DraftBuilt`, assert `[draft ready]` hint visible. (b) Scroll-resumption: fill buffer, scroll up, return to bottom, append line — assert `auto_scroll = true` and view follows. (c) Scrollbar click: inject `MouseEvent::Down` in scrollbar column at position 50% — assert scroll offset jumps to ~midpoint.
+
+8. [ ] **Paste when cursor not in prompt window**: When the TUI cursor is in the output area (user scrolled away and the visual cursor is on the output pane, not the `ta>` input line), `Ctrl+V` / bracketed paste currently does nothing. Fix: any paste event when the input is not visually focused should still append to the end of the current prompt input and snap scroll to bottom. Distinguish from "cursor in input line" (insert at cursor position) vs "cursor in output pane" (append to end). Root cause: `Ctrl+V` raw-character path inserts at cursor position; when cursor is on output area row, the byte offset calculation produces an out-of-bounds or zero insert. The `Event::Paste` (bracketed paste) path correctly forces cursor to `input.len()` first; the raw `KeyEvent::Char` path does not.
+
+9. [ ] **Scroll lock when new output arrives below prompt line**: When the user is at the bottom of the output (`scroll_offset == 0`) and the agent streams new output that is rendered below the `ta>` prompt line (i.e., the prompt is not the last visual line), the view does not snap to follow the new output. Root cause: `auto_scroll_if_near_bottom()` uses `scroll_offset <= 3` threshold which works when output is above the prompt, but does not account for new content that pushes below the prompt's visual row. Fix: when rendering, track the prompt's visual row vs. the terminal height; if new output would be placed at or below the prompt row and `scroll_offset == 0`, force scroll to bottom so the prompt re-anchors at the bottom of the visible area.
 
 #### Version: `0.14.7.1-alpha`
 
