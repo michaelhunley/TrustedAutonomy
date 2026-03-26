@@ -390,10 +390,20 @@ impl OverlayWorkspace {
 
         // Collect all file paths from both directories.
         let mut staging_files = Vec::new();
-        walk_dir_relative(&self.staging_dir, &self.staging_dir, &mut staging_files)?;
+        walk_dir_relative(
+            &self.staging_dir,
+            &self.staging_dir,
+            &mut staging_files,
+            &self.excludes,
+        )?;
 
         let mut source_files = Vec::new();
-        walk_dir_relative(&self.source_dir, &self.source_dir, &mut source_files)?;
+        walk_dir_relative(
+            &self.source_dir,
+            &self.source_dir,
+            &mut source_files,
+            &self.excludes,
+        )?;
 
         // Check each staging file against source.
         for path in &staging_files {
@@ -1110,10 +1120,16 @@ fn estimate_dir_bytes(path: &Path, depth: u8) -> u64 {
 // ── Directory walking ───────────────────────────────────────────
 
 /// Walk a directory tree and collect relative file paths.
+///
+/// Directories that should be excluded (per `excludes`) are pruned before
+/// recursing — this is both more efficient and avoids Windows path-prefix
+/// edge cases that can arise when deeply nested paths are collected and then
+/// filtered after the fact.
 fn walk_dir_relative(
     dir: &Path,
     root: &Path,
     files: &mut Vec<String>,
+    excludes: &ExcludePatterns,
 ) -> Result<(), WorkspaceError> {
     if !dir.exists() {
         return Ok(());
@@ -1132,7 +1148,19 @@ fn walk_dir_relative(
         let path = entry.path();
 
         if path.is_dir() {
-            walk_dir_relative(&path, root, files)?;
+            // Prune excluded directories early (before recursing) using the
+            // directory name alone.  This covers both exclude-pattern dirs
+            // (e.g. "target/", "node_modules/") and infra dirs (e.g. ".ta").
+            // On Windows the normalised name is compared, so forward-slash and
+            // backslash paths are handled uniformly.
+            let dir_name = path
+                .file_name()
+                .map(|n| n.to_string_lossy())
+                .unwrap_or_default();
+            if excludes.should_exclude(&dir_name) {
+                continue;
+            }
+            walk_dir_relative(&path, root, files, excludes)?;
         } else if let Ok(rel) = path.strip_prefix(root) {
             // Normalize to forward slashes so URIs are consistent across platforms.
             let rel_str = rel.to_string_lossy().replace('\\', "/");
