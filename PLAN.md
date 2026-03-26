@@ -6833,6 +6833,37 @@ All 6 items implemented. New tests:
 
 ---
 
+### v0.14.3.6 — PR Creation Reliability & Submit Path Integration Test
+<!-- status: pending -->
+**Goal**: Harden `ta draft apply`'s VCS submit path so that PR creation is idempotent, always uses `workflow.toml` config, and is covered by an integration test that prevents silent regressions.
+
+**Background**: `open_review()` in `crates/ta-submit/src/git.rs` used `SubmitConfig::default()` (adapter="none") instead of `self.config`, silently skipping PR creation and ignoring `target_branch`. Fixed in PR #279. This phase adds the integration test that would have caught it.
+
+#### Items
+
+1. ✅ **`open_review()` uses `self.config`**: `target_branch`, `head_branch` (derived from `self.config`), `merge_strategy`, `auto_merge` all sourced from `self.config`. Landed in PR #279.
+
+2. ✅ **`--head <branch>` on `gh pr create`**: Explicit `--head` prevents the PR using a drifted `git HEAD`. Landed in PR #279.
+
+3. ✅ **Idempotency check before `gh pr create`**: `gh pr list --head <branch> --state open` — returns existing PR URL+number rather than failing with "already exists". Landed in PR #279.
+
+4. ✅ **Supervisor parent-chain context**: `invoke_supervisor_agent()` receives parent goal scope summary for follow-up goals, eliminating false-positive scope-drift verdicts. Landed in PR #280.
+
+5. [ ] **Integration test: `open_review` uses `workflow.toml` config** — Fast follow after PR #279 merges. In `crates/ta-submit/tests/`, create a test that:
+   - Writes a temp `workflow.toml` with `target_branch = "staging"` and `adapter = "git"`
+   - Calls `GitAdapter::open_review()` with a mock goal
+   - Asserts the `gh pr create` invocation includes `--base staging` and `--head <expected-branch>`
+   - Asserts idempotency: a second `open_review()` call with the branch already existing returns the existing PR without error
+   Use `mockall` or a `gh` stub script (per the VCS plugin test pattern) to avoid real network calls.
+
+6. [ ] **Constitution rule: no `::default()` in submit paths** — Add to `.ta/constitution.yaml`:
+   - Rule: any `SubmitConfig::default()` usage in `crates/ta-submit/` is a blocking finding
+   - Checklist gate for `crates/ta-submit/src/git.rs` changes: "Does every VCS operation function use `self.config` or an explicitly passed config, not a constructed default?"
+
+#### Version: `0.14.3.6-alpha` (sub-phase of v0.14.3)
+
+---
+
 ### v0.14.4 — Central Daemon & Multi-User Deployment
 <!-- status: pending -->
 <!-- enterprise: yes — team and cloud deployment topology -->
