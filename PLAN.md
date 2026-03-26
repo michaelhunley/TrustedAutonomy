@@ -6793,6 +6793,29 @@ The zero-injection mode is **opt-in** via config (`[workflow] context_mode = "mc
 
 ---
 
+### v0.14.3.5 — Draft Apply Reliability: Follow-up Baseline Tracking
+<!-- status: pending -->
+**Goal**: Make `ta draft apply` and follow-up draft apply 100% reliable for three known failure modes. Two immediate fixes landed in v0.14.3.4 (dedup + git-rm); this phase closes the root-cause systemic issue.
+
+**Background**: `ta draft apply` has three failure modes:
+1. **Duplicate artifact paths** — parent+child chain diffs produce the same path twice → `git add` receives duplicates. Fixed in v0.14.3.4 with a `HashSet` deduplication pass.
+2. **Deleted/renamed files** — agent renames or deletes a file; path stays in artifact list but is absent from disk → `git add <missing>` fails fatally. Fixed in v0.14.3.4: partition by `exists()`, route missing paths to `git rm --cached --ignore-unmatch`.
+3. **Follow-up staging drift** — follow-up staging is created before the parent draft is applied. Shared files (PLAN.md, unchanged source files) are at the parent-goal version in staging, but the source tree (branch HEAD) is newer. `apply_copy` diffs staging vs source and copies staging's older version, reverting in-between changes (e.g., checked PLAN.md items become unchecked). **Not yet fixed.**
+
+#### Items
+
+1. [ ] **`DraftPackage.baseline_artifacts`**: Add an optional `baseline_artifacts: Vec<ResourceUri>` field to `DraftPackage` (and its serialized form in `.ta/drafts/<id>/`). When a follow-up draft is built, populate `baseline_artifacts` with all URIs from the parent draft's artifact list. This tells apply which files are "inherited from parent — already applied" vs "genuinely new/changed in this follow-up goal."
+
+2. [ ] **Apply skip logic for baseline-only artifacts**: During `apply_copy`, if a file is in `baseline_artifacts` but NOT in the follow-up diff (staging matches source for that path after baseline subtraction), skip it entirely — neither copy nor delete. This prevents staging drift from reverting in-between commits.
+
+3. [ ] **PLAN.md revert guard**: Independently of baseline tracking, add a specific guard: when applying a follow-up draft, if the source PLAN.md is newer than the staging PLAN.md (modified time or content hash), keep the source version and log a warning. PLAN.md is always managed by `ta draft apply`'s own update logic; an agent should not be able to revert it through the copy step.
+
+4. [ ] **Integration test: follow-up apply does not revert parent changes**: Create a test that (1) starts a goal and applies it (updating a tracked file F), (2) starts a follow-up on the same staging, (3) applies the follow-up — verifies that file F keeps the applied content from step 1, not the staging content from step 2.
+
+#### Version: `0.14.3.5-alpha` (sub-phase of v0.14.3)
+
+---
+
 ### v0.14.4 — Central Daemon & Multi-User Deployment
 <!-- status: pending -->
 <!-- enterprise: yes — team and cloud deployment topology -->
