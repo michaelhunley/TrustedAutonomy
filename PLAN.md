@@ -6793,24 +6793,45 @@ The zero-injection mode is **opt-in** via config (`[workflow] context_mode = "mc
 
 ---
 
-### v0.14.3.5 — Draft Apply Reliability: Follow-up Baseline Tracking
+### v0.14.3.5 — Draft Apply Reliability: Conflict Merging & Follow-up Baseline
 <!-- status: pending -->
-**Goal**: Make `ta draft apply` and follow-up draft apply 100% reliable for three known failure modes. Two immediate fixes landed in v0.14.3.4 (dedup + git-rm); this phase closes the root-cause systemic issue.
+**Goal**: Make `ta draft apply` fully automatic for all non-ambiguous cases and reliable for follow-up chains — requiring human intervention only when the same lines of the same file were genuinely changed by both the agent and an external commit.
 
-**Background**: `ta draft apply` has three failure modes:
-1. **Duplicate artifact paths** — parent+child chain diffs produce the same path twice → `git add` receives duplicates. Fixed in v0.14.3.4 with a `HashSet` deduplication pass.
-2. **Deleted/renamed files** — agent renames or deletes a file; path stays in artifact list but is absent from disk → `git add <missing>` fails fatally. Fixed in v0.14.3.4: partition by `exists()`, route missing paths to `git rm --cached --ignore-unmatch`.
-3. **Follow-up staging drift** — follow-up staging is created before the parent draft is applied. Shared files (PLAN.md, unchanged source files) are at the parent-goal version in staging, but the source tree (branch HEAD) is newer. `apply_copy` diffs staging vs source and copies staging's older version, reverting in-between changes (e.g., checked PLAN.md items become unchecked). **Not yet fixed.**
+**Background**: `ta draft apply` has known failure modes and a merge gap:
+1. **Duplicate artifact paths** — Fixed in v0.14.3.4 (`HashSet` dedup).
+2. **Deleted/renamed files** — Fixed in v0.14.3.4 (`git rm --cached --ignore-unmatch`).
+3. **Follow-up staging drift** — Follow-up staging predates the parent commit. Shared files (PLAN.md, USAGE.md, unchanged source) are at the pre-parent version in staging; apply copies them back, reverting in-between changes. **Not yet fixed.**
+4. **No line-level merge** — When the agent and an external commit both touch the same file, TA aborts rather than attempting a three-way hunk merge. Even non-overlapping edits to different lines of the same file trigger abort. **Not yet fixed.**
 
 #### Items
 
-1. [ ] **`DraftPackage.baseline_artifacts`**: Add an optional `baseline_artifacts: Vec<ResourceUri>` field to `DraftPackage` (and its serialized form in `.ta/drafts/<id>/`). When a follow-up draft is built, populate `baseline_artifacts` with all URIs from the parent draft's artifact list. This tells apply which files are "inherited from parent — already applied" vs "genuinely new/changed in this follow-up goal."
+1. [ ] **`DraftPackage.baseline_artifacts`**: Add an optional `baseline_artifacts: Vec<ResourceUri>` field to `DraftPackage`. When a follow-up draft is built, populate it with all URIs from the parent draft's artifact list. Apply uses this to distinguish "inherited from parent — already applied" from "genuinely changed in this follow-up."
 
-2. [ ] **Apply skip logic for baseline-only artifacts**: During `apply_copy`, if a file is in `baseline_artifacts` but NOT in the follow-up diff (staging matches source for that path after baseline subtraction), skip it entirely — neither copy nor delete. This prevents staging drift from reverting in-between commits.
+2. [ ] **Apply skip logic for baseline-only artifacts**: During `apply_copy`, if a file is in `baseline_artifacts` but unchanged relative to current source (staging hash == source hash), skip it — neither copy nor delete. Prevents staging drift from reverting files the parent already settled.
 
-3. [ ] **PLAN.md revert guard**: Independently of baseline tracking, add a specific guard: when applying a follow-up draft, if the source PLAN.md is newer than the staging PLAN.md (modified time or content hash), keep the source version and log a warning. PLAN.md is always managed by `ta draft apply`'s own update logic; an agent should not be able to revert it through the copy step.
+3. [ ] **Protected-file revert guard**: For files TA manages directly (PLAN.md, USAGE.md), if the source version is strictly newer than staging (content hash differs and source mtime > staging mtime), keep the source version and log a warning rather than overwriting. These files are managed by `ta draft apply`'s own update logic — agents should not be able to revert them via the copy step.
 
-4. [ ] **Integration test: follow-up apply does not revert parent changes**: Create a test that (1) starts a goal and applies it (updating a tracked file F), (2) starts a follow-up on the same staging, (3) applies the follow-up — verifies that file F keeps the applied content from step 1, not the staging content from step 2.
+4. [ ] **Three-way content merge for true conflicts**: When a file has a true conflict (agent changed it AND source changed it since the snapshot), attempt a three-way merge before escalating to human:
+   - `base` = snapshot content (captured at goal start)
+   - `ours` = staging content (agent's version)
+   - `theirs` = current source content (external changes)
+   - Use `git merge-file --quiet` (or the `diffy` Rust crate for a pure-Rust path). If the merge is clean (no conflict markers), write the merged result and continue. If conflict markers remain, fall through to the configured `conflict_resolution` strategy (abort by default).
+   - Log each auto-merged file: `ℹ️  auto-merged: src/foo.rs (3 hunks, 0 conflicts)`
+
+5. [ ] **Per-file conflict policy in `workflow.toml`**: Add a `[apply.conflict_policy]` table so teams can set file-level resolution rules once rather than passing flags each time:
+   ```toml
+   [apply.conflict_policy]
+   default = "merge"            # attempt 3-way merge first
+   "PLAN.md" = "keep-source"   # TA owns this — never let agents overwrite
+   "Cargo.lock" = "keep-source" # auto-generated, always regenerated by cargo
+   "docs/**" = "merge"         # docs are usually safe to 3-way merge
+   "src/**" = "abort"          # code conflicts need human review
+   ```
+   `ta setup vcs` pre-populates sensible defaults based on project type (Rust gets `Cargo.lock = "keep-source"`, etc.). Non-technical users get a working config without needing to understand conflict resolution semantics.
+
+6. [ ] **Integration test: follow-up apply does not revert parent changes**: Test that (1) applies a parent goal (updates file F), (2) applies a follow-up on the same staging — verifies F keeps the parent's content, not the staging's older version.
+
+7. [ ] **Integration test: three-way merge on non-overlapping edits**: Test that two non-overlapping edits to the same file (agent adds lines at top, external commit adds lines at bottom) auto-merge cleanly without human intervention.
 
 #### Version: `0.14.3.5-alpha` (sub-phase of v0.14.3)
 
