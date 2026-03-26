@@ -57,12 +57,6 @@ result-*
 #   .ta/pr_packages/  — draft artifact packages
 #   *.local.toml      — personal local overrides (never committed)
 #
-# SMART MERGE NOTE:
-#   release-history.json and plan_history.jsonl are append-only by convention.
-#   Git's line-merge handles concurrent appends cleanly (no special merge driver needed
-#   for a single-developer project). For team aggregation, Central Daemon (v0.14.4)
-#   will provide server-side merge across contributors.
-# ──────────────────────────────────────────────────────────────────────────────
 
 # Ephemeral state — never committed
 .ta/staging/
@@ -86,6 +80,7 @@ result-*
 .ta/events.jsonl
 .ta/events/
 .ta/goal-history.jsonl
+.ta/plan_history.jsonl
 .ta/memory.rvf
 .ta/memory/
 .ta/velocity-stats.jsonl
