@@ -1,0 +1,25 @@
+# .taignore — Files to exclude from TA staging diffs for Blender addons
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Blender temporary files
+*.blend1
+*.blend2
+
+# Distribution
+dist/
+*.zip
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Editor metadata
+.vscode/
+.idea/
+*.swp

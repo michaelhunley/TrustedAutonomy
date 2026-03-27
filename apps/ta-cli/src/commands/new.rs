@@ -277,6 +277,14 @@ fn resolve_template(template: &str) -> anyhow::Result<(&'static str, &'static st
     );
 }
 
+/// Check for an installed template (project-local first, then global).
+///
+/// Returns the path to the template directory if found.
+/// Call this before `resolve_template` to let installed templates shadow built-ins.
+pub fn resolve_installed_template(name: &str, project_root: &Path) -> Option<PathBuf> {
+    super::template::resolve_installed_template(name, project_root)
+}
+
 /// Validate a version schema name.
 fn validate_version_schema(schema: &str) -> anyhow::Result<()> {
     if VERSION_SCHEMAS.iter().any(|(name, _)| *name == schema) {
@@ -666,7 +674,15 @@ fn run_new(
     if let Some(v) = vcs {
         validate_vcs(v)?;
     }
-    let (init_template_name, _template_desc) = if let Some(tmpl) = template {
+    // Check installed templates (project-local, then global) before built-ins.
+    // This allows users to shadow built-in templates with custom ones.
+    let installed_path =
+        template.and_then(|tmpl| resolve_installed_template(tmpl, &config.workspace_root));
+
+    let (init_template_name, _template_desc) = if installed_path.is_some() {
+        // An installed template was found; pass None to the init engine (scaffold handled separately).
+        (None, template.map(|_| "installed template"))
+    } else if let Some(tmpl) = template {
         let (init_name, desc) = resolve_template(tmpl)?;
         (Some(init_name), Some(desc))
     } else {

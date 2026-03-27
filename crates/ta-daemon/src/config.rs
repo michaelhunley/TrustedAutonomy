@@ -585,6 +585,9 @@ pub struct ServerConfig {
     /// Optional TLS private key path for the HTTP API server (v0.14.4).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tls_key_path: Option<String>,
+    /// Serve the web UI at /ui (default: true). Set to false to disable the dashboard (v0.14.8).
+    #[serde(default = "default_true")]
+    pub web_ui: bool,
 }
 
 impl Default for ServerConfig {
@@ -596,6 +599,7 @@ impl Default for ServerConfig {
             socket_path: None,
             tls_cert_path: None,
             tls_key_path: None,
+            web_ui: true,
         }
     }
 }

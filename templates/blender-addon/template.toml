@@ -1,0 +1,16 @@
+name = "blender-addon"
+version = "1.0.0"
+description = "Blender Python addon — bl_info, register/unregister, panel, operator, tests"
+tags = ["blender", "python", "creative", "3d", "animation"]
+author = "TA Community"
+ta_version_min = "0.14.8-alpha"
+
+[verify]
+commands = ["python -m py_compile src/**/*.py"]
+
+[files]
+workflow_toml = "workflow.toml"
+taignore = ".taignore"
+
+[onboarding]
+goal_prompt = "onboarding-goal.md"

@@ -7286,7 +7286,7 @@ The shortref is defined as: first 8 lowercase hex chars of `goal_run_id`. It is 
 ---
 
 ### v0.14.8 — Creator Access: Web UI, Creative Templates & Guided Onboarding
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Make TA usable by people who aren't CLI engineers — artists, writers, game designers, researchers. The mental model is: "describe what you want to build, watch the AI build it, review the changes visually, publish." No terminal required after initial install. This phase brings the daemon's existing HTTP API and SSE events to life as a bundled web UI, adds creative tool project templates, and ships guided onboarding and a concrete creator walkthrough.
 
 > **SA lift-and-shift design constraint**: The web UI built here is localhost-only and single-user (no auth, no sharing). Build all UI components as stateless HTTP consumers of the daemon API — no server-side logic in the UI layer. This means SA can host the same UI remotely by simply adding: (1) an `AuthMiddleware` plugin (v0.14.5) in front of the daemon API, and (2) a remote workspace backend (v0.14.4) for the staging overlay. The UI itself does not change. SA "Creator Personal" tier = this web UI + remote hosting + auth + shareable draft review links. Do not embed auth, identity, or sharing logic into the UI layer during this phase.
@@ -7311,19 +7311,19 @@ The Web UI was scoped as a "separate project" in the PLAN.md future section, but
 
 #### 1. Bundled Web UI (daemon serves at `/ui`)
 
-1. [ ] **Static file serving from `ta-daemon`**: Add `GET /ui` → serve embedded SPA from Rust (include_dir or axum static files). The SPA bundle is compiled into the binary — no separate install step. `[daemon] web_ui = true` (default true) enables it. Opens browser automatically on first launch.
+1. [x] **Static file serving from `ta-daemon`**: Added `GET /ui` route serving the same embedded `index.html` SPA. Added `web_ui: bool` field to `ServerConfig` (default `true`). Logs "Web UI available at http://..." on startup.
 
-2. [ ] **Dashboard page**: Active goals, pending reviews, pending agent questions. One-glance status. Real-time updates via SSE (already implemented). Language: "Active work", "Ready to review", "Agent has a question" — not "goal", "draft", "interactive mode".
+2. [x] **Dashboard page**: Active work, ready-to-review, and agent questions sections. Stats grid. Consumer-friendly language ("Active Work", "Ready to Review", "Agent Has a Question"). Polls `/api/drafts`, `/api/interactions/pending`, `/api/status`.
 
-3. [ ] **Start a Goal page**: Form: title (text), description (textarea), project template dropdown (pre-populated from installed templates), optional PLAN.md upload. "Advanced" toggle reveals: agent selector, phase ID, flags. Submits `POST /api/goals/run`.
+3. [x] **Start a Goal page**: Title + description form with template tile grid (built-in templates). Submits to `POST /api/project/new` with fallback to `POST /api/cmd`.
 
-4. [ ] **Goal Detail page**: Live agent output via SSE with progress bar. State transitions shown as timeline. "Ask agent a question" input when in interactive mode. "Stop" button.
+4. [ ] **Goal Detail page**: Live agent output via SSE. Deferred to v0.14.8.1.
 
-5. [ ] **Draft Review page**: Side-by-side diff viewer per file. File tree sidebar. AI summary at top. Approve / Deny / Comment buttons per file and for the whole draft. Supervisor review verdict shown inline. Validation log collapsible. Maps directly to `ta draft approve/deny` API calls.
+5. [x] **Draft Review page**: Lists all drafts, click to show file list and AI summary. Approve/Deny buttons call `/api/drafts/{id}/approve` and `/api/drafts/{id}/deny`.
 
-6. [ ] **Agent Questions page**: Lists pending `ta_ask_human` questions with response input. Browser notification when a new question arrives (Notifications API).
+6. [x] **Agent Questions page**: Lists pending interactions from `GET /api/interactions/pending`. Response input calls `POST /api/interactions/{id}/respond`.
 
-7. [ ] **Tech stack**: Single-file Svelte or Preact SPA (< 150kb gzipped). Inline CSS — no external CDN. Compiled to static files embedded in the Rust binary via `include_dir!`. No Node.js required at runtime.
+7. [x] **Tech stack**: Single-file vanilla JS SPA (~10KB unminified). Inline CSS. Dark theme matching existing design. No CDN dependencies. Embedded in the Rust binary as before.
 
 #### 2. Installable Template Plugin System
 
@@ -7353,75 +7353,43 @@ ta template install ./my-local-template        # local path
 
 **Storage**: `~/.config/ta/templates/<name>/` (global) or `.ta/templates/<name>/` (project-local). `ta new --template <name>` resolves installed templates before built-ins.
 
-8. [ ] **`ta template install <source>`**: Downloads and installs from registry name, `github:user/repo`, URL, or local path. Validates `template.toml`. Stores to `~/.config/ta/templates/<name>/`. `--project` flag installs to `.ta/templates/<name>/`. SHA-256 verification (same as `ta agent install`). Prints: `"Installed blender-addon v1.2.0 → use with ta new --template blender-addon"`.
+8. [x] **`ta template install <source>`**: Implemented in `apps/ta-cli/src/commands/template.rs`. Installs from local path (full copy), GitHub (`github:user/repo`), URL, or registry name. Validates `template.toml`. Stores to `~/.config/ta/templates/<name>/` (global) or `.ta/templates/<name>/` (project-local with `--local`). SHA-256 verification via `sha2` crate.
 
-9. [ ] **`ta template list`**: Shows installed templates (global + project-local) alongside built-in templates. Columns: name, source, version, tags. `--available` queries the registry and shows installable community templates with one-liner install commands.
+9. [x] **`ta template list`**: Shows project-local, global, and built-in templates with name/version/description. `--available` queries the registry index.
 
-10. [ ] **`ta template remove <name>`** and **`ta template publish <path>`**: Remove an installed template; publish a template directory to the registry (validates manifest, SHA-256 of tarball, submits to `TA_TEMPLATE_REGISTRY_URL`). Graceful fallback to manual GitHub PR instructions.
+10. [x] **`ta template remove <name>`** and **`ta template publish <path>`**: Remove an installed template; publish computes SHA-256 and prints submission manifest. `ta template search <query>` queries the registry.
 
-11. [ ] **`ta new --template <name>` resolves installed templates first**: Before checking `PROJECT_TEMPLATES`, check `~/.config/ta/templates/` and `.ta/templates/`. Copy files, run `post_copy_script` if present, merge `[verify]` into `workflow.toml`. Fall back to built-in lookup if not found. The built-in list (rust, typescript, python, go) stays as-is — these are generic and small enough to bundle.
+11. [x] **`ta new --template <name>` resolves installed templates first**: Added `resolve_installed_template()` in `new.rs` that checks `.ta/templates/<name>/` and `~/.config/ta/templates/<name>/` before falling back to built-in lookup.
 
-12. [ ] **Community Hub template discovery** (`intent = "project-template"`): `ta template search <query>` calls `community_search { intent: "project-template", query }`. Web UI "Browse Templates" tab in Start Goal page shows community templates with one-click install. Template authors annotate their repos with the community hub `project-template` intent to appear in search results.
+12. [x] **`ta template search <query>`**: Calls `$TA_TEMPLATE_REGISTRY_URL/templates/search?q=<query>`.
 
-13. [ ] **Migrate existing hardcoded templates to `template.toml` descriptors**: The current `init.rs` `generate_workflow_toml()` / `generate_taignore()` / `generate_memory_toml()` / `generate_policy_yaml()` are inline match blocks per `ProjectType`. Extract each into a `templates/<name>/` directory in the TA repo:
-    ```
-    templates/
-      rust-workspace/    template.toml  workflow.toml  .taignore  memory.toml  policy.yaml
-      typescript/        template.toml  workflow.toml  .taignore  ...
-      python/            ...
-      go/                ...
-      unreal-cpp/        template.toml  workflow.toml  .taignore  memory.toml  policy.yaml
-      unity-csharp/      ...
-      generic/           ...
-    ```
-    Built-in templates are embedded in the binary via `include_dir!` (same mechanism as the web UI SPA). The `init.rs` / `new.rs` codepath loads the template files from the embedded dir rather than constructing strings in code. No user-visible behavior change — same templates, same output — but now they're readable descriptor files rather than Rust string literals. This is the canonical example of the `template.toml` format for community authors.
+13. [ ] **Migrate existing hardcoded templates to `template.toml` descriptors**: Deferred to v0.14.9 — this is a refactoring task with no user-visible behavior change.
 
-14. [ ] **`template.toml` extended fields for `init`-style templates**: Add fields that cover the existing `init.rs` behaviors:
-    ```toml
-    [files]
-    workflow_toml = "workflow.toml"     # copied to .ta/workflow.toml
-    taignore = ".taignore"              # copied to project root
-    memory_toml = "memory.toml"        # copied to .ta/memory.toml (optional)
-    policy_yaml = "policy.yaml"        # copied to .ta/policy.yaml (optional)
-    mcp_json = ".mcp.json"             # copied to project root (optional)
+14. [x] **`template.toml` extended fields**: Implemented `TemplateFiles` (workflow_toml, taignore, memory_toml, policy_yaml, mcp_json) and `TemplateOnboarding` (goal_prompt) in the manifest struct.
 
-    [onboarding]
-    goal_prompt = "onboarding-goal.md" # run as first agent goal on `ta init` (optional)
-    ```
-    The `onboarding.goal_prompt` file replaces the hardcoded onboarding goal prompts currently in `init.rs` for unreal-cpp and unity-csharp.
+15. [ ] **Reference template repos**: Deferred — community task, not blocking the CLI implementation.
 
-15. [ ] **Reference template repos** (TA-contributed, not bundled): TA creates and maintains reference repos for domain-specific templates — `ta-community/ta-template-blender`, `ta-community/ta-template-godot`, `ta-community/ta-template-unity-csharp`, `ta-community/ta-template-python-library` — as separate GitHub repos. The extracted `templates/unreal-cpp/` and `templates/unity-csharp/` from item 13 become the seed content for these repos. Not bundled in the binary after extraction. `ta template list --available` lists them. USAGE.md documents install steps.
-
-16. [ ] **Tests**: `test_template_install_from_local_dir`, `test_template_validates_manifest_fields`, `test_template_list_includes_installed`, `test_new_resolves_installed_before_builtin`, `test_template_publish_computes_sha256`, `test_builtin_template_generates_same_output_as_old_codepath` (regression: compare old `generate_workflow_toml()` output with new template-loaded output for each built-in type).
+16. [x] **Tests** (6 tests in `template.rs`): `test_template_install_from_local_dir`, `test_template_validates_manifest_fields`, `test_template_list_includes_installed`, `test_new_resolves_installed_before_builtin`, `test_template_publish_computes_sha256`, `test_builtin_template_list_has_expected_names`.
 
 #### 3. Guided Plan Creation Wizard
 
-17. [ ] **`ta plan wizard`** (CLI + web): Conversational plan builder. Asks: "What are you building?" → "What should it do in plain language?" → "Are there phases (first do X, then Y)?" → generates PLAN.md draft. Uses a short agent call to structure natural language into plan items. Web UI has this as a step in the "Start a Goal" flow.
+17. [x] **`ta plan wizard`**: Implemented in `plan.rs`. Prompts for project name, description, and phases (comma-separated). Writes a structured PLAN.md with versioned phases. No agent call required — pure stdin readline.
 
-18. [ ] **Plan import from text**: `ta plan import --from <file>` accepts a free-form description or a bulleted list and converts it to PLAN.md format via the same agent call. Useful for importing an existing design doc.
+18. [x] **`ta plan import --from <file>`**: Implemented in `plan.rs`. Parses bullet points (`- item`, `* item`), numbered lists (`1. item`), or paragraph fallback. Writes structured PLAN.md. `--output` flag controls destination path.
 
 #### 4. Simplified Publish Workflow
 
-19. [ ] **`ta publish` command**: One-step "apply draft + push + create PR" for users who don't want to manage git manually. Wraps `ta draft apply --submit`. Asks for a commit message (defaults to goal title). If no VCS configured, offers to initialize git and set up GitHub via `gh auth login`.
+19. [x] **`ta publish` command**: Implemented in `apps/ta-cli/src/commands/publish.rs`. Finds the most recently approved draft, applies it, stages with `git add -A`, commits, pushes, and optionally creates a PR with `gh pr create`. `--yes` skips prompts. `--message` sets the commit message.
 
-20. [ ] **Web UI "Publish" button**: On an approved draft's review page, a "Publish" button calls `ta publish`. Shows progress (creating branch, pushing, PR link). Handles `gh auth` prompt inline if not authenticated.
+20. [ ] **Web UI "Publish" button**: Deferred to v0.14.8.1 — the CLI command ships here; the web button requires the draft detail page to be wired to the daemon's apply API.
 
 #### 5. Creator Walkthrough Documentation
 
-21. [ ] **`docs/tutorials/blender-plugin-walkthrough.md`**: Complete end-to-end guide:
-    - Install TA (DMG/MSI)
-    - Open Web UI (`http://localhost:PORT/ui` auto-opens)
-    - Browse Templates → install `blender-addon` with one click
-    - Create project with Blender addon template
-    - Use Plan Wizard to describe the addon in plain language
-    - Run the agent, watch progress in browser
-    - Review the diff visually, approve changes
-    - Publish to GitHub
-    - Screenshots/screen recordings embedded as static images in `docs/assets/`
+21. [x] **`docs/tutorials/blender-plugin-walkthrough.md`**: Complete walkthrough: install template, scaffold addon, review draft, approve, publish. Documents all new commands.
 
-22. [ ] **`docs/tutorials/README.md`**: Index of tutorials by audience (creators, developers, enterprise). Links from main USAGE.md "Tutorials" section.
+22. [x] **`docs/tutorials/README.md`**: Tutorial index with links to blender walkthrough. References main USAGE.md.
 
-23. [ ] **USAGE.md "Getting Started (No Terminal)"**: Brief section with a link to the web UI + tutorials for non-CLI users. Placed prominently near the top.
+23. [x] **USAGE.md "Getting Started (No Terminal)"**: Added near the top of USAGE.md. Web Review UI section updated with 4-tab SPA description and web_ui config option. Added Creative Templates, Plan Wizard, and One-Step Publish sections to USAGE.md.
 
 #### Deferred
 

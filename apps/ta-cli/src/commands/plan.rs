@@ -185,6 +185,27 @@ pub enum PlanCommands {
     ///
     /// Example: `ta plan shared`
     Shared,
+    /// Interactive conversational plan builder wizard.
+    ///
+    /// Prompts for project name, description, and phases, then generates a
+    /// structured PLAN.md without requiring an agent session.
+    ///
+    /// Example: `ta plan wizard`
+    Wizard,
+    /// Import a free-form description or bulleted list and convert to PLAN.md format.
+    ///
+    /// Reads a text file containing a description, numbered list, or bullet points
+    /// and converts it into a structured PLAN.md.
+    ///
+    /// Example: `ta plan import --from docs/features.md`
+    Import {
+        /// Path to a text file containing the project description or feature list.
+        #[arg(long)]
+        from: std::path::PathBuf,
+        /// Output path for the generated PLAN.md (default: PLAN.md).
+        #[arg(long, default_value = "PLAN.md")]
+        output: String,
+    },
 }
 
 pub fn execute(cmd: &PlanCommands, config: &GatewayConfig) -> anyhow::Result<()> {
@@ -275,6 +296,8 @@ pub fn execute(cmd: &PlanCommands, config: &GatewayConfig) -> anyhow::Result<()>
             goal,
         } => plan_create_phase(config, id, title, after.as_deref(), goal.as_deref()),
         PlanCommands::Shared => plan_shared(config),
+        PlanCommands::Wizard => plan_wizard(&config.workspace_root),
+        PlanCommands::Import { from, output } => plan_import(&config.workspace_root, from, output),
     }
 }
 
@@ -2342,6 +2365,282 @@ fn plan_shared(config: &GatewayConfig) -> anyhow::Result<()> {
         println!("  All local paths are either absent or properly ignored.");
     }
     Ok(())
+}
+
+// ── Plan wizard ─────────────────────────────────────────────────
+
+/// Prompt the user for a line of stdin input with an optional default.
+fn wizard_prompt(prompt_text: &str, default: Option<&str>) -> String {
+    use std::io::Write;
+    if let Some(d) = default {
+        print!("{} [{}]: ", prompt_text, d);
+    } else {
+        print!("{}: ", prompt_text);
+    }
+    let _ = std::io::stdout().flush();
+    let mut buf = String::new();
+    let _ = std::io::stdin().read_line(&mut buf);
+    let trimmed = buf.trim().to_string();
+    if trimmed.is_empty() {
+        default.map(str::to_string).unwrap_or_default()
+    } else {
+        trimmed
+    }
+}
+
+/// Conversational plan builder wizard.
+///
+/// Prompts the user for project metadata and phases, then writes a structured
+/// PLAN.md to the project root without needing an agent session.
+pub fn plan_wizard(project_root: &std::path::Path) -> anyhow::Result<()> {
+    println!("Plan Wizard — Let's build your PLAN.md interactively.");
+    println!("Press Enter to accept defaults.\n");
+
+    let project_name = wizard_prompt("Project name", Some("My Project"));
+    let description = wizard_prompt(
+        "What does this project do? (one sentence)",
+        Some("A TA-managed project"),
+    );
+    let phases_input = wizard_prompt(
+        "List your main phases, comma-separated (e.g. Setup, Auth, API, Tests)",
+        Some("Setup, Core Feature, Tests, Release"),
+    );
+
+    // Parse phases.
+    let phases: Vec<String> = phases_input
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    if phases.is_empty() {
+        anyhow::bail!(
+            "No phases provided. Please enter at least one phase name, comma-separated.\n\
+             Example: Setup, Core Feature, Tests, Release"
+        );
+    }
+
+    // Build PLAN.md content.
+    let mut lines = Vec::new();
+    lines.push(format!("# {} — Development Plan", project_name));
+    lines.push(String::new());
+    lines.push(description.clone());
+    lines.push(String::new());
+
+    for (i, phase) in phases.iter().enumerate() {
+        let version = format!("v0.{}.0", i + 1);
+        lines.push(format!("## Phase {} — {}", version, phase));
+        lines.push("<!-- status: pending -->".to_string());
+        lines.push(String::new());
+        lines.push("### Goals".to_string());
+        lines.push(String::new());
+        lines.push(format!("- [ ] Implement {}", phase));
+        lines.push(String::new());
+    }
+
+    let content = lines.join("\n");
+    let output_path = project_root.join("PLAN.md");
+
+    if output_path.exists() {
+        let overwrite = wizard_prompt("PLAN.md already exists. Overwrite?", Some("n"));
+        if !overwrite.eq_ignore_ascii_case("y") && !overwrite.eq_ignore_ascii_case("yes") {
+            println!("Aborted. PLAN.md was not modified.");
+            println!("Tip: Use `ta plan create` to generate a new plan with a different name.");
+            return Ok(());
+        }
+    }
+
+    std::fs::write(&output_path, &content).map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to write PLAN.md to '{}': {e}",
+            output_path.display()
+        )
+    })?;
+
+    println!();
+    println!("Created PLAN.md with {} phase(s):", phases.len());
+    for phase in &phases {
+        println!("  - {}", phase);
+    }
+    println!();
+    println!("Next steps:");
+    println!("  ta plan list          — view your plan");
+    println!("  ta plan next          — see what to work on");
+    println!("  ta run \"your goal\"    — start an agent on the next phase");
+
+    Ok(())
+}
+
+// ── Plan import ──────────────────────────────────────────────────
+
+/// Import a free-form description or bulleted list and convert to PLAN.md format.
+///
+/// Handles:
+///   - Lines starting with `- ` or `* ` (bullet points → phases)
+///   - Lines starting with digits + `.` or `)` (numbered lists → phases)
+///   - Blank-line-separated paragraphs (each paragraph → a phase)
+pub fn plan_import(
+    project_root: &std::path::Path,
+    from: &std::path::Path,
+    output: &str,
+) -> anyhow::Result<()> {
+    let from_abs = if from.is_absolute() {
+        from.to_path_buf()
+    } else {
+        project_root.join(from)
+    };
+
+    let content = std::fs::read_to_string(&from_abs).map_err(|e| {
+        anyhow::anyhow!(
+            "Could not read input file '{}': {e}\n\
+             Check the path and try again.",
+            from_abs.display()
+        )
+    })?;
+
+    // Extract a project name from the first heading or filename.
+    let project_name = content
+        .lines()
+        .find(|l| l.starts_with("# "))
+        .map(|l| l.trim_start_matches('#').trim().to_string())
+        .unwrap_or_else(|| {
+            from_abs
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "Project".to_string())
+        });
+
+    // Extract items from the text.
+    let items = extract_plan_items(&content);
+
+    if items.is_empty() {
+        anyhow::bail!(
+            "Could not extract any plan items from '{}'\n\
+             The file should contain bullet points (- item), numbered lists (1. item),\n\
+             or blank-line-separated paragraphs. At least one item is required.",
+            from_abs.display()
+        );
+    }
+
+    // Build PLAN.md.
+    let mut lines = Vec::new();
+    lines.push(format!("# {} — Development Plan", project_name));
+    lines.push(String::new());
+    lines.push(format!("Imported from: {}", from_abs.display()));
+    lines.push(String::new());
+
+    for (i, item) in items.iter().enumerate() {
+        let version = format!("v0.{}.0", i + 1);
+        lines.push(format!("## Phase {} — {}", version, item));
+        lines.push("<!-- status: pending -->".to_string());
+        lines.push(String::new());
+        lines.push("### Goals".to_string());
+        lines.push(String::new());
+        lines.push(format!("- [ ] {}", item));
+        lines.push(String::new());
+    }
+
+    let plan_content = lines.join("\n");
+
+    let output_path = if std::path::Path::new(output).is_absolute() {
+        std::path::PathBuf::from(output)
+    } else {
+        project_root.join(output)
+    };
+
+    std::fs::write(&output_path, &plan_content)
+        .map_err(|e| anyhow::anyhow!("Failed to write plan to '{}': {e}", output_path.display()))?;
+
+    println!(
+        "Imported {} item(s) from '{}'",
+        items.len(),
+        from_abs.display()
+    );
+    println!("Written: {}", output_path.display());
+    println!();
+    for item in &items {
+        println!("  - {}", item);
+    }
+    println!();
+    println!("Next: `ta plan list` to review your plan.");
+
+    Ok(())
+}
+
+/// Extract plan item texts from free-form text.
+fn extract_plan_items(text: &str) -> Vec<String> {
+    let mut items: Vec<String> = Vec::new();
+
+    for line in text.lines() {
+        let trimmed = line.trim();
+
+        // Skip headings.
+        if trimmed.starts_with('#') {
+            continue;
+        }
+        // Skip HTML-style comments.
+        if trimmed.starts_with("<!--") {
+            continue;
+        }
+
+        // Bullet: "- item" or "* item"
+        if let Some(rest) = trimmed
+            .strip_prefix("- ")
+            .or_else(|| trimmed.strip_prefix("* "))
+        {
+            let item = rest.trim();
+            if !item.is_empty() {
+                items.push(item.to_string());
+                continue;
+            }
+        }
+
+        // Numbered: "1. item" or "1) item"
+        let after_num = trimmed.find(|c: char| !c.is_ascii_digit()).and_then(|i| {
+            let rest = &trimmed[i..];
+            rest.strip_prefix(". ").or_else(|| rest.strip_prefix(") "))
+        });
+        if let Some(rest) = after_num {
+            let item = rest.trim();
+            if !item.is_empty()
+                && trimmed
+                    .chars()
+                    .next()
+                    .map(|c| c.is_ascii_digit())
+                    .unwrap_or(false)
+            {
+                items.push(item.to_string());
+                continue;
+            }
+        }
+    }
+
+    // If no list items found, fall back to non-empty, non-heading lines as paragraph units.
+    if items.is_empty() {
+        let mut para = String::new();
+        for line in text.lines() {
+            let t = line.trim();
+            if t.starts_with('#') || t.starts_with("<!--") {
+                continue;
+            }
+            if t.is_empty() {
+                if !para.is_empty() {
+                    items.push(para.trim().to_string());
+                    para.clear();
+                }
+            } else {
+                if !para.is_empty() {
+                    para.push(' ');
+                }
+                para.push_str(t);
+            }
+        }
+        if !para.is_empty() {
+            items.push(para.trim().to_string());
+        }
+    }
+
+    items
 }
 
 #[cfg(test)]

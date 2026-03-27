@@ -1,0 +1,16 @@
+# workflow.toml — Blender addon project workflow configuration
+
+[project]
+name = "blender-addon"
+type = "python"
+
+[agent]
+default = "claude-code"
+
+[verify]
+commands = [
+    "python -m py_compile src/**/*.py",
+]
+
+[source]
+vcs = "git"
