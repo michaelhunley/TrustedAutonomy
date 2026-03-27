@@ -3962,6 +3962,23 @@ fn apply_package(
         rollback_guard.commit();
     }
 
+    // v0.14.6: Write goal audit ledger entry here — BEFORE adapter.commit() —
+    // so that auto_stage_critical_files() picks up the dirty goal-audit.jsonl
+    // and includes it in the VCS commit. Writing after adapter.commit() means
+    // the file is modified too late to be caught by git status checks.
+    {
+        let reviewer = pkg.pending_approvals.first().map(|a| a.reviewer.as_str());
+        write_goal_audit_entry(
+            config,
+            &pkg,
+            Some(goal),
+            ta_audit::AuditDisposition::Applied,
+            reviewer,
+            None,
+            None,
+        );
+    }
+
     // Submit workflow integration (VCS-agnostic: git, svn, perforce, etc.).
     if git_commit {
         use ta_submit::{select_adapter, SourceAdapter, WorkflowConfig};
@@ -4505,20 +4522,6 @@ fn apply_package(
         if let Err(e) = vs.append(&entry) {
             tracing::warn!("Failed to record velocity entry: {}", e);
         }
-    }
-
-    // v0.14.6: Write goal audit ledger entry.
-    {
-        let reviewer = pkg.pending_approvals.first().map(|a| a.reviewer.as_str());
-        write_goal_audit_entry(
-            config,
-            &pkg,
-            Some(goal),
-            ta_audit::AuditDisposition::Applied,
-            reviewer,
-            None,
-            None,
-        );
     }
 
     // Auto-close parent draft on follow-up apply (v0.3.6, refined v0.4.1.2).
