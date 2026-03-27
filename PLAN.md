@@ -7401,11 +7401,49 @@ ta template install ./my-local-template        # local path
 
 ---
 
-### v0.14.8.1 — End-to-End Governed Workflow: Goal → Review → Apply → Sync
+### v0.14.8.1 — Draft & Goal ID Unification Hotfix
+<!-- status: pending -->
+**Goal**: Every identifier displayed to the user in TA output MUST be accepted as input by all related commands — "if it's shown, it works." This hotfix patches the regression introduced in v0.14.8 where `ta draft list` displayed shortref/seq IDs (e.g. `6ebf85ab/1`) but `ta draft view/approve/apply` only accepted full UUIDs, breaking the apply workflow. This class of bug must never recur.
+
+**Depends on**: v0.14.8 (draft view + shortref display)
+
+**Constitution rule added**: *Identifier consistency* — any identifier surfaced in TA output (draft list, goal list, status messages, completion messages) MUST resolve correctly when passed as input to all commands that accept that identifier type. This is enforced structurally by a `DraftResolver` API that is the single resolution point.
+
+#### Design
+
+A `DraftResolver` function (or method on `DraftStore`) accepts any of:
+- Full UUID: `cbda7f5f-4a19-4752-bea4-802af93fc020`
+- UUID prefix (≥4 chars): `cbda7f5f`
+- Shortref/seq (goal 8-char prefix + seq): `6ebf85ab/1`
+- Legacy UUID-seq: `cbda7f5f-1`
+
+All draft subcommands (`view`, `approve`, `deny`, `apply`) route through `DraftResolver` before looking up the draft. The `ta run` completion message and `ta draft list` DRAFT ID column emit the shortref/seq format only when it resolves — verified at emit time.
+
+#### Items
+
+1. [ ] **`DraftResolver` API**: Add `pub fn resolve_draft(store: &DraftStore, id: &str) -> Result<DraftId>` in `crates/ta-changeset/src/draft_store.rs`. Resolution order: (1) exact UUID match, (2) UUID prefix match (error if ambiguous), (3) shortref/seq split on `/` — look up goal by 8-char shortref, find draft at that seq number, (4) legacy UUID-seq format `<uuid>-<n>`. Returns `DraftNotFound` with a hint listing candidate IDs if nothing matches.
+
+2. [ ] **Wire all draft subcommands through resolver**: In `apps/ta-cli/src/commands/draft.rs`, replace direct ID lookups in `view`, `approve`, `deny`, `apply` with `resolve_draft(store, &id_arg)?`. The resolution is transparent — callers pass whatever string the user typed.
+
+3. [ ] **`ta run` completion message uses resolvable ID**: The run completion message currently emits the shortref/seq format. Add a `resolve_draft` round-trip assertion: if the emitted ID string does not resolve, fall back to full UUID. Prevents regression if resolution logic drifts.
+
+4. [ ] **`ta draft list` DRAFT ID column validation**: The DRAFT ID column must emit strings that resolve. After this change: shortref/seq if unique and resolvable, UUID prefix (8 chars) otherwise. Add a `#[test]` that emits a draft list and verifies every ID in the DRAFT ID column resolves via `resolve_draft`.
+
+5. [ ] **Constitution rule in `constitution.rs`**: Add a built-in constitution rule `identifier-consistency`: "All identifiers surfaced in command output must be accepted as input by the same command family. Draft IDs shown in `ta draft list` must resolve via `ta draft view/approve/apply`. Goal IDs shown in `ta goal list` must resolve via `ta goal status/recover/cancel`." This rule is checked during `ta constitution check`.
+
+6. [ ] **Tests**: `resolve_draft` with full UUID → resolves. UUID prefix → resolves. Shortref/seq → resolves. Ambiguous prefix → error with candidates. Unknown ID → `DraftNotFound` with hint. `ta draft view <shortref/seq>` end-to-end with a real draft fixture.
+
+7. [ ] **USAGE.md update**: Add note to "Draft Commands" section: draft IDs in `ta draft list` can be passed directly to `view`, `approve`, `deny`, `apply`. Formats accepted: full UUID, 8-char prefix, shortref/seq.
+
+#### Version: `0.14.8.1-alpha`
+
+---
+
+### v0.14.8.2 — End-to-End Governed Workflow: Goal → Review → Apply → Sync
 <!-- status: pending -->
 **Goal**: Ship a reference workflow that demonstrates TA's full governance loop as a single composable workflow definition: run a goal, route it to an independent reviewer agent before apply, apply on approval, then sync back to the PR once merged. This is the canonical "safe autonomous coding loop" that SA and Virtual Office builds on top of.
 
-**Depends on**: v0.14.4 (plugin traits), v0.14.6 (audit ledger), v0.14.7 (draft view structure)
+**Depends on**: v0.14.8.1 (draft/goal ID unification), v0.14.4 (plugin traits), v0.14.6 (audit ledger), v0.14.7 (draft view structure)
 
 #### Design
 
@@ -7453,15 +7491,15 @@ ta workflow run governed-goal --goal "Fix the auth bug"
 
 10. [ ] **Tests**: Workflow stage graph parsing (unit). Reviewer verdict JSON validation (unit). `human_gate` auto-approve and flag paths (unit). PR sync poll with mocked `gh` (unit). Full workflow integration test with stub agents (integration, `#[ignore]` for CI).
 
-#### Version: `0.14.8.1-alpha`
+#### Version: `0.14.8.2-alpha`
 
 ---
 
-### v0.14.8.2 — VCS Event Hooks: Inbound Webhook & Trigger Integration
+### v0.14.8.3 — VCS Event Hooks: Inbound Webhook & Trigger Integration
 <!-- status: pending -->
-**Goal**: Enable TA to trigger and chain workflow steps from external VCS events — GitHub PR merged, Perforce changelist submitted, post-receive git hooks. Today `v0.14.8.1` pr-sync polls `gh pr view` every 2 minutes. This is fragile, adds latency, and doesn't work for Perforce or non-GitHub VCS. This phase adds a proper inbound event surface so TA workflows become event-driven, not polling-driven. It also establishes the foundation for SA's distributed/cloud hybrid event routing.
+**Goal**: Enable TA to trigger and chain workflow steps from external VCS events — GitHub PR merged, Perforce changelist submitted, post-receive git hooks. Today `v0.14.8.2` pr-sync polls `gh pr view` every 2 minutes. This is fragile, adds latency, and doesn't work for Perforce or non-GitHub VCS. This phase adds a proper inbound event surface so TA workflows become event-driven, not polling-driven. It also establishes the foundation for SA's distributed/cloud hybrid event routing.
 
-**Depends on**: v0.14.8.1 (workflow engine)
+**Depends on**: v0.14.8.2 (workflow engine)
 
 #### Problem
 
@@ -7500,7 +7538,7 @@ For SA cloud hybrid: SA provides a webhook relay service (publicly-accessible HT
 
 2. [ ] **`/api/webhooks/vcs` generic endpoint**: Accepts `{ event: "pr_merged"|"changelist_submitted"|"branch_pushed", payload: {...} }` JSON POST. Used by Perforce trigger scripts and custom git hooks. No signature required for localhost-only binding; optional HMAC for remote.
 
-3. [ ] **Workflow `trigger_on` condition**: New workflow step type that waits for a named event rather than running immediately. `type = "trigger_on"`, `event = "vcs.pr_merged"`, `timeout_hours = 72`. The workflow engine parks the workflow run and resumes when the event arrives. Replaces the pr-sync polling in v0.14.8.1.
+3. [ ] **Workflow `trigger_on` condition**: New workflow step type that waits for a named event rather than running immediately. `type = "trigger_on"`, `event = "vcs.pr_merged"`, `timeout_hours = 72`. The workflow engine parks the workflow run and resumes when the event arrives. Replaces the pr-sync polling in v0.14.8.2.
 
 4. [ ] **`ta-p4-trigger` script** (ships as `scripts/ta-p4-trigger.sh`): Perforce trigger that calls the daemon webhook endpoint. Documents installation: `p4 triggers -o | ta-p4-trigger install`. Handles: changelist submitted, shelved CL created, branch view changed.
 
@@ -7512,7 +7550,7 @@ For SA cloud hybrid: SA provides a webhook relay service (publicly-accessible HT
 
 8. [ ] **USAGE.md "Event-Driven Workflows" section**: GitHub webhook setup (ngrok for local dev, production URL for deployed). Perforce trigger installation. git post-receive hook. Trigger conditions in `workflow.toml`. `ta webhook test` for debugging.
 
-#### Version: `0.14.8.2-alpha`
+#### Version: `0.14.8.3-alpha`
 
 ---
 
@@ -7552,6 +7590,8 @@ For SA cloud hybrid: SA provides a webhook relay service (publicly-accessible HT
 7. [ ] **USAGE.md "Local Models" section**: Quick-start for Qwen3.5. Prerequisites (Ollama, VRAM table), install command, first run example, thinking-mode guidance, switching between sizes.
 
 8. [ ] **Tests**: `ta agent install qwen3.5 --size 4b` with Ollama stub (mock the `ollama pull` subprocess). Profile loading round-trip. Thinking-mode system prompt injection. `--model qwen3.5:auto` selection logic with mocked model list.
+
+9. [ ] **End-to-end validation with live Ollama models** (deferred from v0.13.16 item 5): Run a real goal using `ta run "..." --model ollama/qwen3.5:4b` against a live Ollama instance (manual/CI with `#[ignore]`). Verify: agent produces a valid draft, draft builds correctly, `ta draft apply` succeeds. Document the validation checklist in `tests/integration/ollama_e2e.md`. This closes the v0.13.16 deferred item.
 
 #### Version: `0.14.9-alpha`
 
@@ -7625,6 +7665,169 @@ Two separate issues must both be fixed:
     - [ ] `:tail <id>` then scroll up → scroll back to bottom → output auto-follows without re-running `:tail`
 
 #### Version: `0.14.9.1-alpha`
+
+---
+
+### v0.14.10 — Artifact-Typed Workflow Edges
+<!-- status: pending -->
+**Goal**: Workflow steps declare typed `inputs` and `outputs` using an `ArtifactType` enum. The `WorkflowEngine` resolves the execution DAG automatically from type compatibility — a step that outputs `PlanDocument` is automatically wired to any step that accepts `PlanDocument` as input. Memory IS the session artifact store: artifacts are written to and read from `ta memory` by type key, making session state inspectable and resumable. This is the foundation for project-level oversight across multi-step agent workflows.
+
+**Depends on**: v0.14.8.2 (workflow engine), v0.14.3 (memory/Supermemory)
+
+#### Design
+
+Steps declare their I/O types in the workflow TOML:
+
+```toml
+[[step]]
+name = "generate-plan"
+type = "agent"
+outputs = ["PlanDocument"]
+
+[[step]]
+name = "implement-plan"
+type = "agent"
+inputs = ["PlanDocument"]
+outputs = ["DraftPackage"]
+
+[[step]]
+name = "review-draft"
+type = "agent"
+inputs = ["DraftPackage"]
+outputs = ["ReviewVerdict"]
+```
+
+The WorkflowEngine:
+1. Builds a DAG from declared types — no explicit `depends_on` needed for type-compatible edges
+2. Stores each step's output artifacts to `ta memory` under `<workflow-run-id>/<step-name>/<ArtifactType>`
+3. Resolves inputs for each step by reading from memory — enabling resume after interruption
+4. Detects type mismatches at workflow parse time, not at runtime
+
+`ArtifactType` enum (initial set): `GoalTitle`, `PlanDocument`, `DraftPackage`, `ReviewVerdict`, `AuditEntry`, `ConstitutionReport`, `AgentMessage`, `FileArtifact`, `TestResult`.
+
+#### Items
+
+1. [ ] **`ArtifactType` enum**: Define in `crates/ta-changeset/src/artifact_type.rs`. Derive `Serialize/Deserialize/Display`. Add `from_str` for TOML parsing. Initial set listed above. Extensible — custom types are strings prefixed with `x-`.
+
+2. [ ] **Step I/O declaration in workflow TOML schema**: Add optional `inputs: [ArtifactType]` and `outputs: [ArtifactType]` arrays to step definitions. Parse and validate at `ta workflow run` startup.
+
+3. [ ] **DAG resolution from type compatibility**: `WorkflowEngine::resolve_dag(steps) -> Result<Vec<StepOrder>>`. For each step, find steps whose `outputs` intersect with the step's `inputs`. Build dependency edges. Detect cycles. Detect missing input types (warn, not error — allows partial workflows). Unit test: 5-step chain with mixed types resolves correctly; cycle detected; ambiguous producer warns.
+
+4. [ ] **Memory as artifact store**: Each step writes outputs to `ta memory store --session <run-id> --key <step>/<type> --value <artifact-json>`. Reading inputs: `ta memory retrieve --session <run-id> --key <producing-step>/<type>`. On resume (`ta workflow resume <run-id>`), steps with already-stored outputs are skipped.
+
+5. [ ] **`ta workflow graph <name>`**: Print the resolved DAG as ASCII art showing step names, types flowing along edges, and `→` connections. Useful for debugging workflow definitions before running them. `--dot` flag emits Graphviz DOT format.
+
+6. [ ] **Resume from artifact store**: `ta workflow resume <run-id>` loads the run state, checks which step outputs exist in memory, skips completed steps, resumes at the first incomplete step. Handles partial completion (e.g., agent crashed mid-step).
+
+7. [ ] **Swarm progress dashboard (from v0.13.16 item 13)**: `ta workflow status --live <run-id>` shows a live-updating terminal view of all parallel step executions: step name, state, elapsed time, last artifact emitted. Multi-step workflows can run steps in parallel when DAG allows; the dashboard shows all concurrent steps simultaneously.
+
+8. [ ] **Tests**: DAG resolver unit tests (chain, parallel fan-out, cycle detection, missing type warning). Memory store/retrieve round-trip per ArtifactType. Resume: populate memory with step-1 output, run workflow, assert step-1 skipped. `ta workflow graph` output for a 4-step workflow.
+
+9. [ ] **USAGE.md "Artifact-Typed Workflows" section**: How to declare I/O types, how the engine resolves the DAG automatically, how to inspect in-flight artifacts with `ta memory retrieve`, how to resume a failed workflow.
+
+#### Version: `0.14.10-alpha`
+
+---
+
+### v0.14.11 — Project Session: Ask → Plan → Interactive Implement
+<!-- status: pending -->
+**Goal**: Bridge the gap between plan generation and governed execution. `ta new --from brief.md` produces a `PlanDocument` artifact. This phase adds the "interactive implement" loop: the WorkflowEngine instantiates a session from the plan, presents an interactive review step where the user can accept/edit/skip plan items, then executes the approved items as a governed workflow with `AwaitHuman` gates at configurable checkpoints. The user experience is: "describe what you want → review the plan → watch it happen with oversight."
+
+**Depends on**: v0.14.10 (artifact-typed workflow edges), v0.14.8.2 (governed workflow), v0.14.1 (wizard/setup)
+
+#### Design
+
+```
+ta new --from brief.md          # wizard generates PlanDocument artifact
+ta session start <plan-id>      # instantiates WorkflowEngine session from plan
+ta session review               # interactive plan item editor (accept/edit/skip each item)
+ta session run                  # execute approved items as governed workflow
+  │
+  ├─ [for each plan item]
+  │     ├─ run-goal (agent implements the item)
+  │     ├─ review-draft (optional reviewer agent)
+  │     ├─ human-gate (configurable: auto | prompt | always)
+  │     └─ apply-draft → emit AppliedArtifact
+  │
+  └─ session-summary: list of applied items, skipped items, deferred items
+```
+
+`ta session status` shows the current plan item being worked, completed items, and remaining items — the "project oversight" view.
+
+#### Items
+
+1. [ ] **`ta new --from <brief.md>`**: Parse a freeform brief (markdown or plain text) and produce a `PlanDocument` artifact via a `planner` agent. The planner agent receives the brief + any existing `constitution.toml` and outputs structured plan items: `{ id, title, acceptance_criteria, estimated_effort, artifact_outputs: [ArtifactType] }`. Saves the PlanDocument to `ta memory store --key plan/<uuid>`.
+
+2. [ ] **`ta session start <plan-id>`**: Instantiates a `WorkflowSession` from the PlanDocument. A session has: `session_id`, `plan_id`, `items: Vec<PlanItem>`, `state: SessionState` (reviewing/running/paused/complete). Persists to `.ta/sessions/<session-id>.json`. Multiple sessions can exist (one per project/plan).
+
+3. [ ] **`ta session review`**: TUI-driven interactive review of plan items. For each item: show title + acceptance criteria, prompt `[A]ccept / [E]dit / [S]kip / [D]efer`. Edits open `$EDITOR` with the item JSON. Accepted items enter the execution queue; skipped items are recorded as `SessionItemState::Skipped`; deferred items are moved to a future session.
+
+4. [ ] **`ta session run [--gate auto|prompt|always]`**: Execute accepted plan items in order (or parallel where DAG allows). For each item, instantiates a governed workflow run (from v0.14.8.2 `governed-goal.toml`). Gate behavior is per-item configurable. Streams progress to `ta session status --live`. On interruption, stores session state — resume with `ta session resume <id>`.
+
+5. [ ] **`ta session status [--live] [<id>]`**: Show session overview: items completed (with applied draft ID), current item (agent running, at gate, etc.), remaining items, skipped/deferred count. `--live` auto-refreshes. This is the "project oversight" dashboard.
+
+6. [ ] **`AwaitHuman` gate event**: A workflow step type that pauses execution and emits a notification (TUI prompt, status bar alert, or webhook) asking the human to approve/skip/abort. The gate stores the pause point in session state so `ta session resume` can continue. Gate verdict is recorded in the audit ledger.
+
+7. [ ] **`ta session list`**: List all sessions with status: `reviewing`, `running`, `paused`, `complete`. Show plan title, item count, last activity timestamp.
+
+8. [ ] **Memory commit on apply**: When `ta draft apply` runs inside a session workflow, commit the applied artifacts to session memory (`ta memory store --session <id> --key applied/<item-id>`). This makes session history queryable and enables the v0.14.3 Supermemory bridge to surface session outcomes in future conversations.
+
+9. [ ] **Swarm orchestration for parallel items**: When plan items are independent (no type-edge dependency), the session can run multiple governed workflows concurrently. `ta session run --parallel <n>` limits the concurrency. The `ta workflow status --live` dashboard (from v0.14.10) shows all concurrent sessions simultaneously.
+
+10. [ ] **Tests**: `ta new --from brief.md` with stub planner agent produces valid PlanDocument. Session start from PlanDocument → correct item list. Session review acceptance changes item states. Session run with stub governed workflow completes all accepted items. `AwaitHuman` gate pauses and resumes correctly. Memory commit on apply writes artifact.
+
+11. [ ] **USAGE.md "Project Session" section**: Full walkthrough — write a brief, generate a plan, review interactively, run with oversight, inspect progress, resume after interruption. Positions TA as a project-level oversight layer, not just per-goal.
+
+#### Version: `0.14.11-alpha`
+
+---
+
+### v0.14.12 — GC, Recovery & Self-Healing Hardening + Memory Sharing Config
+<!-- status: pending -->
+**Goal**: Unified, reliable GC and recovery so TA never gets into a state the user can't escape without manual `.ta/` edits. Closes the remaining gaps from v0.13.14 (watchdog/recovery) and v0.14.7.2 (goal lifecycle hygiene): auto-recovery on daemon startup, unified `ta gc` command, progress journal for resume-from-crash, and `Failed+staging` goals visible by default. Also ships the `[memory.sharing]` config schema so teams can declare which memory scopes are local vs shared — the SA sync transport builds against this config.
+
+**Depends on**: v0.13.14 (watchdog, `ta goal recover`), v0.14.7.2 (goal traceability), v0.14.3 (memory/RuVector), v0.14.11 (session + memory commit)
+
+#### Items
+
+##### GC & Recovery
+
+1. [ ] **Auto-recovery on daemon startup**: On `ta daemon start`, scan active goals. For any goal in `Running` state with no heartbeat in the last `heartbeat_timeout` window AND a staging dir present, automatically attempt recovery (`GoalRunState::Finalizing` → draft build). Log the recovery attempt. If recovery fails, transition to `Failed` and emit an audit entry with the failure reason. This catches goals killed by machine restart or OOM.
+
+2. [ ] **Unified `ta gc [--dry-run] [--older-than <days>]`**: Single entry point for all GC operations: (a) prune staging dirs for goals in terminal states (Applied/Failed/Denied) older than N days; (b) delete orphaned draft packages with no linked goal; (c) remove expired sessions; (d) compact events.jsonl (archive entries older than 30 days). `--dry-run` prints what would be deleted. `--older-than 7` for aggressive cleanup. Replaces the separate `ta goal gc` and any ad-hoc cleanup commands.
+
+3. [ ] **Progress journal for resume-from-crash**: During agent execution, `ta run` writes incremental progress entries to `.ta/goals/<id>/progress.jsonl`: each tool call result, each file written, each checkpoint reached. On crash+recover, `ta goal recover <id>` reads the journal and resumes from the last checkpoint rather than re-running from scratch. Journal is pruned on successful draft build.
+
+4. [ ] **`Failed+staging` goals in default list**: `ta goal list` (without `--all`) currently hides Failed goals. If a Failed goal has a staging dir (draft may be buildable via `ta goal recover`), show it with a `[recoverable]` tag. This surfaces actionable state without overwhelming the list with old failures.
+
+5. [ ] **`ta goal purge <id>`**: Explicitly delete a goal and all its artifacts (staging dir, draft packages, progress journal, audit entries). Requires `--confirm` flag. Intended for test goals, abandoned experiments. Records a `GoalPurged` audit entry before deletion.
+
+6. [ ] **`DraftPending` goal state**: Add a `DraftPending` state between `Running` and `PrReady`. A goal enters `DraftPending` after the agent exits but before `ta draft build` completes. This makes the build step visible in `ta goal status` and prevents the goal from appearing `PrReady` before the draft is actually built.
+
+##### Memory Sharing Config
+
+7. [ ] **`[memory.sharing]` config schema**: Add to `daemon.toml` / `config.toml`:
+   ```toml
+   [memory.sharing]
+   decisions = "team"       # shared with team via SA sync
+   plan = "team"            # shared
+   constitution = "team"    # shared
+   experiments = "local"    # never synced
+   scratch = "local"        # never synced
+   ```
+   Values: `"local"` (default, never synced) or `"team"` (SA sync eligible). TA writes a `scope` tag to every memory entry on write. The SA sync transport (built by SA) reads this config and filters accordingly.
+
+8. [ ] **Scope tagging on memory write**: `ta memory store` accepts an optional `--scope local|team` flag. If not provided, defaults from `[memory.sharing]` config by matching the memory key prefix. All existing memory write paths (session artifacts, constitution, decisions) use the correct default scope.
+
+9. [ ] **`ta memory list --scope team`**: Filter memory entries by scope tag. Useful for inspecting what would be synced to SA. `--scope local` shows non-synced entries.
+
+10. [ ] **`ta doctor` GC health checks**: Add to `ta doctor`: (a) staging dirs older than 7 days with no active goal (suggest `ta gc`); (b) events.jsonl > 10MB (suggest `ta gc --compact`); (c) goals in `DraftPending` state for > 1 hour (suggest `ta goal recover`).
+
+11. [ ] **USAGE.md "Maintenance & GC" section**: `ta gc` usage, `ta goal purge`, `ta doctor` GC checks, auto-recovery behavior. **USAGE.md "Memory Sharing" section**: `[memory.sharing]` config, scope tagging, `ta memory list --scope team`, SA sync integration notes.
+
+12. [ ] **Tests**: Auto-recovery detects Running+no-heartbeat goal and builds draft. `ta gc --dry-run` lists correct targets without deleting. Progress journal write/resume round-trip. `Failed+staging` goal appears in default list with `[recoverable]` tag. Scope tag written and queryable. `ta doctor` emits GC warning for stale staging dir.
+
+#### Version: `0.14.12-alpha`
 
 ---
 
