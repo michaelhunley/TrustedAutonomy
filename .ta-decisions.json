@@ -28,5 +28,23 @@
     "rationale": "These are workspace integrity invariants that fit naturally alongside the existing constitution checks. Users already know to run `ta goal check` for health checks; adding a separate command would fragment the verification surface. They can be extracted to a dedicated `ta audit integrity` command later if the check surface grows.",
     "alternatives": ["New `ta goal integrity` subcommand (separate discovery surface)", "`ta audit check` (audit crate doesn't exist yet for CLI dispatch)"],
     "confidence": 0.8
+  },
+  {
+    "decision": "Remote template install downloads archive and guides manual extraction rather than using tar/flate2",
+    "rationale": "The workspace has no tar/flate2 crate. Adding them would pull in C dependencies (libz). For v0.14.8, local path install is fully automated; remote downloads save the archive and print clear extraction steps. Future phase can add a pure-Rust extractor.",
+    "alternatives": ["Add tar + flate2 workspace deps (C deps)", "Add a pure-Rust zip extractor", "Only support local path install"],
+    "confidence": 0.85
+  },
+  {
+    "decision": "plan_wizard uses stdin readline without an agent call",
+    "rationale": "The plan item says no agent call is needed. stdin readline is simpler, faster, works offline, and requires no staging workspace. The output is structurally correct PLAN.md immediately.",
+    "alternatives": ["Call an agent to structure the input", "Use a TUI library for the wizard"],
+    "confidence": 0.95
+  },
+  {
+    "decision": "Captured daemon_config fields before move to fix borrow-after-move in web.rs",
+    "rationale": "build_full_router takes ownership of daemon_config. The web_ui flag and bind info need to be used after the move for the startup log message. Extracting the values (web_ui_enabled, web_ui_port, web_ui_bind) before the move is the minimal correct fix with no cloning of the entire config.",
+    "alternatives": ["Clone daemon_config before build_full_router", "Change build_full_router signature to borrow", "Add web_ui to AppState"],
+    "confidence": 0.99
   }
 ]

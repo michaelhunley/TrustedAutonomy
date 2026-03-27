@@ -23,37 +23,45 @@
   .container { max-width: 960px; margin: 0 auto; padding: 2rem 1rem; }
   h1 { font-size: 1.5rem; margin-bottom: 0.25rem; }
   .subtitle { color: var(--muted); font-size: 0.9rem; margin-bottom: 1rem; }
-  .tabs { display: flex; gap: 0; margin-bottom: 1.5rem; border-bottom: 1px solid var(--border); }
+  .tabs { display: flex; gap: 0; margin-bottom: 1.5rem; border-bottom: 1px solid var(--border);
+          overflow-x: auto; }
   .tab { padding: 0.6rem 1.25rem; cursor: pointer; color: var(--muted); font-size: 0.9rem;
-         font-weight: 500; border-bottom: 2px solid transparent; transition: all 0.15s; }
+         font-weight: 500; border-bottom: 2px solid transparent; transition: all 0.15s;
+         white-space: nowrap; }
   .tab:hover { color: var(--text); }
   .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
   .card { background: var(--surface); border: 1px solid var(--border);
-          border-radius: 8px; padding: 1.25rem; margin-bottom: 1rem; cursor: pointer;
+          border-radius: 8px; padding: 1.25rem; margin-bottom: 1rem;
           transition: border-color 0.15s; }
-  .card:hover { border-color: var(--accent); }
-  .card-header { display: flex; justify-content: space-between; align-items: center; }
+  .card.clickable { cursor: pointer; }
+  .card.clickable:hover { border-color: var(--accent); }
+  .card-header { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; }
   .card-title { font-weight: 600; font-size: 1.05rem; }
-  .badge { padding: 0.2rem 0.6rem; border-radius: 12px; font-size: 0.75rem; font-weight: 600; }
+  .badge { padding: 0.2rem 0.6rem; border-radius: 12px; font-size: 0.75rem; font-weight: 600;
+           white-space: nowrap; }
   .badge-draft { background: var(--yellow); color: #000; }
   .badge-pending { background: var(--accent); color: #fff; }
   .badge-approved { background: var(--green); color: #000; }
   .badge-denied { background: var(--red); color: #fff; }
   .badge-cat { background: var(--border); color: var(--text); font-size: 0.7rem; }
+  .badge-active { background: #2563eb; color: #fff; }
+  .badge-question { background: var(--yellow); color: #000; }
   .card-meta { color: var(--muted); font-size: 0.8rem; margin-top: 0.5rem; }
   .detail { background: var(--surface); border: 1px solid var(--border);
             border-radius: 8px; padding: 1.5rem; }
   .back { color: var(--accent); cursor: pointer; font-size: 0.9rem;
           margin-bottom: 1rem; display: inline-block; }
   .back:hover { text-decoration: underline; }
-  .actions { display: flex; gap: 0.75rem; margin-top: 1.25rem; }
+  .actions { display: flex; gap: 0.75rem; margin-top: 1.25rem; flex-wrap: wrap; }
   .btn { padding: 0.5rem 1.25rem; border: none; border-radius: 6px; font-size: 0.9rem;
          font-weight: 600; cursor: pointer; transition: opacity 0.15s; }
   .btn:hover { opacity: 0.85; }
+  .btn:disabled { opacity: 0.45; cursor: not-allowed; }
   .btn-approve { background: var(--green); color: #000; }
   .btn-deny { background: var(--red); color: #fff; }
   .btn-primary { background: var(--accent); color: #fff; }
   .btn-sm { padding: 0.3rem 0.8rem; font-size: 0.8rem; }
+  .btn-ghost { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
   .section { margin-top: 1.25rem; }
   .section h3 { font-size: 0.95rem; color: var(--muted); margin-bottom: 0.5rem;
                 text-transform: uppercase; letter-spacing: 0.05em; }
@@ -81,43 +89,71 @@
   .confidence-bar { display: inline-block; width: 60px; height: 6px; background: var(--border);
                     border-radius: 3px; vertical-align: middle; margin-left: 0.5rem; }
   .confidence-fill { height: 100%; border-radius: 3px; background: var(--green); }
+  /* Form styles */
+  .form-group { margin-bottom: 1rem; }
+  .form-group label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 0.35rem; }
+  .form-group input,
+  .form-group textarea,
+  .form-group select {
+    width: 100%; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 0.5rem 0.75rem; color: var(--text); font-size: 0.9rem;
+    font-family: inherit;
+  }
+  .form-group input:focus,
+  .form-group textarea:focus,
+  .form-group select:focus { outline: none; border-color: var(--accent); }
+  .form-group textarea { resize: vertical; min-height: 80px; }
+  /* Answer panel */
+  .question-card { border-left: 3px solid var(--yellow); }
+  .answer-input { display: flex; gap: 0.5rem; margin-top: 0.75rem; }
+  .answer-input input { flex: 1; background: var(--bg); border: 1px solid var(--border);
+                        border-radius: 6px; padding: 0.5rem 0.75rem; color: var(--text);
+                        font-size: 0.9rem; }
+  .answer-input input:focus { outline: none; border-color: var(--accent); }
+  /* Dashboard sections */
+  .dash-section-title { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.06em;
+                        color: var(--muted); margin-bottom: 0.6rem; padding-bottom: 0.3rem;
+                        border-bottom: 1px solid var(--border); }
+  .dash-section { margin-bottom: 1.5rem; }
+  /* Template grid */
+  .template-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+                   gap: 0.75rem; margin-top: 0.75rem; }
+  .template-tile { background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+                   padding: 0.9rem; cursor: pointer; transition: border-color 0.15s; }
+  .template-tile:hover, .template-tile.selected { border-color: var(--accent); }
+  .template-tile.selected { background: #1e2235; }
+  .template-name { font-weight: 600; font-size: 0.9rem; margin-bottom: 0.25rem; }
+  .template-desc { font-size: 0.75rem; color: var(--muted); }
 </style>
 </head>
 <body>
 <div class="container">
   <h1>Trusted Autonomy</h1>
-  <p class="subtitle">Review Dashboard</p>
+  <p class="subtitle" id="subtitle">Loading...</p>
   <div class="tabs">
-    <div class="tab active" onclick="switchTab('drafts')">Drafts</div>
+    <div class="tab active" onclick="switchTab('dashboard')">Dashboard</div>
+    <div class="tab" onclick="switchTab('start')">Start a Goal</div>
+    <div class="tab" onclick="switchTab('drafts')">Review Drafts</div>
+    <div class="tab" onclick="switchTab('questions')" id="tab-questions">Agent Questions</div>
     <div class="tab" onclick="switchTab('memory')">Memory</div>
   </div>
   <div id="app"><div class="loading">Loading...</div></div>
 </div>
 <script>
 const app = document.getElementById('app');
-let currentTab = 'drafts';
+let currentTab = 'dashboard';
 let drafts = [];
 
-function switchTab(tab) {
-  currentTab = tab;
-  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-  document.querySelectorAll('.tab').forEach(t => {
-    if (t.textContent.toLowerCase() === tab) t.classList.add('active');
-  });
-  if (tab === 'drafts') loadDrafts();
-  else loadMemory();
-}
-
-// ── Drafts ──────────────────────────────────────────────────
-function badgeClass(status) {
-  const s = status.toLowerCase();
-  if (s.includes('approved')) return 'badge-approved';
-  if (s.includes('denied')) return 'badge-denied';
-  if (s.includes('pending')) return 'badge-pending';
-  return 'badge-draft';
+// ── Utilities ─────────────────────────────────────────────────
+function esc(s) {
+  if (s === null || s === undefined) return '';
+  const el = document.createElement('span');
+  el.textContent = String(s);
+  return el.innerHTML;
 }
 
 function timeAgo(iso) {
+  if (!iso) return '';
   const d = new Date(iso);
   const now = new Date();
   const mins = Math.floor((now - d) / 60000);
@@ -128,28 +164,281 @@ function timeAgo(iso) {
   return Math.floor(hrs / 24) + 'd ago';
 }
 
+function badgeClass(status) {
+  const s = (status || '').toLowerCase();
+  if (s.includes('approved')) return 'badge-approved';
+  if (s.includes('denied')) return 'badge-denied';
+  if (s.includes('pending')) return 'badge-pending';
+  return 'badge-draft';
+}
+
+// ── Tab navigation ─────────────────────────────────────────────
+function switchTab(tab) {
+  currentTab = tab;
+  document.querySelectorAll('.tab').forEach(t => {
+    const label = t.textContent.trim().toLowerCase().replace(/ /g, '-');
+    t.classList.toggle('active', label === tab || (tab === 'dashboard' && label === 'dashboard'));
+  });
+  if (tab === 'dashboard') loadDashboard();
+  else if (tab === 'start') loadStart();
+  else if (tab === 'drafts') loadDrafts();
+  else if (tab === 'questions') loadQuestions();
+  else if (tab === 'memory') loadMemory();
+}
+
+// ── Dashboard ─────────────────────────────────────────────────
+async function loadDashboard() {
+  app.innerHTML = '<div class="loading">Loading dashboard...</div>';
+  try {
+    const [draftsResp, questionsResp, statusResp] = await Promise.allSettled([
+      fetch('/api/drafts'),
+      fetch('/api/interactions/pending'),
+      fetch('/api/status')
+    ]);
+
+    const draftsData = draftsResp.status === 'fulfilled' && draftsResp.value.ok
+      ? await draftsResp.value.json().catch(() => [])
+      : [];
+    const questions = questionsResp.status === 'fulfilled' && questionsResp.value.ok
+      ? await questionsResp.value.json().catch(() => [])
+      : [];
+    const status = statusResp.status === 'fulfilled' && statusResp.value.ok
+      ? await statusResp.value.json().catch(() => null)
+      : null;
+
+    // Update subtitle with timestamp.
+    document.getElementById('subtitle').textContent =
+      'Review Dashboard — updated ' + new Date().toLocaleTimeString();
+
+    // Highlight questions tab if there are pending questions.
+    const qTab = document.getElementById('tab-questions');
+    if (questions.length > 0) {
+      qTab.textContent = 'Agent Questions (' + questions.length + ')';
+      qTab.style.color = 'var(--yellow)';
+    } else {
+      qTab.textContent = 'Agent Questions';
+      qTab.style.color = '';
+    }
+
+    renderDashboard(draftsData, questions, status);
+  } catch (e) {
+    app.innerHTML = '<div class="empty">Failed to load dashboard. Is the daemon running?</div>';
+  }
+}
+
+function renderDashboard(allDrafts, questions, status) {
+  const pending = allDrafts.filter(d => d.status && d.status.toLowerCase().includes('pending'));
+  const active = allDrafts.filter(d => d.status && d.status.toLowerCase().includes('draft'));
+
+  let html = '';
+
+  // Active work.
+  if (active.length > 0) {
+    html += '<div class="dash-section">';
+    html += '<div class="dash-section-title">Active Work</div>';
+    html += active.slice(0, 3).map(d => `
+      <div class="card clickable" onclick="switchTab('drafts');setTimeout(()=>showDraftDetail('${d.package_id}'),100)">
+        <div class="card-header">
+          <span class="card-title">${esc(d.title)}</span>
+          <span class="badge badge-active">In Progress</span>
+        </div>
+        <div class="card-meta">${d.artifact_count} artifact${d.artifact_count !== 1 ? 's' : ''} &middot; ${timeAgo(d.created_at)}</div>
+      </div>
+    `).join('');
+    html += '</div>';
+  }
+
+  // Ready to review.
+  if (pending.length > 0) {
+    html += '<div class="dash-section">';
+    html += '<div class="dash-section-title">Ready to Review (' + pending.length + ')</div>';
+    html += pending.slice(0, 5).map(d => `
+      <div class="card clickable" onclick="switchTab('drafts');setTimeout(()=>showDraftDetail('${d.package_id}'),100)">
+        <div class="card-header">
+          <span class="card-title">${esc(d.title)}</span>
+          <span class="badge badge-pending">Needs Review</span>
+        </div>
+        <div class="card-meta">${d.artifact_count} artifact${d.artifact_count !== 1 ? 's' : ''} &middot; ${timeAgo(d.created_at)}</div>
+      </div>
+    `).join('');
+    html += '</div>';
+  }
+
+  // Agent questions.
+  if (questions.length > 0) {
+    html += '<div class="dash-section">';
+    html += '<div class="dash-section-title">Agent Has a Question (' + questions.length + ')</div>';
+    html += questions.slice(0, 3).map(q => `
+      <div class="card clickable" onclick="switchTab('questions')">
+        <div class="card-header">
+          <span class="card-title">${esc(q.prompt || 'Agent question')}</span>
+          <span class="badge badge-question">Waiting</span>
+        </div>
+        <div class="card-meta">${timeAgo(q.created_at || q.timestamp)}</div>
+      </div>
+    `).join('');
+    html += '</div>';
+  }
+
+  // Summary stats.
+  html += '<div class="stat-grid">';
+  html += `<div class="stat-card"><div class="stat-value">${pending.length}</div><div class="stat-label">Needs Review</div></div>`;
+  html += `<div class="stat-card"><div class="stat-value">${active.length}</div><div class="stat-label">In Progress</div></div>`;
+  html += `<div class="stat-card"><div class="stat-value">${questions.length}</div><div class="stat-label">Waiting for You</div></div>`;
+  const total = allDrafts.length;
+  html += `<div class="stat-card"><div class="stat-value">${total}</div><div class="stat-label">Total Drafts</div></div>`;
+  html += '</div>';
+
+  if (active.length === 0 && pending.length === 0 && questions.length === 0) {
+    html += '<div class="empty">Everything is up to date. Start a new goal from the "Start a Goal" tab.</div>';
+  }
+
+  html += '<div style="margin-top:1rem;font-size:0.8rem;color:var(--muted);text-align:right">' +
+    '<button class="btn btn-sm btn-ghost" onclick="loadDashboard()">Refresh</button></div>';
+
+  app.innerHTML = html;
+}
+
+// ── Start a Goal ───────────────────────────────────────────────
+const BUILTIN_TEMPLATES = [
+  { name: 'rust-cli', desc: 'Rust CLI application' },
+  { name: 'python-script', desc: 'Python scripting project' },
+  { name: 'blender-addon', desc: 'Blender Python addon' },
+  { name: 'web-api', desc: 'REST API server' },
+  { name: 'data-pipeline', desc: 'Data pipeline' },
+  { name: '(none)', desc: 'No template' },
+];
+
+let selectedTemplate = '(none)';
+
+function loadStart() {
+  app.innerHTML = `
+    <div class="card">
+      <h2 style="margin-bottom:1rem">Start a New Goal</h2>
+      <div class="form-group">
+        <label>Goal title <span style="color:var(--red)">*</span></label>
+        <input id="goalTitle" type="text" placeholder="e.g. Add user authentication" autofocus>
+      </div>
+      <div class="form-group">
+        <label>Description (optional)</label>
+        <textarea id="goalDesc" placeholder="Describe what the agent should do..."></textarea>
+      </div>
+      <div class="form-group">
+        <label>Template</label>
+        <div class="template-grid" id="templateGrid"></div>
+      </div>
+      <div class="actions">
+        <button class="btn btn-primary" onclick="submitGoal()">Start Goal</button>
+        <button class="btn btn-ghost" onclick="loadDashboard()">Cancel</button>
+      </div>
+      <div id="goalResult" style="margin-top:1rem"></div>
+    </div>
+  `;
+  renderTemplateGrid();
+}
+
+function renderTemplateGrid() {
+  const grid = document.getElementById('templateGrid');
+  if (!grid) return;
+  grid.innerHTML = BUILTIN_TEMPLATES.map(t => `
+    <div class="template-tile${selectedTemplate === t.name ? ' selected' : ''}"
+         onclick="selectTemplate('${esc(t.name)}')">
+      <div class="template-name">${esc(t.name)}</div>
+      <div class="template-desc">${esc(t.desc)}</div>
+    </div>
+  `).join('');
+}
+
+function selectTemplate(name) {
+  selectedTemplate = name;
+  renderTemplateGrid();
+}
+
+async function submitGoal() {
+  const title = document.getElementById('goalTitle').value.trim();
+  if (!title) {
+    document.getElementById('goalResult').innerHTML =
+      '<span style="color:var(--red)">Goal title is required.</span>';
+    return;
+  }
+  const desc = document.getElementById('goalDesc').value.trim();
+  const result = document.getElementById('goalResult');
+  result.innerHTML = '<span style="color:var(--muted)">Starting goal...</span>';
+
+  const tmpl = selectedTemplate !== '(none)' ? selectedTemplate : undefined;
+
+  // Try POST /api/project/new first, fall back to /api/cmd.
+  try {
+    const body = { title, description: desc || undefined, template: tmpl };
+    const resp = await fetch('/api/project/new', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    if (resp.ok) {
+      const data = await resp.json().catch(() => ({}));
+      result.innerHTML = '<span style="color:var(--green)">Goal started! ' +
+        (data.goal_id ? 'ID: ' + esc(data.goal_id.slice(0, 8)) : '') + '</span>';
+      setTimeout(() => { switchTab('dashboard'); }, 1500);
+      return;
+    }
+  } catch (_) {}
+
+  // Fallback: /api/cmd
+  try {
+    const body = { command: 'run', args: { title, description: desc || '', template: tmpl } };
+    const resp = await fetch('/api/cmd', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    if (resp.ok) {
+      result.innerHTML = '<span style="color:var(--green)">Goal started successfully.</span>';
+      setTimeout(() => { switchTab('dashboard'); }, 1500);
+    } else {
+      const text = await resp.text();
+      result.innerHTML = '<span style="color:var(--red)">Error: ' + esc(text) + '</span>';
+    }
+  } catch (e) {
+    result.innerHTML = '<span style="color:var(--red)">Could not reach daemon. ' +
+      'Start it with <code>ta daemon start</code>.</span>';
+  }
+}
+
+// ── Draft Review ───────────────────────────────────────────────
 async function loadDrafts() {
+  app.innerHTML = '<div class="loading">Loading drafts...</div>';
   try {
     const resp = await fetch('/api/drafts');
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
     drafts = await resp.json();
     renderDraftList();
   } catch (e) {
-    app.innerHTML = '<div class="empty">Failed to load drafts.</div>';
+    app.innerHTML = '<div class="empty">Failed to load drafts. Is the daemon running?</div>';
   }
 }
 
 function renderDraftList() {
-  if (drafts.length === 0) {
-    app.innerHTML = '<div class="empty">No drafts yet. Start a goal with <code>ta run</code>.</div>';
+  if (!drafts || drafts.length === 0) {
+    app.innerHTML = '<div class="empty">No drafts yet. Start a goal with the "Start a Goal" tab.</div>';
     return;
   }
-  app.innerHTML = drafts.map(d => `
-    <div class="card" onclick="showDraftDetail('${d.package_id}')">
+  app.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem">
+      <span style="color:var(--muted);font-size:0.85rem">${drafts.length} draft${drafts.length !== 1 ? 's' : ''}</span>
+      <button class="btn btn-sm btn-ghost" onclick="loadDrafts()">Refresh</button>
+    </div>
+  ` + drafts.map(d => `
+    <div class="card clickable" onclick="showDraftDetail('${d.package_id}')">
       <div class="card-header">
         <span class="card-title">${esc(d.title)}</span>
         <span class="badge ${badgeClass(d.status)}">${esc(d.status)}</span>
       </div>
-      <div class="card-meta">${d.artifact_count} artifact${d.artifact_count !== 1 ? 's' : ''} &middot; ${timeAgo(d.created_at)} &middot; ${d.package_id.slice(0,8)}</div>
+      <div class="card-meta">
+        ${d.artifact_count} artifact${d.artifact_count !== 1 ? 's' : ''} &middot;
+        ${timeAgo(d.created_at)} &middot;
+        <code style="font-size:0.75rem">${d.package_id.slice(0, 8)}</code>
+      </div>
     </div>
   `).join('');
 }
@@ -165,59 +454,161 @@ async function showDraftDetail(id) {
 }
 
 function renderDraftDetail(d) {
-  const artifacts = d.changes.artifacts || [];
-  const actions = d.changes.pending_actions || [];
+  const artifacts = (d.changes && d.changes.artifacts) || [];
+  const actions = (d.changes && d.changes.pending_actions) || [];
+  const isReviewable = d.status && d.status.toLowerCase().includes('pending');
+
   app.innerHTML = `
-    <span class="back" onclick="renderDraftList()">&larr; Back to list</span>
+    <span class="back" onclick="loadDrafts()">&larr; Back to drafts</span>
     <div class="detail">
       <div class="card-header">
-        <span class="card-title">${esc(d.goal.title)}</span>
-        <span class="badge ${badgeClass(d.status)}">${d.status}</span>
+        <span class="card-title">${esc(d.goal && d.goal.title || 'Draft')}</span>
+        <span class="badge ${badgeClass(d.status)}">${esc(d.status)}</span>
       </div>
-      <div class="card-meta">${d.package_id} &middot; ${new Date(d.created_at).toLocaleString()}</div>
+      <div class="card-meta">
+        <code>${d.package_id}</code> &middot; ${new Date(d.created_at).toLocaleString()}
+      </div>
       ${d.summary ? `<div class="section"><h3>Summary</h3><p>${esc(d.summary.description || '')}</p></div>` : ''}
       <div class="section">
-        <h3>Artifacts (${artifacts.length})</h3>
-        ${artifacts.length === 0 ? '<p style="color:var(--muted)">No artifacts</p>' :
-          artifacts.map(a => `
+        <h3>Changed Files (${artifacts.length})</h3>
+        ${artifacts.length === 0
+          ? '<p style="color:var(--muted)">No artifacts</p>'
+          : artifacts.map(a => `
             <div class="artifact">
               <span class="artifact-uri">${esc(a.resource_uri)}</span>
-              ${a.disposition ? ' &middot; ' + esc(a.disposition) : ''}
+              ${a.disposition ? ' &middot; <span style="color:var(--muted)">' + esc(a.disposition) + '</span>' : ''}
             </div>
           `).join('')}
       </div>
       ${actions.length > 0 ? `
-      <div class="section">
-        <h3>Pending Actions (${actions.length})</h3>
-        ${actions.map(a => `
-          <div class="artifact">
-            <span class="artifact-uri">${esc(a.tool_name)}</span> &middot; ${esc(a.kind)} &middot; ${esc(a.description)}
-          </div>
-        `).join('')}
-      </div>` : ''}
-      <div class="actions">
-        <button class="btn btn-approve" onclick="doDraftAction('${d.package_id}','approve')">Approve</button>
-        <button class="btn btn-deny" onclick="doDraftAction('${d.package_id}','deny')">Deny</button>
-      </div>
+        <div class="section">
+          <h3>Pending Actions (${actions.length})</h3>
+          ${actions.map(a => `
+            <div class="artifact">
+              <span class="artifact-uri">${esc(a.tool_name)}</span>
+              &middot; ${esc(a.kind)} &middot; ${esc(a.description)}
+            </div>
+          `).join('')}
+        </div>
+      ` : ''}
+      ${isReviewable ? `
+        <div class="actions">
+          <button class="btn btn-approve" onclick="doDraftAction('${d.package_id}','approve')">Approve</button>
+          <button class="btn btn-deny" onclick="doDraftAction('${d.package_id}','deny')">Deny</button>
+        </div>
+      ` : `
+        <div class="actions">
+          <button class="btn btn-ghost" onclick="loadDrafts()">&larr; Back</button>
+        </div>
+      `}
     </div>
   `;
 }
 
 async function doDraftAction(id, action) {
+  const btn = event && event.target;
+  if (btn) btn.disabled = true;
   try {
     const opts = { method: 'POST', headers: { 'Content-Type': 'application/json' } };
     if (action === 'deny') {
       const reason = prompt('Reason for denial:', 'Needs revision');
-      if (reason === null) return;
+      if (reason === null) { if (btn) btn.disabled = false; return; }
       opts.body = JSON.stringify({ reason });
     }
     const resp = await fetch('/api/drafts/' + id + '/' + action, opts);
-    if (resp.ok) { await loadDrafts(); }
-    else { alert('Action failed: ' + await resp.text()); }
-  } catch (e) { alert('Network error'); }
+    if (resp.ok) {
+      await loadDrafts();
+    } else {
+      alert('Action failed: ' + await resp.text());
+      if (btn) btn.disabled = false;
+    }
+  } catch (e) {
+    alert('Network error');
+    if (btn) btn.disabled = false;
+  }
 }
 
-// ── Memory (v0.5.7) ──────────────────────────────────────────
+// ── Agent Questions ────────────────────────────────────────────
+async function loadQuestions() {
+  app.innerHTML = '<div class="loading">Loading questions...</div>';
+  try {
+    const resp = await fetch('/api/interactions/pending');
+    const questions = resp.ok ? await resp.json().catch(() => []) : [];
+    renderQuestions(questions);
+  } catch (e) {
+    app.innerHTML = '<div class="empty">Failed to load questions. Is the daemon running?</div>';
+  }
+}
+
+function renderQuestions(questions) {
+  if (!questions || questions.length === 0) {
+    app.innerHTML = `
+      <div class="empty">
+        <p>No pending questions from agents.</p>
+        <p style="margin-top:0.5rem;font-size:0.85rem">When an agent needs clarification, its question will appear here.</p>
+        <button class="btn btn-sm btn-ghost" style="margin-top:1rem" onclick="loadQuestions()">Refresh</button>
+      </div>
+    `;
+    return;
+  }
+
+  app.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem">
+      <span style="color:var(--muted);font-size:0.85rem">${questions.length} question${questions.length !== 1 ? 's' : ''} waiting</span>
+      <button class="btn btn-sm btn-ghost" onclick="loadQuestions()">Refresh</button>
+    </div>
+  ` + questions.map((q, i) => `
+    <div class="card question-card" id="q-${esc(q.interaction_id || i)}">
+      <div class="card-header">
+        <span class="card-title" style="font-size:0.95rem">${esc(q.prompt || q.question || 'Agent question')}</span>
+        <span class="badge badge-question">Waiting</span>
+      </div>
+      <div class="card-meta">${timeAgo(q.created_at || q.timestamp)}
+        ${q.goal_id ? ' &middot; goal: <code>' + esc(q.goal_id.slice(0, 8)) + '</code>' : ''}</div>
+      ${q.context ? `<div style="margin-top:0.5rem;font-size:0.85rem;color:var(--muted)">${esc(q.context)}</div>` : ''}
+      <div class="answer-input">
+        <input id="ans-${i}" type="text" placeholder="Type your answer..."
+               onkeydown="if(event.key==='Enter')submitAnswer('${esc(q.interaction_id || '')}',${i})">
+        <button class="btn btn-primary btn-sm"
+                onclick="submitAnswer('${esc(q.interaction_id || '')}',${i})">Reply</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function submitAnswer(id, idx) {
+  const input = document.getElementById('ans-' + idx);
+  if (!input) return;
+  const answer = input.value.trim();
+  if (!answer) { input.focus(); return; }
+
+  input.disabled = true;
+  try {
+    const resp = await fetch('/api/interactions/' + id + '/respond', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ response: answer })
+    });
+    if (resp.ok) {
+      // Remove the card.
+      const card = document.getElementById('q-' + id) || input.closest('.card');
+      if (card) {
+        card.style.opacity = '0.5';
+        card.innerHTML += '<div style="color:var(--green);margin-top:0.5rem;font-size:0.85rem">Answer sent.</div>';
+      }
+      setTimeout(loadQuestions, 800);
+    } else {
+      const text = await resp.text();
+      alert('Failed to send answer: ' + text);
+      input.disabled = false;
+    }
+  } catch (e) {
+    alert('Network error');
+    input.disabled = false;
+  }
+}
+
+// ── Memory ─────────────────────────────────────────────────────
 async function loadMemory() {
   app.innerHTML = '<div class="loading">Loading memory...</div>';
   try {
@@ -225,8 +616,8 @@ async function loadMemory() {
       fetch('/api/memory/stats'),
       fetch('/api/memory?limit=50')
     ]);
-    const stats = await statsResp.json();
-    const entries = await entriesResp.json();
+    const stats = statsResp.ok ? await statsResp.json().catch(() => ({})) : {};
+    const entries = entriesResp.ok ? await entriesResp.json().catch(() => []) : [];
     renderMemory(stats, entries);
   } catch (e) {
     app.innerHTML = '<div class="empty">Failed to load memory store.</div>';
@@ -234,35 +625,30 @@ async function loadMemory() {
 }
 
 function renderMemory(stats, entries) {
-  const cats = Object.entries(stats.by_category || {}).sort((a,b) => b[1]-a[1]);
-  const srcs = Object.entries(stats.by_source || {}).sort((a,b) => b[1]-a[1]);
-
+  const cats = Object.entries(stats.by_category || {}).sort((a, b) => b[1] - a[1]);
   app.innerHTML = `
     <div class="stat-grid">
-      <div class="stat-card"><div class="stat-value">${stats.total_entries}</div><div class="stat-label">Total Entries</div></div>
-      <div class="stat-card"><div class="stat-value">${stats.expired_count}</div><div class="stat-label">Expired</div></div>
-      <div class="stat-card"><div class="stat-value">${stats.avg_confidence.toFixed(2)}</div><div class="stat-label">Avg Confidence</div></div>
+      <div class="stat-card"><div class="stat-value">${stats.total_entries || 0}</div><div class="stat-label">Total Entries</div></div>
+      <div class="stat-card"><div class="stat-value">${stats.expired_count || 0}</div><div class="stat-label">Expired</div></div>
+      <div class="stat-card"><div class="stat-value">${typeof stats.avg_confidence === 'number' ? stats.avg_confidence.toFixed(2) : '—'}</div><div class="stat-label">Avg Confidence</div></div>
       <div class="stat-card"><div class="stat-value">${cats.length}</div><div class="stat-label">Categories</div></div>
     </div>
     ${cats.length > 0 ? `<div class="section"><h3>By Category</h3>${cats.map(([c,n]) => `<span class="tag">${esc(c)}: ${n}</span>`).join(' ')}</div>` : ''}
-    ${srcs.length > 0 ? `<div class="section" style="margin-bottom:1rem"><h3>By Source</h3>${srcs.map(([s,n]) => `<span class="tag">${esc(s)}: ${n}</span>`).join(' ')}</div>` : ''}
-    <div class="search-bar">
+    <div class="search-bar" style="margin-top:1rem">
       <input type="text" id="memSearch" placeholder="Search memory entries..." onkeydown="if(event.key==='Enter')searchMemory()">
       <button class="btn btn-primary btn-sm" onclick="searchMemory()">Search</button>
-      <button class="btn btn-sm" style="background:var(--surface);color:var(--text);border:1px solid var(--border)" onclick="showCreateForm()">+ New</button>
+      <button class="btn btn-sm btn-ghost" onclick="showCreateForm()">+ New</button>
     </div>
-    <div id="memEntries">
-      ${renderMemoryEntries(entries)}
-    </div>
+    <div id="memEntries">${renderMemoryEntries(entries)}</div>
   `;
 }
 
 function renderMemoryEntries(entries) {
-  if (entries.length === 0) return '<div class="empty">No memory entries.</div>';
+  if (!entries || entries.length === 0) return '<div class="empty">No memory entries.</div>';
   return entries.map(e => {
     const val = typeof e.value === 'string' ? e.value : JSON.stringify(e.value);
-    const preview = val.length > 80 ? val.slice(0,77) + '...' : val;
-    const confPct = Math.round(e.confidence * 100);
+    const preview = val && val.length > 80 ? val.slice(0, 77) + '...' : (val || '');
+    const confPct = Math.round((e.confidence || 0) * 100);
     return `
       <div class="card" style="cursor:default">
         <div class="card-header">
@@ -275,7 +661,7 @@ function renderMemoryEntries(entries) {
         <div style="font-size:0.85rem;color:var(--muted);margin-top:0.4rem">${esc(preview)}</div>
         <div class="card-meta">
           source: ${esc(e.source)} &middot; ${timeAgo(e.updated_at)}
-          ${e.tags.length ? ' &middot; ' + e.tags.map(t => `<span class="tag">${esc(t)}</span>`).join('') : ''}
+          ${(e.tags || []).length ? ' &middot; ' + e.tags.map(t => `<span class="tag">${esc(t)}</span>`).join('') : ''}
           <span style="float:right;cursor:pointer;color:var(--red)" onclick="deleteMemory('${esc(e.key)}')">delete</span>
         </div>
       </div>
@@ -288,8 +674,9 @@ async function searchMemory() {
   if (!q) { loadMemory(); return; }
   try {
     const resp = await fetch('/api/memory/search?q=' + encodeURIComponent(q));
-    const entries = await resp.json();
-    document.getElementById('memEntries').innerHTML = renderMemoryEntries(entries);
+    const entries = resp.ok ? await resp.json().catch(() => []) : [];
+    const el = document.getElementById('memEntries');
+    if (el) el.innerHTML = renderMemoryEntries(entries);
   } catch (e) { /* ignore */ }
 }
 
@@ -302,29 +689,39 @@ async function deleteMemory(key) {
 }
 
 function showCreateForm() {
-  const html = `
+  app.innerHTML = `
     <span class="back" onclick="loadMemory()">&larr; Back to memory</span>
     <div class="detail">
       <h3 style="margin-bottom:1rem">Create Memory Entry</h3>
-      <label style="font-size:0.85rem;color:var(--muted)">Key</label>
-      <input id="newKey" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:0.5rem;color:var(--text);margin-bottom:0.75rem" placeholder="e.g., convention:use-tempdir">
-      <label style="font-size:0.85rem;color:var(--muted)">Value</label>
-      <textarea id="newValue" rows="3" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:0.5rem;color:var(--text);margin-bottom:0.75rem;resize:vertical" placeholder="Text or JSON value"></textarea>
-      <label style="font-size:0.85rem;color:var(--muted)">Category</label>
-      <select id="newCategory" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:0.5rem;color:var(--text);margin-bottom:0.75rem">
-        <option value="">None</option>
-        <option value="convention">Convention</option>
-        <option value="architecture">Architecture</option>
-        <option value="history">History</option>
-        <option value="preference">Preference</option>
-        <option value="relationship">Relationship</option>
-      </select>
-      <label style="font-size:0.85rem;color:var(--muted)">Tags (comma-separated)</label>
-      <input id="newTags" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:0.5rem;color:var(--text);margin-bottom:1rem" placeholder="e.g., testing, rust">
-      <button class="btn btn-primary" onclick="createMemory()">Create</button>
+      <div class="form-group">
+        <label>Key <span style="color:var(--red)">*</span></label>
+        <input id="newKey" type="text" placeholder="e.g., convention:use-tempdir">
+      </div>
+      <div class="form-group">
+        <label>Value</label>
+        <textarea id="newValue" placeholder="Text or JSON value"></textarea>
+      </div>
+      <div class="form-group">
+        <label>Category</label>
+        <select id="newCategory">
+          <option value="">None</option>
+          <option value="convention">Convention</option>
+          <option value="architecture">Architecture</option>
+          <option value="history">History</option>
+          <option value="preference">Preference</option>
+          <option value="relationship">Relationship</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Tags (comma-separated)</label>
+        <input id="newTags" type="text" placeholder="e.g., testing, rust">
+      </div>
+      <div class="actions">
+        <button class="btn btn-primary" onclick="createMemory()">Create</button>
+        <button class="btn btn-ghost" onclick="loadMemory()">Cancel</button>
+      </div>
     </div>
   `;
-  app.innerHTML = html;
 }
 
 async function createMemory() {
@@ -346,14 +743,8 @@ async function createMemory() {
   } catch (e) { alert('Network error'); }
 }
 
-function esc(s) {
-  if (!s) return '';
-  const el = document.createElement('span');
-  el.textContent = String(s);
-  return el.innerHTML;
-}
-
-loadDrafts();
+// ── Boot ──────────────────────────────────────────────────────
+loadDashboard();
 </script>
 </body>
 </html>

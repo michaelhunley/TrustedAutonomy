@@ -28,6 +28,7 @@ pub mod policy;
 pub mod pr;
 #[cfg(unix)]
 pub mod pty_capture;
+pub mod publish;
 pub mod release;
 pub mod run;
 pub mod runbook;
@@ -39,6 +40,7 @@ pub mod shell_tui;
 pub mod stats;
 pub mod status;
 pub mod sync;
+pub mod template;
 pub mod terms;
 pub mod token;
 pub mod verify;

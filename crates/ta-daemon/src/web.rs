@@ -430,6 +430,7 @@ pub fn build_router(pr_packages_dir: PathBuf) -> Router {
 fn build_web_routes(state: Arc<WebState>) -> Router {
     Router::new()
         .route("/", get(index))
+        .route("/ui", get(index))
         .route("/shell", get(shell_page))
         .route("/manifest.json", get(manifest))
         // Favicon and icon routes (v0.10.18.7)
@@ -513,6 +514,11 @@ pub async fn serve_daemon_api(
         tracing::debug!("Removed daemon PID file");
     });
 
+    // Capture web_ui setting before daemon_config is moved.
+    let web_ui_enabled = daemon_config.server.web_ui;
+    let web_ui_port = daemon_config.server.port;
+    let web_ui_bind = daemon_config.server.bind.clone();
+
     let (app, app_state) = build_full_router(project_root, daemon_config);
 
     // Startup recovery: resume state-poll tasks for any goals that were
@@ -528,6 +534,13 @@ pub async fn serve_daemon_api(
 
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     tracing::info!("Daemon API listening on http://{}", bind);
+    if web_ui_enabled {
+        tracing::info!(
+            "Web UI available at http://{}:{}/ui",
+            web_ui_bind,
+            web_ui_port
+        );
+    }
     axum::serve(listener, app)
         .with_graceful_shutdown(async move {
             shutdown.notified().await;

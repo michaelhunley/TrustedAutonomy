@@ -369,6 +369,32 @@ enum Commands {
         #[command(subcommand)]
         command: commands::plugin::PluginCommands,
     },
+    /// Manage creative project templates (install, list, remove, publish, search).
+    ///
+    /// Templates provide project scaffolding including workflow.toml, .taignore,
+    /// optional memory.toml, and an onboarding goal prompt.
+    ///
+    /// Examples:
+    ///   ta template list
+    ///   ta template install blender-addon
+    ///   ta template install github:myorg/my-template
+    ///   ta template install ./my-local-template
+    Template {
+        #[command(subcommand)]
+        command: commands::template::TemplateCommands,
+    },
+    /// One-step publish: apply the latest approved draft, commit, push, and create a PR.
+    ///
+    /// Finds the most recently approved draft, applies it, stages and commits
+    /// changes with git, pushes to the remote, and optionally opens a GitHub PR.
+    Publish {
+        /// Commit message (defaults to the draft title).
+        #[arg(long, short)]
+        message: Option<String>,
+        /// Skip confirmation prompts (non-interactive mode).
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
     /// Manage multi-stage workflows with pluggable engines.
     Workflow {
         #[command(subcommand)]
@@ -790,6 +816,10 @@ fn main() -> anyhow::Result<()> {
         Commands::Plugin { command } => {
             commands::plugin::run_plugin(&project_root, command)?;
             Ok(())
+        }
+        Commands::Template { command } => commands::template::execute(command, &config),
+        Commands::Publish { message, yes } => {
+            commands::publish::execute(&project_root, message.as_deref(), *yes)
         }
         Commands::Workflow { command } => commands::workflow::execute(command, &config),
         Commands::Stats { command } => commands::stats::execute(command, &config),

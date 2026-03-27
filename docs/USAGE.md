@@ -76,6 +76,26 @@ Trusted Autonomy (TA) is a governance wrapper for AI agents. It lets any agent w
 
 ---
 
+## Getting Started (No Terminal)
+
+If you prefer working in a browser, start the TA daemon and open the web dashboard:
+
+```bash
+ta daemon start
+open http://localhost:7700/ui
+```
+
+From the dashboard you can:
+
+- **Start a Goal** — enter a title, optional description, and pick a template
+- **Review Drafts** — see proposed changes, approve or deny with one click
+- **Answer Agent Questions** — respond to agents that need your input
+- **Browse Memory** — inspect and manage what the agents remember about your project
+
+No CLI commands are needed for the review loop once the daemon is running.
+
+---
+
 ## Quick Start
 
 ### Install
@@ -4778,23 +4798,33 @@ When `ta run` launches an agent, solution entries matching the project type are 
 Review drafts from a browser instead of the terminal. Useful for non-CLI users, team reviews, or when you want a visual overview.
 
 ```bash
-# Start the daemon with web UI on port 7676
-ta-daemon --project-root . --web-port 7676
+# Start the daemon
+ta daemon start
+
+# Open the dashboard
+open http://localhost:7700/ui
 ```
 
-Open `http://127.0.0.1:7676` to see:
-- **Draft list** -- all drafts with status badges (Draft, Pending, Approved, Denied), timestamps, and artifact counts
-- **Draft detail** -- click a draft to see its artifacts, pending actions (intercepted MCP tool calls), and summary
-- **Approve/Deny** -- one-click buttons with optional denial reason
+The dashboard has four tabs:
 
-The web UI reads from the same `.ta/pr_packages/` directory as the CLI. Approving a draft in the browser is reflected in `ta draft list` and vice versa.
+- **Dashboard** — Active work, ready-to-review drafts, and agent questions at a glance
+- **Start a Goal** — Form to start a new goal with title, description, and template selection
+- **Review Drafts** — Browse all drafts, see changed files, approve or deny with one click
+- **Agent Questions** — Answer pending questions from agents without leaving the browser
 
-You can also set the port in your gateway config so it starts automatically:
+When the daemon starts, it logs the web UI URL:
+
+```
+Daemon API listening on http://127.0.0.1:7700
+Web UI available at http://127.0.0.1:7700/ui
+```
+
+To disable the web UI:
 
 ```toml
-# .ta/workflow.toml or gateway config
-[gateway]
-web_ui_port = 7676
+# .ta/daemon.toml
+[server]
+web_ui = false
 ```
 
 ### Daemon Lifecycle Management
@@ -7888,6 +7918,137 @@ ta stats export --format csv  # CSV for spreadsheets
 ```
 
 The velocity stats file is at `.ta/velocity-stats.jsonl` — one JSON entry per line, human-readable, and easy to query with `jq`.
+
+---
+
+## Creative Templates
+
+Templates are project scaffolding packages that include a `workflow.toml`, `.taignore`, optional `memory.toml`, and an onboarding goal prompt. They provide a starting point for common project types.
+
+### Listing templates
+
+```bash
+ta template list               # show installed + built-in templates
+ta template list --available   # query the community registry
+```
+
+### Installing a template
+
+```bash
+# Install by registry name
+ta template install blender-addon
+
+# Install from GitHub
+ta template install github:myorg/my-template
+
+# Install from a local directory
+ta template install ./my-local-template
+
+# Install as project-local (overrides global for this project only)
+ta template install ./my-template --local
+```
+
+### Using a template
+
+```bash
+ta new run --template blender-addon --name my-addon
+```
+
+### Removing a template
+
+```bash
+ta template remove blender-addon
+ta template remove blender-addon --local   # remove project-local copy
+```
+
+### Publishing a template
+
+```bash
+ta template publish ./my-template
+```
+
+This computes a SHA-256 of the template directory and prints a submission manifest. Set `TA_TEMPLATE_REGISTRY_TOKEN` to publish to the community registry.
+
+### Searching community templates
+
+```bash
+ta template search "blender"
+ta template search "python creative"
+```
+
+### Template manifest (`template.toml`)
+
+A valid template directory must contain `template.toml`:
+
+```toml
+name = "blender-addon"
+version = "1.0.0"
+description = "Blender Python addon"
+tags = ["blender", "python", "creative"]
+author = "My Name"
+ta_version_min = "0.14.8-alpha"
+
+[verify]
+commands = ["python -m py_compile src/**/*.py"]
+
+[files]
+workflow_toml = "workflow.toml"
+taignore = ".taignore"
+```
+
+---
+
+## Plan Wizard and Import
+
+### Interactive plan builder wizard
+
+The plan wizard walks you through creating a `PLAN.md` interactively without needing an agent session:
+
+```bash
+ta plan wizard
+```
+
+You will be prompted for:
+- Project name
+- One-sentence description
+- Main phases (comma-separated)
+
+The wizard writes a structured `PLAN.md` with versioned phases (`v0.1.0`, `v0.2.0`, ...).
+
+### Importing a description
+
+Convert a free-form description or bulleted list into a `PLAN.md`:
+
+```bash
+ta plan import --from docs/features.md
+ta plan import --from notes.txt --output PLAN.md
+```
+
+The import command handles:
+- Bullet points: `- item` or `* item`
+- Numbered lists: `1. item` or `1) item`
+- Blank-line-separated paragraphs (fallback)
+
+---
+
+## One-Step Publish
+
+`ta publish` combines draft apply, git commit, push, and PR creation into one step:
+
+```bash
+ta publish                                    # interactive prompts
+ta publish --message "feat: add auth"         # specify commit message
+ta publish --message "feat: add auth" --yes   # skip all prompts
+```
+
+Behavior:
+1. Finds the most recently approved draft in `.ta/pr-packages/`
+2. Prompts for a commit message (defaults to the draft title)
+3. Applies the draft with `ta draft apply`
+4. Stages all changes with `git add -A`
+5. Commits with the provided message
+6. Pushes to the remote (if git is configured)
+7. Creates a GitHub PR with `gh pr create` (if `gh` CLI is available)
 
 ---
 
