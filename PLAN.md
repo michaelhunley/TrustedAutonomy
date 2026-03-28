@@ -7659,14 +7659,43 @@ Two separate issues must both be fixed:
 
 9. [ ] **End-to-end tail test**: Populate buffer with 200 lines, simulate scroll-up (scroll_offset = 50), simulate scroll-back-to-bottom (scroll_offset = 0) → assert `auto_scroll == true`. Append 10 new lines → assert `scroll_offset` stays 0. Verify `is_at_bottom()` returns true when content shorter than viewport.
 
-10. [ ] **Manual verification checklist** (must be done before marking done — these cannot be tested headlessly):
+10. [ ] **Prompt line word-wrap at window width**: The `ta>` input prompt currently stays on a single line and scrolls right indefinitely when input exceeds terminal width. It must wrap at word boundaries — never splitting a word across lines — matching the behaviour of Claude's chat input and standard terminal editors. Implementation: in the `ta shell` input renderer, calculate available width as `terminal_width - prompt_prefix_len`. When `input_buffer` rendered length exceeds available width, reflowed into continuation lines using word-boundary breaks. Cursor position tracking must account for the multi-line layout so left/right arrows and Home/End work correctly across wrapped lines. Test: input a 200-char string in a 80-col terminal → renders across multiple lines with no word split at boundary, cursor moves correctly.
+
+11. [ ] **Manual verification checklist** (must be done before marking done — these cannot be tested headlessly):
     - [ ] Cmd+V in iTerm2 on Mac inserts clipboard text into `ta>` prompt
     - [ ] Cmd+V in Terminal.app on Mac inserts clipboard text
     - [ ] Ctrl+V on Linux (xterm/gnome-terminal) inserts clipboard text
     - [ ] Scroll up during agent output → scroll back to bottom → new output auto-follows
     - [ ] `:tail <id>` then scroll up → scroll back to bottom → output auto-follows without re-running `:tail`
+    - [ ] Type a command longer than terminal width → prompt wraps at word boundary, no horizontal scroll
 
 #### Version: `0.14.9.1-alpha`
+
+---
+
+### v0.14.9.2 — Draft View Polish & Shell Help
+<!-- status: pending -->
+**Goal**: Close the remaining rough edges in the draft review experience: collapsible sections in `ta shell` draft view, decision entries that explain what drove them (not just the internal rationale), file-level drill-down, selective artifact denial with agent interrogation, and a context-sensitive `help` command in the shell.
+
+**Depends on**: v0.14.7 (draft view structure), v0.14.9.1 (shell UX), v0.14.8.1 (DraftResolver)
+
+#### Items
+
+1. [ ] **Collapsible sections in `ta shell` draft view**: The structured output system (decisions, findings, artifact list) is already returned as structured JSON by the daemon. In the TUI, render draft view sections as collapsible rows: pressing `Enter` or `Space` on a section header toggles it expanded/collapsed. Each `Artifact`, `Decision`, and `Finding` is a collapsible row. Collapsed state shows the one-line summary; expanded shows full details. Implemented using a stateful list in ratatui with a `collapsed: bool` per row — no new widget library needed. This mirrors what TA Studio renders in the web UI using the same structured output data. Initial state: artifacts expanded, decisions collapsed (most users want file list first).
+
+2. [ ] **Decision `context` field — what drove the decision**: Each `Decision` entry currently shows what was decided and the internal rationale, but not what external need or constraint triggered it. Add a `context: Option<String>` field to the `AgentDecision` struct. The agent is prompted to populate it: "What feature, requirement, or constraint made this decision necessary?" This becomes the header line shown in collapsed state: `▸ [context] → [short decision summary] [confidence]`. Example: `▸ Ollama thinking-mode config → Use --thinking-mode CLI flag in args [95%]`. Without `context`, fall back to the first sentence of the rationale. Update `ta draft view <id> --section decisions` to show `context` as a bold header line above `Rationale:`.
+
+3. [ ] **`ta draft view <id> --file <pattern>`**: Show full diff content for specific files matching a glob pattern. `ta draft view abc123 --file "src/auth/*.rs"` streams the unified diff for matching artifacts to stdout. `ta draft view abc123 --file PLAN.md` shows that single file's diff. Multiple `--file` flags allowed. When no `--file` is given, shows the summary (current behaviour). Useful for inspecting a specific area of a large draft without opening every file.
+
+4. [ ] **Selective artifact deny + agent interrogation flow**: `ta draft deny <id> --file <path>` denies a single artifact within a draft rather than the whole draft. The remaining artifacts stay approved/pending. After denying, prompt: `"Ask the agent why it made this choice? [y/N]"` — on yes, opens an interactive one-shot query to the reviewer agent with the denied artifact's diff and rationale as context. Agent responds with its reasoning. User can then: (a) accept the explanation and re-approve the artifact, (b) provide a correction prompt and request a revised artifact (`ta draft revise <id> --file <path> --instruction "use X instead"`), or (c) leave it denied. The revised artifact goes through the same constitution check before being added back to the draft.
+
+5. [ ] **`:help` command in `ta shell`**: Typing `:help` (or `help` or `?`) in the shell prompt invokes a context-sensitive help experience. The shell detects the current context (e.g., viewing a draft, running a goal, idle) and presents: `"Do you want: 1) all available commands, 2) help with a specific aspect, 3) I'm good now"`. Option 1 prints the command reference for the current context. Option 2 accepts a freeform question and routes it to the QA agent (a lightweight claude invocation with the TA command docs + current state as context). Option 3 dismisses. The QA response streams inline in the shell output buffer. No persistent conversation — each `:help` query is one-shot.
+
+6. [ ] **`Studio-WalkThru.md` additions**: Add two new sections after the existing "Iterating" section: (a) "Denying Part of a Draft" — walk through `ta draft deny` for a single file, asking the agent why it made the choice, receiving its explanation, then issuing a correction and seeing the revised artifact. (b) "Examining a Specific File in a Draft" — show `ta draft view <id> --file <path>` to inspect a single file's diff in detail without reviewing the whole draft.
+
+7. [ ] **Tests**: Collapsible TUI: toggle a collapsed row, verify re-render shows full content; toggle back, verify summary. `AgentDecision` context field: round-trip serialization. `--file` flag: glob matches correct artifacts, unmatched glob returns clear error. Selective deny: artifact disposition updated, others unchanged. Interrogation: mock reviewer agent returns explanation. `:help` context detection: idle → shows idle commands; draft-viewing → shows draft commands.
+
+#### Version: `0.14.9.2-alpha`
 
 ---
 
@@ -8065,6 +8094,63 @@ VS Code Extension
 6. [ ] **luarocks / GitHub Releases packaging**: Distribute via `luarocks` and GitHub Releases.
 
 #### Version: `0.15.2-alpha`
+
+---
+
+### v0.15.3 — Ollama Agent Framework Plugin (Extract & Standalone)
+<!-- status: pending -->
+**Goal**: Extract `ta-agent-ollama` from the TA monorepo into a standalone agent-framework plugin with its own repository, README, and usage documentation. TA's built-in USAGE.md "Local Models" section becomes a short pointer to the plugin project. This follows the same pattern as the VCS plugins (`ta-vcs-git`, `ta-vcs-p4`) — TA ships the plugin protocol and discovery, first-party plugins live in their own repos and are published to the plugin registry.
+
+**Why extract**: Ollama support has its own dependency surface (Ollama binary, model management, thinking-mode tokens), release cadence (tracks Ollama API changes independently of TA core), and user audience (local-model users who may not need TA's full feature set). Keeping it in-tree makes the core binary heavier and couples TA releases to Ollama API changes.
+
+**Depends on**: v0.14.9 (Qwen3.5 profiles, `ta agent install` flow), v0.14.4 (daemon extension surface / plugin traits)
+
+#### Design
+
+The plugin lives at `ta-agent-ollama` (separate repository). It registers itself via the existing agent plugin discovery mechanism (`~/.config/ta/agents/` or `.ta/agents/`). Installation:
+
+```bash
+# Via ta agent install (calls the plugin registry)
+ta agent install ollama
+
+# Or direct from the plugin repo
+ta plugin install github:trusted-autonomy/ta-agent-ollama
+```
+
+The plugin's own `README.md` covers everything Ollama-specific: prerequisites, model selection, thinking-mode, hardware sizing, `ta agent install qwen3.5` workflow, troubleshooting. TA's USAGE.md "Local Models" section becomes:
+
+```markdown
+## Local Models
+
+TA supports local AI models via the [ta-agent-ollama plugin](https://github.com/trusted-autonomy/ta-agent-ollama).
+
+Quick start:
+  ta agent install ollama      # install the plugin
+  ta agent install qwen3.5     # pull the recommended model
+
+See the [ta-agent-ollama README] for model selection, hardware requirements,
+thinking-mode configuration, and troubleshooting.
+```
+
+#### Items
+
+1. [ ] **Create `ta-agent-ollama` repository**: New public repo under the Trusted Autonomy GitHub org. Scaffold: `Cargo.toml`, `src/lib.rs`, `README.md`, `USAGE.md`, `agents/` (Qwen3.5 profiles), `tests/`. CI: build + test on push. Publish to `crates.io` as `ta-agent-ollama`.
+
+2. [ ] **Move `ta-agent-ollama` crate**: Copy from monorepo `crates/ta-agent-ollama/` to the new repo. Update `Cargo.toml` workspace membership. Remove from monorepo `Cargo.toml` workspace members. Monorepo retains a `ta-agent-ollama` dev-dependency only for integration tests (behind a feature flag).
+
+3. [ ] **Plugin manifest**: `ta-agent-ollama` ships a `plugin.toml` declaring its capabilities, supported agent frameworks, min TA version, and install instructions. TA's plugin registry resolves it at `ta agent install ollama`.
+
+4. [ ] **Plugin README**: Complete standalone documentation: prerequisites (Ollama binary, supported platforms), model catalog (Qwen3.5 4B/9B/27B, Llama 3.x, Mistral, DeepSeek), install flow (`ta agent install`), thinking-mode configuration, hardware sizing table, `ta doctor` integration, troubleshooting (VRAM errors, connection refused, slow inference). Written for non-engineers — should feel like the Studio-WalkThru.md style.
+
+5. [ ] **TA USAGE.md "Local Models" section rewrite**: Replace the current inline Ollama documentation with a short pointer section. Include the install command, a one-paragraph description, and a link to the plugin README. Keep the `ta agent install <model>` command documented here since it's a core TA command.
+
+6. [ ] **`ta plugin` command** (if not already present): `ta plugin install <source>`, `ta plugin list`, `ta plugin remove <name>`. Source formats: `github:<org>/<repo>`, `crates:<crate-name>`, local path. Used to install community agent plugins beyond the first-party set.
+
+7. [ ] **Migration guide**: For existing users who have `ta-agent-ollama` configured via the monorepo build, provide a one-command migration: `ta agent migrate ollama` — detects existing config, installs the standalone plugin, updates profile paths, verifies connectivity.
+
+8. [ ] **Tests**: Plugin discovery finds `ta-agent-ollama` after `ta agent install ollama`. Agent profile round-trip through the plugin manifest. `ta plugin list` shows the installed plugin with version. Migration command preserves existing model config.
+
+#### Version: `0.15.3-alpha`
 
 ---
 
