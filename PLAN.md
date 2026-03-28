@@ -7835,183 +7835,156 @@ ta session run                  # execute approved items as governed workflow
 
 ---
 
-### v0.14.13 — Guided Setup Console & Installer
+### v0.14.13 — TA Console: Setup Wizard & Settings Management
 <!-- status: pending -->
-**Goal**: A complete guided setup experience for TA that works for non-engineers and engineers alike. The current setup flow assumes the user already knows what VCS they use, has an API key ready, and knows to run `ta init`. This phase replaces that with a wizard-driven console that walks through every dependency in the right order, gives actionable external instructions where needed (e.g. "Go create a Git repository, then come back"), and can be re-run at any time to update settings. The output is a fully-configured `.ta/` workspace and a web console ready to use.
+**Goal**: TA Console (the web app at `http://localhost:7700`) gains a first-run Setup Wizard and a persistent Settings section that let non-engineers configure everything an engineer would do by editing YAML files — without ever seeing a YAML file. Engineers can still edit YAML directly; the Console is the non-engineer surface. Setup can be re-run at any time to update any setting.
 
-**Depends on**: v0.14.8 (web UI), v0.14.11 (project session / ta new)
+**Key principle**: The Console owns all user-facing configuration. YAML files are the storage format — they are written by the Console, not by the user. Non-engineers should never need to open `workflow.toml`, `daemon.toml`, `policy.yaml`, or `constitution.toml` directly.
 
-#### Design
+**Depends on**: v0.14.8 (web UI shell), v0.14.11 (project session / ta new)
 
-The entry point is `ta console` (or `ta install` for first-time users). It launches either an interactive terminal wizard or (if the web UI is running) opens the setup console in the browser. Both paths share the same configuration backend — the wizard just writes to the same `daemon.toml`, `workflow.toml`, and `config.yaml` files that exist today.
+#### Design — First-Run Setup Wizard
 
-**Wizard sections** (each skippable on re-run if already configured):
-
-```
-┌─ TA Setup Console ──────────────────────────────────────────────┐
-│                                                                  │
-│  1. Agent System        Choose how TA runs AI tasks             │
-│  2. Version Control     Connect your VCS                        │
-│  3. Web Console         Install the TA web UI                   │
-│  4. Notifications       Discord / Slack (optional)              │
-│  5. Create Project      Set up your first workspace & plan      │
-│                                                                  │
-│  [Run All]  [Skip to section]  [Update existing]                │
-└──────────────────────────────────────────────────────────────────┘
-```
-
-**Re-runnable**: `ta console --section vcs` re-runs just the VCS section. `ta console --update` re-runs all sections, preserving existing values as defaults.
-
-#### Section: Agent System
-
-Asks which AI backend to use. Options presented as a numbered list with one-line descriptions:
+When the Console loads and no TA workspace is configured, it shows the Setup Wizard as a full-screen multi-step flow. Each step is a web form with plain-English labels — no YAML, no technical jargon beyond what the user needs to make a choice.
 
 ```
-Which agent system would you like to use?
+Step 1 of 5 ── Agent System
+  How should TA run AI tasks?
 
-  1. Claude (Anthropic API)     — Best quality, requires API key
-  2. Local model (Ollama)       — Runs on your hardware, private, no API key
-  3. OpenAI-compatible endpoint — Any OpenAI API-compatible service
-  4. Skip for now               — Configure later with: ta console --section agent
+  ○ Claude (Anthropic)    Best results. Paste your API key below.
+  ○ Local model (Ollama)  Runs on your computer. No account needed.
+  ○ Other (OpenAI API)    Any OpenAI-compatible service.
+
+  API key: [________________________]  [Validate]
+
+  ✓ Key validated — Claude Sonnet is ready.
+                                               [Next →]
 ```
 
-For Claude: prompts for the API key (`ANTHROPIC_API_KEY`), validates it with a test call, writes to `~/.config/ta/daemon.toml`. Never stores the key in the project directory. Shows: "Key validated — Claude Sonnet is ready."
-
-For Ollama: checks if Ollama is installed and running. If not, prints the install URL and a "Press Enter when Ollama is running" prompt. Then runs `ta agent install qwen3.5 --size 9b` (or lets the user pick size). If Ollama is running but no model is pulled, runs the pull interactively.
-
-For OpenAI-compatible: prompts for base URL and API key. Validates with a `/models` probe.
-
-#### Section: Version Control
-
-Detects existing VCS in the current directory and shows what was found. For each detected/chosen VCS, gives the full setup path:
-
 ```
-Which version control system does this project use?
+Step 2 of 5 ── Version Control
+  Where does your code live?
 
-  1. Git (detected — remote: github.com/org/repo)
-  2. Git (no remote detected)
-  3. Perforce / Helix Core
-  4. None — TA will manage files without VCS integration
-```
+  ○ GitHub / GitLab / Bitbucket  (Git detected at /path/to/project)
+  ○ Perforce / Helix Core
+  ○ No version control yet
 
-**Git with remote detected**: shows current remote, asks to confirm. Checks `gh` CLI is installed and authenticated; if not, prints: "Install GitHub CLI: brew install gh  →  gh auth login  →  then press Enter to continue."
+  [For Git] GitHub token: [__________]  [Connect]
+  ✓ Connected as @username
 
-**Git, no remote**: prints step-by-step instructions:
-```
-Next steps:
-  1. Create a repository at github.com/new (or your Git host)
-  2. Copy the remote URL (e.g. git@github.com:org/repo.git)
-  3. Run: git remote add origin <URL>
-  4. Run: git push -u origin main
-  Then press Enter to continue.
+  ┌─ Don't have a repository yet? ──────────────────────────────┐
+  │  1. Go to github.com/new and create a repository            │
+  │  2. Come back here and paste the URL                        │
+  │  Repository URL: [________________________________]          │
+  └──────────────────────────────────────────────────────────────┘
+                                               [Next →]
 ```
 
-**Perforce**: prompts for P4PORT, P4USER, P4CLIENT. Validates with `p4 info`. Asks if the user wants to install the `ta-p4-trigger` server-side trigger (prints manual install instructions if they don't have P4 admin rights).
-
-**None**: explains that TA will still track drafts and history locally but won't create PRs.
-
-#### Section: Web Console
-
 ```
-Would you like to install the TA web console?
+Step 3 of 5 ── Notifications  (optional)
+  Get notified when goals complete or need your input.
 
-  The web console lets you review drafts, approve goals, and monitor
-  agent activity from a browser — no terminal required.
+  □ Discord  Webhook URL: [________________________________]  [Test]
+  □ Slack    Webhook URL: [________________________________]  [Test]
 
-  [Y] Install  [n] Skip
+  ✓ Test message sent to Discord.
+                                               [Skip] [Next →]
 ```
 
-On yes: checks that the daemon is installed and can start. Writes `[web] enabled = true` and `port = 7700` to `daemon.toml`. Starts the daemon and opens `http://localhost:7700` in the default browser. Prints: "Web console running at http://localhost:7700 — bookmark this."
-
-Also asks: "Start the web console automatically at login? [Y/n]" — installs a launchd plist (macOS) or systemd unit (Linux) or Windows service if yes.
-
-#### Section: Notifications (optional)
-
 ```
-Would you like to set up notifications? (optional)
+Step 4 of 5 ── Create Your First Project
+  What are you building?
 
-  Get notified when a goal completes, a draft needs review, or an
-  agent needs your input — without watching the terminal.
+  Project name:        [_________________________]
+  Short description:   [_________________________]
+  First goal:          [_________________________]
+                       (e.g. "Add user login", "Build checkout flow")
 
-  1. Discord webhook
-  2. Slack webhook
-  3. Both
-  4. Skip
+  Who reviews agent changes?
+  ○ Me — I'll approve every change
+  ○ Auto-approve when the reviewer agent is confident
+  ○ Always ask me, even when the reviewer approves
+                                               [Next →]
 ```
 
-For each: prompts for the webhook URL, sends a test message ("TA is connected — you'll be notified here when goals complete."), writes to `daemon.toml` `[notify]` section.
-
-#### Section: Create Project
-
-Only shown on first run or if no `.ta/` exists in the current directory:
-
 ```
-Would you like to create a TA project in this directory?
+Step 5 of 5 ── Ready
+  ✓ Agent: Claude Sonnet
+  ✓ Version control: GitHub (org/repo)
+  ✓ Notifications: Discord
+  ✓ Project: My Project created
 
-  This sets up:
-  • .ta/workflow.toml   — workflow and agent config
-  • .ta/policy.yaml     — what agents can and can't do
-  • .ta/constitution.toml — quality rules for agent output
-  • PLAN.md             — your project roadmap (optional)
-
-  [Y] Create project  [n] Skip
+  ┌──────────────────────────────────────────────────────────────┐
+  │  Start your first goal from the Console home screen,        │
+  │  or run:  ta run "Add user login"                           │
+  └──────────────────────────────────────────────────────────────┘
+                                               [Go to Console →]
 ```
 
-On yes: runs `ta init` (if not already done), then optionally runs `ta new --interactive` to create the first project plan. The plan wizard asks:
-- What is this project? (one-line description)
-- What's the first thing you want to build? (becomes the first plan phase)
-- Who will review agent output? (sets `gate_on_verdict` default)
+The wizard writes the appropriate config files on completion (`daemon.toml`, `workflow.toml`, `policy.yaml`, `.ta/` structure). The user never sees these files unless they choose to.
 
-The wizard finishes with a clear "What to do next" summary:
+#### Design — Settings Section
+
+After setup, the Console has a **Settings** section (top-nav or sidebar) with sub-pages corresponding to each config domain. Each sub-page is a form that reads current values from the config files and writes back on Save. Changes take effect immediately (daemon hot-reloads config).
 
 ```
-✓ TA is set up. Here's what to do next:
-
-  Start your first goal:
-    ta run "Your goal title"        — from terminal
-    http://localhost:7700           — from browser
-
-  Review what the agent produced:
-    ta draft list                   — see pending drafts
-    ta draft view <id>              — inspect changes
-    ta draft apply <id>             — apply to your project
-
-  Re-run setup anytime:
-    ta console                      — update any setting
-    ta console --section vcs        — update VCS only
-
-  Help:
-    ta help                         — all commands
-    ta doctor                       — check for issues
+Settings
+  ├── Agent           API key, model selection, temperature, max turns
+  ├── Version Control VCS type, remote URL, token, branch protection rules
+  ├── Workflow        Agent review, approval gates, verify commands, plan file
+  ├── Policy          What agents can/cannot do (file access, commands, scope)
+  ├── Constitution    Quality rules (shown as toggles/text, not raw TOML)
+  ├── Notifications   Discord, Slack, webhook URLs, event triggers
+  ├── Memory          Scope (local/team), retention, sharing config
+  └── Advanced        Raw config editor for engineers who want direct YAML access
 ```
+
+**Policy page**: Instead of editing `policy.yaml` directly, the user sees a list of toggleable rules:
+```
+Agent permissions
+  ✓ Read project files
+  ✓ Write project files
+  □ Run shell commands        [Enable]
+  □ Access the internet       [Enable]
+  ✓ Create git branches
+  □ Push to protected branches [Enable]
+```
+
+**Constitution page**: Quality rules shown as human-readable toggles with descriptions, not raw TOML. Custom rules can be added via a text field with plain-English input (TA formats it into TOML on save).
+
+**Advanced page**: Shows the raw YAML/TOML for each config file with a syntax-highlighted editor. For engineers who prefer direct control. Changes sync back to the UI fields.
 
 #### Items
 
-1. [ ] **`ta console` command**: Top-level entry point. `--section <name>` to jump to a specific section. `--update` to re-run all sections with existing values as defaults. `--non-interactive` for scripted installs (reads from env vars or `--config` JSON). Routes to the TUI wizard (terminal) or browser (if daemon is running and `--web` flag is set).
+1. [ ] **Settings API endpoints**: Daemon exposes `GET/PUT /api/settings/<section>` (agent, vcs, workflow, policy, constitution, notifications, memory). Each endpoint reads/writes the corresponding config file. Returns structured JSON — not raw YAML. Hot-reloads affected subsystems on write. Auth: localhost-only (same as existing web UI).
 
-2. [ ] **Agent system section**: Claude API key prompt + validation. Ollama detection, install guidance, and model pull. OpenAI-compatible endpoint probe. Writes to `~/.config/ta/daemon.toml` (user-level, not project). Never writes keys to project-level files.
+2. [ ] **Setup Wizard (web)**: 5-step flow rendered in the Console. Step 1: agent system (Claude/Ollama/OpenAI) with key validation. Step 2: VCS selection with auth flow and "no repo yet" guidance. Step 3: notifications (Discord/Slack webhooks, Test button). Step 4: project creation (name, description, first goal, approval gate preference). Step 5: completion summary. Wizard state persists across page reloads (saved to `.ta/setup-progress.json`) so users can complete it in multiple sessions.
 
-3. [ ] **VCS section**: Auto-detect Git/P4/SVN in current dir. Git: check `gh` CLI, guide through remote setup if missing. P4: validate P4PORT/P4USER/P4CLIENT, offer trigger install. None: acknowledge and continue. Writes VCS config to `.ta/workflow.toml`.
+3. [ ] **Agent Settings page**: Dropdown for agent system. API key field (masked, "set" indicator). Model selector (populated from available models for the chosen system). Sliders/inputs for temperature, max turns. "Test connection" button that runs a lightweight probe.
 
-4. [ ] **Web console section**: Enable daemon web UI, optionally install as a system service (launchd/systemd/Windows service), open browser. `ta console --section web --disable` tears it down.
+4. [ ] **VCS Settings page**: VCS type selector. For Git: remote URL, token/SSH key, default branch, PR title template. "Check connection" button. "No repo yet" expand section with step-by-step instructions (copy/paste commands or clickable GitHub link). For P4: P4PORT, P4USER, P4CLIENT fields with validation.
 
-5. [ ] **Notifications section**: Discord and Slack webhook prompts, test message, write to `[notify]` in `daemon.toml`. Each is independently skippable.
+5. [ ] **Workflow Settings page**: Plan file name (default: `PLAN.md`), agent review gate (`auto/prompt/always`), verify commands (add/remove/reorder list), staging strategy, PR auto-submit toggle.
 
-6. [ ] **Create project section**: Runs `ta init` if `.ta/` doesn't exist. Optionally runs the `ta new --interactive` plan wizard. Writes `.ta/policy.yaml`, `constitution.toml`, `workflow.toml` with sensible defaults.
+6. [ ] **Policy Settings page**: Toggle list for agent permissions (file read, file write, shell commands, network, git push to protected). Custom scope patterns (file globs the agent is allowed/denied). No raw YAML visible unless user opens Advanced.
 
-7. [ ] **"What to do next" summary**: Printed at the end of every `ta console` run. Adapts based on what was configured (e.g., includes web console URL only if web was enabled, includes Ollama run command only if Ollama was chosen).
+7. [ ] **Constitution Settings page**: Quality rules shown as human-readable cards with toggle + description. Built-in rules shown with checkboxes. Custom rules added via plain-English text input ("Agent must always write tests for new functions") — TA converts to TOML rule on save.
 
-8. [ ] **`ta install` alias**: `ta install` is an alias for `ta console` for first-time users who see it in the README. Same behavior.
+8. [ ] **Notifications Settings page**: Discord webhook URL + Test button. Slack webhook URL + Test button. Per-event toggles: goal complete, draft ready, human gate triggered, goal failed. Each channel independently enabled/disabled.
 
-9. [ ] **Re-run safety**: Re-running `ta console` never overwrites a config key that is already set unless the user explicitly changes it. Each section shows current values as defaults. Secrets (API keys, webhook URLs) are shown as `[set — press Enter to keep, or type new value]`.
+9. [ ] **Memory Settings page**: Scope selector per memory category (local/team). Retention period. "Clear local memory" button with confirmation. SA sync status indicator (grayed out until SA is connected).
 
-10. [ ] **Non-interactive / CI mode**: `TA_AGENT_KEY=... TA_VCS=git ta console --non-interactive` reads all config from env vars and writes config without prompting. Useful for automated team onboarding scripts.
+10. [ ] **Advanced page**: Syntax-highlighted read/write editors for `daemon.toml`, `workflow.toml`, `policy.yaml`, `constitution.toml`. Save button validates TOML/YAML before writing. Changes sync back to the structured settings pages immediately. Warning banner: "Changes here override the settings UI."
 
-11. [ ] **USAGE.md "Getting Started" rewrite**: Replace the current "Prerequisites" section with a "First Run" section that starts with `ta console` (or `ta install`). Each prerequisite (API key, Git, gh CLI) is now handled inside the wizard rather than listed as a manual step. Keep the manual reference docs for engineers who prefer it.
+11. [ ] **`ta install` CLI bootstrap**: Minimal terminal command that installs the daemon, starts it, and opens `http://localhost:7700/setup` in the default browser. For users who install via script (not Homebrew/MSI). `ta install` is the only terminal command a non-engineer ever needs to run.
 
-12. [ ] **USAGE.md "Governed Workflow" prerequisites block**: Add a short "Before you run" block at the top of the Governed Workflow section listing what `ta console` sets up, with a link to the First Run section. Resolves the missing-prerequisites gap identified in the current docs.
+12. [ ] **Re-run wizard**: "Run Setup Wizard again" button in Settings → top section. Navigates back to step 1 with all fields pre-filled from current config. User can change any step and skip the rest. On finish, writes only the changed fields.
 
-13. [ ] **Tests**: Agent section: API key validation round-trip (mock). Ollama detection when running/not running. VCS detection for Git (with/without remote), P4 (valid/invalid credentials). Notification test message sent (mock webhook). Re-run preserves existing values. Non-interactive mode reads env vars correctly.
+13. [ ] **USAGE.md "Getting Started" rewrite**: First-run instructions become: (1) install TA, (2) run `ta install`, (3) complete the web wizard. All prerequisite setup (API key, Git remote, gh CLI) is handled inside the wizard with inline instructions. Keep the existing manual CLI reference for engineers.
+
+14. [ ] **USAGE.md "Governed Workflow" prerequisites block**: Add a "Before you start" callout at the top of the Governed Workflow section pointing to the web wizard or to `ta doctor` for diagnosis.
+
+15. [ ] **Tests**: Settings API: GET returns current config as JSON; PUT writes and hot-reloads. API key validation endpoint (mock Anthropic). VCS connection check (mock git/p4). Webhook test send (mock HTTP). Wizard progress persistence round-trip. Policy toggle → correct `policy.yaml` diff. Constitution plain-English input → valid TOML rule generated.
 
 #### Version: `0.14.13-alpha`
 
