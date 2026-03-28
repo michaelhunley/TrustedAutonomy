@@ -7593,6 +7593,8 @@ For SA cloud hybrid: SA provides a webhook relay service (publicly-accessible HT
 
 9. [ ] **End-to-end validation with live Ollama models** (deferred from v0.13.16 item 5): Run a real goal using `ta run "..." --model ollama/qwen3.5:4b` against a live Ollama instance (manual/CI with `#[ignore]`). Verify: agent produces a valid draft, draft builds correctly, `ta draft apply` succeeds. Document the validation checklist in `tests/integration/ollama_e2e.md`. This closes the v0.13.16 deferred item.
 
+10. [ ] **Fix post-apply plan status check to read from staging, not source**: The `[warn] Plan: X is still 'pending'` check in `draft.rs` reads from `target_dir` (source working tree) after `auto_clean` has already deleted the staging dir. Move the check to before `auto_clean`, and read from `goal.workspace_path` (staging) instead — staging is the agent's authoritative output. Fall back to `target_dir` only if staging no longer exists. This eliminates the false-positive warning that fires even when the agent correctly marked the phase done in PLAN.md.
+
 #### Version: `0.14.9-alpha`
 
 ---
@@ -7825,7 +7827,9 @@ ta session run                  # execute approved items as governed workflow
 
 11. [ ] **USAGE.md "Maintenance & GC" section**: `ta gc` usage, `ta goal purge`, `ta doctor` GC checks, auto-recovery behavior. **USAGE.md "Memory Sharing" section**: `[memory.sharing]` config, scope tagging, `ta memory list --scope team`, SA sync integration notes.
 
-12. [ ] **Tests**: Auto-recovery detects Running+no-heartbeat goal and builds draft. `ta gc --dry-run` lists correct targets without deleting. Progress journal write/resume round-trip. `Failed+staging` goal appears in default list with `[recoverable]` tag. Scope tag written and queryable. `ta doctor` emits GC warning for stale staging dir.
+12. [ ] **Configurable plan file path**: `PLAN.md` is hardcoded in ~30 places. Add `[plan] file = "PLAN.md"` to `workflow.toml` (`WorkflowConfig`). Extract a `resolve_plan_path(workspace_root, &config) -> PathBuf` helper and replace all `.join("PLAN.md")` call sites with it. The `apply.policy` default entry also follows the configured name. Enables teams using `ROADMAP.md`, `TODO.md`, `docs/plan.md`, or non-standard layouts to use TA plan phase tracking without renaming their file.
+
+13. [ ] **Tests**: Auto-recovery detects Running+no-heartbeat goal and builds draft. `ta gc --dry-run` lists correct targets without deleting. Progress journal write/resume round-trip. `Failed+staging` goal appears in default list with `[recoverable]` tag. Scope tag written and queryable. `ta doctor` emits GC warning for stale staging dir. `[plan] file = "ROADMAP.md"` resolves correctly across draft apply, plan status check, and run injection.
 
 #### Version: `0.14.12-alpha`
 
