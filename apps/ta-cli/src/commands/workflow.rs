@@ -1708,4 +1708,44 @@ roles: {}
         let result = resume_workflow("nonexistent-run", &config);
         assert!(result.is_ok());
     }
+
+    #[test]
+    fn resume_workflow_with_stored_artifacts_shows_completed_stage() {
+        // Populate the artifact store with step-1 output, then call resume_workflow.
+        // Verifies: resume_workflow finds the stored artifact, reports the stage as
+        // completed, and returns Ok (no panic or error when artifacts are present).
+        let dir = tempfile::tempdir().unwrap();
+        let config = GatewayConfig::for_project(dir.path());
+
+        // Store an artifact for the "generate-plan" stage.
+        let memory_dir = dir.path().join(".ta").join("memory");
+        let store = ArtifactStore::new(&memory_dir);
+        store
+            .store(
+                "run-resume-test",
+                "generate-plan",
+                &ArtifactType::PlanDocument,
+                serde_json::json!({"items": ["step A", "step B"]}),
+            )
+            .unwrap();
+
+        // resume_workflow should find the stored artifact and return Ok.
+        let result = resume_workflow("run-resume-test", &config);
+        assert!(
+            result.is_ok(),
+            "resume_workflow must succeed when artifacts are present"
+        );
+
+        // Also verify the completed_stages helper agrees the stage is done.
+        let stage_specs: Vec<(&str, &[ArtifactType])> =
+            vec![("generate-plan", &[ArtifactType::PlanDocument])];
+        let completed = store
+            .completed_stages("run-resume-test", &stage_specs)
+            .unwrap();
+        assert_eq!(
+            completed,
+            vec!["generate-plan"],
+            "generate-plan must be reported as completed after its output is stored"
+        );
+    }
 }

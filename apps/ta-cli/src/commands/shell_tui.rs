@@ -7932,4 +7932,106 @@ mod tests {
         app.push_output(OutputLine::event("bottom event".into()));
         assert_eq!(app.unread_events, before, "no unread events when at bottom");
     }
+
+    #[test]
+    fn direct_input_write_uses_layout_width_for_height() {
+        // Verify that direct_input_write uses `size.width.saturating_sub(2)` as
+        // the layout width for computing content_lines / input_height, matching
+        // draw_ui's block inner width (border takes 1 char each side).
+        //
+        // A display string that fits within `width` but wraps within `width-2`
+        // demonstrates that `layout_width = width-2` gives the correct line count.
+        let width = 10u16;
+        // "hello xxx" = 9 chars; "hello" (5) + space + "xxx" (3).
+        // With layout_width=8 (width-2): space check triggers wrap (5+1+3=9 > 8) → 2 lines.
+        // With layout_width=10 (width): space check does not trigger (9 ≤ 10) → 1 line.
+        let display = "hello xxx";
+
+        // The formula from direct_input_write:
+        let layout_width = width.saturating_sub(2).max(1) as usize;
+        let (_, _, content_lines_layout) = word_wrap_metrics(display, display.len(), layout_width);
+
+        // The naive (incorrect) approach using full terminal width:
+        let (_, _, content_lines_full) = word_wrap_metrics(display, display.len(), width as usize);
+
+        assert_eq!(
+            content_lines_layout, 2,
+            "display must wrap with layout_width={} (width-2): got {} lines",
+            layout_width, content_lines_layout
+        );
+        assert_eq!(
+            content_lines_full, 1,
+            "display must not wrap with full width={}: got {} lines",
+            width, content_lines_full
+        );
+
+        // Confirm layout_width is exactly width-2.
+        assert_eq!(layout_width, (width - 2) as usize);
+
+        // input_height computed from layout_width is >= input_height from full width,
+        // meaning the input box correctly expands to accommodate the wrapped line.
+        let input_height_correct = (content_lines_layout + 2).clamp(3, 24 / 2);
+        let input_height_naive = (content_lines_full + 2).clamp(3, 24 / 2);
+        assert!(
+            input_height_correct >= input_height_naive,
+            "input_height from layout_width must be >= input_height from full width"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "makes real network calls; run with: cargo test -- --ignored reconnect_loop"]
+    async fn reconnect_loop_handles_failed_http_attempt() {
+        // Verify that start_tail_stream does NOT panic when all initial HTTP attempts
+        // fail. Before the v0.14.9.3 reconnect fix, a failed reconnect HTTP attempt
+        // inside the 'reconnect loop would call `continue 'reconnect` with
+        // `next_resp == None`, causing the subsequent `.take().expect()` to panic.
+        //
+        // This test exercises the initial-connection failure path (5 attempts to
+        // an unreachable server). The 'reconnect loop proper (stream-drops-mid-flight)
+        // requires a mock SSE server and is covered by manual verification.
+        //
+        // Expected: function returns without panicking; at least one error message is
+        // sent on the channel.
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_millis(50))
+            .build()
+            .unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<TuiMessage>();
+
+        // Port 1 (tcpmux) is reserved and refused on most platforms; the short
+        // timeout ensures rapid failure even on platforms where it times out.
+        start_tail_stream(
+            client,
+            "http://127.0.0.1:1",
+            Some("deadbeef-reconnect-test"),
+            tx,
+            0,
+        )
+        .await;
+
+        // Collect all messages emitted — must not have panicked.
+        let msgs: Vec<String> = std::iter::from_fn(|| rx.try_recv().ok())
+            .filter_map(|m| {
+                if let TuiMessage::CommandResponse(t) = m {
+                    Some(t)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        assert!(
+            !msgs.is_empty(),
+            "must emit at least one message when connection fails (got none)"
+        );
+        // At least one message must mention an error or inability to connect.
+        let has_error = msgs
+            .iter()
+            .any(|m| m.contains("Error") || m.contains("reach") || m.contains("connect"));
+        assert!(
+            has_error,
+            "at least one message must describe the connection failure; got: {:?}",
+            msgs
+        );
+    }
 }

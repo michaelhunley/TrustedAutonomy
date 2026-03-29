@@ -7821,7 +7821,7 @@ The WorkflowEngine:
 ---
 
 ### v0.14.10.2 — Artifact-Typed Workflow Edges: Completion
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Complete the deferred items from v0.14.10 and v0.14.10.1 — CLI commands, resume support, tests, manual verification, and documentation for artifact-typed workflow edges.
 
 **Depends on**: v0.14.10, v0.14.10.1

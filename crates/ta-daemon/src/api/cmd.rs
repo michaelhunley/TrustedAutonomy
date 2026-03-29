@@ -2031,4 +2031,44 @@ mod tests {
         assert!(!is_interactive_prompt("[tool] Edit"));
         assert!(!is_interactive_prompt("[tool] Bash"));
     }
+
+    #[test]
+    fn tool_input_summary_read_formats_path() {
+        // File-based tools show "  → <path>".
+        for tool in &["Read", "Write", "Edit", "MultiEdit", "NotebookEdit"] {
+            let input = serde_json::json!({"file_path": "/src/main.rs"});
+            let summary = tool_input_summary(tool, &input);
+            assert_eq!(
+                summary, "  → /src/main.rs",
+                "tool '{}' must format path with → prefix",
+                tool
+            );
+        }
+        // Bash shows "  $ <command>".
+        let cmd_input = serde_json::json!({"command": "cargo test"});
+        assert_eq!(tool_input_summary("Bash", &cmd_input), "  $ cargo test");
+
+        // Grep shows "  /  <pattern>".
+        let grep_input = serde_json::json!({"pattern": "fn main"});
+        assert_eq!(tool_input_summary("Grep", &grep_input), "  /  fn main");
+
+        // Glob shows "  *.  <pattern>".
+        let glob_input = serde_json::json!({"pattern": "**/*.rs"});
+        assert_eq!(tool_input_summary("Glob", &glob_input), "  *.  **/*.rs");
+
+        // Agent shows the description.
+        let agent_input = serde_json::json!({"description": "Explore the codebase"});
+        assert_eq!(
+            tool_input_summary("Agent", &agent_input),
+            "  → Explore the codebase"
+        );
+
+        // Unknown tool returns empty string.
+        let other_input = serde_json::json!({"data": "anything"});
+        assert_eq!(tool_input_summary("Unknown", &other_input), "");
+
+        // Missing field returns empty string.
+        let empty_input = serde_json::json!({});
+        assert_eq!(tool_input_summary("Read", &empty_input), "");
+    }
 }
