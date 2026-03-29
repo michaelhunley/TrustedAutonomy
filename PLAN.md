@@ -7735,7 +7735,7 @@ Two separate issues must both be fixed:
 ---
 
 ### v0.14.10 — Artifact-Typed Workflow Edges
-<!-- status: in_progress -->
+<!-- status: done -->
 **Goal**: Workflow steps declare typed `inputs` and `outputs` using an `ArtifactType` enum. The `WorkflowEngine` resolves the execution DAG automatically from type compatibility — a step that outputs `PlanDocument` is automatically wired to any step that accepts `PlanDocument` as input. Memory IS the session artifact store: artifacts are written to and read from `ta memory` by type key, making session state inspectable and resumable. This is the foundation for project-level oversight across multi-step agent workflows.
 
 **Depends on**: v0.14.8.2 (workflow engine), v0.14.3 (memory/Supermemory)
@@ -7781,22 +7781,20 @@ The WorkflowEngine:
 
 4. [x] **Memory as artifact store**: `artifact_store.rs` — `SessionArtifactStore` reads/writes artifacts to `.ta/sessions/<run-id>/<stage>/<type>.json`. Supports `store`, `retrieve`, and `list` operations. Resume checks for existing outputs.
 
-5. [ ] **`ta workflow graph <name>`**: Print the resolved DAG as ASCII art showing step names, types flowing along edges, and `→` connections. Useful for debugging workflow definitions before running them. `--dot` flag emits Graphviz DOT format. → v0.14.10.2
+#### Deferred items moved to v0.14.10.2
 
-6. [ ] **Resume from artifact store**: `ta workflow resume <run-id>` loads the run state, checks which step outputs exist in memory, skips completed steps, resumes at the first incomplete step. Handles partial completion (e.g., agent crashed mid-step). → v0.14.10.2
-
-7. [ ] **Swarm progress dashboard (from v0.13.16 item 13)**: `ta workflow status --live <run-id>` shows a live-updating terminal view of all parallel step executions. → v0.14.10.2
-
-8. [ ] **Tests**: DAG resolver unit tests (chain, parallel fan-out, cycle detection, missing type warning). Memory store/retrieve round-trip per ArtifactType. Resume: populate memory with step-1 output, run workflow, assert step-1 skipped. → v0.14.10.2
-
-9. [ ] **USAGE.md "Artifact-Typed Workflows" section**: How to declare I/O types, how the engine resolves the DAG automatically, how to inspect in-flight artifacts with `ta memory retrieve`, how to resume a failed workflow. → v0.14.10.2
+5. → v0.14.10.2: `ta workflow graph <name>` ASCII DAG + `--dot` Graphviz output
+6. → v0.14.10.2: `ta workflow resume <run-id>` — resume from artifact store
+7. → v0.14.10.2: `ta workflow status --live` swarm progress dashboard
+8. → v0.14.10.2: DAG resolver + artifact store + resume unit tests
+9. → v0.14.10.2: USAGE.md "Artifact-Typed Workflows" section
 
 #### Version: `0.14.10-alpha`
 
 ---
 
 ### v0.14.10.1 — Shell Reliability: Word Wrap, Scroll, Reconnect & Tool Output
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Fix three confirmed regressions in `ta shell` that were unverified in v0.14.9.3: (1) input prompt wraps to a new line instead of scrolling horizontally, (2) output scrolls correctly to bottom when new lines arrive during tail, (3) SSE reconnect loop does not panic on a failed reconnect HTTP request. Also restores the tool-input summary feature in the agent output stream (lost when v0.14.10 draft apply overwrote `cmd.rs`).
 
 **Root causes identified**:
@@ -7809,28 +7807,54 @@ The WorkflowEngine:
 
 #### Items
 
-1. [ ] **Fix `direct_input_write` layout width**: Use `size.width.saturating_sub(2)` for the `content_lines` / `input_height` calculation (matches `draw_ui`'s block inner width). Keep `size.width` for the text rendering loop and cursor positioning (direct write bypasses the block and fills the full terminal width). This fixes: input prompt correctly wraps and expands the input area instead of overflowing; `direct_input_write` draws at the same rows as `draw_ui`.
+1. [x] **Fix `direct_input_write` layout width**: Use `size.width.saturating_sub(2)` for the `content_lines` / `input_height` calculation (matches `draw_ui`'s block inner width). Keep `size.width` for the text rendering loop and cursor positioning (direct write bypasses the block and fills the full terminal width). This fixes: input prompt correctly wraps and expands the input area instead of overflowing; `direct_input_write` draws at the same rows as `draw_ui`.
 
-2. [ ] **Fix `direct_input_write` `text_end_row`**: Change from `size.height.saturating_sub(2)` to `(input_top + input_height).saturating_sub(2)`. This is the last row inside the block before the bottom border. Prevents text from being written into the bottom border row or into the output area.
+2. [x] **Fix `direct_input_write` `text_end_row`**: Change from `size.height.saturating_sub(2)` to `(input_top + input_height).saturating_sub(2)`. This is the last row inside the block before the bottom border. Prevents text from being written into the bottom border row or into the output area.
 
-3. [ ] **Fix `start_tail_stream` reconnect panic**: Restructure the reconnect section so that `next_resp` is always `Some(r)` before `continue 'reconnect`. Replace the current `continue 'reconnect` (on HTTP failure) with an inner retry loop that either sets `next_resp = Some(r)` on success or sends the max-retries error message and returns.
+3. [x] **Fix `start_tail_stream` reconnect panic**: Restructure the reconnect section so that `next_resp` is always `Some(r)` before `continue 'reconnect`. Replace the current `continue 'reconnect` (on HTTP failure) with an inner retry loop that either sets `next_resp = Some(r)` on success or sends the max-retries error message and returns.
 
-4. [ ] **Restore `cmd.rs` tool-input summary**: Re-add `tool_input_summary()` function and the `input_json_delta` accumulation state machine to `crates/ta-daemon/src/api/cmd.rs`. Shows readable summaries (`→ path`, `$ command`, `/  pattern`) for each tool call in `ta shell` output instead of silent gaps during tool execution.
+4. [x] **Restore `cmd.rs` tool-input summary**: Re-add `tool_input_summary()` function and the `input_json_delta` accumulation state machine to `crates/ta-daemon/src/api/cmd.rs`. Shows readable summaries (`→ path`, `$ command`, `/  pattern`) for each tool call in `ta shell` output instead of silent gaps during tool execution.
 
-5. [ ] **Tests for fixed behaviors** (run locally with `cargo test -- --ignored` for PTY tests):
-   - `direct_input_write_uses_layout_width_for_height` — unit test verifying `content_lines` calculation with inner width
-   - `reconnect_loop_handles_failed_http_attempt` — unit test verifying no panic when reconnect HTTP fails
-   - `tool_input_summary_read_formats_path` — unit test for summary function
+#### Deferred items moved to v0.14.10.2
 
-6. [ ] **Manual verification checklist** (real terminal required):
-   - [ ] Type a long sentence in `ta>` prompt — it wraps to a new line and the input box grows instead of scrolling horizontally
-   - [ ] Type past the right edge mid-word — word wraps cleanly, cursor stays on the correct visual line
-   - [ ] Run `ta run` with a goal → output streams, auto-scroll stays at bottom for the full duration of a 5+ minute goal without freezing
-   - [ ] Kill daemon mid-stream → shell shows reconnect message → daemon restarts → tail resumes
-   - [ ] Cmd+V in iTerm2 inserts clipboard text; Cmd+V in Terminal.app inserts clipboard text
-   - [ ] Agent tool calls show `→ path`, `$ command`, `/  pattern` in the shell output instead of nothing
+5. → v0.14.10.2: Unit tests for fixed behaviors (PTY tests, reconnect loop test, tool_input_summary test)
+6. → v0.14.10.2: Manual verification checklist (real terminal — word wrap, scroll, reconnect, clipboard, tool summaries)
 
 #### Version: `0.14.10-alpha.1`
+
+---
+
+### v0.14.10.2 — Artifact-Typed Workflow Edges: Completion
+<!-- status: pending -->
+**Goal**: Complete the deferred items from v0.14.10 and v0.14.10.1 — CLI commands, resume support, tests, manual verification, and documentation for artifact-typed workflow edges.
+
+**Depends on**: v0.14.10, v0.14.10.1
+
+#### Items
+
+1. [ ] **`ta workflow graph <name>`**: Print the resolved DAG as ASCII art showing step names, types flowing along edges, and `→` connections. `--dot` flag emits Graphviz DOT format. *(deferred from v0.14.10 item 5)*
+
+2. [ ] **Resume from artifact store**: `ta workflow resume <run-id>` loads the run state, checks which step outputs exist in memory, skips completed steps, resumes at the first incomplete step. *(deferred from v0.14.10 item 6)*
+
+3. [ ] **Swarm progress dashboard**: `ta workflow status --live <run-id>` shows a live-updating terminal view of all parallel step executions. *(deferred from v0.14.10 item 7 / v0.13.16 item 13)*
+
+4. [ ] **Tests — workflow engine**: DAG resolver unit tests (chain, parallel fan-out, cycle detection, missing type warning). Memory store/retrieve round-trip per ArtifactType. Resume: populate memory with step-1 output, run workflow, assert step-1 skipped. *(deferred from v0.14.10 item 8)*
+
+5. [ ] **Tests — shell reliability** (run locally with `cargo test -- --ignored` for PTY tests): *(deferred from v0.14.10.1 item 5)*
+   - `direct_input_write_uses_layout_width_for_height`
+   - `reconnect_loop_handles_failed_http_attempt`
+   - `tool_input_summary_read_formats_path`
+
+6. [ ] **Manual verification** (real terminal required): *(deferred from v0.14.10.1 item 6)*
+   - [ ] Long sentence wraps in `ta>` prompt — input box grows, no horizontal scroll
+   - [ ] Run a goal — output auto-scrolls for full duration without freezing
+   - [ ] Kill daemon mid-stream — shell reconnects, tail resumes
+   - [ ] Cmd+V inserts clipboard text in iTerm2 and Terminal.app
+   - [ ] Agent tool calls show `→ path`, `$ command`, `/  pattern` summaries
+
+7. [ ] **USAGE.md "Artifact-Typed Workflows" section**: How to declare I/O types, how the engine resolves the DAG automatically, how to inspect artifacts with `ta memory retrieve`, how to resume a failed workflow. *(deferred from v0.14.10 item 9)*
+
+#### Version: `0.14.10-alpha.2`
 
 ---
 
