@@ -845,6 +845,10 @@ impl SourceAdapter for GitAdapter {
         Ok(())
     }
 
+    fn current_branch(&self) -> Result<String> {
+        self.git_cmd(&["rev-parse", "--abbrev-ref", "HEAD"])
+    }
+
     fn revision_id(&self) -> Result<String> {
         let hash = self.git_cmd(&["rev-parse", "--short", "HEAD"])?;
 
