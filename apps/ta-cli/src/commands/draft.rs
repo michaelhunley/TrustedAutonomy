@@ -3627,6 +3627,12 @@ fn apply_package(
     // This closes the race window where: files written to main → apply interrupted
     // → user manually commits to main. After this block, the working tree is on
     // the feature branch regardless of how the rest of apply behaves.
+    //
+    // We also record the feature branch name here so that if the submit pipeline
+    // fails later, the error handler can show the user exactly which branch is
+    // safe to commit to manually (instead of blindly suggesting --no-submit which
+    // previously caused commits to land on main).
+    let mut preflight_branch: Option<String> = None;
     if git_commit {
         use ta_submit::{select_adapter, WorkflowConfig};
         let wf_path = target_dir.join(".ta/workflow.toml");
@@ -3675,11 +3681,17 @@ fn apply_package(
                     "[apply] Switched to feature branch '{}' — proceeding with file writes.",
                     new_branch
                 );
+                // Record the prepared feature branch so the submit-failure error
+                // handler can reference it by name.
+                preflight_branch = Some(new_branch);
             } else {
                 eprintln!(
                     "[apply] VCS pre-flight: already on branch '{}' (not protected) — ok.",
                     branch
                 );
+                // Already on the right branch; record it so the error handler
+                // can confirm the branch name if submit fails later.
+                preflight_branch = Some(branch);
             }
         }
     } else {
@@ -4742,14 +4754,66 @@ fn apply_package(
                     applied_files.len()
                 );
                 eprintln!("  Cause: {}", e);
+
+                // After restore_state() the working tree may be on the feature branch
+                // (if pre-flight switched there before save_state) or on the original
+                // branch (if save_state captured main and restore_state switched back).
+                // Always show the current branch explicitly so the user knows exactly
+                // where they are before following any manual-commit guidance.
+                let current_branch_after_restore = adapter
+                    .current_branch()
+                    .unwrap_or_else(|_| "unknown".to_string());
+                let protected_targets = adapter.protected_submit_targets();
+                let on_protected_after_restore = protected_targets
+                    .iter()
+                    .any(|b| b == &current_branch_after_restore);
+
+                eprintln!("\n  Current branch: {}", current_branch_after_restore);
+                if let Some(ref fb) = preflight_branch {
+                    if fb != &current_branch_after_restore {
+                        eprintln!(
+                            "  Feature branch created: {} (no commits were made to it)",
+                            fb
+                        );
+                    }
+                }
+                if on_protected_after_restore {
+                    eprintln!(
+                        "\n  [!] DANGER: you are on protected branch '{}'.",
+                        current_branch_after_restore
+                    );
+                    eprintln!(
+                        "  [!] Do NOT commit manually here. Switch to the feature branch first:"
+                    );
+                    if let Some(ref fb) = preflight_branch {
+                        eprintln!("  [!]   git checkout {}", fb);
+                    }
+                }
+
                 eprintln!("\nNext steps:");
-                eprintln!("  • Apply without VCS (copy files only, then commit manually):");
-                eprintln!("      ta draft apply {} --no-submit", short_id);
-                eprintln!("  • Retry once the issue is resolved:");
+                eprintln!("  • Retry (recommended) — files rolled back, VCS state is clean:");
                 eprintln!("      ta draft apply {} --submit", short_id);
                 if !skip_verify {
-                    eprintln!("  • Skip pre-submit checks:");
+                    eprintln!("  • Retry skipping pre-submit checks:");
                     eprintln!("      ta draft apply {} --skip-verify", short_id);
+                }
+                if !on_protected_after_restore {
+                    // Only suggest --no-submit when NOT on a protected branch.
+                    // On a non-protected (feature) branch, manual commit is safe.
+                    eprintln!(
+                        "  • Apply without VCS (files only, then commit manually on '{}'):",
+                        current_branch_after_restore
+                    );
+                    eprintln!("      ta draft apply {} --no-submit", short_id);
+                } else {
+                    // On a protected branch: show the safe manual path explicitly.
+                    eprintln!(
+                        "  • Apply without VCS (ONLY after switching to the feature branch):"
+                    );
+                    if let Some(ref fb) = preflight_branch {
+                        eprintln!("      git checkout {}", fb);
+                    }
+                    eprintln!("      ta draft apply {} --no-submit", short_id);
                 }
                 return Err(e);
             }
