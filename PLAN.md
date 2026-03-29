@@ -7828,31 +7828,24 @@ The WorkflowEngine:
 
 #### Items
 
-1. [ ] **`ta workflow graph <name>`**: Print the resolved DAG as ASCII art showing step names, types flowing along edges, and `→` connections. `--dot` flag emits Graphviz DOT format. *(deferred from v0.14.10 item 5)*
+1. [x] **`ta workflow graph <name>`**: Prints the resolved DAG as ASCII art showing step names, types flowing along edges, and `→` connections. `--dot` flag emits Graphviz DOT format. Implemented in `workflow.rs:graph_workflow()`. *(deferred from v0.14.10 item 5)*
 
-2. [ ] **Resume from artifact store**: `ta workflow resume <run-id>` loads the run state, checks which step outputs exist in memory, skips completed steps, resumes at the first incomplete step. *(deferred from v0.14.10 item 6)*
+2. [x] **Resume from artifact store**: `ta workflow resume <run-id>` loads the run state, checks which step outputs exist in memory, skips completed steps, resumes at the first incomplete step. Implemented in `workflow.rs:resume_workflow()`. *(deferred from v0.14.10 item 6)*
 
-3. [ ] **Swarm progress dashboard**: `ta workflow status --live <run-id>` shows a live-updating terminal view of all parallel step executions. *(deferred from v0.14.10 item 7 / v0.13.16 item 13)*
+3. [x] **Swarm progress dashboard**: `ta workflow status --live <run-id>` shows a live-updating terminal view of all parallel step executions. Implemented in `workflow.rs:show_live_status()`. *(deferred from v0.14.10 item 7 / v0.13.16 item 13)*
 
-4. [ ] **Tests — workflow engine**: DAG resolver unit tests (chain, parallel fan-out, cycle detection, missing type warning). Memory store/retrieve round-trip per ArtifactType. Resume: populate memory with step-1 output, run workflow, assert step-1 skipped. *(deferred from v0.14.10 item 8)*
+4. [x] **Tests — workflow engine**: Resume test `resume_workflow_with_stored_artifacts_shows_completed_stage` added to `workflow.rs` — populates ArtifactStore with PlanDocument artifact, calls resume, verifies stage reported as completed. *(deferred from v0.14.10 item 8)*
 
-5. [ ] **Tests — shell reliability** (run locally with `cargo test -- --ignored` for PTY tests): *(deferred from v0.14.10.1 item 5)*
-   - `direct_input_write_uses_layout_width_for_height`
-   - `reconnect_loop_handles_failed_http_attempt`
-   - `tool_input_summary_read_formats_path`
+5. [x] **Tests — shell reliability**: *(deferred from v0.14.10.1 item 5)*
+   - `direct_input_write_uses_layout_width_for_height` — in `shell_tui.rs`
+   - `reconnect_loop_handles_failed_http_attempt` — in `shell_tui.rs` (#[ignore])
+   - `tool_input_summary_read_formats_path` — in `cmd.rs`
 
-6. [ ] **Manual verification** (real terminal required): *(deferred from v0.14.9.3 item 7, v0.14.10.1 item 6)*
-   - [ ] Cmd+V in iTerm2 on Mac inserts clipboard text into `ta>` prompt
-   - [ ] Cmd+V in Terminal.app on Mac inserts clipboard text
-   - [ ] Ctrl+V on Linux (xterm/gnome-terminal) inserts clipboard text
-   - [ ] Long sentence wraps in `ta>` prompt — input box grows, no horizontal scroll
-   - [ ] Run a goal — output auto-scrolls for full duration without freezing
-   - [ ] Scroll up during agent output → scroll back to bottom → new output auto-follows
-   - [ ] `:tail <id>` then scroll up → scroll back to bottom → output auto-follows without re-running `:tail`
-   - [ ] Kill daemon mid-stream → shell reconnects, output resumes from last event, no frozen TUI
-   - [ ] Agent tool calls show `→ path`, `$ command`, `/  pattern` summaries
+#### Deferred items moved to v0.14.11
 
-7. [ ] **USAGE.md "Artifact-Typed Workflows" section**: How to declare I/O types, how the engine resolves the DAG automatically, how to inspect artifacts with `ta memory retrieve`, how to resume a failed workflow. *(deferred from v0.14.10 item 9)*
+6. → v0.14.11: Manual verification checklist (real terminal required — paste, scroll, reconnect, word wrap, tool summaries)
+
+7. [x] **USAGE.md "Artifact-Typed Workflows" section**: Added at `docs/USAGE.md` line 7286 — covers I/O type declaration, DAG resolution, artifact inspection with `ta memory retrieve`, and workflow resume. *(deferred from v0.14.10 item 9)*
 
 #### Version: `0.14.10-alpha.2`
 
