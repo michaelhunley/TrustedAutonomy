@@ -7722,13 +7722,9 @@ Two separate issues must both be fixed:
    - shell_tui.rs: `clipboard_mock_read_returns_set_value`, `clipboard_mock_read_returns_none_when_empty`, `clipboard_mock_copy_sets_value`, `ctrl_v_paste_uses_arboard_mock`, `clear_command_re_enables_auto_scroll`, `auto_scroll_blocked_when_scrolled_up_during_output`, `auto_scroll_resumes_after_scroll_to_bottom_via_scroll_down`
    - goal_output.rs: `sse_event_ids_increment_monotonically`, `get_history_from_returns_since_seq`, `reconnect_replays_missed_events`, `alias_shares_history_with_primary`, `remove_channel_also_removes_publisher`
 
-7. [ ] **Manual verification checklist** (requires real terminal — to be verified post-apply):
-    - [ ] Cmd+V in iTerm2 on Mac inserts clipboard text into `ta>` prompt
-    - [ ] Cmd+V in Terminal.app on Mac inserts clipboard text
-    - [ ] Ctrl+V on Linux (xterm/gnome-terminal) inserts clipboard text
-    - [ ] Scroll up during agent output → scroll back to bottom → new output auto-follows
-    - [ ] `:tail <id>` then scroll up → scroll back to bottom → output auto-follows without re-running `:tail`
-    - [ ] Kill daemon mid-stream → shell reconnects, output resumes from last event, no frozen TUI
+#### Deferred items moved to v0.14.10.2
+
+7. → v0.14.10.2: Manual verification checklist (real terminal required — paste, auto-scroll, reconnect)
 
 #### Version: `0.14.9.3-alpha`
 
@@ -7845,11 +7841,15 @@ The WorkflowEngine:
    - `reconnect_loop_handles_failed_http_attempt`
    - `tool_input_summary_read_formats_path`
 
-6. [ ] **Manual verification** (real terminal required): *(deferred from v0.14.10.1 item 6)*
+6. [ ] **Manual verification** (real terminal required): *(deferred from v0.14.9.3 item 7, v0.14.10.1 item 6)*
+   - [ ] Cmd+V in iTerm2 on Mac inserts clipboard text into `ta>` prompt
+   - [ ] Cmd+V in Terminal.app on Mac inserts clipboard text
+   - [ ] Ctrl+V on Linux (xterm/gnome-terminal) inserts clipboard text
    - [ ] Long sentence wraps in `ta>` prompt — input box grows, no horizontal scroll
    - [ ] Run a goal — output auto-scrolls for full duration without freezing
-   - [ ] Kill daemon mid-stream — shell reconnects, tail resumes
-   - [ ] Cmd+V inserts clipboard text in iTerm2 and Terminal.app
+   - [ ] Scroll up during agent output → scroll back to bottom → new output auto-follows
+   - [ ] `:tail <id>` then scroll up → scroll back to bottom → output auto-follows without re-running `:tail`
+   - [ ] Kill daemon mid-stream → shell reconnects, output resumes from last event, no frozen TUI
    - [ ] Agent tool calls show `→ path`, `$ command`, `/  pattern` summaries
 
 7. [ ] **USAGE.md "Artifact-Typed Workflows" section**: How to declare I/O types, how the engine resolves the DAG automatically, how to inspect artifacts with `ta memory retrieve`, how to resume a failed workflow. *(deferred from v0.14.10 item 9)*
