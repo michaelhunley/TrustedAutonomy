@@ -7894,15 +7894,13 @@ ta session run                  # execute approved items as governed workflow
 
 8. [x] **Memory commit on apply**: After `ta draft apply` succeeds for an item, calls `commit_item_to_session_memory()` which writes `session/<session_id>/applied/<item_id>` to the memory store with the goal+draft IDs. Implemented in `session.rs`. 1 new test.
 
-9. [ ] **Swarm orchestration for parallel items**: `ta session run --parallel <n>` — deferred to v0.14.12. The `--parallel` flag is wired but does not yet spawn concurrent workflows; sequential ordering is used until swarm integration lands.
-
 10. [x] **Tests**: 47 tests across the new modules — 15 in `plan.rs`, 23 in `workflow_session.rs`, 9 in `workflow_manager.rs`, 5 in `new.rs` (plan subcommand), 13 in `session.rs` (new workflow session commands). Total 2687 tests pass.
 
 11. [x] **USAGE.md "Project Session" section**: Full walkthrough — write a brief, generate a plan, review interactively, run with oversight, inspect progress, resume after interruption. Positions TA as a project-level oversight layer.
 
 #### Deferred items moved/resolved
 
-9. → v0.14.12: Swarm orchestration for parallel items (`ta session run --parallel <n>`). Sequential execution is present; concurrent dispatch deferred until v0.14.12 swarm integration.
+9. → post v0.14.16 (unscheduled): Swarm orchestration for parallel items (`ta session run --parallel <n>`). Sequential execution is present and shipped; concurrent dispatch deferred until after the connector phases (v0.14.14–v0.14.16). v0.14.12 does not cover swarm dispatch — retargeted to avoid a false dependency.
 
 #### Version: `0.14.11-alpha`
 
