@@ -8134,33 +8134,45 @@ Agent permissions
 
 ---
 
-### v0.14.15 — Unreal MRQ Governed Render Pipeline
+### v0.14.15 — Image Artifact Support (`ta-changeset`)
 <!-- status: pending -->
-**Goal**: Extend the Unreal connector with typed MRQ tool wrappers and a governed render flow where render outputs land in TA staging, are reviewed as image artifacts in `ta draft view`, and are only promoted to the workspace after human approval. Validates with the turntable LoRA training pipeline (5 TOD × 36 PNG + EXR passes ≈ 210 images).
+**Goal**: Add `ArtifactKind::Image` to core TA so any connector — Unreal, Unity, Omniverse, or future tools — can produce image artifacts that flow through the standard draft/review/apply pipeline. MRQ-specific tooling lives in the Unreal connector (see v0.14.14.1 below), not here.
 
-**Depends on**: v0.14.14 (Unreal connector scaffold)
+**Depends on**: v0.14.14
 
 #### Items
 
-1. [ ] **Typed MRQ tools** with structured parameters and return types:
+1. [ ] **`ArtifactKind::Image` in `ta-changeset`**: `ArtifactKind::Image { width, height, format, frame_index }`. Generic — not UE5-specific.
+
+2. [ ] **`ta draft view` rendering for image artifact sets**: Shows frame count, resolution, format, and file size delta. Binary diff suppressed for image types; human-readable summary shown instead (e.g., "42 PNG frames, 1024×1024, 380 MB").
+
+3. [ ] **Unit tests**: Round-trip serialize/deserialize `ArtifactKind::Image`; `ta draft view` output format for an image artifact set.
+
+#### Version: `0.14.15-alpha`
+
+---
+
+### v0.14.15.1 — Unreal Connector: MRQ Governed Render Flow (`ta-connectors/unreal`)
+<!-- status: pending -->
+**Goal**: Extend the UE5 connector (v0.14.14) with typed MRQ tools and a frames-to-staging watcher so render outputs land in TA staging and flow through the draft/review/apply pipeline. This is UE5-specific connector work — not core TA.
+
+**Depends on**: v0.14.14, v0.14.15 (`ArtifactKind::Image`)
+
+#### Items
+
+1. [ ] **Typed MRQ tools** in `crates/ta-connectors/unreal/`:
    - `ue5_mrq_submit(sequence_path, output_dir, passes: [png|depth_exr|normal_exr], tod_preset)` → `{ job_id, estimated_frames }`
    - `ue5_mrq_status(job_id)` → `{ state: queued|running|complete|failed, frames_done, frames_total }`
    - `ue5_sequencer_query(level_path)` → `{ sequences: [{name, path, frame_range}] }`
    - `ue5_lighting_preset_list(level_path)` → `{ presets: [{name, type}] }`
 
-2. [ ] **Frames-to-staging**: Render output lands in `.ta/staging/<goal-id>/render_output/<preset>/<pass>/`. TA watches the output directory and ingests frames as artifacts during the MRQ run.
+2. [ ] **Frames-to-staging watcher** in the Unreal connector: watches the MRQ output directory, ingests frames as `ArtifactKind::Image` artifacts into `.ta/staging/<goal-id>/render_output/<preset>/<pass>/` during the MRQ run.
 
-3. [ ] **Image artifact type in `ta-changeset`**: `ArtifactKind::Image { width, height, format, frame_index }`. `ta draft view` shows frame count, resolution, TOD preset name, and pass type for image artifact sets. Binary diff is suppressed; a thumbnail count and file size delta is shown instead.
+3. [ ] **Integration smoke test**: Submit a 3-frame MRQ job from a test goal, confirm frames land in staging as image artifacts, confirm `ta draft view` shows frame count and file sizes, confirm `ta draft apply` promotes frames to the workspace.
 
-4. [ ] **End-to-end validation workload**: The turntable LoRA pipeline from `Technical Artist Brief - Turntable+MRQ.docx`:
-   - 5 TOD presets × 36 PNG frames + SceneDepth EXR + WorldNormal EXR per preset
-   - ~25 supplemental pose renders
-   - 1 inference test clip
-   - Produces ~210 training images
+4. [ ] **USAGE.md "Governed Render Jobs" section**: MRQ submission flow, frames-in-staging review, approval → workspace promotion, image artifact diff format.
 
-5. [ ] **USAGE.md "Governed Render Jobs" section**: MRQ submission flow, frames-in-staging review, approval → workspace promotion, image artifact diff format.
-
-#### Version: `0.14.15-alpha`
+#### Version: `0.14.14-alpha.1` (connector patch — no core TA semver bump)
 
 ---
 
@@ -8514,7 +8526,7 @@ Federated sharing of anonymized problem→solution pairs across TA instances. Bu
 
 ### Unreal Engine MCP Plugin (`ta-mcp-unreal`)
 
-> **Promoted to versioned phases**: v0.14.14 (connector scaffold + `ta connector` CLI + `kvick`/`flopperam`/`special-agent` backends) and v0.14.15 (typed MRQ tools, frames-to-staging, image artifact type, turntable LoRA validation workload).
+> **Promoted to versioned phases**: v0.14.14 (connector scaffold + `ta connector` CLI + `kvick`/`flopperam`/`special-agent` backends), v0.14.14.1 (typed MRQ tools + frames-to-staging, UE5 connector extension), and v0.14.15 (`ArtifactKind::Image` in core `ta-changeset`). Full turntable LoRA validation workload lives in `ue5-cine-pipeline` / `meerkat-poc`.
 
 ### Unity MCP Plugin (`ta-mcp-unity`)
 
