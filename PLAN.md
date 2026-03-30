@@ -8538,69 +8538,147 @@ thinking-mode configuration, and troubleshooting.
 
 ---
 
-## v0.17 — Distribution Maturity & Release Channels
+## v0.17 — Release Management
 
-> **Focus**: Release channel infrastructure (stable vs nightly), Homebrew distribution, and VCS-agnostic release pipeline. Makes TA production-grade for teams who need a predictable upgrade path and a simple `brew install` experience.
+> **Focus**: A unified, extensible `ta release` subsystem that works for any release type — binary distributions, content deliveries, service deployments — via a pluggable `ReleaseAdapter` abstraction. Replaces the current ad-hoc dispatch/channel/VCS approach with a single coherent model and a simplified command surface.
 
-### v0.17.0 — Stable & Nightly Release Channels
+### v0.17.0 — Release Management Design Review (Pre-Phase)
 <!-- status: pending -->
-**Goal**: Add a first-class release channel model so users can choose between a stable channel (manually promoted, tested releases) and a nightly/prerelease channel. Channels show up on GitHub Releases so users can self-select without needing to know semver pre-release conventions.
+**Goal**: Before committing implementation, run a structured design session to finalise the `ta release` command surface, `ReleaseAdapter` trait, channel model, and how release fits into TA's broader conversational UX. Produces a signed-off design document (`docs/release-design.md`) that v0.17.1+ implement against.
 
-#### Why this phase exists
-Currently all releases are prerelease with no clear "this is the one to use in production" signal. Teams evaluating TA need a stable channel they can point to in documentation and a nightly channel for early testers. GitHub's native "Mark as latest" toggle is too coarse — we need explicit channel labels.
+**Why a pre-phase**: Release management touches every TA persona (developer, content creator, enterprise ops) and every adapter type. Getting the abstraction wrong means brittle implementations for each use case. One hour of design review saves weeks of rework.
 
-#### Architecture
+#### Questions to resolve
 
+**Command surface — simplification**
+
+Today TA has too many commands that require knowing the right incantation. The goal is a surface where a user can describe what they want to a `ta shell` conversation and the agent issues the right command — not a surface that requires reading docs first.
+
+Current commands to audit for consolidation:
+- `ta release dispatch`, `ta release run` (proposed), `ta upgrade`, `ta plan status` + version bumping
+- Does `ta release run` fully replace `ta release dispatch`?
+- Should `ta release` expose `run`, `promote`, `status`, `list`, `adapters` as its subcommands?
+- Can the RC → stable promotion be a single `ta release promote v0.14.16-rc.1 --to stable`?
+
+**ReleaseAdapter trait design**
+
+Core trait methods to agree on:
+- `prepare(version, label, channel) → PreparedRelease` — bump version files, generate changelog
+- `publish(prepared, assets) → ReleaseRef` — tag, push, upload assets
+- `promote(release_ref, channel) → ()` — move to stable/nightly/lts without re-publishing
+- `status(version) → ReleaseStatus` — is this version published? on which channels?
+
+Built-in adapters to implement in v0.17.1:
+- `GitHubReleaseAdapter` — the current git-tag + GitHub Actions + `gh release` flow
+- `RemoteFileReleaseAdapter` — scp/rsync/S3 bucket copy; target configured as `sftp://host/path`, `s3://bucket/prefix`
+- `ServiceReleaseAdapter` — HTTP webhook; `POST release_payload` to a URL; response confirms publish
+
+Adapters for v0.17.2+:
+- `YouTubeReleaseAdapter` — upload video artifact as YouTube video; title/description from release notes; visibility (public/unlisted/private) maps to channel (stable/nightly/draft)
+- `SteamReleaseAdapter` (game dist) — Steamworks SDK depot push; branch maps to channel
+- `AppStoreReleaseAdapter` — `altool` / App Store Connect API
+
+URL-scheme config approach: adapter type inferred from the `publish_url` in `release.toml`:
+```toml
+[release]
+publish_url = "github://Trusted-Autonomy/TrustedAutonomy"  # → GitHubReleaseAdapter
+# publish_url = "s3://my-bucket/releases"                 # → RemoteFileReleaseAdapter
+# publish_url = "https://deploy.example.com/webhook"      # → ServiceReleaseAdapter
+# publish_url = "youtube://channel/UCxxxx"                # → YouTubeReleaseAdapter
 ```
-ta release dispatch <tag> --channel stable      # promote to stable channel
-ta release dispatch <tag> --channel nightly     # nightly/beta (default for alpha tags)
-ta release dispatch <tag> --channel lts         # future: long-term support
-```
 
-Channel labels appear in GitHub Release titles and as release asset naming suffixes. The release workflow publishes a `channels.json` file to the release that downstream package managers can consume.
+**Versioning for non-code artifacts**
 
-#### Items
+Code releases use semver. Content releases don't. Decide:
+- Does `ta release run` require a semver version, or accept arbitrary labels (`"episode-3"`, `"turntable-v2-final"`)?
+- For content pipelines: does "version" mean a date stamp, a project-internal label, or is it optional entirely?
+- How does the channel model (stable/nightly) map to content? (Published/Draft? Public/Review?)
 
-1. [ ] **Channel enum in release config**: `ReleaseChannel` enum (`Stable`, `Nightly`, `Lts`) in `ta-release`. Stored in `.ta/release.toml` as `default_channel = "nightly"`.
-2. [ ] **`ta release dispatch --channel`**: New `--channel` flag on `ta release dispatch`. Validates channel vs tag (e.g., `v*` with no prerelease suffix → can only be `stable` or `lts`; `-alpha`/`-beta` tags → `nightly` only unless explicitly overridden with `--force`).
-3. [ ] **GitHub Release label**: Release title prefixed with `[Stable]` / `[Nightly]` / `[LTS]`. GitHub topic tags on the release: `channel:stable`, `channel:nightly`.
-4. [ ] **`--latest` guard uses channel**: Replace the current `IS_PRERELEASE` guard with channel-aware logic: only `stable` channel releases get `--latest`. Nightly releases never get `--latest`.
-5. [ ] **`channels.json` release asset**: Each release publishes a `channels.json` at `https://github.com/Trusted-Autonomy/TrustedAutonomy/releases/download/<tag>/channels.json` listing the current stable/nightly tag, checksums, and a `recommended` field. Homebrew tap and `install.sh` can consume this.
-6. [ ] **`ta upgrade --channel`**: `ta upgrade --channel stable` fetches the latest stable tag from `channels.json`. Default remains `nightly` (current behaviour) until stable exists.
-7. [ ] **Release workflow updates**: Update `.github/workflows/release.yml` to accept `channel` as a `workflow_dispatch` input and pass through to asset metadata.
-8. [ ] **Documentation**: Update `docs/USAGE.md` with release channel table (stable / nightly / LTS), upgrade instructions, and how to subscribe to GitHub release notifications filtered by channel.
+**Use cases to cover in the design doc**
 
-#### Version: `0.17.0-alpha`
+| Persona | Release type | Adapter | Channel map |
+|---|---|---|---|
+| TA developer | Binary + GitHub Release | `GitHubReleaseAdapter` | alpha → nightly; stable → stable |
+| SecureAutonomy | Enterprise binary | `RemoteFileReleaseAdapter` (S3) | rc → staging; stable → prod |
+| Content creator | Wan2.1 video output | `YouTubeReleaseAdapter` | draft → unlisted; approved → public |
+| Game studio | UE5 build | `SteamReleaseAdapter` | beta → beta branch; gold → default |
+| Self-hosted team | Any | `ServiceReleaseAdapter` (webhook) | any channel → custom deploy logic |
+
+**Command simplification principles**
+
+1. `ta release run <phase-or-label>` — one command for the happy path; flags for overrides
+2. All release state queryable via `ta release status` — no separate `ta plan status` needed for version info
+3. Conversational: `ta shell` agent understands "release this as an RC" and maps to the right command
+4. Adapter config lives in `release.toml`, not scattered across `daemon.toml`, `workflow.toml`, CI YAML
+5. Existing `ta release dispatch` deprecated in favour of `ta release run` + `ta release promote`
+
+#### Deliverable
+
+`docs/release-design.md` containing:
+- Final `ta release` command surface with all subcommands, flags, and examples
+- `ReleaseAdapter` trait definition (Rust trait sketch)
+- Adapter URL-scheme registry
+- Channel model and lifecycle (draft → rc → stable → lts)
+- Versioning rules for code vs content artifacts
+- Migration path from current `ta release dispatch` / manual tagging workflow
+
+#### Version: `0.17.0-alpha` *(design only — no code)*
 
 ---
 
-### v0.17.1 — Homebrew Tap
+### v0.17.1 — `ta release` Core + Built-in Adapters
 <!-- status: pending -->
-**Goal**: Publish TA to a Homebrew tap (`trusted-autonomy/tap`) so macOS users can install with `brew install trusted-autonomy/tap/ta`. Linux support via Homebrew on Linux (Linuxbrew) is a stretch goal.
+**Goal**: Implement the `ta release` command surface and `ReleaseAdapter` trait as specified in `docs/release-design.md` (v0.17.0). Ship three built-in adapters: `GitHubReleaseAdapter` (replaces current manual tag + dispatch flow), `RemoteFileReleaseAdapter`, and `ServiceReleaseAdapter`.
+
+**Depends on**: v0.17.0 (design doc signed off)
 
 #### Items
 
-1. [ ] **Create `homebrew-tap` repo**: `github.com/Trusted-Autonomy/homebrew-tap` with `Formula/ta.rb`.
-2. [ ] **Formula**: Downloads the macOS release asset (`.tar.gz`), verifies SHA-256, installs `ta` binary to `bin/`. Depends on nothing (single statically-linked binary).
-3. [ ] **CI auto-update**: On every stable channel release, the release workflow opens a PR in `homebrew-tap` updating the version and SHA-256 checksum. Uses `gh pr create` from the release workflow.
-4. [ ] **`brew tap trusted-autonomy/tap && brew install ta`**: Verify end-to-end install on macOS 14 (Sonoma) and macOS 15 (Sequoia) in CI.
-5. [ ] **Documentation**: Add `brew install` as the primary macOS install option in `docs/USAGE.md` Quick Start.
+1. [ ] **`ReleaseAdapter` trait** in `crates/ta-release/src/adapter.rs`: `prepare`, `publish`, `promote`, `status` methods as designed in v0.17.0. URL-scheme registry for adapter discovery.
+
+2. [ ] **`ta release run <phase> [--label <label>] [--channel <channel>]`**: Bumps version in `Cargo.toml` (or equivalent), commits, tags, pushes, calls adapter `publish`. Without `--label`, derives tag from plan phase. `--channel` defaults to `nightly` for pre-release labels, `stable` otherwise.
+
+3. [ ] **`ta release promote <tag-or-ref> --to <channel>`**: Calls adapter `promote` — no new tag, no rebuild. For GitHub: edits release prerelease flag and `--latest`.
+
+4. [ ] **`ta release status [<tag>]`**: Calls adapter `status`. Shows current channels, asset checksums, publish timestamp.
+
+5. [ ] **`GitHubReleaseAdapter`**: Full replacement for current manual tag + `release.yml` dispatch. Draft-first publish (create draft → upload assets → publish) to avoid immutable release race. Channel-aware `--latest` guard.
+
+6. [ ] **`RemoteFileReleaseAdapter`**: Supports `sftp://`, `s3://`, `file://` publish URLs. Copies release assets to target path. Generates `manifest.json` alongside assets (version, checksums, channel, timestamp).
+
+7. [ ] **`ServiceReleaseAdapter`**: `POST` to configured URL with `ReleasePayload` JSON (version, label, channel, asset URLs, changelog). Retry with backoff. Response `{ "release_url": "..." }` stored as `ReleaseRef`.
+
+8. [ ] **`release.toml` schema**: `[release]` section — `publish_url`, `default_channel`, `version_files` (paths to bump), `changelog_cmd` (optional shell command to generate changelog).
+
+9. [ ] **Deprecate `ta release dispatch`**: Keep as alias with deprecation warning pointing to `ta release run`.
+
+10. [ ] **Tests**: Each adapter with stub/mock transport. Version bump round-trip. Channel promotion. `ta release status` output format.
+
+11. [ ] **USAGE.md "Release Management" section**: Quick-start (5 steps: configure `release.toml`, run `ta release run`, test RC, promote to stable), adapter reference table, `release.toml` field reference.
 
 #### Version: `0.17.1-alpha`
 
 ---
 
-### v0.17.2 — VCS-Agnostic Release Pipeline
+### v0.17.2 — Extended Adapters (YouTube, Steam, Homebrew)
 <!-- status: pending -->
-**Goal**: Remove the hard git dependency from the release pipeline. Perforce and SVN users should be able to trigger releases from their VCS without needing a git mirror. Builds on the VCS plugin architecture from v0.12.0.2.
+**Goal**: Implement the content-delivery and distribution adapters identified in the v0.17.0 design review. Enables content creators to release video outputs to YouTube and game studios to push to Steam — all through the same `ta release run` command.
+
+**Depends on**: v0.17.1 (core adapter trait + `ta release run`)
 
 #### Items
 
-1. [ ] **`ReleaseAdapter` trait**: `tag(version, commit_ref) → Result<()>`, `changelog(from, to) → String`. Git implementation stays built-in; Perforce/SVN via external plugin.
-2. [ ] **Perforce release plugin**: `plugins/release/p4-release` — `p4 tag` equivalent, label-based versioning, depot path for asset upload.
-3. [ ] **`ta release dispatch` VCS detection**: Reads `[vcs]` section from `.ta/config.toml` to select adapter. Falls back to git.
-4. [ ] **Single GitHub release per build**: Redesign dispatch flow — label tag as the primary release trigger, semver tag as a lightweight git alias only. Eliminates duplicate release entries when both are pushed. (Deferred from v0.13.12.)
-5. [ ] **Documentation**: Add Perforce release workflow to `docs/USAGE.md` alongside the git workflow.
+1. [ ] **`YouTubeReleaseAdapter`**: YouTube Data API v3. Uploads video artifact from staging, sets title/description from release notes, maps channel → visibility (`nightly` = unlisted, `stable` = public, `draft` = private). Config: `youtube://channel/<channel-id>` in `publish_url`.
+
+2. [ ] **`SteamReleaseAdapter`**: Steamworks SDK `steamcmd` wrapper. Depot upload + branch assignment. Maps `nightly` → beta branch, `stable` → default branch. Config: `steam://app/<appid>`.
+
+3. [ ] **Homebrew tap auto-update**: On `GitHubReleaseAdapter` stable publish, open a PR in the configured `homebrew-tap` repo updating formula version + SHA-256. Replaces the manual v0.17.1 Homebrew step (absorbs old v0.17.1 Homebrew Tap phase).
+
+4. [ ] **Adapter plugin protocol**: Third-party adapters via external process (JSON-over-stdio, same pattern as VCS plugins). Enables custom adapters (`AppStoreReleaseAdapter`, `ItchIoReleaseAdapter`, etc.) without modifying TA core.
+
+5. [ ] **Tests**: YouTube upload stub. Steam steamcmd mock. Homebrew PR open. Plugin adapter round-trip.
+
+6. [ ] **USAGE.md**: Adapter sections for YouTube, Steam, Homebrew. Plugin adapter authoring guide.
 
 #### Version: `0.17.2-alpha`
 
