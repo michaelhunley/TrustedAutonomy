@@ -8187,9 +8187,127 @@ Agent permissions
 
 ---
 
-### v0.14.16 — Unity Connector (`ta-connectors/unity`)
+### v0.14.16 — Draft Apply: Branch Restore Fix
 <!-- status: pending -->
-**Goal**: Parallel to the Unreal connector. Wraps Unity's official MCP server package (`com.unity.mcp-server`) with the same backend-switchable architecture. Agents can trigger builds, query scenes, run PlayMode tests, and export assets — all through TA's governed flow.
+**Goal**: Fix `ta draft apply` not restoring the working branch after applying changes. After apply, the VCS state should be the same branch the user was on before the apply (e.g., `main`), not left on the staging or feature branch. This is a blocker for the end-to-end iteration workflow when draft apply is immediately followed by branch-based git operations.
+
+**Depends on**: v0.14.10.x (VCS pre-flight branch creation)
+
+#### Items
+
+1. [ ] **Root cause investigation**: Identify where `draft apply` leaves the VCS in a detached or wrong branch state. Likely in `apps/ta-cli/src/commands/draft.rs` apply path — branch is created for the commit but `git checkout <original-branch>` is not called after.
+
+2. [ ] **Fix**: Capture current branch before apply begins. After all file writes and optional `--git-commit`, restore to original branch with `git checkout <original-branch>`.
+
+3. [ ] **Test**: Integration test verifying the working branch is the same before and after `ta draft apply --git-commit`. Test starts on `main`, applies a draft, asserts branch is still `main`.
+
+4. [ ] **USAGE.md**: Note in "Apply a Draft" section that `ta draft apply` preserves your working branch.
+
+#### Version: `0.14.16-alpha`
+
+---
+
+> **Unity Connector** → moved to v0.15.3 (Content Pipeline phases).
+
+---
+
+## v0.15 — Content Pipeline Artifact Types & Connectors
+
+> **Focus**: Generic artifact types (binary, text, video) and content-production connectors (ComfyUI, Unity) to support creator workflows and the Studio Wildcard cinematic pipeline. These phases complete the content pipeline story before IDE integration.
+
+### v0.15.0 — Generic Binary & Text Asset Support (`ta-changeset`)
+<!-- status: pending -->
+**Goal**: Add `ArtifactKind::Binary` and `ArtifactKind::Text` to core TA so any connector can produce opaque binary or raw text artifacts that flow through the standard draft/review/apply pipeline. Provides a catch-all for asset types not specifically modeled (scripts, config files, arbitrary data files).
+
+**Depends on**: v0.14.15 (`ArtifactKind::Image`)
+
+#### Items
+
+1. [ ] **`ArtifactKind::Binary` in `ta-changeset`**: `ArtifactKind::Binary { mime_type: Option<String>, byte_size: Option<u64> }`. `is_binary()` and `display_label()` helpers. Binary diff suppressed in `ta draft view` — shows hex summary or `(binary file, N bytes)` instead.
+
+2. [ ] **`ArtifactKind::Text` in `ta-changeset`**: `ArtifactKind::Text { encoding: Option<String>, line_count: Option<u64> }`. Text artifacts render full diff in `ta draft view`. Useful for generated scripts, configs, and data files.
+
+3. [ ] **`ta draft view` rendering**: Binary artifacts suppress diff and show file size. Text artifacts render standard unified diff. Summary lines: "3 binary files (12.4 KB total)" / "2 text files".
+
+4. [ ] **Unit tests**: Round-trip serialize/deserialize for both variants. `is_binary()`, `display_label()`. Draft view renders binary artifact without calling diff provider. Text artifact renders diff.
+
+#### Version: `0.15.0-alpha`
+
+---
+
+### v0.15.1 — Video Artifact Support (`ta-changeset`)
+<!-- status: pending -->
+**Goal**: Add `ArtifactKind::Video` to core TA so video files (`.mp4`, `.mov`, `.webm`) produced by ComfyUI, Wan2.1, or other render pipelines flow through the draft/review/apply pipeline. Video diffs show metadata comparison (duration, resolution, codec) rather than binary content.
+
+**Depends on**: v0.14.15, v0.15.0
+
+#### Items
+
+1. [ ] **`ArtifactKind::Video` in `ta-changeset`**: `ArtifactKind::Video { width: Option<u32>, height: Option<u32>, fps: Option<f32>, duration_secs: Option<f32>, format: Option<String>, frame_count: Option<u32> }`. `is_video()` and `display_label()` helpers.
+
+2. [ ] **`ta draft view` rendering**: Video diff suppressed; shows metadata summary: "Video: 1920×1080, 24fps, 6.2s, MP4". If both staging and source exist, shows delta ("duration: 6.2s → 8.1s").
+
+3. [ ] **Unit tests**: Round-trip serialize/deserialize. `is_video()`, `display_label()`. Diff suppressed. Metadata summary lines.
+
+#### Version: `0.15.1-alpha`
+
+---
+
+### v0.15.2 — ComfyUI Inference Connector (`ta-connectors/comfyui`)
+<!-- status: pending -->
+**Goal**: Wrap ComfyUI's REST API as a TA connector so agents can submit Wan2.1 video-to-video inference jobs, poll status, and land output video frames in TA staging — flowing through the draft/review/apply pipeline with `ArtifactKind::Video` and `ArtifactKind::Image` artifacts.
+
+**Depends on**: v0.14.14 (connector infrastructure), v0.14.15 (`ArtifactKind::Image`), v0.15.1 (`ArtifactKind::Video`)
+
+#### Architecture
+
+```
+ta-connectors/comfyui/
+  ├─ src/
+  │   ├─ lib.rs           — exports ComfyUiConnector, ComfyUiBackend trait
+  │   ├─ backend.rs       — trait: submit_workflow, poll_job, cancel_job
+  │   ├─ rest.rs          — ComfyUI REST API implementation
+  │   ├─ stub.rs          — stub backend for tests
+  │   ├─ frame_watcher.rs — output dir watcher → ArtifactKind::Video/Image
+  │   └─ tools.rs         — MCP tool definitions
+  └─ tests/
+```
+
+#### Items
+
+1. [ ] **Create `crates/ta-connectors/comfyui/` workspace member**: `ComfyUiBackend` trait — `submit_workflow(workflow_json, inputs) → job_id`, `poll_job(job_id) → { state, progress, output_files }`, `cancel_job(job_id)`. `RestBackend` hits `POST /prompt`, `GET /history/{id}`. `StubBackend` for tests.
+
+2. [ ] **Config schema** (`[connectors.comfyui]`):
+   ```toml
+   [connectors.comfyui]
+   enabled = true
+   url = "http://localhost:8188"
+   output_dir = ""   # ComfyUI output directory to watch
+   ```
+
+3. [ ] **`ta connector install comfyui`**: Validates ComfyUI URL is reachable, writes config, prints next steps (install Wan2.1 model, set output dir).
+
+4. [ ] **Register ComfyUI tools in `ta-mcp-gateway`**:
+   - `comfyui_workflow_submit(workflow_json, inputs)` → `{ job_id }`
+   - `comfyui_job_status(job_id)` → `{ state, progress, output_files }`
+   - `comfyui_job_cancel(job_id)`
+   - `comfyui_model_list()` → `{ models: [{ name, type }] }`
+
+5. [ ] **Output watcher**: Scans ComfyUI output directory for new files after job completion. Copies video/image files to `.ta/staging/<goal-id>/comfyui_output/`. Tags with `ArtifactKind::Video` (`.mp4`/`.mov`/`.webm`) or `ArtifactKind::Image` (`.png`/`.jpg`/`.exr`).
+
+6. [ ] **Policy capabilities**: `comfyui://workflow/**` gates workflow submission. `comfyui://model/**` gates model listing.
+
+7. [ ] **Unit tests**: Tool routing. Config parsing. Stub backend round-trip. Output watcher copies files and assigns correct `ArtifactKind`. `ta connector install comfyui` output.
+
+8. [ ] **USAGE.md "ComfyUI Integration" section**: Installation, config, Wan2.1 workflow example, `comfyui_workflow_submit` call, output staging path, reviewing video artifacts in `ta draft view`.
+
+#### Version: `0.15.2-alpha`
+
+---
+
+### v0.15.3 — Unity Connector (`ta-connectors/unity`)
+<!-- status: pending -->
+**Goal**: Parallel to the Unreal connector (v0.14.14). Wraps Unity's official MCP server package (`com.unity.mcp-server`) with the same backend-switchable architecture. Agents can trigger builds, query scenes, run PlayMode tests, and export assets — all through TA's governed flow.
 
 **Depends on**: v0.14.14 (shared connector infrastructure — `ta connector` CLI, backend trait, gateway integration)
 
@@ -8225,15 +8343,15 @@ Agent permissions
 
 7. [ ] **USAGE.md "Unity Integration" section**: Installation, config, `ta connector install unity`, first `unity_scene_query` call.
 
-#### Version: `0.14.16-alpha`
+#### Version: `0.15.3-alpha`
 
 ---
 
-## v0.15 — IDE Integration & Developer Experience
+## v0.16 — IDE Integration & Developer Experience
 
 > **Focus**: First-class IDE integration for VS Code, JetBrains (PyCharm, WebStorm, IntelliJ), and Neovim. TA transitions from a pure CLI tool to an embedded development workflow component with sidebar panels, inline draft review, and one-click goal approval.
 
-### v0.15.0 — VS Code Extension
+### v0.16.0 — VS Code Extension
 <!-- status: pending -->
 **Goal**: A VS Code extension that surfaces TA's core workflow directly in the editor: start goals from the command palette, view draft diffs in the native diff viewer, approve/deny artifacts inline, and see live goal status in the sidebar. Python, TypeScript, and Node.js users (the primary audience) should be able to use TA without leaving VS Code.
 
@@ -8266,11 +8384,11 @@ VS Code Extension
 10. [ ] **Walkthrough**: VS Code onboarding walkthrough ("Get Started with TA") covering: install daemon, configure `workflow.toml` for Python/TS/Node, start first goal, approve first draft.
 11. [ ] **Marketplace publishing**: CI workflow to package and publish to VS Code Marketplace on `v*` tags. Extension version tracks TA version.
 
-#### Version: `0.15.0-alpha`
+#### Version: `0.16.0-alpha`
 
 ---
 
-### v0.15.1 — JetBrains Plugin (PyCharm / WebStorm / IntelliJ)
+### v0.16.1 — JetBrains Plugin (PyCharm / WebStorm / IntelliJ)
 <!-- status: pending -->
 **Goal**: A JetBrains Platform plugin providing the same core workflow as the VS Code extension — goal management, draft review, inline diff, approval — targeting PyCharm (Python), WebStorm (TypeScript/Node), and IntelliJ IDEA users.
 
@@ -8284,11 +8402,11 @@ VS Code Extension
 6. [ ] **Actions**: "Start Goal" (toolbar + right-click menu), "Approve Draft", "Deny Draft", "Open TA Shell" registered as IDE actions.
 7. [ ] **Marketplace publishing**: CI workflow to build and publish to JetBrains Marketplace on `v*` tags.
 
-#### Version: `0.15.1-alpha`
+#### Version: `0.16.1-alpha`
 
 ---
 
-### v0.15.2 — Neovim Plugin
+### v0.16.2 — Neovim Plugin
 <!-- status: pending -->
 **Goal**: A Lua Neovim plugin for terminal-first developers who work in Neovim. Provides goal management, draft review via telescope/fzf pickers, and approval workflow without leaving the editor.
 
@@ -8301,11 +8419,11 @@ VS Code Extension
 5. [ ] **Commands**: `:TA start`, `:TA approve <id>`, `:TA deny <id>`, `:TA shell`.
 6. [ ] **luarocks / GitHub Releases packaging**: Distribute via `luarocks` and GitHub Releases.
 
-#### Version: `0.15.2-alpha`
+#### Version: `0.16.2-alpha`
 
 ---
 
-### v0.15.3 — Ollama Agent Framework Plugin (Extract & Standalone)
+### v0.16.3 — Ollama Agent Framework Plugin (Extract & Standalone)
 <!-- status: pending -->
 **Goal**: Extract `ta-agent-ollama` from the TA monorepo into a standalone agent-framework plugin with its own repository, README, and usage documentation. TA's built-in USAGE.md "Local Models" section becomes a short pointer to the plugin project. This follows the same pattern as the VCS plugins (`ta-vcs-git`, `ta-vcs-p4`) — TA ships the plugin protocol and discovery, first-party plugins live in their own repos and are published to the plugin registry.
 
@@ -8358,15 +8476,15 @@ thinking-mode configuration, and troubleshooting.
 
 8. [ ] **Tests**: Plugin discovery finds `ta-agent-ollama` after `ta agent install ollama`. Agent profile round-trip through the plugin manifest. `ta plugin list` shows the installed plugin with version. Migration command preserves existing model config.
 
-#### Version: `0.15.3-alpha`
+#### Version: `0.16.3-alpha`
 
 ---
 
-## v0.16 — Distribution Maturity & Release Channels
+## v0.17 — Distribution Maturity & Release Channels
 
 > **Focus**: Release channel infrastructure (stable vs nightly), Homebrew distribution, and VCS-agnostic release pipeline. Makes TA production-grade for teams who need a predictable upgrade path and a simple `brew install` experience.
 
-### v0.16.0 — Stable & Nightly Release Channels
+### v0.17.0 — Stable & Nightly Release Channels
 <!-- status: pending -->
 **Goal**: Add a first-class release channel model so users can choose between a stable channel (manually promoted, tested releases) and a nightly/prerelease channel. Channels show up on GitHub Releases so users can self-select without needing to know semver pre-release conventions.
 
@@ -8394,11 +8512,11 @@ Channel labels appear in GitHub Release titles and as release asset naming suffi
 7. [ ] **Release workflow updates**: Update `.github/workflows/release.yml` to accept `channel` as a `workflow_dispatch` input and pass through to asset metadata.
 8. [ ] **Documentation**: Update `docs/USAGE.md` with release channel table (stable / nightly / LTS), upgrade instructions, and how to subscribe to GitHub release notifications filtered by channel.
 
-#### Version: `0.16.0-alpha`
+#### Version: `0.17.0-alpha`
 
 ---
 
-### v0.16.1 — Homebrew Tap
+### v0.17.1 — Homebrew Tap
 <!-- status: pending -->
 **Goal**: Publish TA to a Homebrew tap (`trusted-autonomy/tap`) so macOS users can install with `brew install trusted-autonomy/tap/ta`. Linux support via Homebrew on Linux (Linuxbrew) is a stretch goal.
 
@@ -8410,11 +8528,11 @@ Channel labels appear in GitHub Release titles and as release asset naming suffi
 4. [ ] **`brew tap trusted-autonomy/tap && brew install ta`**: Verify end-to-end install on macOS 14 (Sonoma) and macOS 15 (Sequoia) in CI.
 5. [ ] **Documentation**: Add `brew install` as the primary macOS install option in `docs/USAGE.md` Quick Start.
 
-#### Version: `0.16.1-alpha`
+#### Version: `0.17.1-alpha`
 
 ---
 
-### v0.16.2 — VCS-Agnostic Release Pipeline
+### v0.17.2 — VCS-Agnostic Release Pipeline
 <!-- status: pending -->
 **Goal**: Remove the hard git dependency from the release pipeline. Perforce and SVN users should be able to trigger releases from their VCS without needing a git mirror. Builds on the VCS plugin architecture from v0.12.0.2.
 
@@ -8426,7 +8544,7 @@ Channel labels appear in GitHub Release titles and as release asset naming suffi
 4. [ ] **Single GitHub release per build**: Redesign dispatch flow — label tag as the primary release trigger, semver tag as a lightweight git alias only. Eliminates duplicate release entries when both are pushed. (Deferred from v0.13.12.)
 5. [ ] **Documentation**: Add Perforce release workflow to `docs/USAGE.md` alongside the git workflow.
 
-#### Version: `0.16.2-alpha`
+#### Version: `0.17.2-alpha`
 
 ---
 
