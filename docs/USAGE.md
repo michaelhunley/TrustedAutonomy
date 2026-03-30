@@ -954,7 +954,7 @@ ta draft approve <draft-id>
 ta draft apply <draft-id>
 ```
 
-When a VCS adapter is detected (e.g., Git), `ta draft apply` automatically runs the full submit workflow (commit + push + PR). Use `--no-submit` to copy files only:
+When a VCS adapter is detected (e.g., Git), `ta draft apply` automatically runs the full submit workflow (commit + push + PR). After apply completes, your working branch is restored to the branch you were on before apply (e.g., `main`) — the feature branch created for the commit is preserved but you are returned to your original branch. Use `--no-submit` to copy files only:
 
 ```bash
 ta draft apply <draft-id>              # auto-submits when VCS detected
