@@ -3635,6 +3635,10 @@ fn apply_package(
     // fails later, the error handler can show the user exactly which branch is
     // safe to commit to manually (instead of blindly suggesting --no-submit which
     // previously caused commits to land on main).
+    // Capture the working branch BEFORE any pre-flight branch switching so
+    // restore_state() at the end of the submit workflow can return the user
+    // to their original branch (e.g., main) after the feature-branch commit.
+    let mut original_branch: Option<String> = None;
     let mut preflight_branch: Option<String> = None;
     if git_commit {
         use ta_submit::{select_adapter, WorkflowConfig};
@@ -3646,6 +3650,8 @@ fn apply_package(
             let branch = adapter
                 .current_branch()
                 .unwrap_or_else(|_| "unknown".to_string());
+            // Record original branch before pre-flight may switch to a feature branch.
+            original_branch = Some(branch.clone());
             let protected = adapter.protected_submit_targets();
             let on_protected = protected.iter().any(|b| b == &branch);
 
@@ -4270,7 +4276,7 @@ fn apply_package(
 
     // Submit workflow integration (VCS-agnostic: git, svn, perforce, etc.).
     if git_commit {
-        use ta_submit::{select_adapter, SourceAdapter, WorkflowConfig};
+        use ta_submit::{select_adapter, SavedVcsState, SourceAdapter, WorkflowConfig};
 
         // Load workflow config if it exists.
         let workflow_config_path = target_dir.join(".ta/workflow.toml");
@@ -4314,16 +4320,16 @@ fn apply_package(
             // Files are already on disk — no rollback needed for dry-run.
             rollback_guard.commit();
         } else {
-            // Save VCS state so we can restore after apply operations.
-            // Uses a closure to ensure restore_state() always runs, even on
-            // early bail!() errors from verification, commit, or push.
-            let saved_state = match adapter.save_state() {
-                Ok(state) => state,
-                Err(e) => {
-                    tracing::warn!(error = %e, "Could not save VCS state before apply");
-                    None
-                }
-            };
+            // Build the saved-state from the branch captured before pre-flight.
+            // Pre-flight may have already switched to a feature branch, so calling
+            // adapter.save_state() here would capture the feature branch — meaning
+            // restore_state() would be a no-op and the user would be left on the
+            // feature branch after apply. Using original_branch ensures the user is
+            // returned to their working branch (e.g., main) when apply completes.
+            let saved_state = original_branch.as_ref().map(|b| SavedVcsState {
+                adapter: adapter.name().to_string(),
+                data: Box::new(b.clone()),
+            });
 
             let submit_result = (|| -> anyhow::Result<()> {
                 // Prepare (create branch if needed). Hard failure — if we cannot
@@ -8306,6 +8312,132 @@ fn run() {
         assert!(full_msg.contains("README.md"));
         // No Debug-format change types like "Modify" — should use ~ + - > icons.
         assert!(!full_msg.contains("Modify  "));
+    }
+
+    /// v0.14.16 — Branch restore: after `ta draft apply --git-commit`, the working
+    /// branch must be the same as it was before apply (e.g., main), not the
+    /// feature branch created for the commit.
+    #[test]
+    fn apply_git_commit_restores_original_branch() {
+        let project = TempDir::new().unwrap();
+
+        for git_args in &[
+            vec!["init"],
+            vec!["config", "user.email", "test@test.com"],
+            vec!["config", "user.name", "Test"],
+        ] {
+            clear_git_env(
+                std::process::Command::new("git")
+                    .args(git_args)
+                    .current_dir(project.path()),
+            )
+            .output()
+            .unwrap();
+        }
+
+        std::fs::write(project.path().join("README.md"), "# Test\n").unwrap();
+
+        for git_args in &[vec!["add", "-A"], vec!["commit", "-m", "initial"]] {
+            clear_git_env(
+                std::process::Command::new("git")
+                    .args(git_args)
+                    .current_dir(project.path()),
+            )
+            .output()
+            .unwrap();
+        }
+
+        // Confirm we start on main/master.
+        let branch_before = clear_git_env(
+            std::process::Command::new("git")
+                .args(["rev-parse", "--abbrev-ref", "HEAD"])
+                .current_dir(project.path()),
+        )
+        .output()
+        .unwrap();
+        let branch_before = String::from_utf8_lossy(&branch_before.stdout)
+            .trim()
+            .to_string();
+        // Should be main or master depending on git config.
+        assert!(
+            branch_before == "main" || branch_before == "master",
+            "Expected to start on main/master, got: {}",
+            branch_before
+        );
+
+        let config = GatewayConfig::for_project(project.path());
+
+        super::super::goal::execute(
+            &super::super::goal::GoalCommands::Start {
+                title: "Branch restore test".to_string(),
+                source: Some(project.path().to_path_buf()),
+                objective: "Test branch is restored after apply".to_string(),
+                agent: "test-agent".to_string(),
+                phase: None,
+                follow_up: None,
+                objective_file: None,
+            },
+            &config,
+        )
+        .unwrap();
+
+        let goal_store = GoalRunStore::new(&config.goals_dir).unwrap();
+        let goals = goal_store.list().unwrap();
+        let goal = &goals[0];
+        let goal_id = goal.goal_run_id.to_string();
+
+        std::fs::write(goal.workspace_path.join("README.md"), "# Branch restore\n").unwrap();
+
+        build_package(&config, &goal_id, "Branch restore test", false).unwrap();
+        let packages = load_all_packages(&config).unwrap();
+        let pkg_id = packages[0].package_id.to_string();
+        approve_package(&config, &pkg_id, "tester", false).unwrap();
+        apply_package(
+            &config,
+            &pkg_id,
+            None,
+            true,  // git_commit
+            false, // no push
+            false, // no review
+            false, // skip_verify
+            false, // dry_run
+            ta_workspace::ConflictResolution::Abort,
+            SelectiveReviewPatterns::default(),
+            None,  // phase_override
+            false, // force_apply
+        )
+        .unwrap();
+
+        // The working branch must be the same as before apply.
+        let branch_after = clear_git_env(
+            std::process::Command::new("git")
+                .args(["rev-parse", "--abbrev-ref", "HEAD"])
+                .current_dir(project.path()),
+        )
+        .output()
+        .unwrap();
+        let branch_after = String::from_utf8_lossy(&branch_after.stdout)
+            .trim()
+            .to_string();
+        assert_eq!(
+            branch_after, branch_before,
+            "Working branch changed after apply: was '{}', now '{}'",
+            branch_before, branch_after
+        );
+
+        // The commit must still exist on the ta/ feature branch.
+        let branches = clear_git_env(
+            std::process::Command::new("git")
+                .args(["branch", "--list", "ta/*"])
+                .current_dir(project.path()),
+        )
+        .output()
+        .unwrap();
+        let branch_list = String::from_utf8_lossy(&branches.stdout);
+        assert!(
+            !branch_list.trim().is_empty(),
+            "Expected ta/ feature branch to exist after apply"
+        );
     }
 
     /// v0.12.2.2 — Transactional rollback: when pre-submit verification fails,

@@ -8188,20 +8188,20 @@ Agent permissions
 ---
 
 ### v0.14.16 — Draft Apply: Branch Restore Fix
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Fix `ta draft apply` not restoring the working branch after applying changes. After apply, the VCS state should be the same branch the user was on before the apply (e.g., `main`), not left on the staging or feature branch. This is a blocker for the end-to-end iteration workflow when draft apply is immediately followed by branch-based git operations.
 
 **Depends on**: v0.14.10.x (VCS pre-flight branch creation)
 
 #### Items
 
-1. [ ] **Root cause investigation**: Identify where `draft apply` leaves the VCS in a detached or wrong branch state. Likely in `apps/ta-cli/src/commands/draft.rs` apply path — branch is created for the commit but `git checkout <original-branch>` is not called after.
+1. [x] **Root cause investigation**: `save_state()` was called inside the submit block after the VCS pre-flight had already switched to the feature branch, so it saved the feature branch — meaning `restore_state()` was a no-op and the user remained on the feature branch post-apply.
 
-2. [ ] **Fix**: Capture current branch before apply begins. After all file writes and optional `--git-commit`, restore to original branch with `git checkout <original-branch>`.
+2. [x] **Fix**: Capture current branch before the pre-flight block as `original_branch: Option<String>`. In the submit block, build `SavedVcsState` from `original_branch` instead of calling `save_state()` (which would capture the feature branch). `restore_state()` at the end of the submit workflow now returns to the original branch.
 
-3. [ ] **Test**: Integration test verifying the working branch is the same before and after `ta draft apply --git-commit`. Test starts on `main`, applies a draft, asserts branch is still `main`.
+3. [x] **Test**: `apply_git_commit_restores_original_branch` — starts on `main`, applies a draft with `git_commit=true`, asserts the working branch is still `main`. Also asserts the `ta/` feature branch exists with the commit.
 
-4. [ ] **USAGE.md**: Note in "Apply a Draft" section that `ta draft apply` preserves your working branch.
+4. [x] **USAGE.md**: Added note to "Apply a Draft" section that `ta draft apply` preserves your working branch.
 
 #### Version: `0.14.16-alpha`
 
