@@ -1208,6 +1208,7 @@ pub(crate) fn build_package(
                     explanation_tiers: None,
                     comments: None,
                     amendment: None,
+                    kind: None,
                 });
                 changesets.push(
                     ChangeSet::new(
@@ -1232,6 +1233,7 @@ pub(crate) fn build_package(
                     explanation_tiers: None,
                     comments: None,
                     amendment: None,
+                    kind: None,
                 });
                 changesets.push(
                     ChangeSet::new(
@@ -1256,6 +1258,7 @@ pub(crate) fn build_package(
                     explanation_tiers: None,
                     comments: None,
                     amendment: None,
+                    kind: None,
                 });
                 changesets.push(
                     ChangeSet::new(
@@ -7926,6 +7929,7 @@ mod tests {
             explanation_tiers: None,
             comments: None,
             amendment: None,
+            kind: None,
         }
     }
 

@@ -8135,18 +8135,26 @@ Agent permissions
 ---
 
 ### v0.14.15 — Image Artifact Support (`ta-changeset`)
-<!-- status: pending -->
-**Goal**: Add `ArtifactKind::Image` to core TA so any connector — Unreal, Unity, Omniverse, or future tools — can produce image artifacts that flow through the standard draft/review/apply pipeline. MRQ-specific tooling lives in the Unreal connector (see v0.14.14.1 below), not here.
+<!-- status: done -->
+**Goal**: Add `ArtifactKind::Image` to core TA so any connector — Unreal, Unity, Omniverse, or future tools — can produce image artifacts that flow through the standard draft/review/apply pipeline. MRQ-specific tooling lives in the Unreal connector (see v0.14.15.1 below), not here.
 
 **Depends on**: v0.14.14
 
 #### Items
 
-1. [ ] **`ArtifactKind::Image` in `ta-changeset`**: `ArtifactKind::Image { width, height, format, frame_index }`. Generic — not UE5-specific.
+1. [x] **`ArtifactKind::Image` in `ta-changeset`**: `ArtifactKind::Image { width, height, format, frame_index }`. Generic — not UE5-specific. New `crates/ta-changeset/src/artifact_kind.rs` with serde tag `"type":"image"`, all fields optional, `is_image()` and `display_label()` helpers. Exported from `lib.rs`. Optional `kind: Option<ArtifactKind>` field added to `Artifact` struct in `draft_package.rs`.
 
-2. [ ] **`ta draft view` rendering for image artifact sets**: Shows frame count, resolution, format, and file size delta. Binary diff suppressed for image types; human-readable summary shown instead (e.g., "42 PNG frames, 1024×1024, 380 MB").
+2. [x] **`ta draft view` rendering for image artifact sets**: Binary diff suppressed for image artifacts; `render_artifact_full()` in `terminal.rs` shows "Image artifact:" header with format, resolution, and frame index instead of text diff. New `render_image_artifact_set_summary()` static method builds summary strings like "42 PNG frames, 1024×1024" for sets of image artifacts.
 
-3. [ ] **Unit tests**: Round-trip serialize/deserialize `ArtifactKind::Image`; `ta draft view` output format for an image artifact set.
+3. [x] **Unit tests**: 7 round-trip serialize/deserialize tests in `artifact_kind.rs` (full fields, minimal, type tag, None-field omission, `is_image`, `display_label`). 4 `ta draft view` rendering tests in `terminal.rs` (diff suppressed for image, `AlwaysPanic` diff provider confirms get_diff not called, multi-frame summary, single-frame singular, empty non-image set).
+
+#### Completed
+
+- `crates/ta-changeset/src/artifact_kind.rs`: New `ArtifactKind` enum with `Image` variant and 7 unit tests
+- `crates/ta-changeset/src/draft_package.rs`: Added `kind: Option<ArtifactKind>` field to `Artifact` struct
+- `crates/ta-changeset/src/lib.rs`: Registered `artifact_kind` module; exported `ArtifactKind`
+- `crates/ta-changeset/src/output_adapters/terminal.rs`: Image-aware `render_artifact_full()`, `render_image_artifact_set_summary()`, 4 new tests (11 total new tests across both files)
+- Updated all `Artifact` literal call sites to include `kind: None` (8 files)
 
 #### Version: `0.14.15-alpha`
 
@@ -8172,7 +8180,7 @@ Agent permissions
 
 4. [ ] **USAGE.md "Governed Render Jobs" section**: MRQ submission flow, frames-in-staging review, approval → workspace promotion, image artifact diff format.
 
-#### Version: `0.14.14-alpha.1` (connector patch — no core TA semver bump)
+#### Version: `0.14.15-alpha.1` (connector patch — no core TA semver bump)
 
 ---
 
@@ -8526,7 +8534,7 @@ Federated sharing of anonymized problem→solution pairs across TA instances. Bu
 
 ### Unreal Engine MCP Plugin (`ta-mcp-unreal`)
 
-> **Promoted to versioned phases**: v0.14.14 (connector scaffold + `ta connector` CLI + `kvick`/`flopperam`/`special-agent` backends), v0.14.14.1 (typed MRQ tools + frames-to-staging, UE5 connector extension), and v0.14.15 (`ArtifactKind::Image` in core `ta-changeset`). Full turntable LoRA validation workload lives in `ue5-cine-pipeline` / `meerkat-poc`.
+> **Promoted to versioned phases**: v0.14.14 (connector scaffold + `ta connector` CLI + `kvick`/`flopperam`/`special-agent` backends), v0.14.15 (`ArtifactKind::Image` in core `ta-changeset`), and v0.14.15.1 (typed MRQ tools + frames-to-staging, UE5 connector extension). Full turntable LoRA validation workload lives in `ue5-cine-pipeline` / `meerkat-poc`.
 
 ### Unity MCP Plugin (`ta-mcp-unity`)
 

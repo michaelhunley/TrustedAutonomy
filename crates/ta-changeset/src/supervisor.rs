@@ -436,6 +436,7 @@ mod tests {
             explanation_tiers: None,
             comments: None,
             amendment: None,
+            kind: None,
         }
     }
 
