@@ -5836,6 +5836,7 @@ pre_launch:
             }),
             comments: Some(comment_thread),
             amendment: None,
+            kind: None,
         };
 
         let parent_draft = DraftPackage {
@@ -6000,6 +6001,7 @@ pre_launch:
             explanation_tiers: None,
             comments: None, // No comments yet
             amendment: None,
+            kind: None,
         };
 
         let parent_draft = DraftPackage {

@@ -122,6 +122,7 @@ fn make_draft_package() -> DraftPackage {
                 explanation_tiers: None,
                 comments: None,
                 amendment: None,
+                kind: None,
             }],
             patch_sets: vec![],
             pending_actions: vec![],

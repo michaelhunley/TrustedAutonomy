@@ -2,6 +2,7 @@
 //!
 //! Color is off by default. Enable with `TerminalAdapter::with_color()` or `--color` CLI flag.
 
+use crate::artifact_kind::ArtifactKind;
 use crate::error::ChangeSetError;
 use crate::output_adapters::{
     default_summary, matches_file_filters, DetailLevel, OutputAdapter, RenderContext,
@@ -235,6 +236,29 @@ impl TerminalAdapter {
         let reset = self.reset();
         let dim = self.dim();
 
+        // Image artifacts: suppress binary diff; show human-readable summary instead.
+        if let Some(ArtifactKind::Image {
+            width,
+            height,
+            format,
+            frame_index,
+        }) = &artifact.kind
+        {
+            output.push_str(&format!("\n    {bold}Image artifact:{reset}\n"));
+            let fmt_str = format.as_deref().unwrap_or("unknown format");
+            output.push_str(&format!("    {dim}Format:{reset} {}\n", fmt_str));
+            if let (Some(w), Some(h)) = (width, height) {
+                output.push_str(&format!("    {dim}Resolution:{reset} {}×{}\n", w, h));
+            }
+            if let Some(fi) = frame_index {
+                output.push_str(&format!("    {dim}Frame index:{reset} {}\n", fi));
+            }
+            output.push_str(&format!(
+                "    {dim}[Binary image — text diff suppressed]{reset}\n"
+            ));
+            return output;
+        }
+
         // Fetch and display full diff if provider is available
         if let Some(provider) = ctx.diff_provider {
             match provider.get_diff(&artifact.diff_ref) {
@@ -272,6 +296,55 @@ impl TerminalAdapter {
         }
 
         output
+    }
+
+    /// Build a human-readable summary for a set of image artifacts.
+    ///
+    /// Used by `ta draft view` to display a summary line like
+    /// "42 PNG frames, 1024×1024, 380 MB" when a draft contains image artifacts.
+    pub fn render_image_artifact_set_summary(artifacts: &[&Artifact]) -> String {
+        let image_artifacts: Vec<_> = artifacts
+            .iter()
+            .filter(|a| a.kind.as_ref().map(|k| k.is_image()).unwrap_or(false))
+            .collect();
+
+        if image_artifacts.is_empty() {
+            return String::new();
+        }
+
+        // Collect metadata from image kinds.
+        let frame_count = image_artifacts.len();
+        let format: Option<String> = image_artifacts.iter().find_map(|a| {
+            if let Some(ArtifactKind::Image { format, .. }) = &a.kind {
+                format.clone()
+            } else {
+                None
+            }
+        });
+        let resolution: Option<(u32, u32)> = image_artifacts.iter().find_map(|a| {
+            if let Some(ArtifactKind::Image {
+                width: Some(w),
+                height: Some(h),
+                ..
+            }) = &a.kind
+            {
+                Some((*w, *h))
+            } else {
+                None
+            }
+        });
+
+        let fmt_str = format.as_deref().unwrap_or("image");
+        let mut parts = vec![format!(
+            "{} {} frame{}",
+            frame_count,
+            fmt_str,
+            if frame_count == 1 { "" } else { "s" }
+        )];
+        if let Some((w, h)) = resolution {
+            parts.push(format!("{}×{}", w, h));
+        }
+        parts.join(", ")
     }
 
     /// Group artifacts by module (top-level directory) for the "What Changed" section (v0.9.5).
@@ -623,6 +696,7 @@ mod tests {
                     }),
                     comments: None,
                     amendment: None,
+                    kind: None,
                 }],
                 patch_sets: vec![],
                 pending_actions: vec![],
@@ -855,6 +929,7 @@ mod tests {
             explanation_tiers: None,
             comments: None,
             amendment: None,
+            kind: None,
         });
         let ctx = RenderContext {
             package: &package,
@@ -1095,6 +1170,7 @@ mod tests {
             explanation_tiers: None,
             comments: None,
             amendment: None,
+            kind: None,
         });
         let ctx = RenderContext {
             package: &package,
@@ -1129,5 +1205,123 @@ mod tests {
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("No artifacts match filters"));
+    }
+
+    // ── v0.14.15 Image artifact rendering tests ──
+
+    fn image_artifact(uri: &str, frame_index: u32) -> Artifact {
+        Artifact {
+            resource_uri: uri.to_string(),
+            change_type: ChangeType::Add,
+            diff_ref: format!("changeset:{}", frame_index),
+            tests_run: vec![],
+            disposition: ArtifactDisposition::Pending,
+            rationale: Some("Rendered frame".to_string()),
+            dependencies: vec![],
+            explanation_tiers: None,
+            comments: None,
+            amendment: None,
+            kind: Some(crate::artifact_kind::ArtifactKind::Image {
+                width: Some(1024),
+                height: Some(1024),
+                format: Some("PNG".to_string()),
+                frame_index: Some(frame_index),
+            }),
+        }
+    }
+
+    #[test]
+    fn image_artifact_full_view_suppresses_diff() {
+        // An image artifact in full detail should show image metadata,
+        // not attempt to render a binary text diff.
+        let adapter = TerminalAdapter::new();
+        let mut package = test_package();
+        package.changes.artifacts = vec![image_artifact(
+            "fs://workspace/render_output/day/beauty/frame_0000.png",
+            0,
+        )];
+
+        struct AlwaysPanic;
+        impl crate::output_adapters::DiffProvider for AlwaysPanic {
+            fn get_diff(&self, _: &str) -> Result<String, ChangeSetError> {
+                panic!("get_diff must not be called for image artifacts");
+            }
+        }
+
+        let provider = AlwaysPanic;
+        let ctx = RenderContext {
+            package: &package,
+            detail_level: DetailLevel::Full,
+            file_filters: vec![],
+            diff_provider: Some(&provider),
+            section_filter: None,
+        };
+        let output = adapter.render(&ctx).unwrap();
+        assert!(
+            output.contains("Image artifact"),
+            "should show 'Image artifact' header; got: {}",
+            output
+        );
+        assert!(
+            output.contains("Binary image — text diff suppressed"),
+            "should indicate binary diff suppression; got: {}",
+            output
+        );
+        assert!(
+            output.contains("PNG"),
+            "should show format; got: {}",
+            output
+        );
+        assert!(
+            output.contains("1024"),
+            "should show resolution; got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn image_artifact_set_summary_multiple_frames() {
+        let artifacts: Vec<Artifact> = (0..42)
+            .map(|i| image_artifact(&format!("fs://workspace/render/frame_{:04}.png", i), i))
+            .collect();
+        let refs: Vec<&Artifact> = artifacts.iter().collect();
+        let summary = TerminalAdapter::render_image_artifact_set_summary(&refs);
+        assert!(
+            summary.contains("42"),
+            "should contain frame count; got: {}",
+            summary
+        );
+        assert!(
+            summary.contains("PNG"),
+            "should contain format; got: {}",
+            summary
+        );
+        assert!(
+            summary.contains("1024"),
+            "should contain resolution; got: {}",
+            summary
+        );
+    }
+
+    #[test]
+    fn image_artifact_set_summary_single_frame() {
+        let artifacts = [image_artifact("fs://workspace/render/frame_0000.png", 0)];
+        let refs: Vec<&Artifact> = artifacts.iter().collect();
+        let summary = TerminalAdapter::render_image_artifact_set_summary(&refs);
+        assert!(
+            summary.contains("1 PNG frame"),
+            "singular 'frame' for single image; got: {}",
+            summary
+        );
+    }
+
+    #[test]
+    fn image_artifact_set_summary_empty() {
+        // A set of non-image artifacts returns empty string.
+        let mut package = test_package();
+        package.changes.artifacts[0].kind = None;
+        let refs: Vec<&Artifact> = package.changes.artifacts.iter().collect();
+        let summary = TerminalAdapter::render_image_artifact_set_summary(&refs);
+        assert_eq!(summary, "", "no images → empty summary");
     }
 }

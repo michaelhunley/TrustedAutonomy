@@ -8,6 +8,7 @@
 //!
 //! The data model aligns with `schema/draft_package.schema.json`.
 
+pub mod artifact_kind;
 pub mod artifact_type;
 pub mod changeset;
 pub mod channel_registry;
@@ -37,6 +38,7 @@ pub mod terminal_channel;
 pub mod uri_pattern;
 pub mod webhook_channel;
 
+pub use artifact_kind::ArtifactKind;
 pub use artifact_type::ArtifactType;
 pub use changeset::{ChangeKind, ChangeSet, CommitIntent};
 pub use channel_registry::{

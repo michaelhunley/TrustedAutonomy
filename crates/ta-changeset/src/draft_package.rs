@@ -16,6 +16,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::artifact_kind::ArtifactKind;
+
 // ---- Goal ----
 
 /// The high-level goal this PR package contributes to.
@@ -209,6 +211,11 @@ pub struct Artifact {
     /// Amendment record if this artifact was amended after initial creation (v0.3.4).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub amendment: Option<AmendmentRecord>,
+    /// Semantic kind of the artifact (v0.14.15). When present, the renderer
+    /// uses kind-specific display logic (e.g. image artifacts suppress the
+    /// binary diff and show a human-readable frame/resolution summary).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<ArtifactKind>,
 }
 
 /// Record of a human amendment to an artifact (v0.3.4).
@@ -864,6 +871,7 @@ mod tests {
                     explanation_tiers: None,
                     comments: None,
                     amendment: None,
+                    kind: None,
                 }],
                 patch_sets: vec![],
                 pending_actions: vec![],
@@ -1039,6 +1047,7 @@ mod tests {
             explanation_tiers: None,
             comments: None,
             amendment: None,
+            kind: None,
         };
         let json = serde_json::to_string(&artifact).unwrap();
         let restored: Artifact = serde_json::from_str(&json).unwrap();
@@ -1155,6 +1164,7 @@ mod tests {
             }),
             comments: None,
             amendment: None,
+            kind: None,
         };
         let json = serde_json::to_string(&artifact).unwrap();
         let restored: Artifact = serde_json::from_str(&json).unwrap();
@@ -1316,6 +1326,7 @@ mod tests {
                 amendment_type: AmendmentType::FileReplaced,
                 reason: Some("Deduplicated struct".to_string()),
             }),
+            kind: None,
         };
         let json = serde_json::to_string(&artifact).unwrap();
         let restored: Artifact = serde_json::from_str(&json).unwrap();
