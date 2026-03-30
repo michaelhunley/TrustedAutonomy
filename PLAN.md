@@ -8207,55 +8207,92 @@ Agent permissions
 
 ---
 
-### v0.14.17 — Release Packaging Cleanup (Windows MSI + USAGE.html in zip)
+### v0.14.17 — Release Packaging Cleanup (Windows MSI + USAGE.html in all packages)
 <!-- status: pending -->
-**Goal**: Fix two release packaging bugs that are blocking a clean rc.2:
+**Goal**: Fix the Windows MSI silent failure and ensure USAGE.html is present in every release package — Windows zip, Windows MSI (installed to docs dir), macOS tarballs, and Linux tarballs. USAGE.html is already a standalone release asset (built by the macOS Intel job) but is currently absent from the installable packages themselves.
 
-1. **Windows MSI silently fails** — `continue-on-error: true` swallows the failure. Root cause: `apps/ta-cli/wix/main.wxs` uses the WiX v4 schema (`xmlns="http://wixtoolset.org/schemas/v4/wxs"`) but CI only installs `cargo-wix`, which invokes WiX v3 tools. WiX v4 is a separate .NET global tool (`dotnet tool install --global wix`). Without it, `cargo-wix` cannot compile the v4 manifest and fails silently.
-2. **USAGE.html missing from Windows zip** — HTML generation runs only on the macOS Intel matrix job. The Windows packaging step writes `staging/USAGE.md` but never generates `USAGE.html`, so `Compress-Archive staging/*` never includes it. The MSI build step does generate `USAGE.html` internally, but that step is currently failing (see #1) and the HTML goes into the WiX binary dir, not into `staging/`.
+#### Current state per package
+
+| Package | USAGE.md | USAGE.html | Notes |
+|---|---|---|---|
+| macOS tarball (arm + intel) | ✓ | ✗ | HTML only generated as standalone release asset |
+| Linux tarball (x64 + arm) | ✓ | ✗ | Same |
+| Windows zip | ✓ | ✗ | HTML generation never added to Windows packaging step |
+| Windows MSI | — | ✗ | MSI build silently failing; `main.wxs` already has USAGE.html as a required component |
+| macOS DMG/pkg | — | — | CLI installer only (installs binaries to `/usr/local/bin`); docs live in the tarball |
+
+**Root causes**:
+- **MSI silent fail**: `main.wxs` uses WiX v4 schema (`xmlns="http://wixtoolset.org/schemas/v4/wxs"`) but CI only installs `cargo-wix`, which invokes WiX v3 tools. WiX v4 requires a separate .NET global tool (`dotnet tool install --global wix`). `continue-on-error: true` hides the failure.
+- **USAGE.html absent from tarballs and zip**: HTML generation runs only in the `Generate HTML docs (macOS Intel only)` step and its output goes to `artifacts/`, not into any platform's `staging/` directory. No other platform packaging step generates or copies USAGE.html into staging before archiving.
 
 **Does not depend on**: any other pending phase — pure CI/packaging fixes.
 
-#### Root causes
-
-| Bug | Where | Cause |
-|---|---|---|
-| MSI silent fail | `Build Windows MSI` step | WiX v4 .NET tool not installed; `cargo-wix` falls back to WiX v3 tools which reject the v4 manifest; `continue-on-error: true` hides the error |
-| USAGE.html not in zip | `Package binary with docs (Windows)` step | HTML generation only in `Generate HTML docs (macOS Intel only)` job; Windows step copies `USAGE.md` but never runs a conversion |
-
 #### Items
 
-1. [ ] **Fix MSI build** in `.github/workflows/release.yml`:
-   - Add `dotnet tool install --global wix` step before the MSI build step. `windows-latest` runners have .NET SDK pre-installed; this is fast (~10s).
-   - Replace the `cargo wix` invocation with a direct `wix build` call, which accepts the v4 manifest natively:
+1. [ ] **Add USAGE.html to Unix tarballs** (macOS ARM, macOS Intel, Linux x64, Linux ARM) in the `Package binary with docs (Unix)` step — after the `USAGE.md` stamp, generate `staging/USAGE.html` using pandoc if available (it is on macOS runners via `brew`; not on Ubuntu musl runners), with a `<pre>`-wrapped fallback otherwise:
+   ```bash
+   if command -v pandoc >/dev/null 2>&1; then
+     pandoc staging/USAGE.md -s --metadata title="Trusted Autonomy Usage Guide" \
+       -c https://cdn.simplecss.org/simple.min.css \
+       -o staging/USAGE.html
+   else
+     echo "<!DOCTYPE html><html><meta charset='utf-8'><title>Trusted Autonomy Usage Guide</title>" \
+          "<body><pre>$(cat staging/USAGE.md)</pre></body></html>" > staging/USAGE.html
+   fi
+   ```
+   `tar czf` already includes everything in `staging/`, so USAGE.html is picked up automatically.
+
+2. [ ] **Add USAGE.html to Windows zip** in the `Package binary with docs (Windows)` step — after writing `staging/USAGE.md`, generate `staging/USAGE.html`. `pandoc` is not pre-installed on `windows-latest`; use `System.Net.WebUtility::HtmlEncode` fallback:
+   ```powershell
+   $md = [System.IO.File]::ReadAllText("staging\USAGE.md")
+   $escaped = [System.Net.WebUtility]::HtmlEncode($md)
+   ("<!DOCTYPE html><html><meta charset='utf-8'>" +
+    "<title>Trusted Autonomy Usage Guide</title><body><pre>$escaped</pre></body></html>") |
+     Out-File -Encoding utf8 "staging\USAGE.html"
+   ```
+   `Compress-Archive -Path staging/*` picks it up automatically.
+
+3. [ ] **Fix MSI build** in the `Build Windows MSI` step:
+   - Step A — generate `USAGE.html` into `$releaseDir` **before** calling `wix build` (the WiX manifest references `$(var.SourceDir)\USAGE.html` as a required file; if it is absent, `wix build` fails):
+     ```powershell
+     $releaseDir = "target\x86_64-pc-windows-msvc\release"
+     $md = [System.IO.File]::ReadAllText("docs\USAGE.md")
+     $escaped = [System.Net.WebUtility]::HtmlEncode($md)
+     ("<!DOCTYPE html><html><meta charset='utf-8'>" +
+      "<title>Trusted Autonomy Usage Guide</title><body><pre>$escaped</pre></body></html>") |
+       Out-File -Encoding utf8 "$releaseDir\USAGE.html"
+     # (keep pandoc upgrade path: if pandoc is available, overwrite with richer output)
+     ```
+   - Step B — install WiX v4 .NET tool (fast ~10s; `windows-latest` has .NET SDK):
+     ```powershell
+     dotnet tool install --global wix
+     ```
+   - Step C — replace `cargo wix` invocation with direct `wix build` (accepts v4 manifest natively):
      ```powershell
      wix build apps/ta-cli/wix/main.wxs `
-       -d SourceDir="target\x86_64-pc-windows-msvc\release" `
+       -d SourceDir="$releaseDir" `
        -d Version="$msiVersion" `
        -d Platform=x64 `
        -arch x64 `
        -o "artifacts\ta-$TAG-x86_64-pc-windows-msvc.msi"
      ```
-   - Remove `continue-on-error: true`. MSI failure should surface as a build failure, not be silently skipped.
-   - Keep the `cargo install cargo-wix` step removed (no longer needed when calling `wix build` directly).
-   - The `vcs-perforce` and `vcs-perforce.toml` copy steps remain unchanged — those files exist in `plugins/` and the WiX manifest references them.
+   - Remove `continue-on-error: true` — MSI failure must surface.
+   - Remove `cargo install cargo-wix` — no longer needed.
+   - The `vcs-perforce` and `vcs-perforce.toml` copy steps remain unchanged (files exist in `plugins/`).
 
-2. [ ] **Add USAGE.html to Windows zip** in the `Package binary with docs (Windows)` step — after writing `staging/USAGE.md`, generate `staging/USAGE.html` so `Compress-Archive staging/*` picks it up automatically:
-   ```powershell
-   # pandoc is not pre-installed on windows-latest; use minimal HTML fallback
-   $md = [System.IO.File]::ReadAllText("staging\USAGE.md")
-   $escaped = [System.Net.WebUtility]::HtmlEncode($md)
-   "<!DOCTYPE html><html><meta charset='utf-8'>" +
-   "<title>Trusted Autonomy Usage Guide</title><body><pre>$escaped</pre></body></html>" |
-     Out-File -Encoding utf8 "staging\USAGE.html"
-   ```
-   (If pandoc is available, use it for richer output — keep the pandoc-or-fallback pattern already used in the MSI step.)
+   **Result**: After a successful MSI install, USAGE.html is at `%ProgramFiles%\TrustedAutonomy\docs\USAGE.html` and the "TA Documentation" Start Menu shortcut opens it directly (already wired in `main.wxs`).
 
-3. [ ] **Verify MSI installs cleanly**: Run the MSI on a Windows machine (or CI matrix). Confirm `ta.exe` appears in `%ProgramFiles%\TrustedAutonomy\`, the directory is on PATH, the Start Menu shortcut launches `ta shell`, and the docs shortcut opens `USAGE.html` from the install dir.
+4. [ ] **Promote MSI to required artifact**: In the `Validate artifacts before publish` step, move `ta-${TAG}-x86_64-pc-windows-msvc.msi` from the `OPTIONAL` list to the `REQUIRED` list. A release without a Windows installer now fails the gate.
 
-4. [ ] **Update artifact validation** in `Validate artifacts before publish`: move the MSI from the `OPTIONAL` list to the `REQUIRED` list (alongside the zip). A release without a Windows installer should fail the gate, not proceed silently.
-
-5. [ ] **Smoke test the zip**: Verify the zip contains both `USAGE.md` and `USAGE.html` after the fix.
+5. [ ] **Explicit verification checklist** (run manually against the rc.2 build before tagging stable):
+   - [ ] macOS ARM tarball: `tar tzf ta-*-aarch64-apple-darwin.tar.gz | grep USAGE.html`
+   - [ ] macOS Intel tarball: `tar tzf ta-*-x86_64-apple-darwin.tar.gz | grep USAGE.html`
+   - [ ] Linux x64 tarball: `tar tzf ta-*-x86_64-unknown-linux-musl.tar.gz | grep USAGE.html`
+   - [ ] Windows zip: `Expand-Archive ... -DestinationPath tmp; ls tmp\USAGE.*`
+   - [ ] MSI installs cleanly: `ta.exe` in `%ProgramFiles%\TrustedAutonomy\`, on PATH, `USAGE.html` in `docs\` subdir
+   - [ ] Start Menu "TA Documentation" shortcut opens USAGE.html in browser
+   - [ ] MSI uninstalls cleanly (Add/Remove Programs)
+   - [ ] Standalone `USAGE.html` release asset still present (generated by macOS Intel job — unchanged)
 
 #### Version: `0.14.17-alpha`
 
