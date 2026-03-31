@@ -8298,6 +8298,73 @@ Agent permissions
 
 ---
 
+### v0.14.18 — TA Studio: Multi-Project Support, Project Browser & Platform Launchers
+<!-- status: pending -->
+**Goal**: TA Studio (the web app at `http://localhost:7700`) gains a Project Browser so non-engineers can open, switch between, and discover TA projects without using a terminal. Alongside this, each platform gets a one-click launcher so non-engineers never need to open a terminal at all: the launcher starts the daemon and opens TA Studio in the browser.
+
+**Depends on**: v0.14.8 (TA Studio web shell), v0.14.13 (setup wizard)
+
+#### Problem
+
+Today every TA operation assumes you already know your project directory and have a terminal open. Non-engineers:
+1. Don't know which directory holds their `.ta/` workspace.
+2. Can't switch between projects without `cd`-ing and restarting the daemon.
+3. Must open a terminal, `cd` to the right directory, and run `ta shell` or `ta daemon start` before TA Studio is usable.
+
+TA Studio should handle all three problems: browse/select a project visually, switch cleanly, and launch via a double-click on every platform.
+
+#### Design — Project Browser
+
+TA Studio gains a **Projects** view (accessible from the top-nav "Projects" link or the initial screen when no project is active). The view:
+
+- **Recent projects**: list of previously-opened TA workspaces (`~/.config/ta/recent-projects.json`, max 20 entries), each showing project name (from `workflow.toml [project] name`), last-opened date, and the absolute path.
+- **Open from path**: text input + "Browse" button. On click, the daemon opens a native OS directory picker and returns the selected path; if `.ta/` exists there, opens it.
+- **Git clone + open**: "Open from GitHub/GitLab" link — prompts for a repo URL, clones to a configurable default directory (`~/projects/` or configured in `daemon.toml`), then opens as a new project.
+- **Switching projects**: selecting any project calls `POST /api/project/open { path }` which the daemon uses to set the active workspace. A brief "loading…" spinner, then the Dashboard refreshes for the new project.
+
+#### Design — Platform Launchers
+
+Each platform gets a zero-terminal launch path that starts the TA daemon and opens TA Studio:
+
+| Platform | Launcher | Location |
+|----------|----------|----------|
+| **macOS** | `TA Studio.app` — double-clickable app bundle | `Applications/` (installed by DMG) |
+| **Windows** | `TA Studio.bat` + Start Menu shortcut | `%ProgramFiles%\TrustedAutonomy\` (installed by MSI) |
+| **Linux** | `.desktop` file + `ta-studio` shell script | `/usr/local/share/applications/` + `/usr/local/bin/ta-studio` |
+
+All three launchers follow the same logic:
+1. If the daemon is already running at the configured port, skip `ta daemon start`.
+2. Otherwise, run `ta daemon start --background`.
+3. Wait up to 5 seconds for the daemon health endpoint to respond (`GET /api/status`).
+4. Open `http://localhost:7700` in the system default browser.
+5. If the daemon doesn't respond within 5 seconds, show a user-friendly error dialog (macOS: `osascript`; Windows: PowerShell MsgBox; Linux: `zenity`/`notify-send`).
+
+#### Items
+
+1. [ ] **`/api/project/open` daemon endpoint**: Accepts `{ path: String }`. Validates `.ta/` exists. Sets the active project root. Updates `~/.config/ta/recent-projects.json` (prepend, deduplicate, cap at 20). Returns `{ ok: true, name: String }` or `{ ok: false, error: String }`.
+
+2. [ ] **`/api/project/list` daemon endpoint**: Returns recent projects from `~/.config/ta/recent-projects.json`. Each entry: `{ path, name, last_opened }`. Used by the Project Browser's recent list.
+
+3. [ ] **`/api/project/browse` daemon endpoint**: Triggers native OS directory picker asynchronously. Returns `{ path: String }` or `{ cancelled: true }`. Implementation: `open`/`xdg-open` on Unix; PowerShell `FolderBrowserDialog` on Windows.
+
+4. [ ] **Projects page in TA Studio**: New `/projects` route. Layout: "Recent Projects" card list + "Open from Path" form + "Open from Git" form. Clicking a recent project calls `/api/project/open`, redirects to `/` on success.
+
+5. [ ] **Redirect to /projects when no active project**: If `GET /api/status` returns `{ project: null }`, the Dashboard JS redirects to `/projects` rather than showing an empty dashboard.
+
+6. [ ] **macOS `TA Studio.app` launcher**: Shell script wrapped in an `.app` bundle. Included in the DMG. Logic: check daemon health → start if needed → wait up to 5s → open browser → `osascript` error dialog on timeout.
+
+7. [ ] **Windows `TA Studio.bat` + MSI shortcut**: `.bat` in the MSI install directory. MSI `main.wxs` gains a "TA Studio" Start Menu shortcut (alongside the existing "TA Documentation" shortcut). Logic: start daemon background → loop health check → `START http://localhost:7700`. Error via PowerShell MsgBox.
+
+8. [ ] **Linux `ta-studio` script + `.desktop` file**: Shell script at `/usr/local/bin/ta-studio` in the tarball. `.desktop` at `/usr/local/share/applications/ta-studio.desktop`. Error via `zenity --error` / `notify-send` fallback.
+
+9. [ ] **Tests**: `/api/project/open` writes recent-projects and returns project name; `/api/project/list` returns sorted recents; redirect logic when no active project; recent-projects capped at 20 and deduplicated.
+
+10. [ ] **USAGE.md "Opening a Project" section**: How to use the Project Browser, how the launchers work on each platform, how to set a default clone directory in `daemon.toml`.
+
+#### Version: `0.14.18-alpha`
+
+---
+
 > **Unity Connector** → moved to v0.15.3 (Content Pipeline phases).
 
 ---
