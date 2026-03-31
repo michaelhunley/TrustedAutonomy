@@ -7557,6 +7557,81 @@ For SA cloud hybrid: SA provides a webhook relay service (publicly-accessible HT
 
 ---
 
+### v0.14.8.4 — TA Studio: Multi-Project Support, Project Browser & Platform Launchers
+<!-- status: pending -->
+**Goal**: TA Studio (the web app at `http://localhost:7700`) gains a Project Browser so non-engineers can open, switch between, and discover TA projects without using a terminal. Alongside this, each platform gets a one-click launcher so non-engineers never need to open a terminal at all: the launcher starts the daemon and opens TA Studio in the browser.
+
+**Depends on**: v0.14.8 (TA Studio web shell), v0.14.13 (setup wizard)
+
+#### Problem
+
+Today every TA operation assumes you already know your project directory and have a terminal open. Non-engineers:
+1. Don't know which directory holds their `.ta/` workspace.
+2. Can't switch between projects without `cd`-ing and restarting the daemon.
+3. Must open a terminal, `cd` to the right directory, and run `ta shell` or `ta daemon start` before TA Studio is usable.
+
+TA Studio should handle all three problems: browse/select a project visually, switch cleanly, and launch via a double-click on every platform.
+
+#### Design — Project Browser
+
+TA Studio gains a **Projects** view (accessible from the top-nav "Projects" link or the initial screen when no project is active). The view:
+
+- **Recent projects**: list of previously-opened TA workspaces (`~/.config/ta/recent-projects.json`, max 20 entries), each showing project name (from `workflow.toml [project] name`), last-opened date, and the absolute path.
+- **Open from path**: text input + "Browse" button. On click, the daemon opens a native OS directory picker (via `open`/`xdg-open`/PowerShell UI call) and returns the selected path; if `.ta/` exists there, opens it.
+- **Git clone + open**: "Open from GitHub/GitLab" link — prompts for a repo URL, clones to a configurable default directory (`~/projects/` or configured in `daemon.toml`), then opens as a new project.
+- **Switching projects**: selecting any project calls `POST /api/project/open { path }` which the daemon uses to set the active workspace. A brief "loading…" spinner, then the Dashboard refreshes for the new project.
+
+#### Design — Platform Launchers
+
+Each platform gets a zero-terminal launch path that starts the TA daemon and opens TA Studio:
+
+| Platform | Launcher | Location |
+|----------|----------|----------|
+| **macOS** | `TA Studio.app` — double-clickable app bundle | `Applications/` (installed by DMG) |
+| **Windows** | `TA Studio.bat` + Start Menu shortcut | `%ProgramFiles%\TrustedAutonomy\` (installed by MSI) |
+| **Linux** | `.desktop` file + `ta-studio` shell script | `/usr/local/share/applications/` + `/usr/local/bin/ta-studio` |
+
+All three launchers follow the same logic:
+1. If the daemon is already running at the configured port, skip `ta daemon start`.
+2. Otherwise, run `ta daemon start --background`.
+3. Wait up to 5 seconds for the daemon health endpoint to respond (`GET /api/status`).
+4. Open `http://localhost:7700` in the system default browser.
+5. If the daemon doesn't respond within 5 seconds, show a user-friendly error dialog (macOS: `osascript -e 'display dialog ...'`; Windows: `powershell -Command "Add-Type ..."`; Linux: `notify-send` or `zenity`).
+
+#### Items
+
+1. [ ] **`/api/project/open` daemon endpoint**: Accepts `{ path: String }`. Validates `.ta/` exists. Writes `path` as the active project root. Updates `~/.config/ta/recent-projects.json` (prepend, deduplicate, cap at 20). Returns `{ ok: true, name: String }` or `{ ok: false, error: String }`.
+
+2. [ ] **`/api/project/list` daemon endpoint**: Returns recent projects from `~/.config/ta/recent-projects.json`. Each entry: `{ path, name, last_opened }`. Used by the Project Browser's recent list.
+
+3. [ ] **`/api/project/browse` daemon endpoint**: Triggers native OS directory picker asynchronously. Returns `{ path: String }` (the selected directory) or `{ cancelled: true }`. Implementation: `open`/`xdg-open` calls on Unix; `PowerShell -Command "[System.Windows.Forms.FolderBrowserDialog]..."` on Windows.
+
+4. [ ] **Projects page in TA Studio**: New `/projects` route in the web UI. Layout: "Recent Projects" card list + "Open from Path" form + "Open from Git" form. Each recent-project card has an "Open" button and a "Remove from recents" ×. Clicking "Open" calls `/api/project/open`, redirects to `/` on success. "Open from Path" shows the path field + Browse button (calls `/api/project/browse`). "Open from Git" shows a URL field + directory override + Clone button.
+
+5. [ ] **Redirect to /projects when no active project**: If `GET /api/status` returns `{ project: null }`, the Dashboard JS redirects to `/projects` rather than showing an empty dashboard.
+
+6. [ ] **macOS `TA Studio.app` launcher**: Shell script wrapped in an `.app` bundle using Automator or a minimal `Info.plist` + shell shim. Script: check daemon health → start if needed → wait → open browser → error dialog on timeout. Built by the macOS packaging step and included in the DMG.
+
+7. [ ] **Windows `TA Studio.bat` + MSI shortcut**: `.bat` file in the MSI install directory. MSI `main.wxs` gains a "TA Studio" Start Menu shortcut targeting `TA Studio.bat` (alongside the existing "TA Documentation" shortcut). Launcher: `START /B ta.exe daemon start --background`, loop health check, `START http://localhost:7700`. Error: `msg * "TA Studio could not start..."`.
+
+8. [ ] **Linux `ta-studio` script + `.desktop` file**: Shell script at `/usr/local/bin/ta-studio` installed by the tarball. `.desktop` file at `/usr/local/share/applications/ta-studio.desktop` (`Exec=ta-studio`, `Icon=ta-studio`, `Categories=Development;`). Error via `zenity --error` with `notify-send` fallback.
+
+9. [ ] **`recent-projects.json` structure**:
+   ```json
+   [
+     { "path": "/home/user/projects/my-game", "name": "My Game", "last_opened": "2026-04-01T10:00:00Z" },
+     ...
+   ]
+   ```
+
+10. [ ] **Tests**: `/api/project/open` writes recent-projects and returns project name; `/api/project/list` returns sorted recents; redirect logic when no active project; launcher scripts parse health check correctly (unit-testable shell function); recent-projects capped at 20; duplicate paths deduplicated.
+
+11. [ ] **USAGE.md "Opening a Project" section**: How to use the Project Browser, how the launchers work on each platform, how to set a default clone directory in `daemon.toml`.
+
+#### Version: `0.14.8.4-alpha`
+
+---
+
 ### v0.14.9 — Qwen3.5 Local Agent Profiles & Ollama Install Flow
 <!-- status: done -->
 **Goal**: First-class support for Qwen3.5 (4B, 9B, 27B) as local TA agents via Ollama. The `ta-agent-ollama` binary already supports any OpenAI-compatible endpoint — this phase adds: ready-to-use agent profiles for each size, a `ta agent install` flow that drives Ollama model pulls, Qwen3.x thinking-mode integration, hardware guidance, and size-adaptive selection so TA automatically picks the right model for the task.
@@ -8593,6 +8668,71 @@ supervisor = true         # run supervisor confidence check (default: true)
 6. [ ] **USAGE.md "Terms & First-Run Setup" note**: one paragraph explaining when you'll see the prompt and how to pre-accept in CI.
 
 #### Version: `0.15.5-alpha`
+
+---
+
+### v0.15.6 — Config File Naming Consistency
+<!-- status: pending -->
+**Goal**: Standardise all `.ta/` config override files to the `<name>.local.toml` pattern. Currently `local.workflow.toml` is the odd one out — `daemon.local.toml` already follows the correct convention. Rename the override file and update every reference so all local overrides are consistently discoverable as `*.local.toml`.
+
+**Files affected**:
+- `local.workflow.toml` → `workflow.local.toml` (rename the loaded filename and gitignore entries)
+
+**Scope**:
+- All names that follow `<name>.local.toml` are already correct and stay unchanged: `daemon.local.toml`.
+- Only `local.workflow.toml` needs renaming.
+
+#### Items
+
+1. [ ] **Rename the load path** in `crates/ta-submit/src/config.rs` `WorkflowConfig::load()`: look for `workflow.local.toml` after loading `workflow.toml`, merge/override fields (same semantics as before). If `local.workflow.toml` still exists on disk, log a one-time deprecation warning: _"local.workflow.toml is deprecated — rename it to workflow.local.toml"_.
+
+2. [ ] **Update `LOCAL_TA_PATHS`** in `crates/ta-workspace/src/partitioning.rs`: replace `"local.workflow.toml"` with `"workflow.local.toml"`.
+
+3. [ ] **Update the mirror** in `crates/ta-submit/src/config.rs` `default_local_exclude_paths()`: same rename.
+
+4. [ ] **Update `examples/workflow.toml`** comment (if any) and `docs/USAGE.md` to reflect the new name.
+
+5. [ ] **Migration note in USAGE.md**: one sentence — if you have a `local.workflow.toml`, rename it.
+
+6. [ ] **Tests**: confirm `workflow.local.toml` is loaded and merged; confirm `local.workflow.toml` triggers the deprecation warning and is still applied (backwards compatibility for one release cycle).
+
+#### Version: `0.15.6-alpha`
+
+---
+
+### v0.15.7 — Velocity Stats: Committed Aggregate & Multi-Machine Rollup
+<!-- status: pending -->
+**Goal**: Make velocity data committable, team-visible, and conflict-free. Currently `velocity-stats.jsonl` is purely local (gitignored), so stats never aggregate across machines or team members. This phase introduces a committed `velocity-history.jsonl` that is auto-staged on `ta draft apply --git-commit`, using the same append-only pattern as `plan_history.jsonl`.
+
+**Design**:
+- `velocity-stats.jsonl` — stays LOCAL (raw per-machine log, unchanged)
+- `velocity-history.jsonl` (new) — SHARED, committed to VCS, one line per completed goal
+- Written by `ta draft apply --git-commit` (same moment `plan_history.jsonl` is updated)
+- Each entry tagged with `machine_id` (hostname hash) and `committer` (from git config) so multi-machine appends are unique lines → no merge conflicts
+- `ta stats velocity` reads BOTH files: local raw log + committed history (deduplicates by `goal_id`)
+- `ta stats velocity --team` reads only the committed history to show cross-machine aggregate
+
+#### Items
+
+1. [ ] **`velocity-history.jsonl` schema**: extend `VelocityEntry` with `machine_id: String` (first 8 chars of SHA256(hostname)) and `committer: Option<String>` (from `git config user.name`). Keep backwards-compatible with existing local entries (both fields optional via `#[serde(default)]`).
+
+2. [ ] **Write on apply**: in `apps/ta-cli/src/commands/run.rs` `apply_draft()`, after writing `plan_history.jsonl`, append the velocity entry to `.ta/velocity-history.jsonl`. Only when `--git-commit` is active (same guard as plan_history write).
+
+3. [ ] **Add to `SHARED_TA_PATHS`** in `partitioning.rs` and remove from `LOCAL_TA_PATHS` / `default_local_exclude_paths()`. Auto-stage it in `commit.auto_stage` defaults alongside `plan_history.jsonl`.
+
+4. [ ] **`ta stats velocity` deduplication**: merge local `velocity-stats.jsonl` and committed `velocity-history.jsonl`, dedup by `goal_id`, sort by `started_at`. Local-only entries (not yet committed) appear marked `[local]` in the detail view.
+
+5. [ ] **`ta stats velocity --team`**: reads only `velocity-history.jsonl`, groups by `committer` or `machine_id`, shows per-person and aggregate throughput. Useful for multi-developer projects.
+
+6. [ ] **`ta stats velocity --export`**: unchanged — exports from the merged view. Update the CSV/JSON header to include `machine_id` and `committer`.
+
+7. [ ] **Migration**: on first run after upgrade, if `velocity-stats.jsonl` exists locally, offer `ta stats migrate` to promote all local entries into `velocity-history.jsonl` with the current machine's `machine_id`. Non-destructive — local file stays.
+
+8. [ ] **Tests**: apply with `--git-commit` writes to velocity-history; dedup works across both files; `--team` flag aggregates correctly; migration path handles missing fields gracefully.
+
+9. [ ] **USAGE.md**: "Team velocity" section explaining the two-file design, how to read cross-machine stats, and the `--team` flag.
+
+#### Version: `0.15.7-alpha`
 
 ---
 

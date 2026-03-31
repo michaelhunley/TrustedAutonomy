@@ -333,9 +333,12 @@ impl Default for TaLocalPaths {
 fn default_local_exclude_paths() -> Vec<String> {
     // Mirror of ta-workspace::partitioning::LOCAL_TA_PATHS — kept in sync manually.
     // These are `.ta/` paths that are machine-local only (gitignored, never shared).
+    // Note: taignore, goal-history.jsonl, goal-audit.jsonl moved to SHARED_TA_PATHS.
     vec![
         "daemon.toml".to_string(),
         "daemon.local.toml".to_string(),
+        "daemon.log".to_string(),
+        "daemon.pid".to_string(),
         "local.workflow.toml".to_string(),
         "memory.rvf".to_string(),
         "staging/".to_string(),
@@ -343,10 +346,17 @@ fn default_local_exclude_paths() -> Vec<String> {
         "goals/".to_string(),
         "events/".to_string(),
         "sessions/".to_string(),
+        "backups/".to_string(),
+        "pr_packages/".to_string(),
+        "interactive_sessions/".to_string(),
         "release.lock".to_string(),
         "velocity-stats.jsonl".to_string(),
         "audit-ledger.jsonl".to_string(),
-        "taignore".to_string(),
+        "audit.jsonl".to_string(),
+        "events.jsonl".to_string(),
+        "operations.jsonl".to_string(),
+        "change_summary.json".to_string(),
+        "consent.json".to_string(),
         "interactions/".to_string(),
     ]
 }
