@@ -8496,6 +8496,39 @@ supervisor = true         # run supervisor confidence check (default: true)
 
 ---
 
+### v0.15.5 — Terms Acceptance Gate on First-Run Operations
+<!-- status: pending -->
+**Goal**: Prompt the user to review and accept the TA terms of use during first-run operations (`ta init`, `ta run` first goal, `ta goal start`). Acceptance is recorded in the TA config dir and not asked again. Commands that don't mutate state (e.g. `ta plan list`, `ta draft view`) never gate on terms.
+
+**Why this phase exists**: As TA moves toward public release and studio deployments, a clear terms acceptance moment is required for legal and onboarding purposes. It should feel like a natural part of setup — not a blocker mid-workflow.
+
+#### Behaviour
+
+- **Triggered by**: `ta init`, `ta run` (first goal only), `ta goal start` — i.e. any command that first causes agent-mediated changes to the workspace.
+- **Not triggered by**: read-only commands (`ta plan list`, `ta draft view`, `ta goal list`, `ta stats`, etc.).
+- **Format**: Short, readable plain-text terms printed to stdout with a `[y/N]` prompt. If the terminal is non-interactive (CI/headless), print the terms path and exit with a clear error message telling the user to accept manually: `ta accept-terms`.
+- **Acceptance stored**: `~/.config/ta/accepted_terms` — contains the terms version hash and acceptance timestamp. Checked once per binary version.
+- **Re-prompt**: If the terms version changes (new binary with updated terms), the user is prompted once more on the next triggering command.
+- **`ta accept-terms`**: Standalone command for non-interactive / CI environments. Prints terms, accepts on `--yes` flag.
+
+#### Items
+
+1. [ ] **Terms file** at `apps/ta-cli/src/terms.txt` (embedded via `include_str!`). Short (~20 lines): what TA does, what it may read/write, privacy note, link to full terms. Version hash is derived from the content.
+
+2. [ ] **Acceptance check** in `apps/ta-cli/src/commands/run.rs`, `init.rs`, and `goal.rs`: call `check_terms_accepted()` before the mutating operation begins. Reads `~/.config/ta/accepted_terms`; if absent or stale version, runs the interactive prompt.
+
+3. [ ] **`ta accept-terms`** subcommand: prints terms, accepts with `--yes`, writes acceptance record. Used by CI and install scripts.
+
+4. [ ] **Non-interactive detection**: if `!std::io::stdin().is_terminal()` and terms not yet accepted, print error with `ta accept-terms --yes` as the suggested fix.
+
+5. [ ] **Tests**: acceptance file written correctly; stale version triggers re-prompt; non-interactive path returns correct error; `ta accept-terms --yes` writes acceptance and exits 0.
+
+6. [ ] **USAGE.md "Terms & First-Run Setup" note**: one paragraph explaining when you'll see the prompt and how to pre-accept in CI.
+
+#### Version: `0.15.5-alpha`
+
+---
+
 ## v0.16 — IDE Integration & Developer Experience
 
 > **Focus**: First-class IDE integration for VS Code, JetBrains (PyCharm, WebStorm, IntelliJ), and Neovim. TA transitions from a pure CLI tool to an embedded development workflow component with sidebar panels, inline draft review, and one-click goal approval.
