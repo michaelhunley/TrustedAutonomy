@@ -8625,6 +8625,42 @@ supervisor = true         # run supervisor confidence check (default: true)
 
 ---
 
+### v0.15.7 — Velocity Stats: Committed Aggregate & Multi-Machine Rollup
+<!-- status: pending -->
+**Goal**: Make velocity data committable, team-visible, and conflict-free. Currently `velocity-stats.jsonl` is purely local (gitignored), so stats never aggregate across machines or team members. This phase introduces a committed `velocity-history.jsonl` that is auto-staged on `ta draft apply --git-commit`, using the same append-only pattern as `plan_history.jsonl`.
+
+**Design**:
+- `velocity-stats.jsonl` — stays LOCAL (raw per-machine log, unchanged)
+- `velocity-history.jsonl` (new) — SHARED, committed to VCS, one line per completed goal
+- Written by `ta draft apply --git-commit` (same moment `plan_history.jsonl` is updated)
+- Each entry tagged with `machine_id` (hostname hash) and `committer` (from git config) so multi-machine appends are unique lines → no merge conflicts
+- `ta stats velocity` reads BOTH files: local raw log + committed history (deduplicates by `goal_id`)
+- `ta stats velocity --team` reads only the committed history to show cross-machine aggregate
+
+#### Items
+
+1. [ ] **`velocity-history.jsonl` schema**: extend `VelocityEntry` with `machine_id: String` (first 8 chars of SHA256(hostname)) and `committer: Option<String>` (from `git config user.name`). Keep backwards-compatible with existing local entries (both fields optional via `#[serde(default)]`).
+
+2. [ ] **Write on apply**: in `apps/ta-cli/src/commands/run.rs` `apply_draft()`, after writing `plan_history.jsonl`, append the velocity entry to `.ta/velocity-history.jsonl`. Only when `--git-commit` is active (same guard as plan_history write).
+
+3. [ ] **Add to `SHARED_TA_PATHS`** in `partitioning.rs` and remove from `LOCAL_TA_PATHS` / `default_local_exclude_paths()`. Auto-stage it in `commit.auto_stage` defaults alongside `plan_history.jsonl`.
+
+4. [ ] **`ta stats velocity` deduplication**: merge local `velocity-stats.jsonl` and committed `velocity-history.jsonl`, dedup by `goal_id`, sort by `started_at`. Local-only entries (not yet committed) appear marked `[local]` in the detail view.
+
+5. [ ] **`ta stats velocity --team`**: reads only `velocity-history.jsonl`, groups by `committer` or `machine_id`, shows per-person and aggregate throughput. Useful for multi-developer projects.
+
+6. [ ] **`ta stats velocity --export`**: unchanged — exports from the merged view. Update the CSV/JSON header to include `machine_id` and `committer`.
+
+7. [ ] **Migration**: on first run after upgrade, if `velocity-stats.jsonl` exists locally, offer `ta stats migrate` to promote all local entries into `velocity-history.jsonl` with the current machine's `machine_id`. Non-destructive — local file stays.
+
+8. [ ] **Tests**: apply with `--git-commit` writes to velocity-history; dedup works across both files; `--team` flag aggregates correctly; migration path handles missing fields gracefully.
+
+9. [ ] **USAGE.md**: "Team velocity" section explaining the two-file design, how to read cross-machine stats, and the `--team` flag.
+
+#### Version: `0.15.7-alpha`
+
+---
+
 ## v0.16 — IDE Integration & Developer Experience
 
 > **Focus**: First-class IDE integration for VS Code, JetBrains (PyCharm, WebStorm, IntelliJ), and Neovim. TA transitions from a pure CLI tool to an embedded development workflow component with sidebar panels, inline draft review, and one-click goal approval.
