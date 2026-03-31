@@ -1,0 +1,101 @@
+# .ta/policy.yaml — Security and auto-approval policy for Trusted Autonomy.
+#
+# Copy this file to your project's .ta/ directory:
+#   cp examples/policy.yaml .ta/policy.yaml
+#
+# Or let `ta init` generate one tailored to your project type.
+# Run `ta policy show` to see the resolved policy for any project.
+
+# ────────────────────────────────────────────────────────────────────
+# Security Level
+# ────────────────────────────────────────────────────────────────────
+# Controls the default enforcement posture for the entire project.
+#
+#   open        — Permissive. Auto-approve low-risk actions. Best for solo/trusted projects.
+#   checkpoint  — Balanced (default for most project types). Blocks writes to protected paths.
+#   strict      — Require explicit approval for all file writes. Best for production codebases.
+
+security_level: checkpoint
+
+# ────────────────────────────────────────────────────────────────────
+# Default Action Policy
+# ────────────────────────────────────────────────────────────────────
+# Fallback policy when no scheme-specific rule matches.
+
+defaults:
+  enforcement: error         # "error" = block and report; "warn" = log only
+  auto_approve:
+    verbs:
+      - read                 # always safe to auto-approve reads
+      - list
+      - search
+
+# ────────────────────────────────────────────────────────────────────
+# Scheme-Specific Policies
+# ────────────────────────────────────────────────────────────────────
+# Fine-tune per resource type. The `fs:` scheme covers all file system ops.
+
+schemes:
+  fs:
+    auto_approve_verbs:
+      - read
+      - list
+    # Paths the agent may never write, move, or delete without explicit user approval.
+    # protected_paths:
+    #   - ".ta/policy.yaml"       # protect policy itself
+    #   - ".ta/workflow.toml"
+    #   - ".env"
+    #   - ".env.*"
+    #   - "secrets/**"
+
+  # git:
+  #   auto_approve_verbs:
+  #     - read
+  #     - status
+  #     - diff
+  #   # Block push/force-push even if agent attempts it
+  #   deny_verbs:
+  #     - push
+  #     - force-push
+
+# ────────────────────────────────────────────────────────────────────
+# Escalation Thresholds
+# ────────────────────────────────────────────────────────────────────
+# Trigger a human-review prompt when the agent's activity exceeds these limits.
+
+escalation:
+  # Similarity score below which a draft is flagged as drifting from the goal.
+  # 0.0 = never flag; 1.0 = flag everything. Typical: 0.6–0.8.
+  drift_threshold: 0.7
+
+  # Maximum number of actions before auto-escalation to human review.
+  # Prevents runaway agents on large tasks. Increase for complex multi-file goals.
+  action_limit: 100
+
+# ────────────────────────────────────────────────────────────────────
+# Project-Specific Protected Paths (examples by project type)
+# ────────────────────────────────────────────────────────────────────
+# Uncomment the block that matches your project.
+
+# --- Rust workspace ---
+# protected_paths:
+#   - "Cargo.toml"           # workspace manifest — version bumps are human-controlled
+#   - "PLAN.md"              # TA plan — updated by `ta draft apply`, not the agent
+#   - ".github/workflows/**" # CI pipelines need human review
+
+# --- Unreal Engine ---
+# protected_paths:
+#   - "Config/DefaultEngine.ini"
+#   - "*.uproject"
+#   - "Source/**/*.Build.cs"
+
+# --- Unity ---
+# protected_paths:
+#   - "ProjectSettings/**"
+#   - "**/*.asmdef"
+
+# --- Web / TypeScript ---
+# protected_paths:
+#   - "package.json"         # dependency changes need human review
+#   - ".env"
+#   - ".env.*"
