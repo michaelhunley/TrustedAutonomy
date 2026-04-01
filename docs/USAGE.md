@@ -337,10 +337,26 @@ just icons
 ```bash
 mkdir my-project && cd my-project
 git init
+gh repo create <org>/<repo> --private --source=. --remote=origin  # create GitHub remote
 ta init run --template rust-workspace   # or: typescript-monorepo, python-ml, go-service, generic
+ta setup vcs                            # writes .gitignore entries for TA local state
+ta setup wizard                         # configure API key, model, constitution basics
+git add . && git commit -m "init: project with TA configuration"
+git push -u origin main
 ```
 
-This creates `.ta/` with workflow config, agent configs, policy, memory settings, and a `.taignore`. Everything is generated as a reviewable draft.
+This creates `.ta/` with workflow config, agent configs, policy, memory settings, and a `.taignore`. `ta setup vcs` is a required separate step — it writes the `.gitignore` block that excludes TA's local runtime state (staging dirs, PID files, lock files) from version control.
+
+**Then generate a PLAN.md** to enable the semver versioning process:
+
+```bash
+ta run "Create PLAN.md for <project> — <one sentence description>. Phases should cover: <phase topics>. Start at v0.1.0."
+# review and approve:
+ta draft view
+ta draft approve <id>
+```
+
+Without a PLAN.md, the version cannot track against plan phases. Generate it before running any development goals.
 
 **Existing project** -- auto-detect what's in use:
 
