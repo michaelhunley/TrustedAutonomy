@@ -770,6 +770,9 @@ fn run_new(
             template: init_template_name.map(|s| s.to_string()),
             detect: init_template_name.is_none(),
             name: Some(project_name.clone()),
+            vcs: None,
+            remote: None,
+            non_interactive: true,
         },
         &project_config,
     );
@@ -1076,9 +1079,16 @@ fn generate_project_toml(
     std::fs::create_dir_all(&ta_dir)?;
 
     let path = ta_dir.join("project.toml");
+    // Skip if file exists, unless it's just the bare version stub written by
+    // `ta init run` (contains `version =` but no plugin or name declarations).
     if path.exists() {
-        println!("  .ta/project.toml already exists — skipping");
-        return Ok(());
+        let existing = std::fs::read_to_string(&path).unwrap_or_default();
+        let is_bare_version_stub = existing.trim() == "[project]\nversion = \"0.1.0-alpha\""
+            || existing.trim() == "[project]\nversion = \"0.1.0-alpha\"";
+        if !is_bare_version_stub {
+            println!("  .ta/project.toml already exists — skipping");
+            return Ok(());
+        }
     }
 
     let mut content = format!("[project]\nname = \"{}\"\n", project_name);

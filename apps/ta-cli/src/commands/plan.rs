@@ -206,6 +206,37 @@ pub enum PlanCommands {
         #[arg(long, default_value = "PLAN.md")]
         output: String,
     },
+    /// Generate a PLAN.md from a description or document using an agent goal.
+    ///
+    /// The agent reads the input, proposes a phased plan, and outputs a PLAN.md
+    /// draft that enters the review queue. Use `ta draft view` / `ta draft approve`
+    /// to review and apply.
+    ///
+    /// Examples:
+    ///   ta plan new "orchestrates ComfyUI for AI rendering — batch pipeline, LoRA loading"
+    ///   ta plan new --file docs/product-spec.md
+    ///   ta plan new --file docs/spec.md --framework bmad
+    ///   cat requirements.md | ta plan new --stdin
+    New {
+        /// Short description of the project (used when no --file or --stdin given).
+        description: Option<String>,
+        /// Path to a product document (Markdown, plain text). Mutually exclusive with description and --stdin.
+        #[arg(long)]
+        file: Option<std::path::PathBuf>,
+        /// Read the planning document from stdin. Enables: cat spec.md | ta plan new --stdin
+        #[arg(long)]
+        stdin: bool,
+        /// Planning framework: default (single agent pass), bmad (BMAD planning roles).
+        /// When omitted, auto-detects BMAD if configured in the project.
+        #[arg(long)]
+        framework: Option<String>,
+        /// Agent to use (default: claude-code).
+        #[arg(long, default_value = "claude-code")]
+        agent: String,
+        /// Source directory to overlay (defaults to current directory).
+        #[arg(long)]
+        source: Option<std::path::PathBuf>,
+    },
 }
 
 pub fn execute(cmd: &PlanCommands, config: &GatewayConfig) -> anyhow::Result<()> {
@@ -298,6 +329,22 @@ pub fn execute(cmd: &PlanCommands, config: &GatewayConfig) -> anyhow::Result<()>
         PlanCommands::Shared => plan_shared(config),
         PlanCommands::Wizard => plan_wizard(&config.workspace_root),
         PlanCommands::Import { from, output } => plan_import(&config.workspace_root, from, output),
+        PlanCommands::New {
+            description,
+            file,
+            stdin,
+            framework,
+            agent,
+            source,
+        } => plan_new(
+            config,
+            description.as_deref(),
+            file.as_deref(),
+            *stdin,
+            framework.as_deref(),
+            agent,
+            source.as_deref(),
+        ),
     }
 }
 
@@ -2072,6 +2119,204 @@ fn plan_from(
     )
 }
 
+// ─── ta plan new (v0.14.21) ──────────────────────────────────────────────────
+
+fn plan_new(
+    config: &GatewayConfig,
+    description: Option<&str>,
+    file: Option<&Path>,
+    use_stdin: bool,
+    framework: Option<&str>,
+    agent: &str,
+    source: Option<&Path>,
+) -> anyhow::Result<()> {
+    // Validate: at most one input source.
+    let input_count = description.is_some() as u8 + file.is_some() as u8 + use_stdin as u8;
+    if input_count > 1 {
+        anyhow::bail!("Provide at most one of: description, --file, or --stdin");
+    }
+    if input_count == 0 {
+        anyhow::bail!(
+            "Provide a description, --file <path>, or --stdin.\n\
+             Examples:\n  ta plan new \"My project description\"\n  \
+             ta plan new --file docs/spec.md\n  \
+             cat spec.md | ta plan new --stdin"
+        );
+    }
+
+    // Gather input content and derive a display label.
+    let (input_label, input_content) = if let Some(desc) = description {
+        (
+            format!(
+                "description: \"{}\"",
+                desc.chars().take(60).collect::<String>()
+            ),
+            desc.to_string(),
+        )
+    } else if let Some(file_path) = file {
+        let resolved = if file_path.is_absolute() {
+            file_path.to_path_buf()
+        } else {
+            config.workspace_root.join(file_path)
+        };
+        if !resolved.exists() {
+            anyhow::bail!("File not found: {}", resolved.display());
+        }
+        let content = std::fs::read_to_string(&resolved)
+            .map_err(|e| anyhow::anyhow!("Failed to read {}: {}", resolved.display(), e))?;
+        if content.trim().is_empty() {
+            anyhow::bail!("File '{}' is empty.", resolved.display());
+        }
+        (format!("file: {}", file_path.display()), content)
+    } else {
+        // --stdin
+        use std::io::Read;
+        let mut content = String::new();
+        std::io::stdin().read_to_string(&mut content)?;
+        if content.trim().is_empty() {
+            anyhow::bail!("No content read from stdin.");
+        }
+        ("stdin".to_string(), content)
+    };
+
+    // Auto-detect framework if not given.
+    let effective_framework = match framework {
+        Some(f) => f.to_string(),
+        None => {
+            let bmad_toml = config.workspace_root.join(".ta/bmad.toml");
+            if bmad_toml.exists() {
+                "bmad".to_string()
+            } else {
+                "default".to_string()
+            }
+        }
+    };
+
+    let objective = build_plan_new_prompt(&input_content, &effective_framework);
+    let title = "Generate PLAN.md".to_string();
+
+    println!("Generating plan from {}", input_label);
+    println!("  Framework: {}", effective_framework);
+    println!("  Agent: {}", agent);
+    println!();
+    println!("Launching plan generation session...");
+    println!("  The agent will produce a complete PLAN.md draft.");
+    println!("  Review with: ta draft view");
+    println!("  Apply with:  ta draft approve <id>");
+    println!();
+
+    super::run::execute(
+        config,
+        Some(&title),
+        agent,
+        source,
+        &objective,
+        None,  // no phase
+        None,  // no follow_up
+        None,  // follow_up_draft
+        None,  // follow_up_goal
+        None,  // no objective file
+        false, // no_launch
+        false, // interactive (non-interactive for plan generation)
+        false, // macro_goal
+        None,  // resume
+        false, // headless
+        false, // skip_verify
+        false, // quiet
+        None,  // existing_goal_id
+        None,  // workflow
+        None,  // persona_name
+    )
+}
+
+/// Build the agent objective for `ta plan new`.
+pub fn build_plan_new_prompt(input_content: &str, framework: &str) -> String {
+    let max_chars = 100_000;
+    let truncated = if input_content.len() > max_chars {
+        format!(
+            "{}\n\n[... input truncated at {} chars ...]",
+            &input_content[..max_chars],
+            input_content.len()
+        )
+    } else {
+        input_content.to_string()
+    };
+
+    let framework_instructions = if framework == "bmad" {
+        r#"
+## Planning Framework: BMAD
+
+Use BMAD planning roles to produce a richer plan:
+1. **Analyst role**: Identify requirements, constraints, user personas, and success criteria.
+2. **Architect role**: Define technical architecture, component boundaries, and data flow.
+3. **Product Manager role**: Prioritize phases, size milestones, and identify dependencies.
+
+Produce a plan that reflects this multi-role analysis in well-structured phases.
+"#
+    } else {
+        ""
+    };
+
+    format!(
+        r#"You are a project planner. Your task is to read the following project input and generate a complete phased development plan (PLAN.md).
+{framework}
+## Project Input
+
+```
+{content}
+```
+
+## Instructions
+
+1. **Read and understand** the input thoroughly.
+2. **Generate a phased plan** and write it to `PLAN.md` in the workspace root.
+3. Do NOT ask clarifying questions — produce the best plan you can from the input provided.
+4. Do NOT write any files other than `PLAN.md`.
+
+## PLAN.md Format
+
+Use this exact format so TA can parse it:
+
+```markdown
+# <Project Name> — Development Plan
+
+## Versioning & Release Policy
+
+Phases map to semver: v0.1.0, v0.2.0, etc.
+
+### v0.1.0 — <Phase Title>
+<!-- status: pending -->
+
+**Goal**: <One-sentence goal for this phase.>
+
+#### Items
+
+1. [ ] Item one
+2. [ ] Item two
+
+### v0.2.0 — <Phase Title>
+<!-- status: pending -->
+...
+```
+
+Rules:
+- Use `### v0.N.0 — Title` headers followed by `<!-- status: pending -->` on the next line.
+- Phases ordered by dependency (earlier phases are prerequisites for later ones).
+- Each phase completable in 1–3 working sessions.
+- Include 4–8 phases (fewer for small projects, more for large ones).
+- First phase: project setup / scaffolding / core data structures.
+- Last phase: testing, documentation, and release prep.
+- Each phase has a **Goal** statement and an **Items** checklist (3–8 items).
+- Items use `[ ]` checkboxes.
+
+## Output
+
+Write the completed PLAN.md to the workspace root. Do NOT write any other files."#,
+        framework = framework_instructions,
+        content = truncated,
+    )
+}
+
 // ─── Plan Intelligence (v0.11.3) ─────────────────────────────────────────────
 
 fn plan_add_item(
@@ -3831,5 +4076,35 @@ Build it.
             },
         ];
         assert!(collect_dependency_warnings(&phases).is_empty());
+    }
+
+    // ── ta plan new tests (v0.14.21) ────────────────────────────────────────
+
+    #[test]
+    fn plan_new_prompt_contains_plan_md_format() {
+        let prompt = build_plan_new_prompt("My project description", "default");
+        assert!(prompt.contains("PLAN.md"));
+        assert!(prompt.contains("My project description"));
+    }
+
+    #[test]
+    fn plan_new_prompt_includes_bmad_instructions() {
+        let prompt = build_plan_new_prompt("test project", "bmad");
+        assert!(prompt.contains("BMAD"));
+        assert!(prompt.contains("Analyst role"));
+    }
+
+    #[test]
+    fn plan_new_prompt_default_framework() {
+        let prompt = build_plan_new_prompt("test project", "default");
+        assert!(!prompt.contains("BMAD"));
+        assert!(prompt.contains("PLAN.md Format"));
+    }
+
+    #[test]
+    fn plan_new_prompt_truncates_large_input() {
+        let large_input = "x".repeat(200_000);
+        let prompt = build_plan_new_prompt(&large_input, "default");
+        assert!(prompt.contains("truncated"));
     }
 }

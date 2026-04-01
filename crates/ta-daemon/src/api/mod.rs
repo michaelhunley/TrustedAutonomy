@@ -349,6 +349,8 @@ pub fn build_api_router(state: Arc<AppState>) -> Router {
         .route("/api/goal/start", post(plan::start_goal))
         // Plan generation (v0.14.20).
         .route("/api/plan/generate", post(plan::generate_plan_phases))
+        // Plan new — agent-based PLAN.md generation (v0.14.21).
+        .route("/api/plan/new", post(plan::plan_new))
         // Project browser routes (v0.14.18).
         .route("/api/project/open", post(project_browser::open_project))
         .route("/api/project/list", get(project_browser::list_projects))

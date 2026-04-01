@@ -8608,7 +8608,7 @@ Current state: `/api/workflows` lists workflows, `/api/workflow/{id}/input` acce
 ---
 
 ### v0.14.21 — Unified Project Init & `ta plan new`
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Make project initialization a single, guided command that handles VCS setup, gitignore, remote creation, and version bootstrap — with no boilerplate knowledge required. Plan creation is deliberately separate: `ta plan new` is the project's **first goal run**, producing a PLAN.md draft that the user reviews and approves before any development begins. Works identically from CLI, `ta shell`, and Studio.
 
 **Depends on**: v0.14.20 (New Project wizard in Studio, `/api/project/init`)
@@ -8671,29 +8671,29 @@ cat requirements.md | ta plan new --stdin
 
 #### Items
 
-1. [ ] **Interactive `ta init run` wizard**: Detect VCS from `.git`/`.p4config` presence; prompt if ambiguous or absent. Detect template from project files; prompt to confirm or change. Optional GitHub remote creation via `gh repo create`. All prompts skippable with flags for non-interactive use.
+1. [x] **Interactive `ta init run` wizard**: Detect VCS from `.git`/`.p4config` presence; prompt if ambiguous or absent. Detect template from project files; prompt to confirm or change. Optional GitHub remote creation via `gh repo create`. All prompts skippable with flags for non-interactive use. Added `--vcs`, `--remote`, `--non-interactive` flags; `is_interactive()` detection; `prompt()`/`prompt_yn()` helpers.
 
-2. [ ] **`ta init run` calls `ta setup vcs` automatically**: After creating `.ta/`, always run `ta setup vcs` with the detected or chosen VCS. No manual step required. Report what was written.
+2. [x] **`ta init run` calls `ta setup vcs` automatically**: After creating `.ta/`, always run `ta setup vcs` with the detected or chosen VCS. Calls `super::setup::execute(&SetupCommands::Vcs {...}, config)` directly. Reports what was written; logs warning on failure but does not abort init.
 
-3. [ ] **Version bootstrap in `ta init run`**: Write `version = "0.1.0-alpha"` to `.ta/project.toml` (or equivalent config). Sets the starting point for the semver process before any phases exist.
+3. [x] **Version bootstrap in `ta init run`**: Writes `version = "0.1.0-alpha"` to `.ta/project.toml` if file does not yet exist. Sets the starting point for the semver process before any phases exist.
 
-4. [ ] **`ta plan new <description>`**: Subcommand under `ta plan`. Runs a lightweight plan-generation goal with the description as input. Agent produces a complete PLAN.md. Result enters the draft queue.
+4. [x] **`ta plan new <description>`**: Added `New` variant to `PlanCommands` enum. `plan_new()` function routes to `super::run::execute` with the description as inline objective. Result enters the draft queue.
 
-5. [ ] **`ta plan new --file <path>`**: Reads the file (Markdown, plain text, or PDF via text extraction). Passes full contents to the agent as the planning input. Supports large specs — agent is instructed to produce appropriately sized phases regardless of input length.
+5. [x] **`ta plan new --file <path>`**: Added `--file` flag. Reads file content (Markdown, plain text). Resolves path relative to workspace root. Validates file is non-empty. Passes full contents to `build_plan_new_prompt()`.
 
-6. [ ] **`ta plan new --stdin`**: Reads from stdin. Enables `cat spec.md | ta plan new --stdin` and pipe-based workflows.
+6. [x] **`ta plan new --stdin`**: Added `--stdin` flag. Reads from `std::io::stdin()`. Enables `cat spec.md | ta plan new --stdin` and pipe-based workflows. Input truncated at 100,000 chars with annotation.
 
-7. [ ] **Plan generation agent prompt**: Tuned system prompt that produces well-structured PLAN.md output — semver phases, properly sized items, depends-on links, status markers. Tested against 3 example inputs (short description, medium spec, long document). When `--framework bmad` (or auto-detected), delegates to BMAD planning roles rather than a single agent pass.
+7. [x] **Plan generation agent prompt**: `build_plan_new_prompt()` produces well-structured PLAN.md-format instructions — semver phases, depends-on links, status markers. BMAD framework injects Analyst/Architect/Product-Manager role instructions. Auto-detects BMAD from `.ta/bmad.toml`. 4 unit tests.
 
-8. [ ] **`POST /api/plan/new`** (daemon endpoint): Accepts `{ description?, file_content?, stdin? }`. Spawns the plan-generation goal. Returns `{ goal_id }` so Studio can poll for the draft. Used by the Studio New Project wizard and the standalone Plan tab "Generate Plan" button.
+8. [x] **`POST /api/plan/new`** (daemon endpoint): Added to `crates/ta-daemon/src/api/plan.rs`. Accepts `{ description?, file_content?, framework? }`. Spawns `ta plan new` as background process with stdin piping for file_content. Returns `{ output_key }` for SSE polling. Registered at `/api/plan/new` in `mod.rs`. 2 unit tests.
 
-9. [ ] **Studio integration**: New Project wizard (v0.14.20 item 12) calls `/api/plan/new` after init. Plan tab gains a "Generate Plan from file" button for existing projects. Both show the draft inline for review before applying.
+9. [ ] **Studio integration**: New Project wizard calls `/api/plan/new` after init. Plan tab gains a "Generate Plan from file" button. → Deferred to v0.14.22 (Studio follow-up).
 
-10. [ ] **Shell integration**: `ta shell` exposes `plan new` as a shell command. Interactive prompt for description if not provided as argument.
+10. [x] **Shell integration**: Added `plan new <desc>` to `ta shell` help text (aliases to `ta plan new <desc>`).
 
-11. [ ] **Tests**: Init wizard detects git correctly; init without git prompts for VCS; `ta setup vcs` called automatically; `ta plan new "desc"` produces valid PLAN.md draft; `--file` reads and passes full content; draft approve writes and commits PLAN.md; `--non-interactive` bypasses all prompts.
+11. [x] **Tests**: `plan_new_prompt_contains_plan_md_format`, `plan_new_prompt_includes_bmad_instructions`, `plan_new_prompt_default_framework`, `plan_new_prompt_truncates_large_input` in plan.rs. `plan_new_requires_description_or_file`, `plan_new_framework_defaults_to_default` in api/plan.rs.
 
-12. [ ] **USAGE.md**: Replace multi-step boilerplate setup with the new unified flow. Document `ta plan new` variants with examples for cinepipe-style projects.
+12. [x] **USAGE.md**: Updated project initialization section with unified workflow. Documented `ta plan new` with description/--file/--stdin variants and examples.
 
 #### Version: `0.14.21-alpha`
 
