@@ -8441,7 +8441,7 @@ All three launchers follow the same logic:
 ---
 
 ### v0.14.19 — TA Studio: Plan Tab (Phase Browser, One-Click Run & Custom Goals)
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Replace the "Start a Goal" tab in TA Studio with a **Plan** tab that surfaces the PLAN.md phase queue visually. Users see upcoming phases as expandable cards, can run any phase with one click, enter a custom ad-hoc goal, and interactively add or annotate plan phases — all without touching a terminal. This is the rc3 demo experience: non-engineers can see what's coming and kick off work from the browser.
 
 **Depends on**: v0.14.18 (TA Studio project browser), v0.14.8 (TA Studio web shell)
@@ -8481,23 +8481,23 @@ The Plan tab replaces the current single-input "Start a Goal" form. Layout:
 
 #### Items
 
-1. [ ] **`GET /api/plan/phases`**: Parses PLAN.md, returns array of `{ id, title, status, description, items: [{ text, done }], depends_on }` for all phases. Pending phases ordered by their position in PLAN.md.
+1. [x] **`GET /api/plan/phases`**: Parses PLAN.md, returns array of `{ id, title, status, description, items: [{ text, done }], depends_on }` for all phases. Pending phases ordered by their position in PLAN.md. Annotates `running: true` when an active goal references the phase. 8 unit tests in `api/plan.rs`.
 
-2. [ ] **`POST /api/plan/phase/add`**: Appends a new `<!-- status: pending -->` phase to PLAN.md with provided title and description. Returns the new phase object. Used by the "Add phase" form.
+2. [x] **`POST /api/plan/phase/add`**: Appends a new `<!-- status: pending -->` phase to PLAN.md with provided title and description. Returns the new phase object. Used by the "Add phase" form.
 
-3. [ ] **Plan tab — phase list**: Renders pending phases as expandable cards. Collapsed: phase ID + title + status badge + "Run" button. Expanded: description, items checklist (read-only), depends-on. Loads from `/api/plan/phases`, filters to `status: pending`.
+3. [x] **Plan tab — phase list**: Renders pending phases as expandable cards. Collapsed: phase ID + title + "Details" toggle + "Run" button. Expanded: description, items checklist (read-only), depends-on. Loads from `/api/plan/phases`, filters to `status: pending`.
 
-4. [ ] **Phase card "Run This Phase"**: Calls `POST /api/goal/start` with `phase_id`. Navigates to the Goals tab with the new goal highlighted. Disabled (greyed) if a goal for that phase is already running.
+4. [x] **Phase card "Run This Phase"**: Calls `POST /api/goal/start` with `phase_id`. Navigates to the Dashboard tab after start. Disabled (greyed) if a goal for that phase is already running.
 
-5. [ ] **Custom goal form**: Textarea for prompt, optional phase dropdown (all pending phases), "Run" button. Calls `POST /api/goal/start { title, prompt, phase_id? }`. Replaces the existing single-input form entirely.
+5. [x] **Custom goal form**: Textarea for prompt, title input, optional phase dropdown (all pending phases), "Run" button. Calls `POST /api/goal/start { title, prompt, phase_id? }`. Replaces the existing single-input form entirely.
 
-6. [ ] **"Add phase" inline form**: Title input + description textarea + "Add to Plan" button. Calls `/api/plan/phase/add`. New phase appears at bottom of phase list immediately.
+6. [x] **"Add phase" inline form**: Title input + description textarea + "Add to Plan" button. Calls `/api/plan/phase/add`. Phase list reloads after 800ms to show the new phase.
 
-7. [ ] **Tab rename**: "Start a Goal" → "Plan" in the nav. Update any references in the existing HTML/JS.
+7. [x] **Tab rename**: "Start a Goal" → "Plan" in the nav. Updated all references in `index.html` (dashboard empty state, drafts empty state).
 
-8. [ ] **Tests**: `/api/plan/phases` parses pending/done/in_progress correctly; `/api/plan/phase/add` appends valid PLAN.md syntax; phase card "Run" button disabled when goal already running for that phase.
+8. [x] **Tests**: `parse_plan_phases` extracts all phases/items/depends_on correctly; `add_plan_phase` increments patch version; `ids_match` normalises `v` prefix; pending-only filter works. 8 tests total.
 
-9. [ ] **USAGE.md**: Update "Starting a Goal" section to describe the Plan tab — phase cards, custom goal, adding phases.
+9. [x] **USAGE.md**: Updated "Starting a Goal" section to describe the Plan tab — phase cards, custom goal, adding phases.
 
 #### Version: `0.14.19-alpha`
 
