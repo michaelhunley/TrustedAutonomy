@@ -8771,106 +8771,116 @@ supervisor = true         # run supervisor confidence check (default: true)
 
 ---
 
-### v0.15.9 — `ta email`: Credential Setup, Inbox Polling & Filter Rules
+### v0.15.9 — `MessagingAdapter` Trait & Email Provider Plugins
 <!-- status: pending -->
-**Goal**: A self-contained local email workflow — no connector framework, no content pipeline dependency. The user runs `ta email setup` once to capture credentials securely in the OS keychain, then `ta email run` to fetch and filter new messages. Designed to run on the user's own PC or Mac, driven by cron, Windows Task Scheduler, or the TA daemon scheduler.
+**Goal**: A pluggable messaging adapter layer — the same external plugin protocol used by VCS adapters — extended to cover mailbox access. Email providers (Gmail, Outlook, IMAP/SMTP) are discoverable plugins that speak a common `MessagingAdapter` JSON-over-stdio protocol. No bespoke `ta email` command surface; credentials live in the OS keychain. This phase delivers the adapter trait, the plugin protocol, and three built-in provider plugins. The workflow in v0.15.10 drives them.
 
-**Depends on**: v0.13.9 (constitution framework for user voice/persona)
+**Depends on**: v0.12.0.2 (VCS plugin protocol as the pattern to follow)
 
 **Design**:
-- Single `crates/ta-email` crate — standalone, no dependency on connector infrastructure
-- Config: `~/.config/ta/email.toml` (personal, not per-project; works without any `.ta/` workspace)
-- Credentials stored in OS keychain via `keyring` crate (macOS Keychain, Windows Credential Manager, Linux SecretService) — never written to disk in plaintext
-- Provider support: Gmail (OAuth2 + Gmail API), Outlook/M365 (OAuth2 + Graph API), generic IMAP/SMTP
-- Filter rules evaluated in order; first match wins; unmatched mail is left untouched in inbox
-- Watermark: last-processed timestamp stored in `~/.config/ta/email-watermark.json` — each run only processes mail since last run
+- `MessagingAdapter` protocol: same JSON-over-stdio pattern as `VcsPluginProtocol`
+- Built-in plugins: `ta-adapter-gmail`, `ta-adapter-outlook`, `ta-adapter-imap` (in `plugins/messaging/`)
+- Plugin discovery: `~/.config/ta/plugins/messaging/`, `.ta/plugins/messaging/`, `$PATH` (prefix `ta-messaging-`)
+- Credentials stored in OS keychain via `keyring` crate — plugin calls `ta adapter credentials get <key>` to retrieve; `ta adapter credentials set <key>` to store. Never written to disk in plaintext.
+- `ta adapter setup messaging/<plugin>` — one-time credential capture wizard (OAuth browser flow or masked IMAP prompt)
+- Community plugins (Exchange on-prem, Fastmail, etc.) follow the same protocol with no changes to core
+
+**Protocol messages** (adapter ↔ plugin, JSON lines):
+```
+→ { "op": "fetch", "since": "2026-03-31T00:00:00Z", "account": "me@example.com" }
+← { "messages": [{ "id", "from", "to", "subject", "body_text", "body_html", "thread_id", "received_at" }] }
+
+→ { "op": "send", "reply": { "to", "subject", "body", "in_reply_to" } }
+← { "ok": true } | { "ok": false, "error": "..." }
+
+→ { "op": "health" }
+← { "ok": true, "address": "me@example.com", "provider": "gmail" }
+```
 
 #### Items
 
-1. [ ] **`ta email setup <gmail|outlook|imap>`**: One-time credential capture.
-   - Gmail/Outlook: opens system browser to OAuth consent page, listens on `localhost:9876` for callback, stores refresh token in OS keychain under key `ta-email:<address>`.
-   - IMAP: prompts for host, port, username, app-password (masked input); validates connection; stores in keychain.
-   - Prints connected address and next-steps on success.
+1. [ ] **`MessagingAdapter` protocol spec** (`crates/ta-submit/src/messaging_plugin_protocol.rs`): Request/response enums mirroring `VcsPluginProtocol`. `fetch`, `send`, `health`, `capabilities` ops. Shared `ExternalMessagingAdapter` struct wrapping the subprocess.
 
-2. [ ] **`ta email status`**: Shows configured accounts (address, provider, last-polled timestamp), keychain health, and filter rule summary. No credentials printed.
+2. [ ] **Plugin discovery** (`crates/ta-submit/src/messaging_adapter.rs`): Search `~/.config/ta/plugins/messaging/`, `.ta/plugins/messaging/`, `$PATH` for `ta-messaging-*` executables. Return first match for a given provider name. Clear error if no plugin found for configured provider.
 
-3. [ ] **Filter config** (`~/.config/ta/email.toml`):
-   ```toml
-   [[account]]
-   address = "me@example.com"
-   provider = "gmail"           # gmail | outlook | imap
+3. [ ] **`ta adapter setup messaging/<plugin>`**: Credential wizard. Gmail/Outlook: OAuth2 browser flow (open consent URL, localhost callback, store refresh token in keychain under `ta-messaging:<address>`). IMAP: masked prompt for host/port/username/app-password, validate connection, store in keychain. Prints health check result on success.
 
-   [[filter]]
-   name = "client-questions"
-   from_domain = ["client.com", "partner.org"]
-   subject_contains = ["?", "help", "question"]
-   action = "reply"             # reply | flag | ignore
+4. [ ] **`plugins/messaging/ta-messaging-gmail`**: Rust binary. Implements `fetch` via Gmail REST API (OAuth2 refresh), `send` via Gmail API. Retrieves token from keychain via `ta adapter credentials get`. Packaged with the TA installer.
 
-   [[filter]]
-   name = "newsletters"
-   subject_contains = ["unsubscribe", "newsletter"]
-   action = "ignore"
+5. [ ] **`plugins/messaging/ta-messaging-outlook`**: Rust binary. Implements `fetch` via Microsoft Graph API, `send` via Graph API. Same keychain retrieval pattern.
 
-   [[auto_approve]]
-   from_address = ["noreply@github.com", "noreply@linear.app"]
-   action = "discard"           # matched but no reply needed
-   ```
+6. [ ] **`plugins/messaging/ta-messaging-imap`**: Rust binary. Implements `fetch` via IMAP (TLS/STARTTLS, `async-imap`), `send` via SMTP. Watermark-based — passes `since` as IMAP `SINCE` search criterion.
 
-4. [ ] **`ta email poll`**: Fetches messages since watermark, applies filter rules, writes matched emails to `~/.config/ta/email-inbox/<message-id>.json`. Updates watermark on success. Prints: N matched (by rule), M ignored, K left untouched.
+7. [ ] **`ta adapter health messaging`**: Calls `health` op on each configured messaging plugin, prints provider, connected address, last-fetch timestamp. No credentials printed.
 
-5. [ ] **Daemon / cron scheduling**: `[email] poll_interval_minutes = 15` in `~/.config/ta/daemon.toml` schedules `ta email poll` via the daemon scheduler. `ta email poll` also works standalone — headless, exits 0/1, suitable for `crontab` or Windows Task Scheduler without daemon.
+8. [ ] **Tests**: Protocol round-trip with a mock plugin script; discovery finds plugin in each search path; credentials set/get via mocked keychain; `health` op returns address; IMAP `since` filter applied correctly.
 
-6. [ ] **`ta email list`**: Shows inbox queue — message ID, from, subject, received, matched filter rule, status (pending/replied/discarded).
-
-7. [ ] **Tests**: Keychain store/retrieve round-trip (mocked); filter rule evaluation (domain glob, subject keyword, action routing); watermark advances on successful poll; `ignore` action produces no inbox entry; cron exit codes.
-
-8. [ ] **USAGE.md**: "Email Workflow" section — one-time setup per provider, filter config, cron/scheduler setup, how to check what's queued.
+9. [ ] **USAGE.md**: "Messaging Adapters" section — plugin protocol, how to set up each built-in provider, how to write a community plugin.
 
 #### Version: `0.15.9-alpha`
 
 ---
 
-### v0.15.10 — `ta email run`: Agent Replies, Draft Review & Auto-Approve
+### v0.15.10 — Email Management Workflow Template
 <!-- status: pending -->
-**Goal**: Agent-driven replies for queued emails. The user runs `ta email run` (or it fires on schedule) and TA spawns a goal for each pending email: the agent reads the message and the user's email constitution (voice, tone, topics to engage), drafts a reply, and stages it for human review. Auto-approve rules let trusted senders/domains bypass manual review. Approved replies are sent immediately.
+**Goal**: A TA workflow template that drives the `MessagingAdapter` to manage email: fetch since last run → apply filter rules → run reply goal in user's voice → stage for review → apply auto-approve rules → send. Scheduled via the daemon scheduler or cron/Task Scheduler. The entire behavior is configured in a workflow TOML — no bespoke command surface. Adding calendar, Slack, or SMS later is a new adapter plugin + new workflow template, not new core commands.
 
-**Depends on**: v0.15.9 (`ta email poll` inbox queue, credential infrastructure)
+**Depends on**: v0.15.9 (`MessagingAdapter` plugins), v0.14.x workflow engine, v0.13.9 (constitution for user voice)
 
 **Design**:
-- `ta email run` processes all pending inbox entries in order
-- Each email becomes a standard TA goal: prompt = email body + thread history + `~/.config/ta/email-constitution.md` (user's voice/persona/topics)
-- Agent produces a structured reply (`to`, `subject`, `body`) as a TA draft artifact
-- Draft goes through standard `ta draft view` / `ta draft approve` / `ta draft deny` pipeline
-- Auto-approve: trusted senders skip human review — reply sent immediately after agent drafts it
-- Confidence gate: agent self-rates confidence (0–1); below threshold always queues for review
-- Fully headless: `ta email run --dry-run` prints what would be sent without sending
+- Workflow template: `~/.config/ta/workflows/email-manager.toml` (or `.ta/workflows/email-manager.toml` for project inbox)
+- Workflow steps: `fetch` → `filter` → `for_each: reply_goal` → `stage` → `auto_approve` → `send`
+- Run via `ta workflow run email-manager` or daemon schedule (`run_every = "30min"` in workflow TOML)
+- Fully headless: `ta workflow run email-manager --dry-run`, `--json`, exits 0/1 — cron/Task Scheduler compatible
+- `--since <datetime>` override: "Manage outstanding emails since last Monday"
+
+**Workflow config** (`~/.config/ta/workflows/email-manager.toml`):
+```toml
+[workflow]
+name = "email-manager"
+adapter = "messaging/gmail"
+account = "me@example.com"
+run_every = "30min"          # daemon scheduler; omit to run manually / via cron
+constitution = "~/.config/ta/email-constitution.md"
+
+[[filter]]
+name = "client-questions"
+from_domain = ["client.com", "partner.org"]
+subject_contains = ["?", "help", "question"]
+action = "reply"             # reply | flag | ignore | discard
+
+[[filter]]
+name = "newsletters"
+subject_contains = ["unsubscribe", "newsletter"]
+action = "ignore"
+
+[[auto_approve]]
+from_domain = ["trusted-client.com"]
+filter = "client-questions"
+min_confidence = 0.85        # agent self-rates; below threshold → human review
+```
 
 #### Items
 
-1. [ ] **`~/.config/ta/email-constitution.md`**: User-authored persona file. Injected into every reply goal prompt. Covers: writing style, sign-off, topics to engage or decline, escalation language, out-of-office rules. `ta email setup` creates a commented starter template if absent.
+1. [ ] **`email-constitution.md` template**: Created by `ta workflow init email-manager` if absent. Documents voice, sign-off, topics to engage/decline, escalation language, out-of-office rules. Injected into every reply goal prompt.
 
-2. [ ] **Email reply goal**: Each inbox entry spawns a goal with prompt: `"Draft a reply to this email in the voice described in the attached constitution. Email: [body]. Thread history: [N prior messages]. Reply as: [address]."` Agent produces `EmailReply { to, cc, subject, body, confidence }`.
+2. [ ] **Workflow fetch step**: Calls `MessagingAdapter.fetch(since: last_watermark)`. Stores watermark per workflow instance in `~/.config/ta/workflow-state/<name>.json`. Updates on successful completion.
 
-3. [ ] **Reply draft staging**: Agent reply stored as a TA draft artifact alongside the original email. `ta draft view <id>` shows original message + proposed reply side-by-side. `ta draft approve <id>` sends via the configured provider and marks the inbox entry as replied.
+3. [ ] **Filter step**: Evaluates each message against `[[filter]]` rules in order (domain glob, subject keyword). First match wins. `ignore` drops the message; `discard` drops with no reply; `reply` queues for goal; `flag` queues for human review without running a goal.
 
-4. [ ] **Auto-approve rules** (extends `~/.config/ta/email.toml`):
-   ```toml
-   [[auto_approve]]
-   from_domain = ["trusted-client.com"]
-   filter = "client-questions"     # only auto-approve if matched this filter
-   min_confidence = 0.85           # agent must self-rate ≥ 0.85
-   ```
-   Replies below `min_confidence` or not matching an auto-approve rule always queue for human review.
+4. [ ] **Reply goal step**: For each `reply`-matched message, spawns a standard TA goal: prompt = email body + thread history (last N messages via `fetch`) + constitution. Agent produces `EmailReply { to, cc, subject, body, confidence }` as a draft artifact.
 
-5. [ ] **`ta email run`**: Processes all pending inbox entries. For each: run reply goal → build draft → check auto-approve rules → send immediately or queue for review. Prints summary: N sent (auto-approved), M queued for review, K skipped (discard rule). Headless-safe: `--dry-run`, `--json`, exits 0/1.
+5. [ ] **Auto-approve step**: After goal completes, evaluate `[[auto_approve]]` rules. If matched and `confidence ≥ min_confidence`, call `MessagingAdapter.send()` immediately. Otherwise place in `ta draft` queue for human review. `ta draft view <id>` shows original + proposed reply side-by-side.
 
-6. [ ] **Daemon / cron scheduling**: `[email] run_interval_minutes = 30` in `daemon.toml`. Runs `ta email run` on schedule. Designed so cron or Windows Task Scheduler can call `ta email run` without daemon.
+6. [ ] **`ta workflow run email-manager --since <datetime>`**: One-off catch-up run overriding the watermark. Useful for "process everything since I left for holiday".
 
-7. [ ] **`ta email run --since <datetime>`**: Override the watermark for a one-off catch-up run ("Manage outstanding emails since last Monday").
+7. [ ] **Daemon scheduling**: `run_every = "30min"` in workflow TOML registers with daemon scheduler. `ta workflow status email-manager` shows last run time, messages processed, sent, queued.
 
-8. [ ] **Tests**: Reply goal produces valid `EmailReply`; auto-approve fires on domain + confidence threshold; low-confidence held for review; `--dry-run` prints plan without sending; `ta draft approve` triggers send and marks inbox entry replied; cron exit codes correct.
+8. [ ] **Cron / Task Scheduler**: `ta workflow run email-manager` is headless — no daemon required. Documents crontab and Windows Task Scheduler setup in USAGE.md.
 
-9. [ ] **USAGE.md**: "Auto-Reply Workflow" section — constitution file format, auto-approve rules, cron example, how to review queued replies, `--dry-run` for testing.
+9. [ ] **Tests**: Workflow fetch → filter → goal → auto-approve end-to-end with mock adapter; watermark advances; `--dry-run` prints plan without sending; below-threshold reply held for review; cron exit codes.
+
+10. [ ] **USAGE.md**: "Email Manager Workflow" section — init, constitution format, filter + auto-approve config, scheduling options, `--since` usage, reviewing staged replies.
 
 #### Version: `0.15.10-alpha`
 
