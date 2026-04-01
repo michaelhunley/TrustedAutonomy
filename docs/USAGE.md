@@ -7174,20 +7174,55 @@ The daemon also exposes `POST /api/project/new` for remote bootstrapping from Di
 
 ### Project Initialization
 
-Use `ta init` to bootstrap a new TA-managed project from a template.
+Use `ta init` to bootstrap a new TA-managed project. When run with no flags, it asks a few questions and handles everything automatically:
 
 ```bash
-# Initialize with auto-detection
-ta init run --detect
+$ ta init run
 
-# Initialize with a specific template
+? Project name: cinepipe
+? Template [python-ml]:
+? VCS: (auto-detected: git) ✓
+? Create GitHub remote? [Y/n] Y
+? Org/name [org/repo]: amplifiedxai/cinepipe
+
+TA project initialized successfully!
+  .ta/workflow.toml      -- workflow configuration
+  .ta/memory.toml        -- memory key schema and backend
+  .ta/policy.yaml        -- security policy
+  .ta/project.toml       -- project version (0.1.0-alpha)
+  .gitignore             -- TA local-state entries added
+
+Next: generate your project plan
+  ta plan new "description of your project"
+  ta plan new --file product-spec.md
+```
+
+For scripted or CI use, all prompts can be bypassed with flags:
+
+```bash
+ta init run --template python-ml --vcs git --remote github.com/org/repo --non-interactive
+```
+
+```bash
+# Auto-detect project type (default behavior)
+ta init run
+
+# Use a specific template
 ta init run --template rust-workspace
+
+# Non-interactive (CI / scripted)
+ta init run --template generic --non-interactive
 
 # List available templates
 ta init templates
 ```
 
 Available templates: `rust-workspace`, `typescript-monorepo`, `python-ml`, `go-service`, `generic`.
+
+`ta init run` automatically:
+- Detects your VCS (git / perforce) and runs `ta setup vcs` to write the correct ignore entries
+- Creates `.ta/project.toml` with `version = "0.1.0-alpha"` as the starting point for semver tracking
+- Optionally creates a GitHub remote via `gh repo create` (requires `gh` CLI)
 
 Each template generates:
 - `.ta/workflow.toml` — workflow defaults for the project type
@@ -7199,6 +7234,39 @@ Each template generates:
 - Seeded memory entries from project structure (e.g., Cargo.toml workspace members → `arch:module-map`)
 
 `ta init` reads existing project files and tailors config to the actual structure — not just generic templates.
+
+### Generating a Project Plan
+
+After `ta init`, generate a phased development plan with `ta plan new`. This is the project's first agent-run: the agent reads your input, produces a structured PLAN.md, and the result enters the draft review queue.
+
+```bash
+# From a short description (single agent pass):
+ta plan new "Orchestrates ComfyUI for AI cinematic rendering — LoRA loading, batch pipeline, output validation"
+
+# From a product specification document:
+ta plan new --file docs/product-spec.md
+
+# From stdin (pipe a document):
+cat requirements.md | ta plan new --stdin
+
+# With BMAD planning roles (recommended for larger/complex projects):
+ta plan new --file docs/spec.md --framework bmad
+```
+
+After the agent session completes, review and apply the generated plan:
+
+```bash
+ta draft view        # see the proposed PLAN.md
+ta draft approve <id>  # apply it to your project
+```
+
+`ta plan new` also works on existing projects to regenerate or extend a plan from an updated spec.
+
+**`--framework` options:**
+- `default` — single optimised agent pass (good for most projects)
+- `bmad` — BMAD planning roles (Analyst → Architect → Product Manager) for richer phase decomposition on larger projects
+
+When `.ta/bmad.toml` exists (created automatically by game-engine templates), `bmad` is the default framework.
 
 ### Add TA to an Existing Project
 

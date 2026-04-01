@@ -636,6 +636,156 @@ pub async fn generate_plan_phases(
     .into_response()
 }
 
+// ── Plan new (v0.14.21) ────────────────────────────────────────
+
+/// Request body for `POST /api/plan/new`.
+#[derive(Deserialize)]
+pub struct PlanNewRequest {
+    /// Short project description (use when no file_content given).
+    pub description: Option<String>,
+    /// Full document content (Markdown or plain text) for detailed spec input.
+    pub file_content: Option<String>,
+    /// Planning framework: "default" or "bmad". Defaults to "default".
+    #[serde(default)]
+    pub framework: Option<String>,
+}
+
+/// `POST /api/plan/new` — Start a plan-generation goal for the current project.
+///
+/// Spawns `ta plan new "<description>"` or `ta plan new --stdin` (piping file_content)
+/// as a background process. Returns `{ output_key }` so Studio can poll.
+pub async fn plan_new(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<PlanNewRequest>,
+) -> impl IntoResponse {
+    // Require at least description or file_content.
+    let has_description = body
+        .description
+        .as_deref()
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
+    let has_file = body
+        .file_content
+        .as_deref()
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
+
+    if !has_description && !has_file {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "description or file_content is required"})),
+        )
+            .into_response();
+    }
+
+    let framework = body.framework.as_deref().unwrap_or("default").to_string();
+
+    // Build args for `ta plan new`.
+    let mut args: Vec<String> = vec!["plan".to_string(), "new".to_string()];
+
+    let stdin_content: Option<String> = if has_file {
+        args.push("--stdin".to_string());
+        args.push("--framework".to_string());
+        args.push(framework.clone());
+        body.file_content.clone()
+    } else {
+        args.push(body.description.clone().unwrap_or_default());
+        args.push("--framework".to_string());
+        args.push(framework.clone());
+        None
+    };
+
+    let binary = find_ta_binary();
+    let working_dir = state.active_project_root.read().unwrap().clone();
+    let output_key = format!("plan-new-{}", uuid::Uuid::new_v4());
+
+    let goal_output = state.goal_output.clone_ref();
+    let tx = goal_output.create_channel(&output_key).await;
+    let output_key_response = output_key.clone();
+    let output_key_display = output_key.clone();
+
+    tokio::spawn(async move {
+        tracing::info!(
+            "plan new (API): framework={}, output_key={}",
+            framework,
+            output_key_display
+        );
+
+        let consent_path = working_dir.join(".ta/consent.json");
+        let has_consent = consent_path.exists();
+
+        let mut cmd_builder = tokio::process::Command::new(&binary);
+        cmd_builder.arg("--project-root").arg(&working_dir);
+        if has_consent {
+            cmd_builder.arg("--accept-terms");
+        }
+        cmd_builder.args(&args);
+
+        if stdin_content.is_some() {
+            cmd_builder.stdin(std::process::Stdio::piped());
+        } else {
+            cmd_builder.stdin(std::process::Stdio::null());
+        }
+
+        let result = cmd_builder
+            .current_dir(&working_dir)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn();
+
+        match result {
+            Ok(mut child) => {
+                use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+                if let (Some(mut stdin_handle), Some(content)) = (child.stdin.take(), stdin_content)
+                {
+                    tokio::spawn(async move {
+                        let _ = stdin_handle.write_all(content.as_bytes()).await;
+                    });
+                }
+
+                let stdout = child.stdout.take();
+                let stderr = child.stderr.take();
+                let tx2 = tx.clone();
+                let tx3 = tx.clone();
+
+                let stdout_task = tokio::spawn(async move {
+                    if let Some(out) = stdout {
+                        let mut reader = BufReader::new(out).lines();
+                        while let Ok(Some(line)) = reader.next_line().await {
+                            tx.publish("stdout", line).await;
+                        }
+                    }
+                });
+                let stderr_task = tokio::spawn(async move {
+                    if let Some(err) = stderr {
+                        let mut reader = BufReader::new(err).lines();
+                        while let Ok(Some(line)) = reader.next_line().await {
+                            tx2.publish("stderr", line).await;
+                        }
+                    }
+                });
+
+                let _ = child.wait().await;
+                let _ = stdout_task.await;
+                let _ = stderr_task.await;
+                tx3.publish("stdout", "[plan new process exited]".to_string())
+                    .await;
+            }
+            Err(e) => {
+                tx.publish("stderr", format!("Failed to spawn ta plan new: {}", e))
+                    .await;
+            }
+        }
+    });
+
+    Json(serde_json::json!({
+        "output_key": output_key_response,
+        "message": "Plan generation started. Poll /api/goals/output/<output_key> for progress.",
+    }))
+    .into_response()
+}
+
 // ── Tests ──────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -735,5 +885,38 @@ Future work.
         let phases = parse_plan_phases(SAMPLE_PLAN);
         let pending: Vec<_> = phases.iter().filter(|p| p.status == "pending").collect();
         assert_eq!(pending.len(), 2);
+    }
+
+    // ── plan_new request validation (v0.14.21) ─────────────────────────────
+
+    #[test]
+    fn plan_new_requires_description_or_file() {
+        let req = PlanNewRequest {
+            description: None,
+            file_content: None,
+            framework: None,
+        };
+        let has_description = req
+            .description
+            .as_deref()
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false);
+        let has_file = req
+            .file_content
+            .as_deref()
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false);
+        assert!(!has_description && !has_file);
+    }
+
+    #[test]
+    fn plan_new_framework_defaults_to_default() {
+        let req = PlanNewRequest {
+            description: Some("test".to_string()),
+            file_content: None,
+            framework: None,
+        };
+        let framework = req.framework.as_deref().unwrap_or("default");
+        assert_eq!(framework, "default");
     }
 }

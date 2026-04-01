@@ -25,6 +25,15 @@ pub enum InitCommands {
         /// Project name (defaults to directory name).
         #[arg(long)]
         name: Option<String>,
+        /// Override VCS backend: git, perforce, or none.
+        #[arg(long)]
+        vcs: Option<String>,
+        /// GitHub remote URL (e.g., github.com/org/repo). When set, run `gh repo create`.
+        #[arg(long)]
+        remote: Option<String>,
+        /// Skip all interactive prompts.
+        #[arg(long)]
+        non_interactive: bool,
     },
     /// List available project templates.
     Templates,
@@ -36,7 +45,17 @@ pub fn execute(command: &InitCommands, config: &GatewayConfig) -> anyhow::Result
             template,
             detect: _,
             name,
-        } => run_init(config, template.as_deref(), name.as_deref()),
+            vcs,
+            remote,
+            non_interactive,
+        } => run_init(
+            config,
+            template.as_deref(),
+            name.as_deref(),
+            vcs.as_deref(),
+            remote.as_deref(),
+            *non_interactive,
+        ),
         InitCommands::Templates => list_templates(),
     }
 }
@@ -83,10 +102,46 @@ fn list_templates() -> anyhow::Result<()> {
     Ok(())
 }
 
+fn is_interactive() -> bool {
+    std::env::var("TERM").is_ok() && std::env::var("TA_NON_INTERACTIVE").is_err()
+}
+
+fn prompt(question: &str, default: &str) -> String {
+    use std::io::{self, Write};
+    print!("{} [{}]: ", question, default);
+    io::stdout().flush().ok();
+    let mut input = String::new();
+    io::stdin().read_line(&mut input).ok();
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        default.to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn prompt_yn(question: &str, default: bool) -> bool {
+    let default_str = if default { "Y/n" } else { "y/N" };
+    use std::io::{self, Write};
+    print!("{} [{}] ", question, default_str);
+    io::stdout().flush().ok();
+    let mut input = String::new();
+    io::stdin().read_line(&mut input).ok();
+    let trimmed = input.trim().to_lowercase();
+    if trimmed.is_empty() {
+        default
+    } else {
+        trimmed.starts_with('y')
+    }
+}
+
 fn run_init(
     config: &GatewayConfig,
     template_name: Option<&str>,
     project_name: Option<&str>,
+    vcs_override: Option<&str>,
+    remote_url: Option<&str>,
+    non_interactive: bool,
 ) -> anyhow::Result<()> {
     let project_root = &config.workspace_root;
     let ta_dir = project_root.join(".ta");
@@ -103,7 +158,26 @@ fn run_init(
         }
     }
 
+    let interactive = !non_interactive && is_interactive();
+
+    // Derive default project name.
+    let default_name = project_root
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("project")
+        .to_string();
+
+    let name_owned: String = if let Some(n) = project_name {
+        n.to_string()
+    } else if interactive {
+        prompt("Project name", &default_name)
+    } else {
+        default_name.clone()
+    };
+    let name = name_owned.as_str();
+
     // Resolve project type.
+    let detected_type = detect_project_type(project_root);
     let project_type = if let Some(tmpl) = template_name {
         match tmpl {
             "rust-workspace" => ProjectType::RustWorkspace,
@@ -120,16 +194,60 @@ fn run_init(
                 );
             }
         }
+    } else if interactive {
+        let type_str = prompt(
+            "Template (rust-workspace/typescript-monorepo/python-ml/go-service/generic)",
+            &detected_type.to_string(),
+        );
+        match type_str.as_str() {
+            "rust-workspace" | "rust" => ProjectType::RustWorkspace,
+            "typescript-monorepo" | "typescript" => ProjectType::TypeScript,
+            "python-ml" | "python" => ProjectType::Python,
+            "go-service" | "go" => ProjectType::Go,
+            "unreal-cpp" | "unreal" => ProjectType::UnrealCpp,
+            "unity-csharp" | "unity" => ProjectType::UnityCsharp,
+            _ => detected_type,
+        }
     } else {
-        detect_project_type(project_root)
+        detected_type
     };
 
-    let name = project_name.unwrap_or_else(|| {
-        project_root
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("project")
-    });
+    // Determine VCS.
+    let effective_vcs: Option<String> = if let Some(v) = vcs_override {
+        Some(v.to_string())
+    } else if interactive {
+        let has_git = project_root.join(".git").exists();
+        let has_p4 = project_root.join(".p4config").exists();
+        let has_svn = project_root.join(".svn").exists();
+        let detected = if has_git {
+            "git"
+        } else if has_p4 {
+            "perforce"
+        } else if has_svn {
+            "svn"
+        } else {
+            "none"
+        };
+        let vcs_ans = prompt("VCS backend (git/perforce/none)", detected);
+        Some(vcs_ans)
+    } else {
+        None
+    };
+
+    // Determine GitHub remote.
+    let effective_remote: Option<String> = if let Some(r) = remote_url {
+        Some(r.to_string())
+    } else if interactive {
+        let want_remote = prompt_yn("Create GitHub remote?", false);
+        if want_remote {
+            let org_repo = prompt("Org/name (e.g., org/repo)", "org/repo");
+            Some(format!("github.com/{}", org_repo))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
 
     println!("Initializing TA project: {}", name);
     println!("Project type: {}", project_type);
@@ -146,6 +264,12 @@ fn run_init(
     generate_constitutions(&ta_dir)?;
     seed_memory_entries(&ta_dir, &project_type, project_root)?;
 
+    // Write .ta/project.toml with initial version.
+    let project_toml_path = ta_dir.join("project.toml");
+    if !project_toml_path.exists() {
+        std::fs::write(&project_toml_path, "[project]\nversion = \"0.1.0-alpha\"\n")?;
+    }
+
     // Game engine templates: additional files.
     let is_game_engine = matches!(
         project_type,
@@ -158,6 +282,22 @@ fn run_init(
         generate_onboarding_goal(&ta_dir, &project_type, name)?;
     }
 
+    // Run VCS setup automatically.
+    {
+        use super::setup::{execute as setup_execute, SetupCommands};
+        let vcs_cmd = SetupCommands::Vcs {
+            force: false,
+            dry_run: false,
+            vcs: effective_vcs,
+            project_type: None,
+        };
+        // Best-effort: log failure but don't abort init.
+        if let Err(e) = setup_execute(&vcs_cmd, config) {
+            println!("  Warning: VCS setup encountered an issue: {}", e);
+            println!("  Run `ta setup vcs` manually to retry.");
+        }
+    }
+
     println!();
     println!("TA project initialized successfully!");
     println!();
@@ -167,6 +307,7 @@ fn run_init(
     println!("  .ta/policy.yaml        — security policy");
     println!("  .ta/agents/            — agent configurations");
     println!("  .ta/constitutions/     — starter constitutions");
+    println!("  .ta/project.toml       — project version");
     println!("  .taignore              — file exclusion patterns");
     if is_game_engine {
         println!("  .ta/bmad.toml          — BMAD machine-local install config");
@@ -174,6 +315,53 @@ fn run_init(
         println!("  .mcp.json              — Claude Flow MCP server config");
         println!("  .ta/onboarding-goal.md — First-run discovery goal");
     }
+
+    // GitHub remote creation.
+    if let Some(ref remote) = effective_remote {
+        let repo_slug = remote
+            .trim_start_matches("https://github.com/")
+            .trim_start_matches("github.com/");
+        println!();
+        println!("Creating GitHub remote: {}", repo_slug);
+        let status = std::process::Command::new("gh")
+            .args([
+                "repo",
+                "create",
+                repo_slug,
+                "--private",
+                "--source=.",
+                "--remote=origin",
+                "--push",
+            ])
+            .current_dir(project_root)
+            .status();
+        match status {
+            Ok(s) if s.success() => {
+                println!(
+                    "  GitHub remote created and pushed: github.com/{}",
+                    repo_slug
+                );
+            }
+            Ok(s) => {
+                println!(
+                    "  Warning: `gh repo create` exited with status {}.",
+                    s.code().unwrap_or(-1)
+                );
+                println!(
+                    "  Run manually: gh repo create {} --private --source=. --remote=origin --push",
+                    repo_slug
+                );
+            }
+            Err(e) => {
+                println!("  Warning: Could not run `gh`: {}", e);
+                println!(
+                    "  Run manually: gh repo create {} --private --source=. --remote=origin --push",
+                    repo_slug
+                );
+            }
+        }
+    }
+
     println!();
     println!("Next steps:");
     if is_game_engine {
@@ -189,8 +377,11 @@ fn run_init(
     } else {
         println!("  ta setup show          — inspect configuration");
         println!("  ta setup refine <topic> — adjust specific settings");
-        println!("  ta run \"first goal\"     — start your first TA-mediated goal");
     }
+    println!();
+    println!("Next: generate your project plan");
+    println!("  ta plan new \"description of your project\"");
+    println!("  ta plan new --file product-spec.md");
 
     Ok(())
 }
@@ -884,7 +1075,7 @@ mod tests {
         .unwrap();
 
         let config = test_config(&dir);
-        run_init(&config, None, Some("test-project")).unwrap();
+        run_init(&config, None, Some("test-project"), None, None, true).unwrap();
 
         let ta_dir = dir.path().join(".ta");
         assert!(ta_dir.join("workflow.toml").exists());
@@ -908,14 +1099,22 @@ mod tests {
 
         let config = test_config(&dir);
         // Should not error, just skip.
-        run_init(&config, None, None).unwrap();
+        run_init(&config, None, None, None, None, true).unwrap();
     }
 
     #[test]
     fn init_with_template() {
         let dir = TempDir::new().unwrap();
         let config = test_config(&dir);
-        run_init(&config, Some("typescript"), Some("my-ts-app")).unwrap();
+        run_init(
+            &config,
+            Some("typescript"),
+            Some("my-ts-app"),
+            None,
+            None,
+            true,
+        )
+        .unwrap();
 
         let memory = std::fs::read_to_string(dir.path().join(".ta").join("memory.toml")).unwrap();
         assert!(memory.contains("typescript"));
@@ -926,7 +1125,7 @@ mod tests {
     fn init_unknown_template_errors() {
         let dir = TempDir::new().unwrap();
         let config = test_config(&dir);
-        let result = run_init(&config, Some("haskell"), None);
+        let result = run_init(&config, Some("haskell"), None, None, None, true);
         assert!(result.is_err());
     }
 
@@ -995,7 +1194,15 @@ members = [
     fn init_unreal_template() {
         let dir = TempDir::new().unwrap();
         let config = test_config(&dir);
-        run_init(&config, Some("unreal-cpp"), Some("MyGame")).unwrap();
+        run_init(
+            &config,
+            Some("unreal-cpp"),
+            Some("MyGame"),
+            None,
+            None,
+            true,
+        )
+        .unwrap();
 
         let ta_dir = dir.path().join(".ta");
         assert!(ta_dir.join("workflow.toml").exists());
@@ -1031,7 +1238,15 @@ members = [
     fn init_unity_template() {
         let dir = TempDir::new().unwrap();
         let config = test_config(&dir);
-        run_init(&config, Some("unity-csharp"), Some("MyUnityGame")).unwrap();
+        run_init(
+            &config,
+            Some("unity-csharp"),
+            Some("MyUnityGame"),
+            None,
+            None,
+            true,
+        )
+        .unwrap();
 
         let ta_dir = dir.path().join(".ta");
         assert!(ta_dir.join("bmad.toml").exists());

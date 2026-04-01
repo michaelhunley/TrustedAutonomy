@@ -1125,6 +1125,7 @@ Commands:
   status             Shortcut for: ta status
   plan               Shortcut for: ta plan list
   plan add <desc>    Add a phase to the plan via agent session
+  plan new <desc>    Generate PLAN.md via agent (alias for: ta plan new <desc>)
   goals              Shortcut for: ta goal list
   drafts             Shortcut for: ta draft list
   <anything else>    Sent to agent session (if attached)
