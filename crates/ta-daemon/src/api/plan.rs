@@ -1,0 +1,677 @@
+// api/plan.rs — Plan phase browser and goal-start API (v0.14.19).
+//
+// GET  /api/plan/phases          — parse PLAN.md, return phase list with items
+// POST /api/plan/phase/add       — append a new pending phase to PLAN.md
+// POST /api/goal/start           — start a goal (optionally linked to a phase)
+
+use std::sync::Arc;
+
+use axum::extract::State;
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
+use axum::Json;
+use regex::Regex;
+use serde::{Deserialize, Serialize};
+
+use crate::api::AppState;
+
+// ── Data types ─────────────────────────────────────────────────
+
+/// A single checklist item from a plan phase.
+#[derive(Debug, Serialize)]
+pub struct PlanItem {
+    pub text: String,
+    pub done: bool,
+}
+
+/// A plan phase with full details for the UI.
+#[derive(Debug, Serialize)]
+pub struct ApiPlanPhase {
+    pub id: String,
+    pub title: String,
+    /// "pending" | "in_progress" | "done" | "deferred"
+    pub status: String,
+    /// Short description from the Goal/Focus line, or first paragraph.
+    pub description: String,
+    pub items: Vec<PlanItem>,
+    pub depends_on: Vec<String>,
+    /// True if a goal referencing this phase is currently running.
+    pub running: bool,
+}
+
+// ── Parsing ────────────────────────────────────────────────────
+
+/// Parse PLAN.md content into API-friendly phase objects.
+///
+/// Extracts id, title, status, description (first paragraph / Goal line),
+/// checklist items (`- [ ]` / `- [x]`), and depends_on comments.
+pub fn parse_plan_phases(content: &str) -> Vec<ApiPlanPhase> {
+    // Matches either:
+    //   ## Phase 4b — Title
+    //   ### v0.3.1 — Title   (or — with em-dash)
+    let phase_re = Regex::new(
+        r"(?m)^(?:##\s+Phase[\s\u{00a0}]+([0-9a-z.]+)\s+[—\-]\s+(.+)|###\s+(v[\d.]+[a-z]?)\s+[—\-]\s+(.+))$",
+    )
+    .expect("static regex");
+    let status_re = Regex::new(r"<!--\s*status:\s*(\w+)\s*-->").expect("static regex");
+    let dep_re = Regex::new(r"<!--\s*depends_on:\s*([^>]+?)\s*-->").expect("static regex");
+    // Matches both "- [ ] text" (unordered) and "1. [ ] text" (ordered) checklist items.
+    let item_re = Regex::new(r"^(?:-|\d+\.)\s+\[([ xX])\]\s+(.+)$").expect("static regex");
+
+    let lines: Vec<&str> = content.lines().collect();
+    let n = lines.len();
+
+    // Collect (line_index, id, title) for every phase header.
+    let mut headers: Vec<(usize, String, String)> = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        let l = line.trim();
+        if let Some(caps) = phase_re.captures(l) {
+            let (id, title) = if caps.get(1).is_some() {
+                (
+                    caps.get(1).map(|m| m.as_str()).unwrap_or("").to_string(),
+                    caps.get(2).map(|m| m.as_str()).unwrap_or("").to_string(),
+                )
+            } else {
+                (
+                    caps.get(3).map(|m| m.as_str()).unwrap_or("").to_string(),
+                    caps.get(4).map(|m| m.as_str()).unwrap_or("").to_string(),
+                )
+            };
+            if id.is_empty() {
+                continue;
+            }
+            // Strip trailing markdown decoration from title.
+            let title = title.trim_end_matches(['*', '(', ')']).trim().to_string();
+            headers.push((i, id, title));
+        }
+    }
+
+    let mut phases = Vec::new();
+    for h_idx in 0..headers.len() {
+        let (start, ref id, ref title) = headers[h_idx];
+        let end = headers.get(h_idx + 1).map(|(i, _, _)| *i).unwrap_or(n);
+
+        let section = &lines[start..end];
+
+        // Status: search lines 1–4 after header.
+        let mut status = "pending".to_string();
+        let mut status_offset: usize = 1; // default body start
+        for (j, line) in section[1..section.len().min(5)].iter().enumerate() {
+            if let Some(caps) = status_re.captures(line.trim()) {
+                status = caps
+                    .get(1)
+                    .map(|m| m.as_str().to_string())
+                    .unwrap_or_else(|| "pending".to_string());
+                status_offset = j + 2; // line after status marker
+                break;
+            }
+        }
+
+        // depends_on: search up to 8 lines after header.
+        let mut depends_on: Vec<String> = Vec::new();
+        for line in section[1..section.len().min(9)].iter() {
+            if let Some(caps) = dep_re.captures(line.trim()) {
+                let raw = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+                depends_on = raw
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                break;
+            }
+        }
+
+        // Description and items from body.
+        let mut description_lines: Vec<&str> = Vec::new();
+        let mut items: Vec<PlanItem> = Vec::new();
+        let mut past_description = false;
+
+        for line in section[status_offset..].iter() {
+            let trimmed = line.trim();
+
+            // Stop at phase-level headers (## or ###) but not deeper sub-headers (####).
+            if (trimmed.starts_with("## ") || trimmed.starts_with("### "))
+                && !trimmed.starts_with("####")
+            {
+                break;
+            }
+            // Skip HTML comments (status/depends markers).
+            if trimmed.starts_with("<!--") {
+                continue;
+            }
+            // Checklist items.
+            if let Some(caps) = item_re.captures(trimmed) {
+                past_description = true;
+                let done = caps.get(1).map(|m| m.as_str() != " ").unwrap_or(false);
+                let raw_text = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+                // Strip leading bold/code markers like **`foo`** → foo.
+                let text = raw_text
+                    .trim_start_matches("**")
+                    .trim_start_matches('`')
+                    .to_string();
+                items.push(PlanItem { text, done });
+                continue;
+            }
+            // Collect description text (before items, skip fences/horizontal rules).
+            if !past_description
+                && !trimmed.is_empty()
+                && trimmed != "---"
+                && !trimmed.starts_with("```")
+                && !trimmed.starts_with('|') // skip table rows
+                && description_lines.len() < 4
+            {
+                // Prefer the **Goal**: or **Focus**: line as the description.
+                let stripped = trimmed
+                    .trim_start_matches("**Goal**:")
+                    .trim_start_matches("**Focus**:")
+                    .trim_start_matches("**Objective**:")
+                    .trim();
+                description_lines.push(stripped);
+            }
+        }
+
+        let raw_desc = description_lines.join(" ");
+        // Strip remaining markdown bold/italic markers.
+        let description = raw_desc.replace("**", "").replace('*', "");
+
+        phases.push(ApiPlanPhase {
+            id: id.clone(),
+            title: title.clone(),
+            status,
+            description,
+            items,
+            depends_on,
+            running: false, // populated separately
+        });
+    }
+
+    phases
+}
+
+/// Check which phase IDs have a currently active goal.
+///
+/// Scans `.ta/goals/*.json` for goal files whose `plan_phase` matches one of
+/// the supplied phase IDs and whose `state` is an active (non-terminal) state.
+fn active_phases(goals_dir: &std::path::Path) -> std::collections::HashSet<String> {
+    let mut active = std::collections::HashSet::new();
+    let dir = match std::fs::read_dir(goals_dir) {
+        Ok(d) => d,
+        Err(_) => return active,
+    };
+    for entry in dir.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(val) = serde_json::from_str::<serde_json::Value>(&text) else {
+            continue;
+        };
+        let Some(phase_id) = val.get("plan_phase").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let state = val
+            .get("state")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        // Active states: created, configured, running, awaiting_input, finalizing.
+        let is_active = matches!(
+            state,
+            "created" | "configured" | "running" | "awaiting_input" | "finalizing"
+        );
+        if is_active {
+            active.insert(phase_id.to_string());
+        }
+    }
+    active
+}
+
+// ── Handlers ───────────────────────────────────────────────────
+
+/// `GET /api/plan/phases` — Return all plan phases with description and items.
+pub async fn get_plan_phases(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let project_root = state.active_project_root.read().unwrap().clone();
+    let plan_path = project_root.join("PLAN.md");
+
+    let content = match std::fs::read_to_string(&plan_path) {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({
+                    "error": format!("Could not read PLAN.md: {}", e),
+                    "path": plan_path.display().to_string(),
+                    "hint": "Run `ta plan create` to generate a plan, or create PLAN.md manually."
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    let mut phases = parse_plan_phases(&content);
+
+    // Annotate phases that have an active goal.
+    let goals_dir = project_root.join(".ta").join("goals");
+    let active = active_phases(&goals_dir);
+    for ph in &mut phases {
+        ph.running = active.contains(&ph.id)
+            || active.contains(&format!("v{}", ph.id))
+            || active.iter().any(|a| ids_match(a, &ph.id));
+    }
+
+    Json(phases).into_response()
+}
+
+/// Request body for `POST /api/plan/phase/add`.
+#[derive(Deserialize)]
+pub struct AddPhaseRequest {
+    pub title: String,
+    #[serde(default)]
+    pub description: String,
+}
+
+/// `POST /api/plan/phase/add` — Append a new pending phase to PLAN.md.
+pub async fn add_plan_phase(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<AddPhaseRequest>,
+) -> impl IntoResponse {
+    if body.title.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "title is required"})),
+        )
+            .into_response();
+    }
+
+    let project_root = state.active_project_root.read().unwrap().clone();
+    let plan_path = project_root.join("PLAN.md");
+
+    let content = match std::fs::read_to_string(&plan_path) {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({
+                    "error": format!("Could not read PLAN.md: {}", e),
+                    "hint": "Run `ta plan create` to generate a plan first."
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    let phases = parse_plan_phases(&content);
+    let new_id = next_phase_id(&phases);
+
+    let desc_section = if body.description.trim().is_empty() {
+        String::new()
+    } else {
+        format!("\n**Goal**: {}\n", body.description.trim())
+    };
+
+    let new_block = format!(
+        "\n### {} — {}\n<!-- status: pending -->{}\n",
+        new_id,
+        body.title.trim(),
+        desc_section,
+    );
+
+    let separator = if content.ends_with('\n') { "" } else { "\n" };
+    let new_content = format!(
+        "{}{}{}",
+        content,
+        separator,
+        new_block.trim_start_matches('\n')
+    );
+
+    if let Err(e) = std::fs::write(&plan_path, &new_content) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Could not write PLAN.md: {}", e)})),
+        )
+            .into_response();
+    }
+
+    Json(serde_json::json!({
+        "id": new_id,
+        "title": body.title.trim(),
+        "status": "pending",
+        "description": body.description.trim(),
+        "items": [],
+        "depends_on": [],
+        "running": false,
+    }))
+    .into_response()
+}
+
+/// Determine the next phase ID by incrementing the highest semver-style ID.
+fn next_phase_id(phases: &[ApiPlanPhase]) -> String {
+    let mut best: Option<(u32, u32, u32)> = None;
+    for ph in phases {
+        if let Some(ver) = parse_semver_triple(&ph.id) {
+            if best.is_none_or(|b| ver > b) {
+                best = Some(ver);
+            }
+        }
+    }
+    match best {
+        Some((maj, min, patch)) => format!("v{}.{}.{}", maj, min, patch + 1),
+        None => "v0.1.0".to_string(),
+    }
+}
+
+fn parse_semver_triple(id: &str) -> Option<(u32, u32, u32)> {
+    let id = id.strip_prefix('v').unwrap_or(id);
+    let parts: Vec<&str> = id.splitn(4, '.').collect();
+    let maj = parts.first()?.parse::<u32>().ok()?;
+    let min = parts.get(1)?.parse::<u32>().ok()?;
+    let patch = parts
+        .get(2)
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(0);
+    Some((maj, min, patch))
+}
+
+/// Compare two phase IDs normalising the optional `v` prefix.
+pub fn ids_match(a: &str, b: &str) -> bool {
+    let a = a.strip_prefix('v').unwrap_or(a);
+    let b = b.strip_prefix('v').unwrap_or(b);
+    a == b
+}
+
+// ── Goal start ─────────────────────────────────────────────────
+
+/// Request body for `POST /api/goal/start`.
+#[derive(Deserialize)]
+pub struct GoalStartRequest {
+    /// Goal title. If omitted, the phase title is used (requires `phase_id`).
+    pub title: Option<String>,
+    /// Optional freeform prompt / description passed as `--description`.
+    pub prompt: Option<String>,
+    /// Optional plan phase link (e.g., "v0.14.19"). Passed as `--phase`.
+    pub phase_id: Option<String>,
+}
+
+/// `POST /api/goal/start` — Start a goal, optionally linked to a plan phase.
+///
+/// Spawns `ta run <title> [--phase <id>] [--description <text>]` as a
+/// background process using the same mechanism as `POST /api/cmd`. Returns
+/// the output key so the caller can tail the stream.
+pub async fn start_goal(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<GoalStartRequest>,
+) -> impl IntoResponse {
+    // Resolve title.
+    let title = match body.title.as_deref().filter(|s| !s.trim().is_empty()) {
+        Some(t) => t.to_string(),
+        None => match body.phase_id.as_deref() {
+            Some(phase_id) => {
+                // Derive title from PLAN.md.
+                let project_root = state.active_project_root.read().unwrap().clone();
+                let plan_path = project_root.join("PLAN.md");
+                let phase_title = std::fs::read_to_string(&plan_path)
+                    .ok()
+                    .and_then(|c| {
+                        let phases = parse_plan_phases(&c);
+                        phases
+                            .into_iter()
+                            .find(|p| ids_match(&p.id, phase_id))
+                            .map(|p| format!("{} — {}", p.id, p.title))
+                    })
+                    .unwrap_or_else(|| format!("Phase {}", phase_id));
+                phase_title
+            }
+            None => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({"error": "title or phase_id is required"})),
+                )
+                    .into_response();
+            }
+        },
+    };
+
+    // Build args: ["run", "<title>", "--phase", "<id>", ...]
+    let mut args: Vec<String> = vec!["run".to_string(), title.clone()];
+    if let Some(ref phase_id) = body.phase_id {
+        args.push("--phase".to_string());
+        args.push(phase_id.clone());
+    }
+    if let Some(ref prompt) = body.prompt {
+        if !prompt.trim().is_empty() {
+            args.push("--description".to_string());
+            args.push(prompt.clone());
+        }
+    }
+
+    let binary = find_ta_binary();
+    let working_dir = state.active_project_root.read().unwrap().clone();
+    let output_key = extract_goal_key(&args);
+
+    let goal_title_display = args.get(1).cloned().unwrap_or_default();
+    let goal_output = state.goal_output.clone_ref();
+    let tx = goal_output.create_channel(&output_key).await;
+    let output_key_response = output_key.clone();
+    let output_key_display = output_key.clone();
+
+    tokio::spawn(async move {
+        tracing::info!(
+            "Goal start (plan tab): {} (output key: {})",
+            title,
+            output_key_display
+        );
+
+        let consent_path = working_dir.join(".ta/consent.json");
+        let has_consent = consent_path.exists();
+
+        let mut cmd_builder = tokio::process::Command::new(&binary);
+        cmd_builder.arg("--project-root").arg(&working_dir);
+        if has_consent {
+            cmd_builder.arg("--accept-terms");
+        }
+        // Inject --headless after the "run" subcommand.
+        if let Some(subcmd) = args.first() {
+            cmd_builder.arg(subcmd);
+            cmd_builder.arg("--headless");
+            cmd_builder.args(&args[1..]);
+        }
+
+        let goal_input = state.goal_input.clone();
+        let output_key_stdin = output_key_display.clone();
+
+        let result = cmd_builder
+            .current_dir(&working_dir)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .stdin(std::process::Stdio::piped())
+            .spawn();
+
+        match result {
+            Ok(mut child) => {
+                use tokio::io::{AsyncBufReadExt, BufReader};
+
+                if let Some(stdin) = child.stdin.take() {
+                    goal_input.register(&output_key_stdin, stdin).await;
+                }
+
+                let stdout = child.stdout.take();
+                let stderr = child.stderr.take();
+
+                let tx2 = tx.clone();
+                let tx3 = tx.clone();
+
+                let stdout_task = tokio::spawn(async move {
+                    if let Some(out) = stdout {
+                        let mut reader = BufReader::new(out).lines();
+                        while let Ok(Some(line)) = reader.next_line().await {
+                            tx.publish("stdout", line).await;
+                        }
+                    }
+                });
+
+                let stderr_task = tokio::spawn(async move {
+                    if let Some(err) = stderr {
+                        let mut reader = BufReader::new(err).lines();
+                        while let Ok(Some(line)) = reader.next_line().await {
+                            tx2.publish("stderr", line).await;
+                        }
+                    }
+                });
+
+                let _ = child.wait().await;
+                let _ = stdout_task.await;
+                let _ = stderr_task.await;
+                tx3.publish("stdout", "[goal process exited]".to_string())
+                    .await;
+            }
+            Err(e) => {
+                tx.publish(
+                    "stderr",
+                    format!("Failed to start goal: {}. Is `ta` on PATH?", e),
+                )
+                .await;
+            }
+        }
+    });
+
+    Json(serde_json::json!({
+        "status": "started",
+        "title": goal_title_display,
+        "output_key": output_key_response,
+    }))
+    .into_response()
+}
+
+// ── Utilities ──────────────────────────────────────────────────
+
+/// Locate the `ta` binary. Prefers the one adjacent to the running daemon.
+fn find_ta_binary() -> String {
+    if let Ok(current) = std::env::current_exe() {
+        if let Some(dir) = current.parent() {
+            let ta_path = dir.join("ta");
+            if ta_path.exists() {
+                return ta_path.to_string_lossy().to_string();
+            }
+        }
+    }
+    "ta".to_string()
+}
+
+/// Derive an output-stream key from args (phase ID → title → UUID fallback).
+fn extract_goal_key(args: &[String]) -> String {
+    for arg in args {
+        if arg.starts_with("v0.") || arg.starts_with("v1.") {
+            return arg.clone();
+        }
+    }
+    for (i, arg) in args.iter().enumerate() {
+        if i > 0 && !arg.starts_with('-') {
+            return arg.clone();
+        }
+    }
+    uuid::Uuid::new_v4().to_string()
+}
+
+// ── Tests ──────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SAMPLE_PLAN: &str = r#"# Project Plan
+
+## Versioning
+
+Some intro text.
+
+### v0.14.18 — TA Studio: Multi-Project Support
+<!-- status: done -->
+
+**Goal**: Add multi-project support to TA Studio.
+
+#### Items
+
+1. [x] Project browser UI
+2. [x] Platform launchers
+
+### v0.14.19 — TA Studio: Plan Tab
+<!-- status: pending -->
+<!-- depends_on: v0.14.18 -->
+
+**Goal**: Replace "Start a Goal" with a Plan tab.
+
+#### Items
+
+1. [ ] `GET /api/plan/phases`
+2. [ ] Phase card UI
+3. [x] Something already done
+
+### v0.15.0 — Generic Binary & Text Assets
+<!-- status: pending -->
+
+Future work.
+"#;
+
+    #[test]
+    fn parse_plan_phases_extracts_all() {
+        let phases = parse_plan_phases(SAMPLE_PLAN);
+        assert_eq!(phases.len(), 3);
+        assert_eq!(phases[0].id, "v0.14.18");
+        assert_eq!(phases[0].status, "done");
+        assert_eq!(phases[1].id, "v0.14.19");
+        assert_eq!(phases[1].status, "pending");
+        assert_eq!(phases[2].id, "v0.15.0");
+        assert_eq!(phases[2].status, "pending");
+    }
+
+    #[test]
+    fn parse_plan_phases_items_correct() {
+        let phases = parse_plan_phases(SAMPLE_PLAN);
+        // v0.14.19 has 3 items: 2 undone, 1 done
+        let p = phases.iter().find(|p| p.id == "v0.14.19").unwrap();
+        assert_eq!(p.items.len(), 3);
+        assert!(!p.items[0].done);
+        assert!(!p.items[1].done);
+        assert!(p.items[2].done);
+    }
+
+    #[test]
+    fn parse_plan_phases_depends_on() {
+        let phases = parse_plan_phases(SAMPLE_PLAN);
+        let p = phases.iter().find(|p| p.id == "v0.14.19").unwrap();
+        assert_eq!(p.depends_on, vec!["v0.14.18".to_string()]);
+    }
+
+    #[test]
+    fn parse_plan_phases_description() {
+        let phases = parse_plan_phases(SAMPLE_PLAN);
+        let p = phases.iter().find(|p| p.id == "v0.14.19").unwrap();
+        // Description should contain the Goal line text.
+        assert!(!p.description.is_empty());
+    }
+
+    #[test]
+    fn next_phase_id_increments_patch() {
+        let phases = parse_plan_phases(SAMPLE_PLAN);
+        // Highest version is v0.15.0 → next is v0.15.1
+        let next = next_phase_id(&phases);
+        assert_eq!(next, "v0.15.1");
+    }
+
+    #[test]
+    fn ids_match_normalises_v_prefix() {
+        assert!(ids_match("v0.14.19", "0.14.19"));
+        assert!(ids_match("0.14.19", "v0.14.19"));
+        assert!(ids_match("v0.14.19", "v0.14.19"));
+        assert!(!ids_match("v0.14.18", "v0.14.19"));
+    }
+
+    #[test]
+    fn parse_plan_pending_phases_only_filter() {
+        let phases = parse_plan_phases(SAMPLE_PLAN);
+        let pending: Vec<_> = phases.iter().filter(|p| p.status == "pending").collect();
+        assert_eq!(pending.len(), 2);
+    }
+}

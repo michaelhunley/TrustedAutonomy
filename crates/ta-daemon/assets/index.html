@@ -132,7 +132,7 @@
   <p class="subtitle" id="subtitle">Loading...</p>
   <div class="tabs">
     <div class="tab active" onclick="switchTab('dashboard')">Dashboard</div>
-    <div class="tab" onclick="switchTab('start')">Start a Goal</div>
+    <div class="tab" onclick="switchTab('plan')">Plan</div>
     <div class="tab" onclick="switchTab('drafts')">Review Drafts</div>
     <div class="tab" onclick="switchTab('questions')" id="tab-questions">Agent Questions</div>
     <div class="tab" onclick="switchTab('memory')">Memory</div>
@@ -188,7 +188,7 @@ function switchTab(tab) {
     t.classList.toggle('active', label === tab || (tab === 'dashboard' && label === 'dashboard'));
   });
   if (tab === 'dashboard') loadDashboard();
-  else if (tab === 'start') loadStart();
+  else if (tab === 'plan') loadPlan();
   else if (tab === 'drafts') loadDrafts();
   else if (tab === 'questions') loadQuestions();
   else if (tab === 'memory') loadMemory();
@@ -306,7 +306,7 @@ function renderDashboard(allDrafts, questions, status) {
   html += '</div>';
 
   if (active.length === 0 && pending.length === 0 && questions.length === 0) {
-    html += '<div class="empty">Everything is up to date. Start a new goal from the "Start a Goal" tab.</div>';
+    html += '<div class="empty">Everything is up to date. Start a new goal from the <strong>Plan</strong> tab.</div>';
   }
 
   html += '<div style="margin-top:1rem;font-size:0.8rem;color:var(--muted);text-align:right">' +
@@ -315,109 +315,242 @@ function renderDashboard(allDrafts, questions, status) {
   app.innerHTML = html;
 }
 
-// ── Start a Goal ───────────────────────────────────────────────
-const BUILTIN_TEMPLATES = [
-  { name: 'rust-cli', desc: 'Rust CLI application' },
-  { name: 'python-script', desc: 'Python scripting project' },
-  { name: 'blender-addon', desc: 'Blender Python addon' },
-  { name: 'web-api', desc: 'REST API server' },
-  { name: 'data-pipeline', desc: 'Data pipeline' },
-  { name: '(none)', desc: 'No template' },
-];
+// ── Plan Tab (v0.14.19) ────────────────────────────────────────
 
-let selectedTemplate = '(none)';
+let planPhases = [];
 
-function loadStart() {
-  app.innerHTML = `
+async function loadPlan() {
+  app.innerHTML = '<div class="loading">Loading plan...</div>';
+  try {
+    const resp = await fetch('/api/plan/phases');
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    planPhases = await resp.json();
+  } catch (e) {
+    planPhases = [];
+  }
+  renderPlan();
+}
+
+function renderPlan() {
+  const pending = planPhases.filter(p => p.status === 'pending' || p.status === 'in_progress');
+  let html = '';
+
+  // ── Next Up (phase list) ────────────────────────────────────
+  html += '<div class="dash-section">';
+  html += '<div class="dash-section-title">Next Up</div>';
+  if (pending.length === 0) {
+    html += '<div class="card"><div class="card-meta">';
+    if (planPhases.length === 0) {
+      html += 'No PLAN.md found. Add phases below or run <code>ta plan create</code> in your project.';
+    } else {
+      html += 'All phases are complete. Add a new phase below.';
+    }
+    html += '</div></div>';
+  } else {
+    pending.forEach(ph => {
+      const statusColor = ph.status === 'in_progress' ? 'var(--yellow)' : 'var(--accent)';
+      const runningBadge = ph.running
+        ? '<span class="badge badge-active" style="margin-left:0.5rem">Running</span>'
+        : '';
+      html += `<div class="card" id="phase-card-${esc(ph.id)}">
+        <div class="card-header">
+          <div style="display:flex;align-items:center;gap:0.5rem;flex:1;min-width:0">
+            <span style="color:var(--muted);font-family:monospace;font-size:0.8rem;flex-shrink:0">${esc(ph.id)}</span>
+            <span class="card-title" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(ph.title)}</span>
+            ${runningBadge}
+          </div>
+          <div style="display:flex;gap:0.5rem;flex-shrink:0">
+            <button class="btn btn-sm btn-ghost" onclick="togglePhaseExpand('${esc(ph.id)}')">Details</button>
+            <button class="btn btn-sm btn-primary" id="run-btn-${esc(ph.id)}"
+              onclick="runPhase('${esc(ph.id)}')"
+              ${ph.running ? 'disabled title="A goal for this phase is already running"' : ''}>
+              Run
+            </button>
+          </div>
+        </div>
+        <div class="card-meta" id="phase-desc-${esc(ph.id)}" style="margin-top:0.35rem">
+          ${ph.description ? esc(ph.description) : ''}
+        </div>
+        <div id="phase-expand-${esc(ph.id)}" style="display:none;margin-top:0.75rem">
+          ${renderPhaseDetails(ph)}
+        </div>
+      </div>`;
+    });
+  }
+  html += '</div>';
+
+  // ── Custom Goal ─────────────────────────────────────────────
+  html += `<div class="dash-section">
+    <div class="dash-section-title">Custom Goal</div>
     <div class="card">
-      <h2 style="margin-bottom:1rem">Start a New Goal</h2>
       <div class="form-group">
-        <label>Goal title <span style="color:var(--red)">*</span></label>
-        <input id="goalTitle" type="text" placeholder="e.g. Add user authentication" autofocus>
+        <label>What do you want to build or fix?</label>
+        <textarea id="customGoalPrompt" rows="3"
+          placeholder="Describe the goal for the agent..."></textarea>
+      </div>
+      <div style="display:flex;gap:1rem;align-items:flex-end;flex-wrap:wrap">
+        <div class="form-group" style="flex:1;min-width:180px;margin-bottom:0">
+          <label>Title <span style="color:var(--red)">*</span></label>
+          <input id="customGoalTitle" type="text" placeholder="e.g. Fix auth bug">
+        </div>
+        <div class="form-group" style="flex:1;min-width:180px;margin-bottom:0">
+          <label>Link to phase (optional)</label>
+          <select id="customGoalPhase">
+            <option value="">— none —</option>
+            ${pending.map(p => `<option value="${esc(p.id)}">${esc(p.id)} — ${esc(p.title)}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+      <div class="actions" style="margin-top:1rem">
+        <button class="btn btn-primary" onclick="submitCustomGoal()">Run Goal</button>
+      </div>
+      <div id="customGoalResult" style="margin-top:0.75rem;font-size:0.9rem"></div>
+    </div>
+  </div>`;
+
+  // ── Add Phase ───────────────────────────────────────────────
+  html += `<div class="dash-section">
+    <div class="dash-section-title">Add Phase</div>
+    <div class="card">
+      <div class="form-group">
+        <label>Phase title <span style="color:var(--red)">*</span></label>
+        <input id="newPhaseTitle" type="text" placeholder="e.g. Add dark mode support">
       </div>
       <div class="form-group">
         <label>Description (optional)</label>
-        <textarea id="goalDesc" placeholder="Describe what the agent should do..."></textarea>
-      </div>
-      <div class="form-group">
-        <label>Template</label>
-        <div class="template-grid" id="templateGrid"></div>
+        <textarea id="newPhaseDesc" rows="2"
+          placeholder="What should this phase accomplish?"></textarea>
       </div>
       <div class="actions">
-        <button class="btn btn-primary" onclick="submitGoal()">Start Goal</button>
-        <button class="btn btn-ghost" onclick="loadDashboard()">Cancel</button>
+        <button class="btn btn-primary" onclick="submitAddPhase()">Add to Plan</button>
       </div>
-      <div id="goalResult" style="margin-top:1rem"></div>
+      <div id="addPhaseResult" style="margin-top:0.75rem;font-size:0.9rem"></div>
     </div>
-  `;
-  renderTemplateGrid();
+  </div>`;
+
+  app.innerHTML = html;
 }
 
-function renderTemplateGrid() {
-  const grid = document.getElementById('templateGrid');
-  if (!grid) return;
-  grid.innerHTML = BUILTIN_TEMPLATES.map(t => `
-    <div class="template-tile${selectedTemplate === t.name ? ' selected' : ''}"
-         onclick="selectTemplate('${esc(t.name)}')">
-      <div class="template-name">${esc(t.name)}</div>
-      <div class="template-desc">${esc(t.desc)}</div>
-    </div>
-  `).join('');
-}
-
-function selectTemplate(name) {
-  selectedTemplate = name;
-  renderTemplateGrid();
-}
-
-async function submitGoal() {
-  const title = document.getElementById('goalTitle').value.trim();
-  if (!title) {
-    document.getElementById('goalResult').innerHTML =
-      '<span style="color:var(--red)">Goal title is required.</span>';
-    return;
+function renderPhaseDetails(ph) {
+  let html = '';
+  if (ph.depends_on && ph.depends_on.length > 0) {
+    html += `<div style="font-size:0.8rem;color:var(--muted);margin-bottom:0.5rem">
+      Depends on: ${ph.depends_on.map(d => `<span class="tag">${esc(d)}</span>`).join(' ')}
+    </div>`;
   }
-  const desc = document.getElementById('goalDesc').value.trim();
-  const result = document.getElementById('goalResult');
-  result.innerHTML = '<span style="color:var(--muted)">Starting goal...</span>';
+  if (ph.items && ph.items.length > 0) {
+    html += '<div style="font-size:0.85rem">';
+    ph.items.forEach(item => {
+      const icon = item.done
+        ? '<span style="color:var(--green)">✓</span>'
+        : '<span style="color:var(--muted)">○</span>';
+      const style = item.done ? 'color:var(--muted);text-decoration:line-through' : '';
+      html += `<div style="display:flex;gap:0.5rem;padding:0.2rem 0;${style}">${icon} ${esc(item.text)}</div>`;
+    });
+    html += '</div>';
+  } else {
+    html += '<div style="font-size:0.85rem;color:var(--muted)">No checklist items.</div>';
+  }
+  return html;
+}
 
-  const tmpl = selectedTemplate !== '(none)' ? selectedTemplate : undefined;
+function togglePhaseExpand(id) {
+  const el = document.getElementById('phase-expand-' + id);
+  if (el) el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
 
-  // Try POST /api/project/new first, fall back to /api/cmd.
+async function runPhase(phaseId) {
+  const btn = document.getElementById('run-btn-' + phaseId);
+  if (btn) { btn.disabled = true; btn.textContent = 'Starting…'; }
   try {
-    const body = { title, description: desc || undefined, template: tmpl };
-    const resp = await fetch('/api/project/new', {
+    const resp = await fetch('/api/goal/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
+      body: JSON.stringify({ phase_id: phaseId })
     });
     if (resp.ok) {
-      const data = await resp.json().catch(() => ({}));
-      result.innerHTML = '<span style="color:var(--green)">Goal started! ' +
-        (data.goal_id ? 'ID: ' + esc(data.goal_id.slice(0, 8)) : '') + '</span>';
-      setTimeout(() => { switchTab('dashboard'); }, 1500);
-      return;
-    }
-  } catch (_) {}
-
-  // Fallback: /api/cmd
-  try {
-    const body = { command: 'run', args: { title, description: desc || '', template: tmpl } };
-    const resp = await fetch('/api/cmd', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
-    if (resp.ok) {
-      result.innerHTML = '<span style="color:var(--green)">Goal started successfully.</span>';
-      setTimeout(() => { switchTab('dashboard'); }, 1500);
+      if (btn) { btn.textContent = 'Running'; }
+      setTimeout(() => switchTab('dashboard'), 1200);
     } else {
       const text = await resp.text();
-      result.innerHTML = '<span style="color:var(--red)">Error: ' + esc(text) + '</span>';
+      if (btn) { btn.disabled = false; btn.textContent = 'Run'; }
+      alert('Failed to start goal: ' + text);
     }
   } catch (e) {
-    result.innerHTML = '<span style="color:var(--red)">Could not reach daemon. ' +
+    if (btn) { btn.disabled = false; btn.textContent = 'Run'; }
+    alert('Network error: ' + e.message);
+  }
+}
+
+async function submitCustomGoal() {
+  const title = document.getElementById('customGoalTitle')?.value.trim() || '';
+  const prompt = document.getElementById('customGoalPrompt')?.value.trim() || '';
+  const phaseId = document.getElementById('customGoalPhase')?.value || '';
+  const result = document.getElementById('customGoalResult');
+
+  if (!title) {
+    if (result) { result.innerHTML = '<span style="color:var(--red)">Title is required.</span>'; }
+    return;
+  }
+
+  if (result) result.innerHTML = '<span style="color:var(--muted)">Starting goal…</span>';
+
+  const body = {
+    title,
+    prompt: prompt || undefined,
+    phase_id: phaseId || undefined,
+  };
+
+  try {
+    const resp = await fetch('/api/goal/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    if (resp.ok) {
+      if (result) result.innerHTML = '<span style="color:var(--green)">Goal started!</span>';
+      setTimeout(() => switchTab('dashboard'), 1200);
+    } else {
+      const text = await resp.text();
+      if (result) result.innerHTML = '<span style="color:var(--red)">Error: ' + esc(text) + '</span>';
+    }
+  } catch (e) {
+    if (result) result.innerHTML = '<span style="color:var(--red)">Could not reach daemon. ' +
       'Start it with <code>ta daemon start</code>.</span>';
+  }
+}
+
+async function submitAddPhase() {
+  const title = document.getElementById('newPhaseTitle')?.value.trim() || '';
+  const description = document.getElementById('newPhaseDesc')?.value.trim() || '';
+  const result = document.getElementById('addPhaseResult');
+
+  if (!title) {
+    if (result) result.innerHTML = '<span style="color:var(--red)">Title is required.</span>';
+    return;
+  }
+
+  if (result) result.innerHTML = '<span style="color:var(--muted)">Adding phase…</span>';
+
+  try {
+    const resp = await fetch('/api/plan/phase/add', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, description })
+    });
+    if (resp.ok) {
+      const phase = await resp.json();
+      if (result) result.innerHTML = `<span style="color:var(--green)">Phase ${esc(phase.id)} added.</span>`;
+      if (document.getElementById('newPhaseTitle')) document.getElementById('newPhaseTitle').value = '';
+      if (document.getElementById('newPhaseDesc')) document.getElementById('newPhaseDesc').value = '';
+      // Reload plan to show the new phase.
+      setTimeout(() => loadPlan(), 800);
+    } else {
+      const text = await resp.text();
+      if (result) result.innerHTML = '<span style="color:var(--red)">Error: ' + esc(text) + '</span>';
+    }
+  } catch (e) {
+    if (result) result.innerHTML = '<span style="color:var(--red)">Network error: ' + esc(e.message) + '</span>';
   }
 }
 
@@ -436,7 +569,7 @@ async function loadDrafts() {
 
 function renderDraftList() {
   if (!drafts || drafts.length === 0) {
-    app.innerHTML = '<div class="empty">No drafts yet. Start a goal with the "Start a Goal" tab.</div>';
+    app.innerHTML = '<div class="empty">No drafts yet. Start a goal from the <strong>Plan</strong> tab.</div>';
     return;
   }
   app.innerHTML = `

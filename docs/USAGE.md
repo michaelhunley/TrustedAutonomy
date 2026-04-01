@@ -111,12 +111,44 @@ open http://localhost:7700
 
 From the dashboard you can:
 
-- **Start a Goal** — enter a title, optional description, and pick a template
+- **Plan** — browse upcoming phases, run any phase with one click, create custom goals, or add new phases (see below)
 - **Review Drafts** — see proposed changes, approve or deny with one click
 - **Answer Agent Questions** — respond to agents that need your input
 - **Browse Memory** — inspect and manage what the agents remember about your project
 - **Projects** — open, switch, and browse recent TA projects (see below)
 - **Settings** — update your configuration through the browser UI
+
+## Starting Goals with the Plan Tab
+
+The **Plan** tab is the primary way to kick off work in TA Studio. It replaces the old "Start a Goal" form with a phase-aware interface.
+
+### Phase List (Next Up)
+
+Pending and in-progress phases from your `PLAN.md` are shown as expandable cards:
+
+- **Phase ID + title** in the header — shows at a glance what the next work item is
+- **Details** button — expands the card to show the description, checklist items, and phase dependencies
+- **Run** button — starts the phase immediately (calls `ta run --phase <id>` in the background)
+  - The button is greyed out if a goal for that phase is already running
+
+### Custom Goal
+
+To start a goal that isn't in the plan (ad-hoc work, experiments, quick fixes):
+
+1. Enter a **title** (required)
+2. Optionally add a **description** / prompt for the agent
+3. Optionally link it to a **plan phase** from the dropdown
+4. Click **Run Goal**
+
+### Adding Plan Phases
+
+To add a new phase to your `PLAN.md` without opening a terminal:
+
+1. Enter a **phase title** (e.g., "Add dark mode support")
+2. Optionally add a **description**
+3. Click **Add to Plan**
+
+The new phase is appended to `PLAN.md` with a `<!-- status: pending -->` marker and appears in the phase list immediately.
 
 ## Opening a Project with TA Studio
 
