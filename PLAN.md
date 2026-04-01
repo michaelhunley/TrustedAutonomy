@@ -8503,6 +8503,109 @@ The Plan tab replaces the current single-input "Start a Goal" form. Layout:
 
 ---
 
+### v0.14.20 — TA Studio: Workflows, Agent Personas & New Project Wizard
+<!-- status: pending -->
+**Goal**: Complete the Studio "no terminal required" experience for three remaining gaps: (1) a Workflows tab for viewing, running, and creating workflows from plain-English descriptions; (2) an Agent Personas system for defining role-based agent behaviors (e.g. "financial analyst", "code reviewer") separate from the framework selection in Settings; (3) a New Project wizard with interactive plan generation so a blank project gets a semver-structured PLAN.md before the first goal runs.
+
+**Depends on**: v0.14.19 (Plan tab), v0.14.18 (Projects tab)
+
+---
+
+#### Part A — Agent Personas
+
+**Two distinct agent concepts** (clarified here once to guide all future phases):
+- **Framework agents** (`agents/codex.toml`, `agents/gsd.toml`) — define the binary, launch args, and capabilities. Already exists. Configured in Settings.
+- **Persona agents** (new) — define *who* the agent acts as: a system prompt, behavioral rules, tool allowlist/blocklist, and optional constitution reference. Stored in `.ta/personas/<name>.toml`. Applied with `ta run "title" --persona financial-analyst` or declared in a workflow step.
+
+**Persona config format** (`.ta/personas/financial-analyst.toml`):
+```toml
+[persona]
+name        = "financial-analyst"
+description = "Analyzes financial data and produces structured reports"
+system_prompt = """
+You are a financial analyst. Your outputs are always structured:
+executive summary, key metrics, risks, and recommended actions.
+Never speculate without data. Cite your sources.
+"""
+constitution = ".ta/constitution.md"   # optional: extend project constitution
+
+[capabilities]
+allowed_tools   = ["read", "bash"]     # read-only by default
+forbidden_tools = ["write"]            # no file writes without explicit override
+
+[style]
+output_format = "markdown"
+max_response_length = "2000 words"
+```
+
+#### Part B — Workflows Tab
+
+Current state: `/api/workflows` lists workflows, `/api/workflow/{id}/input` accepts input, but there is no Workflows tab in Studio. Users cannot see, run, create, or edit workflows from the browser.
+
+**Workflows tab layout**:
+```
+┌─ Workflows ──────────────────────────────────┐
+│  [+ New Workflow]  [Import TOML]             │
+│                                              │
+│  ▶ email-manager      scheduled  [Run] [Edit]│
+│  ▶ nightly-report     manual     [Run] [Edit]│
+│  ● code-review        running    [Stop] [Log]│
+└──────────────────────────────────────────────┘
+```
+
+**Create from description**: "New Workflow" opens a prompt input — user describes what they want ("check my inbox every 30 minutes and draft replies"). An agent generates the workflow TOML. User reviews in an inline editor, edits if needed, saves. This is the same pattern as plan phase generation — agent drafts, human reviews.
+
+#### Part C — New Project Wizard + Interactive Plan Creation
+
+**Current gap**: `ta init` creates `.ta/` but leaves PLAN.md absent, breaking the semver process (version can't track plan phases that don't exist). Non-engineers have no path to bootstrap a plan.
+
+**New Project flow** (in Projects tab "New Project" button, or `ta init --interactive`):
+1. **Name & directory** — project name, local path (directory picker)
+2. **Description** — "What is this project?" — free text, used as context for plan generation
+3. **Plan generation** — agent drafts PLAN.md phases from the description. User sees proposed phases, can add/remove/reorder before saving.
+4. **First version** — sets `version = "0.1.0-alpha"` in project config. Phase IDs start at `v0.1.0`.
+5. **Finish** — creates `.ta/`, writes PLAN.md, opens Dashboard for the new project.
+
+**Interactive plan editing** also surfaces in the Plan tab ("Edit Plan" section from v0.14.19) — not just for new projects but for any project that wants to restructure its roadmap.
+
+---
+
+#### Items
+
+1. [ ] **Persona config schema** (`crates/ta-goal/src/persona.rs`): `PersonaConfig` struct — `name`, `description`, `system_prompt`, `constitution`, `capabilities: { allowed_tools, forbidden_tools }`, `style`. Loaded from `.ta/personas/<name>.toml`. Parsed and injected into the agent's CLAUDE.md alongside plan context.
+
+2. [ ] **`ta persona list`**: Lists all personas in `.ta/personas/`. Shows name, description, tool allowlist summary.
+
+3. [ ] **`ta persona new <name>`**: Interactive CLI wizard — prompts for description, system prompt, tool restrictions. Saves `.ta/personas/<name>.toml`. Alternatively, `ta run "title" --persona new` opens the wizard inline.
+
+4. [ ] **`--persona <name>` flag on `ta run`**: Loads persona config, merges into CLAUDE.md injection (persona system prompt + rules appended after plan context).
+
+5. [ ] **`GET /api/personas`**: Returns list of personas from `.ta/personas/`. Each entry: `{ name, description, allowed_tools, forbidden_tools }`.
+
+6. [ ] **`POST /api/persona/save`**: Creates or updates a `.ta/personas/<name>.toml` file. Used by Studio persona editor.
+
+7. [ ] **Workflows tab in Studio**: Lists workflows from `/api/workflows`. Each row shows name, schedule/manual, status, Run/Stop/Edit buttons. "New Workflow" button opens description-to-TOML flow.
+
+8. [ ] **Workflow creation from description**: "New Workflow" → description textarea → `POST /api/workflow/generate { description }` → agent drafts TOML → inline TOML editor → "Save" calls `POST /api/workflow/save`. Workflow appears in list immediately.
+
+9. [ ] **Workflow run/stop from Studio**: "Run" calls existing `POST /api/workflow/{id}/run` (or equivalent). "Stop" calls `DELETE /api/workflow/{id}`. Live status polling with step progress display.
+
+10. [ ] **`POST /api/project/init`**: Creates a new TA project at a given path — `mkdir -p <path>/.ta`, writes starter `workflow.toml` and empty `PLAN.md` with correct semver header. Returns `{ ok, path, name }`.
+
+11. [ ] **`POST /api/plan/generate`**: Given a project description, spawns a lightweight agent goal to draft PLAN.md phases. Returns proposed phases as structured JSON (same format as `/api/plan/phases`). User reviews in Studio before committing.
+
+12. [ ] **New Project wizard in Studio**: Multi-step flow in Projects tab — name/path → description → plan preview (agent-generated phases, editable) → confirm → calls `/api/project/init` + `/api/plan/generate` + `/api/plan/phase/add` for each confirmed phase. Opens Dashboard on completion.
+
+13. [ ] **Agent Personas section in Studio**: New sub-tab under Settings (or standalone tab) — list of personas from `/api/personas`, "New Persona" form (name, description, system prompt, tool restrictions), inline editor for existing personas. Save calls `/api/persona/save`.
+
+14. [ ] **Tests**: Persona loaded and injected correctly into goal prompt; `--persona` flag applies tool restrictions; `/api/project/init` creates valid `.ta/`; `/api/plan/generate` returns parseable phase list; workflow TOML generated from description is valid; persona save round-trip.
+
+15. [ ] **USAGE.md**: "Agent Personas" section (format, usage in goals and workflows), "Workflows" section (Studio tab, creation from description), "New Project" section (wizard flow, plan generation, semver bootstrap).
+
+#### Version: `0.14.20-alpha`
+
+---
+
 > **Unity Connector** → moved to v0.15.3 (Content Pipeline phases).
 
 ---
