@@ -1009,6 +1009,7 @@ pub fn execute(
     quiet: bool,
     existing_goal_id: Option<&str>,
     workflow: Option<&str>,
+    persona_name: Option<&str>,
 ) -> anyhow::Result<()> {
     // ── Resume an existing session ──────────────────────────────
     if let Some(session_id_prefix) = resume {
@@ -1447,6 +1448,29 @@ pub fn execute(
             &context_mode,
         )?;
         tracing::info!(goal_id = %goal.goal_run_id, "CLAUDE.md injected");
+
+        // Inject persona section if --persona was specified (v0.14.20).
+        if let Some(pname) = persona_name {
+            match ta_goal::PersonaConfig::load(&config.workspace_root, pname) {
+                Ok(persona) => {
+                    let persona_section = persona.to_claude_md_section();
+                    let claude_md_path = staging_path.join("CLAUDE.md");
+                    if let Ok(existing) = std::fs::read_to_string(&claude_md_path) {
+                        let updated = format!("{}{}", existing, persona_section);
+                        std::fs::write(&claude_md_path, updated)?;
+                    }
+                    tracing::info!(persona = %pname, "Persona injected into CLAUDE.md");
+                }
+                Err(e) => {
+                    anyhow::bail!(
+                        "Could not load persona '{}': {}. Check .ta/personas/{}.toml exists.",
+                        pname,
+                        e,
+                        pname
+                    );
+                }
+            }
+        }
 
         // v0.14.3.1: Warn at goal start when projected context > 80% of budget.
         if context_budget_chars > 0 {
@@ -5372,6 +5396,7 @@ mod tests {
             false, // quiet = false
             None,  // no existing goal id
             None,  // workflow = default (single-agent)
+            None,  // persona_name = None
         )
         .unwrap();
 

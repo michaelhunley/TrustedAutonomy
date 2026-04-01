@@ -137,6 +137,8 @@
     <div class="tab" onclick="switchTab('questions')" id="tab-questions">Agent Questions</div>
     <div class="tab" onclick="switchTab('memory')">Memory</div>
     <div class="tab" onclick="switchTab('projects')" id="tab-projects">Projects</div>
+    <div class="tab" onclick="switchTab('workflows')">Workflows</div>
+    <div class="tab" onclick="switchTab('personas')">Personas</div>
     <div class="tab" onclick="switchTab('settings')">Settings</div>
   </div>
   <div id="app"><div class="loading">Loading...</div></div>
@@ -193,6 +195,8 @@ function switchTab(tab) {
   else if (tab === 'questions') loadQuestions();
   else if (tab === 'memory') loadMemory();
   else if (tab === 'projects') loadProjects();
+  else if (tab === 'workflows') loadWorkflows();
+  else if (tab === 'personas') loadPersonas();
   else if (tab === 'settings') loadSettings();
 }
 
@@ -1395,7 +1399,54 @@ function renderProjects(projects) {
     </div>
   </div>`;
 
+  // New Project wizard
+  html += `<div class="section"><h3>New Project</h3>
+    <div class="card">
+      <div class="card-meta" style="padding:0.5rem 0 0.75rem">Initialize a new TA project at a given path. Creates <code>.ta/</code>, a starter <code>PLAN.md</code>, and <code>workflow.toml</code>.</div>
+      <div class="form-group">
+        <label>Project Name <span style="color:var(--red)">*</span></label>
+        <input type="text" id="newproject-name" placeholder="My New Project">
+      </div>
+      <div class="form-group">
+        <label>Project Directory <span style="color:var(--red)">*</span></label>
+        <input type="text" id="newproject-path" placeholder="/path/to/new/project" style="font-family:monospace">
+      </div>
+      <div class="actions">
+        <button class="btn btn-primary" onclick="initNewProject()">Initialize Project</button>
+      </div>
+      <div id="newproject-status" style="margin-top:0.75rem;font-size:0.85rem"></div>
+    </div>
+  </div>`;
+
   app.innerHTML = html;
+}
+
+async function initNewProject() {
+  const nameEl = document.getElementById('newproject-name');
+  const pathEl = document.getElementById('newproject-path');
+  const status = document.getElementById('newproject-status');
+  const name = nameEl ? nameEl.value.trim() : '';
+  const path = pathEl ? pathEl.value.trim() : '';
+  if (!name) { if (status) { status.textContent = 'Project name is required.'; status.style.color = 'var(--red)'; } return; }
+  if (!path) { if (status) { status.textContent = 'Project path is required.'; status.style.color = 'var(--red)'; } return; }
+  if (status) status.textContent = 'Initializing...';
+  try {
+    const resp = await fetch('/api/project/init', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, path })
+    });
+    const result = await resp.json();
+    if (result.ok) {
+      if (status) { status.textContent = 'Project initialized at ' + result.path; status.style.color = 'var(--green)'; }
+      // Auto-open the new project.
+      setTimeout(() => openProject(result.path), 1200);
+    } else {
+      if (status) { status.textContent = 'Error: ' + (result.error || 'Could not initialize.'); status.style.color = 'var(--red)'; }
+    }
+  } catch (e) {
+    if (status) { status.textContent = 'Network error: ' + e.message; status.style.color = 'var(--red)'; }
+  }
 }
 
 async function openProject(path) {
@@ -1449,6 +1500,205 @@ async function browseForProject() {
     }
   } catch (e) {
     // Browse not available on this platform - ignore
+  }
+}
+
+// ── Workflows (v0.14.20) ──────────────────────────────────────
+async function loadWorkflows() {
+  app.innerHTML = '<div class="loading">Loading workflows...</div>';
+  try {
+    const resp = await fetch('/api/workflows');
+    const data = resp.ok ? await resp.json() : { workflows: [] };
+    renderWorkflows(data.workflows || []);
+  } catch (e) {
+    renderWorkflows([]);
+  }
+}
+
+function renderWorkflows(workflows) {
+  let html = '';
+
+  html += '<div class="section"><h3>Workflows</h3>';
+  if (workflows.length === 0) {
+    html += '<div class="card"><div class="card-meta">No workflows found in .ta/workflows/. Create one below.</div></div>';
+  } else {
+    workflows.forEach(w => {
+      html += `<div class="card">
+        <div class="card-header">
+          <span class="card-title">${esc(w.name || w.id)}</span>
+          <span class="badge ${w.trigger === 'scheduled' ? 'badge-info' : 'badge-default'}">${esc(w.trigger)}</span>
+          <span class="badge badge-default">${esc(w.status)}</span>
+        </div>
+        <div class="card-meta" style="font-family:monospace;font-size:0.78rem">${esc(w.toml_path)}</div>
+      </div>`;
+    });
+  }
+  html += '</div>';
+
+  // New Workflow section
+  html += `<div class="section"><h3>New Workflow</h3>
+    <div class="card">
+      <div class="form-group">
+        <label>Describe what this workflow should do</label>
+        <input type="text" id="wf-desc-input" placeholder="Check inbox every 30 min and draft replies">
+      </div>
+      <div class="actions">
+        <button class="btn btn-primary" onclick="generateWorkflow()">Generate Workflow TOML</button>
+      </div>
+      <div id="wf-generated" style="margin-top:1rem;display:none">
+        <label>Generated TOML (edit before saving)</label>
+        <textarea id="wf-toml-editor" style="width:100%;height:200px;font-family:monospace;font-size:0.82rem;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:0.5rem"></textarea>
+        <div class="actions" style="margin-top:0.5rem">
+          <button class="btn btn-primary" onclick="saveWorkflow()">Save Workflow</button>
+        </div>
+        <div id="wf-save-status" style="margin-top:0.5rem;font-size:0.85rem"></div>
+      </div>
+    </div>
+  </div>`;
+
+  app.innerHTML = html;
+}
+
+async function generateWorkflow() {
+  const input = document.getElementById('wf-desc-input');
+  const desc = input ? input.value.trim() : '';
+  if (!desc) { alert('Please enter a description.'); return; }
+  try {
+    const resp = await fetch('/api/workflow/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ description: desc })
+    });
+    const result = await resp.json();
+    const generated = document.getElementById('wf-generated');
+    const editor = document.getElementById('wf-toml-editor');
+    if (editor) editor.value = result.toml || '';
+    if (generated) generated.style.display = 'block';
+  } catch (e) {
+    alert('Error generating workflow: ' + e.message);
+  }
+}
+
+async function saveWorkflow() {
+  const editor = document.getElementById('wf-toml-editor');
+  const status = document.getElementById('wf-save-status');
+  const toml = editor ? editor.value : '';
+  if (!toml.trim()) { if (status) status.textContent = 'No TOML to save.'; return; }
+  // Extract id from the toml name field or generate slug.
+  const nameMatch = toml.match(/^name\s*=\s*"([^"]+)"/m);
+  const id = nameMatch ? nameMatch[1].toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-_]/g, '') : 'new-workflow';
+  try {
+    const resp = await fetch('/api/workflow/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, toml })
+    });
+    const result = await resp.json();
+    if (result.ok) {
+      if (status) { status.textContent = 'Saved to ' + result.path; status.style.color = 'var(--green)'; }
+      setTimeout(() => loadWorkflows(), 1200);
+    } else {
+      if (status) { status.textContent = 'Error: ' + (result.error || 'Unknown'); status.style.color = 'var(--red)'; }
+    }
+  } catch (e) {
+    if (status) { status.textContent = 'Network error: ' + e.message; status.style.color = 'var(--red)'; }
+  }
+}
+
+// ── Personas (v0.14.20) ───────────────────────────────────────
+async function loadPersonas() {
+  app.innerHTML = '<div class="loading">Loading personas...</div>';
+  try {
+    const resp = await fetch('/api/personas');
+    const data = resp.ok ? await resp.json() : { personas: [] };
+    renderPersonas(data.personas || []);
+  } catch (e) {
+    renderPersonas([]);
+  }
+}
+
+function renderPersonas(personas) {
+  let html = '';
+
+  html += '<div class="section"><h3>Agent Personas</h3>';
+  if (personas.length === 0) {
+    html += '<div class="card"><div class="card-meta">No personas found in .ta/personas/. Create one below.</div></div>';
+  } else {
+    personas.forEach(p => {
+      const tools = p.allowed_tools && p.allowed_tools.length > 0
+        ? 'Allow: ' + p.allowed_tools.join(', ')
+        : '(all tools)';
+      html += `<div class="card">
+        <div class="card-header"><span class="card-title">${esc(p.name)}</span></div>
+        <div class="card-meta">${esc(p.description)}</div>
+        <div class="card-meta" style="font-size:0.8rem;margin-top:0.25rem">Tools: ${esc(tools)}</div>
+        <div class="card-meta" style="font-size:0.8rem">Use with: <code>ta run "goal" --persona ${esc(p.name)}</code></div>
+      </div>`;
+    });
+  }
+  html += '</div>';
+
+  // New Persona form
+  html += `<div class="section"><h3>New Persona</h3>
+    <div class="card">
+      <div class="form-group">
+        <label>Name <span style="color:var(--red)">*</span></label>
+        <input type="text" id="persona-name" placeholder="financial-analyst">
+      </div>
+      <div class="form-group">
+        <label>Description</label>
+        <input type="text" id="persona-desc" placeholder="Analyzes financial data and reports">
+      </div>
+      <div class="form-group">
+        <label>System Prompt</label>
+        <textarea id="persona-prompt" style="width:100%;height:100px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:0.5rem" placeholder="You are a financial analyst specialized in..."></textarea>
+      </div>
+      <div class="form-group">
+        <label>Allowed Tools (comma-separated, empty = no restriction)</label>
+        <input type="text" id="persona-allowed" placeholder="read, bash">
+      </div>
+      <div class="form-group">
+        <label>Forbidden Tools (comma-separated)</label>
+        <input type="text" id="persona-forbidden" placeholder="write">
+      </div>
+      <div class="actions">
+        <button class="btn btn-primary" onclick="savePersona()">Save Persona</button>
+      </div>
+      <div id="persona-status" style="margin-top:0.75rem;font-size:0.85rem"></div>
+    </div>
+  </div>`;
+
+  app.innerHTML = html;
+}
+
+async function savePersona() {
+  const name = (document.getElementById('persona-name') || {}).value || '';
+  const description = (document.getElementById('persona-desc') || {}).value || '';
+  const system_prompt = (document.getElementById('persona-prompt') || {}).value || '';
+  const allowedRaw = (document.getElementById('persona-allowed') || {}).value || '';
+  const forbiddenRaw = (document.getElementById('persona-forbidden') || {}).value || '';
+  const status = document.getElementById('persona-status');
+
+  if (!name.trim()) { if (status) { status.textContent = 'Name is required.'; status.style.color = 'var(--red)'; } return; }
+
+  const allowed_tools = allowedRaw.split(',').map(s => s.trim()).filter(Boolean);
+  const forbidden_tools = forbiddenRaw.split(',').map(s => s.trim()).filter(Boolean);
+
+  try {
+    const resp = await fetch('/api/persona/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name.trim(), description, system_prompt, allowed_tools, forbidden_tools, output_format: 'markdown' })
+    });
+    const result = await resp.json();
+    if (result.ok) {
+      if (status) { status.textContent = 'Persona saved to ' + result.path; status.style.color = 'var(--green)'; }
+      setTimeout(() => loadPersonas(), 1200);
+    } else {
+      if (status) { status.textContent = 'Error: ' + (result.error || 'Unknown'); status.style.color = 'var(--red)'; }
+    }
+  } catch (e) {
+    if (status) { status.textContent = 'Network error: ' + e.message; status.style.color = 'var(--red)'; }
   }
 }
 

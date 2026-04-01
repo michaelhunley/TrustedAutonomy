@@ -1816,6 +1816,7 @@ fn plan_add(
         false, // quiet = false
         None,  // existing_goal_id = None
         None,  // workflow = default (single-agent)
+        None,  // persona_name = None
     )
 }
 
@@ -2067,6 +2068,7 @@ fn plan_from(
         false, // quiet = false
         None,  // existing_goal_id = None
         None,  // workflow = default (single-agent)
+        None,  // persona_name = None
     )
 }
 

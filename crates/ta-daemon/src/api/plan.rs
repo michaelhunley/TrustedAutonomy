@@ -574,6 +574,68 @@ fn extract_goal_key(args: &[String]) -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
+// ── Plan generation ────────────────────────────────────────────
+
+/// Request body for plan generation.
+#[derive(Deserialize)]
+pub struct PlanGenerateRequest {
+    pub description: String,
+}
+
+/// `POST /api/plan/generate` — Generate draft plan phases from a project description.
+///
+/// Returns proposed phases as structured JSON. The user reviews them in Studio
+/// before committing to PLAN.md via `/api/plan/phase/add`.
+pub async fn generate_plan_phases(
+    State(_state): State<Arc<AppState>>,
+    Json(body): Json<PlanGenerateRequest>,
+) -> impl IntoResponse {
+    if body.description.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "description is required"})),
+        )
+            .into_response();
+    }
+
+    // Generate a starter set of phases based on the description.
+    // In a full implementation, this would spawn an agent to draft phases.
+    // For now, we generate a sensible default scaffold that the user can edit.
+    let phases = vec![
+        serde_json::json!({
+            "id": "v0.1.0",
+            "title": "Project Foundation",
+            "description": "Initial setup, dependencies, and core data structures.",
+            "status": "pending",
+        }),
+        serde_json::json!({
+            "id": "v0.2.0",
+            "title": "Core Implementation",
+            "description": format!("Main implementation for: {}", body.description.trim()),
+            "status": "pending",
+        }),
+        serde_json::json!({
+            "id": "v0.3.0",
+            "title": "Testing & Quality",
+            "description": "Unit tests, integration tests, and quality checks.",
+            "status": "pending",
+        }),
+        serde_json::json!({
+            "id": "v0.4.0",
+            "title": "Documentation & Polish",
+            "description": "User docs, README, and final polish.",
+            "status": "pending",
+        }),
+    ];
+
+    Json(serde_json::json!({
+        "phases": phases,
+        "description": body.description.trim(),
+        "message": "Review these proposed phases. Edit titles/descriptions, then save each to your plan.",
+    }))
+    .into_response()
+}
+
 // ── Tests ──────────────────────────────────────────────────────
 
 #[cfg(test)]

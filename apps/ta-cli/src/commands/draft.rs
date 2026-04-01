@@ -5468,6 +5468,7 @@ fn fix_package(
         false, // quiet = false
         None,  // no existing goal id
         None,  // workflow = default (single-agent)
+        None,  // persona_name = None
     )?;
 
     if no_launch {

@@ -118,6 +118,9 @@ enum Commands {
         /// Skip pre-draft verification checks (from [verify] in workflow.toml).
         #[arg(long)]
         skip_verify: bool,
+        /// Agent persona to apply (name of .ta/personas/<name>.toml).
+        #[arg(long)]
+        persona: Option<String>,
         /// Suppress streaming agent output; still print completion/failure summary.
         /// Default for daemon-dispatched and channel-dispatched goals.
         /// Inverse: omit --quiet (current interactive default) shows full output.
@@ -185,6 +188,11 @@ enum Commands {
     Plan {
         #[command(subcommand)]
         command: commands::plan::PlanCommands,
+    },
+    /// Manage agent personas for role-based behavior.
+    Persona {
+        #[command(subcommand)]
+        command: commands::persona::PersonaCommands,
     },
     /// Interactive TA Shell — opens the web shell in your browser (default).
     ///
@@ -738,6 +746,7 @@ fn main() -> anyhow::Result<()> {
             resume,
             headless,
             skip_verify,
+            persona,
             quiet,
             goal_id,
             workflow,
@@ -792,6 +801,7 @@ fn main() -> anyhow::Result<()> {
                 *quiet,
                 goal_id.as_deref(),
                 workflow.as_deref(),
+                persona.as_deref(),
             )
         }
         Commands::Events { command } => commands::events::execute(command, &config),
@@ -808,6 +818,7 @@ fn main() -> anyhow::Result<()> {
         ),
         Commands::Session { command } => commands::session::execute(command, &config),
         Commands::Plan { command } => commands::plan::execute(command, &config),
+        Commands::Persona { command } => commands::persona::execute(command, &config),
         Commands::Context { command } => commands::context::execute(command, &config),
         Commands::Credentials { command } => commands::credentials::execute(command, &config),
         Commands::Agent { command } => commands::agent::execute(command, &config),
