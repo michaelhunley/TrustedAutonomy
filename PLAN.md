@@ -8416,25 +8416,25 @@ All three launchers follow the same logic:
 
 #### Items
 
-1. [ ] **`/api/project/open` daemon endpoint**: Accepts `{ path: String }`. Validates `.ta/` exists. Sets the active project root. Updates `~/.config/ta/recent-projects.json` (prepend, deduplicate, cap at 20). Returns `{ ok: true, name: String }` or `{ ok: false, error: String }`.
+1. [x] **`/api/project/open` daemon endpoint**: Accepts `{ path: String }`. Validates `.ta/` exists. Sets the active project root. Updates `~/.config/ta/recent-projects.json` (prepend, deduplicate, cap at 20). Returns `{ ok: true, name: String }` or `{ ok: false, error: String }`.
 
-2. [ ] **`/api/project/list` daemon endpoint**: Returns recent projects from `~/.config/ta/recent-projects.json`. Each entry: `{ path, name, last_opened }`. Used by the Project Browser's recent list.
+2. [x] **`/api/project/list` daemon endpoint**: Returns recent projects from `~/.config/ta/recent-projects.json`. Each entry: `{ path, name, last_opened }`. Used by the Project Browser's recent list.
 
-3. [ ] **`/api/project/browse` daemon endpoint**: Triggers native OS directory picker asynchronously. Returns `{ path: String }` or `{ cancelled: true }`. Implementation: `open`/`xdg-open` on Unix; PowerShell `FolderBrowserDialog` on Windows.
+3. [x] **`/api/project/browse` daemon endpoint**: Triggers native OS directory picker asynchronously. Returns `{ path: String }` or `{ cancelled: true }`. Implementation: `open`/`xdg-open` on Unix; PowerShell `FolderBrowserDialog` on Windows.
 
-4. [ ] **Projects page in TA Studio**: New `/projects` route. Layout: "Recent Projects" card list + "Open from Path" form + "Open from Git" form. Clicking a recent project calls `/api/project/open`, redirects to `/` on success.
+4. [x] **Projects page in TA Studio**: New `/projects` route. Layout: "Recent Projects" card list + "Open from Path" form + "Open from Git" form. Clicking a recent project calls `/api/project/open`, redirects to `/` on success.
 
-5. [ ] **Redirect to /projects when no active project**: If `GET /api/status` returns `{ project: null }`, the Dashboard JS redirects to `/projects` rather than showing an empty dashboard.
+5. [x] **Redirect to /projects when no active project**: If `GET /api/status` returns `{ project: null }`, the Dashboard JS redirects to `/projects` rather than showing an empty dashboard.
 
-6. [ ] **macOS `TA Studio.app` launcher**: Shell script wrapped in an `.app` bundle. Included in the DMG. Logic: check daemon health → start if needed → wait up to 5s → open browser → `osascript` error dialog on timeout.
+6. [x] **macOS `TA Studio.app` launcher**: Shell script wrapped in an `.app` bundle. Included in the DMG. Logic: check daemon health → start if needed → wait up to 5s → open browser → `osascript` error dialog on timeout.
 
-7. [ ] **Windows `TA Studio.bat` + MSI shortcut**: `.bat` in the MSI install directory. MSI `main.wxs` gains a "TA Studio" Start Menu shortcut (alongside the existing "TA Documentation" shortcut). Logic: start daemon background → loop health check → `START http://localhost:7700`. Error via PowerShell MsgBox.
+7. [x] **Windows `TA Studio.bat` + MSI shortcut**: `.bat` in the MSI install directory. MSI `main.wxs` gains a "TA Studio" Start Menu shortcut (alongside the existing "TA Documentation" shortcut). Logic: start daemon background → loop health check → `START http://localhost:7700`. Error via PowerShell MsgBox.
 
-8. [ ] **Linux `ta-studio` script + `.desktop` file**: Shell script at `/usr/local/bin/ta-studio` in the tarball. `.desktop` at `/usr/local/share/applications/ta-studio.desktop`. Error via `zenity --error` / `notify-send` fallback.
+8. [x] **Linux `ta-studio` script + `.desktop` file**: Shell script at `/usr/local/bin/ta-studio` in the tarball. `.desktop` at `/usr/local/share/applications/ta-studio.desktop`. Error via `zenity --error` / `notify-send` fallback.
 
-9. [ ] **Tests**: `/api/project/open` writes recent-projects and returns project name; `/api/project/list` returns sorted recents; redirect logic when no active project; recent-projects capped at 20 and deduplicated.
+9. [x] **Tests**: `/api/project/open` writes recent-projects and returns project name; `/api/project/list` returns sorted recents; redirect logic when no active project; recent-projects capped at 20 and deduplicated.
 
-10. [ ] **USAGE.md "Opening a Project" section**: How to use the Project Browser, how the launchers work on each platform, how to set a default clone directory in `daemon.toml`.
+10. [x] **USAGE.md "Opening a Project" section**: How to use the Project Browser, how the launchers work on each platform, how to set a default clone directory in `daemon.toml`.
 
 #### Version: `0.14.18-alpha`
 
@@ -8771,102 +8771,106 @@ supervisor = true         # run supervisor confidence check (default: true)
 
 ---
 
-### v0.15.9 — Email Connector: Provider Integration & Filter Config
+### v0.15.9 — `ta email`: Credential Setup, Inbox Polling & Filter Rules
 <!-- status: pending -->
-**Goal**: A pluggable email connector that polls configured mailboxes (Gmail, Outlook/Microsoft 365, or any IMAP provider), applies user-defined filter rules to incoming messages, and delivers matched emails as TA artifacts into the draft pipeline. Lays the foundation for auto-response in v0.15.10.
+**Goal**: A self-contained local email workflow — no connector framework, no content pipeline dependency. The user runs `ta email setup` once to capture credentials securely in the OS keychain, then `ta email run` to fetch and filter new messages. Designed to run on the user's own PC or Mac, driven by cron, Windows Task Scheduler, or the TA daemon scheduler.
 
-**Depends on**: v0.15.0 (generic artifact kinds), v0.14.14 (connector infrastructure)
+**Depends on**: v0.13.9 (constitution framework for user voice/persona)
 
 **Design**:
-- `ta-connectors/email` crate — `EmailProvider` trait with OAuth (Gmail, Outlook) and IMAP generic implementations
-- Config: `.ta/connectors/email.toml` per-project (or `~/.config/ta/email.toml` for personal inbox)
-- `ta email setup <provider>` — OAuth wizard (opens browser for consent) or IMAP credential prompt; stores tokens in OS keychain
-- Filter rules: sender address glob, domain glob, subject regex, body keywords — evaluated in order, first match wins
-- `ta email poll` — one-shot check; daemon runs it on a configurable interval (`poll_interval_minutes`)
-- Matched emails surface as `EmailArtifact { message_id, from, subject, body_text, body_html, thread_id }` in a new `email-inbox` draft queue
+- Single `crates/ta-email` crate — standalone, no dependency on connector infrastructure
+- Config: `~/.config/ta/email.toml` (personal, not per-project; works without any `.ta/` workspace)
+- Credentials stored in OS keychain via `keyring` crate (macOS Keychain, Windows Credential Manager, Linux SecretService) — never written to disk in plaintext
+- Provider support: Gmail (OAuth2 + Gmail API), Outlook/M365 (OAuth2 + Graph API), generic IMAP/SMTP
+- Filter rules evaluated in order; first match wins; unmatched mail is left untouched in inbox
+- Watermark: last-processed timestamp stored in `~/.config/ta/email-watermark.json` — each run only processes mail since last run
 
 #### Items
 
-1. [ ] **`EmailProvider` trait** (`crates/ta-connectors/email/src/provider.rs`): `async fn poll(&self, since: DateTime) -> Vec<EmailMessage>`, `async fn send(&self, reply: EmailReply) -> Result<()>`. Implementations: `GmailProvider` (OAuth2 + Gmail API), `OutlookProvider` (OAuth2 + Graph API), `ImapProvider` (generic IMAP + SMTP).
+1. [ ] **`ta email setup <gmail|outlook|imap>`**: One-time credential capture.
+   - Gmail/Outlook: opens system browser to OAuth consent page, listens on `localhost:9876` for callback, stores refresh token in OS keychain under key `ta-email:<address>`.
+   - IMAP: prompts for host, port, username, app-password (masked input); validates connection; stores in keychain.
+   - Prints connected address and next-steps on success.
 
-2. [ ] **OAuth flow** (`ta email setup gmail|outlook`): Opens system browser to consent URL, listens on localhost callback, stores refresh token in OS keychain (`keyring` crate). Prints confirmation with connected address and quota.
+2. [ ] **`ta email status`**: Shows configured accounts (address, provider, last-polled timestamp), keychain health, and filter rule summary. No credentials printed.
 
-3. [ ] **IMAP/SMTP setup** (`ta email setup imap`): Prompts for host, port, username, password (app password). Validates connection before storing. Supports TLS and STARTTLS.
-
-4. [ ] **Filter config schema** (`.ta/connectors/email.toml`):
+3. [ ] **Filter config** (`~/.config/ta/email.toml`):
    ```toml
-   [filter]
-   [[filter.rules]]
-   name = "support-requests"
-   from_domain = ["*.example.com"]
-   subject_contains = ["help", "issue", "support"]
-   action = "stage"   # stage | ignore | auto_reply
+   [[account]]
+   address = "me@example.com"
+   provider = "gmail"           # gmail | outlook | imap
 
-   [[filter.rules]]
-   name = "spam-domains"
-   from_domain = ["*.promo.net"]
+   [[filter]]
+   name = "client-questions"
+   from_domain = ["client.com", "partner.org"]
+   subject_contains = ["?", "help", "question"]
+   action = "reply"             # reply | flag | ignore
+
+   [[filter]]
+   name = "newsletters"
+   subject_contains = ["unsubscribe", "newsletter"]
    action = "ignore"
+
+   [[auto_approve]]
+   from_address = ["noreply@github.com", "noreply@linear.app"]
+   action = "discard"           # matched but no reply needed
    ```
 
-5. [ ] **`ta email poll`**: Fetches messages since last watermark, applies filter rules, creates `EmailDraft` entries in `.ta/email-inbox/` for matched messages. Prints count of staged / ignored / skipped.
+4. [ ] **`ta email poll`**: Fetches messages since watermark, applies filter rules, writes matched emails to `~/.config/ta/email-inbox/<message-id>.json`. Updates watermark on success. Prints: N matched (by rule), M ignored, K left untouched.
 
-6. [ ] **Daemon integration**: `[connectors.email] poll_interval_minutes = 15` in `daemon.toml` schedules `ta email poll` via the daemon's internal scheduler. Can also be driven externally by cron (just run `ta email poll`).
+5. [ ] **Daemon / cron scheduling**: `[email] poll_interval_minutes = 15` in `~/.config/ta/daemon.toml` schedules `ta email poll` via the daemon scheduler. `ta email poll` also works standalone — headless, exits 0/1, suitable for `crontab` or Windows Task Scheduler without daemon.
 
-7. [ ] **`ta email list`**: Shows staged emails pending review — message ID, from, subject, received time, matched rule.
+6. [ ] **`ta email list`**: Shows inbox queue — message ID, from, subject, received, matched filter rule, status (pending/replied/discarded).
 
-8. [ ] **Tests**: Filter rule evaluation (domain glob, subject regex, action routing); OAuth token refresh flow (mock server); IMAP poll watermark advances correctly; `ignore` action produces no artifact.
+7. [ ] **Tests**: Keychain store/retrieve round-trip (mocked); filter rule evaluation (domain glob, subject keyword, action routing); watermark advances on successful poll; `ignore` action produces no inbox entry; cron exit codes.
 
-9. [ ] **USAGE.md**: "Email Connector" section — setup for each provider, filter rule syntax, polling config, how staged emails appear in the draft queue.
+8. [ ] **USAGE.md**: "Email Workflow" section — one-time setup per provider, filter config, cron/scheduler setup, how to check what's queued.
 
 #### Version: `0.15.9-alpha`
 
 ---
 
-### v0.15.10 — Email Auto-Response Workflow: Agent Matching, Staging & Auto-Approve
+### v0.15.10 — `ta email run`: Agent Replies, Draft Review & Auto-Approve
 <!-- status: pending -->
-**Goal**: Agent-driven auto-response for emails that match filter rules. The agent reads the email and the project constitution, drafts a reply, and stages it for human review. Configurable auto-approve rules allow specific senders or domains to bypass manual review for trusted correspondence. Periodic polling or cron integration keeps the inbox continuously attended.
+**Goal**: Agent-driven replies for queued emails. The user runs `ta email run` (or it fires on schedule) and TA spawns a goal for each pending email: the agent reads the message and the user's email constitution (voice, tone, topics to engage), drafts a reply, and stages it for human review. Auto-approve rules let trusted senders/domains bypass manual review. Approved replies are sent immediately.
 
-**Depends on**: v0.15.9 (email connector + filter config), v0.13.9 (constitution framework)
+**Depends on**: v0.15.9 (`ta email poll` inbox queue, credential infrastructure)
 
 **Design**:
-- For each staged `EmailDraft`, an agent goal is spawned with the email body + constitution as context
-- Agent produces a reply draft (`EmailReply`) as a TA artifact
-- Reply goes through standard draft → review → approve → send pipeline
-- Auto-approve rules allow trusted senders/domains to skip manual review
-- `ta email workflow run` — process all pending staged emails; can be called by cron or daemon scheduler
-- Approved replies are sent immediately via the configured provider
+- `ta email run` processes all pending inbox entries in order
+- Each email becomes a standard TA goal: prompt = email body + thread history + `~/.config/ta/email-constitution.md` (user's voice/persona/topics)
+- Agent produces a structured reply (`to`, `subject`, `body`) as a TA draft artifact
+- Draft goes through standard `ta draft view` / `ta draft approve` / `ta draft deny` pipeline
+- Auto-approve: trusted senders skip human review — reply sent immediately after agent drafts it
+- Confidence gate: agent self-rates confidence (0–1); below threshold always queues for review
+- Fully headless: `ta email run --dry-run` prints what would be sent without sending
 
 #### Items
 
-1. [ ] **Email response agent goal type**: New `GoalKind::EmailResponse { draft_id }`. Agent prompt includes: email body, conversation thread history (if available), project constitution, configured reply tone/persona from email.toml. Agent produces structured `EmailReply { to, subject, body }`.
+1. [ ] **`~/.config/ta/email-constitution.md`**: User-authored persona file. Injected into every reply goal prompt. Covers: writing style, sign-off, topics to engage or decline, escalation language, out-of-office rules. `ta email setup` creates a commented starter template if absent.
 
-2. [ ] **Reply staging**: Agent-produced reply stored as `EmailReplyArtifact` in the draft package. `ta draft view <id>` shows the original email + proposed reply side-by-side. `ta draft approve <id>` sends the reply via the provider.
+2. [ ] **Email reply goal**: Each inbox entry spawns a goal with prompt: `"Draft a reply to this email in the voice described in the attached constitution. Email: [body]. Thread history: [N prior messages]. Reply as: [address]."` Agent produces `EmailReply { to, cc, subject, body, confidence }`.
 
-3. [ ] **Auto-approve rules** (`.ta/connectors/email.toml`):
+3. [ ] **Reply draft staging**: Agent reply stored as a TA draft artifact alongside the original email. `ta draft view <id>` shows original message + proposed reply side-by-side. `ta draft approve <id>` sends via the configured provider and marks the inbox entry as replied.
+
+4. [ ] **Auto-approve rules** (extends `~/.config/ta/email.toml`):
    ```toml
    [[auto_approve]]
-   from_address = ["noreply@github.com"]
-   action = "discard"        # don't reply to notification emails
-
-   [[auto_approve]]
-   from_domain = ["trusted-partner.com"]
-   reply_filter = "support-requests"   # only auto-approve if matched this filter
-   max_confidence = 0.85     # agent must rate confidence ≥ 0.85 to skip review
+   from_domain = ["trusted-client.com"]
+   filter = "client-questions"     # only auto-approve if matched this filter
+   min_confidence = 0.85           # agent must self-rate ≥ 0.85
    ```
+   Replies below `min_confidence` or not matching an auto-approve rule always queue for human review.
 
-4. [ ] **Confidence scoring**: Agent includes `confidence: f32` (0.0–1.0) in its reply artifact. Low-confidence replies always require human review regardless of auto-approve rules. Confidence shown in `ta draft view`.
+5. [ ] **`ta email run`**: Processes all pending inbox entries. For each: run reply goal → build draft → check auto-approve rules → send immediately or queue for review. Prints summary: N sent (auto-approved), M queued for review, K skipped (discard rule). Headless-safe: `--dry-run`, `--json`, exits 0/1.
 
-5. [ ] **`ta email workflow run`**: Processes all pending staged emails in order. For each: spawn agent goal → build draft → apply auto-approve rules → either send immediately or queue for human review. Prints summary: N sent, M queued for review, K skipped.
+6. [ ] **Daemon / cron scheduling**: `[email] run_interval_minutes = 30` in `daemon.toml`. Runs `ta email run` on schedule. Designed so cron or Windows Task Scheduler can call `ta email run` without daemon.
 
-6. [ ] **Daemon scheduler**: `[connectors.email] workflow_interval_minutes = 30` in `daemon.toml` runs `ta email workflow run` on schedule. Shares the poll interval or can be set independently.
+7. [ ] **`ta email run --since <datetime>`**: Override the watermark for a one-off catch-up run ("Manage outstanding emails since last Monday").
 
-7. [ ] **Cron compatibility**: `ta email workflow run` is fully headless — exits 0 on success, 1 on error, prints machine-readable JSON summary with `--json`. Suitable for `crontab` or Windows Task Scheduler without daemon running.
+8. [ ] **Tests**: Reply goal produces valid `EmailReply`; auto-approve fires on domain + confidence threshold; low-confidence held for review; `--dry-run` prints plan without sending; `ta draft approve` triggers send and marks inbox entry replied; cron exit codes correct.
 
-8. [ ] **`ta email status`**: Shows inbox stats — pending staged, pending review, sent today, auto-approved today, provider connection health.
-
-9. [ ] **Tests**: Agent reply staged correctly; auto-approve fires on domain match + confidence threshold; low-confidence reply held for review; `ta email workflow run --dry-run` prints plan without sending; cron exit codes correct.
-
-10. [ ] **USAGE.md**: "Email Auto-Response" section — how agent matching works, constitution influence on replies, auto-approve rule syntax, cron setup example, how to review and approve staged replies.
+9. [ ] **USAGE.md**: "Auto-Reply Workflow" section — constitution file format, auto-approve rules, cron example, how to review queued replies, `--dry-run` for testing.
 
 #### Version: `0.15.10-alpha`
 
