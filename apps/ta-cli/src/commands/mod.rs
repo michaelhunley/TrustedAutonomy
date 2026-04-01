@@ -25,6 +25,7 @@ pub mod new;
 pub mod notify;
 pub mod office;
 pub mod operations;
+pub mod persona;
 pub mod plan;
 pub mod plugin;
 pub mod policy;

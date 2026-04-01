@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use axum::extract::State;
+use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 use serde::{Deserialize, Serialize};
@@ -255,6 +256,115 @@ fn spawn_directory_picker() -> Result<Option<String>, String> {
     }
 
     Err("No directory picker available (install zenity or kdialog)".to_string())
+}
+
+/// Request body for project init.
+#[derive(Deserialize)]
+pub struct ProjectInitRequest {
+    pub path: String,
+    pub name: String,
+}
+
+/// `POST /api/project/init` — Create a new TA project at a given path.
+///
+/// Creates `.ta/`, writes starter `workflow.toml` and empty `PLAN.md`.
+pub async fn init_project(
+    State(_state): State<Arc<AppState>>,
+    Json(body): Json<ProjectInitRequest>,
+) -> impl IntoResponse {
+    if body.path.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "path is required"})),
+        )
+            .into_response();
+    }
+    if body.name.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "name is required"})),
+        )
+            .into_response();
+    }
+
+    let project_path = std::path::PathBuf::from(body.path.trim());
+    let ta_dir = project_path.join(".ta");
+
+    // Create .ta/ directory structure.
+    for sub in &[
+        "goals",
+        "pr_packages",
+        "memory",
+        "events",
+        "personas",
+        "workflows",
+    ] {
+        if let Err(e) = std::fs::create_dir_all(ta_dir.join(sub)) {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": format!("Could not create .ta/{}: {}", sub, e),
+                })),
+            )
+                .into_response();
+        }
+    }
+
+    // Write a starter PLAN.md.
+    let plan_content = format!(
+        "# {name} — Development Plan\n\n\
+         ## Versioning\n\n\
+         Version format: `MAJOR.MINOR.PATCH-alpha`. Phases map directly to semver.\n\n\
+         ---\n\
+         <!-- Add phases below using `ta plan add` or the Plan tab in Studio. -->\n",
+        name = body.name.trim()
+    );
+    let plan_path = project_path.join("PLAN.md");
+    if let Err(e) = std::fs::write(&plan_path, &plan_content) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": format!("Could not write PLAN.md: {}", e),
+            })),
+        )
+            .into_response();
+    }
+
+    // Write a starter workflow.toml.
+    let workflow_toml = format!(
+        "[workflow]\n\
+         name = \"{name}\"\n\
+         enforce_phase_order = \"warn\"\n\
+         context_budget_chars = 0\n\n\
+         [build]\n\
+         # commands = [\"cargo build\"]\n\n\
+         [verify]\n\
+         # commands = [\"cargo test\", \"cargo clippy\"]\n\
+         # on_failure = \"block\"\n",
+        name = body.name.trim()
+    );
+    if let Err(e) = std::fs::write(ta_dir.join("workflow.toml"), workflow_toml) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": format!("Could not write workflow.toml: {}", e),
+            })),
+        )
+            .into_response();
+    }
+
+    tracing::info!(
+        path = %project_path.display(),
+        name = %body.name,
+        "New project initialized via Studio"
+    );
+
+    Json(serde_json::json!({
+        "ok": true,
+        "path": project_path.display().to_string(),
+        "name": body.name.trim(),
+    }))
+    .into_response()
 }
 
 #[cfg(test)]

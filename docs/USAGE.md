@@ -193,7 +193,126 @@ name = "My Pipeline Project"
 
 This name appears in the Recent Projects list and in the dashboard subtitle.
 
+### Creating a New Project from Studio
+
+The **Projects** tab includes a **New Project** section that initializes a TA project without opening a terminal:
+
+1. Enter a **project name** (e.g., "My Pipeline")
+2. Enter the **directory path** where the project should live (the directory will be created if it does not exist)
+3. Click **Initialize Project**
+
+This calls `POST /api/project/init`, which:
+- Creates `.ta/` and its subdirectories (`goals/`, `pr_packages/`, `memory/`, `events/`, `personas/`, `workflows/`)
+- Writes a starter `workflow.toml` with `[workflow]`, `[build]`, and `[verify]` stubs
+- Writes an empty `PLAN.md` with a semver versioning header
+
+After initialization, the project is automatically opened in Studio and the Dashboard tab loads.
+
+To add plan phases without a terminal, switch to the **Plan** tab and use the "Add to Plan" form. To generate a starter set of phases from a description, use `POST /api/plan/generate` or the Plan tab's generate flow.
+
 No CLI commands are needed for the review loop once the daemon is running.
+
+---
+
+## Agent Personas
+
+Agent personas let you define *who* the agent acts as — a system prompt, behavioral rules, and tool restrictions — separate from the choice of agent framework (Claude Code, Codex, etc.).
+
+Personas are stored in `.ta/personas/<name>.toml`. They are applied at goal start with `--persona <name>`.
+
+### Persona Config Format
+
+```toml
+[persona]
+name        = "financial-analyst"
+description = "Analyzes financial data and produces structured reports"
+system_prompt = """
+You are a financial analyst. Your outputs are always structured:
+executive summary, key metrics, risks, and recommended actions.
+Never speculate without data.
+"""
+
+[capabilities]
+allowed_tools   = ["read", "bash"]   # empty = no restriction
+forbidden_tools = ["write"]          # agent may not use these tools
+
+[style]
+output_format       = "markdown"
+max_response_length = "2000 words"
+```
+
+### Creating a Persona
+
+**From the CLI:**
+
+```bash
+# Interactive wizard (prompts for description and system prompt)
+ta persona new financial-analyst
+
+# Non-interactive with flags
+ta persona new financial-analyst \
+  --description "Analyzes financial data" \
+  --system-prompt "You are a financial analyst..." \
+  --forbidden-tools write
+```
+
+**From Studio:** Open the **Personas** tab, fill in the form, and click **Save Persona**.
+
+### Listing and Inspecting Personas
+
+```bash
+ta persona list          # show all personas in .ta/personas/
+ta persona show <name>   # show full details of a persona
+```
+
+### Applying a Persona to a Goal
+
+```bash
+ta run "Analyze Q3 financials" --persona financial-analyst
+```
+
+The persona's system prompt and tool restrictions are appended to CLAUDE.md in the staging workspace, after the plan context injection.
+
+---
+
+## Workflows
+
+### Workflows Tab in Studio
+
+The **Workflows** tab in TA Studio lists all workflow TOML files from `.ta/workflows/`. Each entry shows:
+
+- **Name** — derived from the workflow ID
+- **Trigger** — `scheduled` (if the TOML contains a `[trigger]` section or `cron`) or `manual`
+- **Status** — current run state (`idle`, `running`)
+
+### Creating a Workflow from a Description
+
+1. Open the **Workflows** tab
+2. Enter a plain-English description in the "Describe what this workflow should do" field
+3. Click **Generate Workflow TOML**
+4. Review and edit the generated TOML in the inline editor
+5. Click **Save Workflow**
+
+The workflow TOML is saved to `.ta/workflows/<id>.toml` and appears in the list immediately.
+
+**API:** `POST /api/workflow/generate` returns a starter TOML; `POST /api/workflow/save` writes the file.
+
+### Workflow TOML Format
+
+```toml
+[workflow]
+name = "email-manager"
+description = "Check inbox every 30 min and draft replies"
+
+[trigger]
+type = "schedule"
+cron = "*/30 * * * *"   # Every 30 minutes
+
+[[steps]]
+name = "process-inbox"
+goal = "Check inbox and draft replies"
+agent = "claude-code"
+```
 
 ---
 
@@ -337,26 +456,10 @@ just icons
 ```bash
 mkdir my-project && cd my-project
 git init
-gh repo create <org>/<repo> --private --source=. --remote=origin  # create GitHub remote
 ta init run --template rust-workspace   # or: typescript-monorepo, python-ml, go-service, generic
-ta setup vcs                            # writes .gitignore entries for TA local state
-ta setup wizard                         # configure API key, model, constitution basics
-git add . && git commit -m "init: project with TA configuration"
-git push -u origin main
 ```
 
-This creates `.ta/` with workflow config, agent configs, policy, memory settings, and a `.taignore`. `ta setup vcs` is a required separate step — it writes the `.gitignore` block that excludes TA's local runtime state (staging dirs, PID files, lock files) from version control.
-
-**Then generate a PLAN.md** to enable the semver versioning process:
-
-```bash
-ta run "Create PLAN.md for <project> — <one sentence description>. Phases should cover: <phase topics>. Start at v0.1.0."
-# review and approve:
-ta draft view
-ta draft approve <id>
-```
-
-Without a PLAN.md, the version cannot track against plan phases. Generate it before running any development goals.
+This creates `.ta/` with workflow config, agent configs, policy, memory settings, and a `.taignore`. Everything is generated as a reviewable draft.
 
 **Existing project** -- auto-detect what's in use:
 
@@ -8890,6 +8993,9 @@ TA has a working end-to-end workflow: staging isolation, agent wrapping, draft r
 | v0.14.7 | Draft view polish — agent decision log, collapsible HTML | Pending |
 | v0.14.9 | Qwen3.5 local agent profiles & Ollama install flow | Done |
 | v0.14.9.1 | Shell paste & tail reliability (Ctrl+V clipboard, auto-tail resume) | Done |
+| v0.14.18 | TA Studio: Multi-Project Support, Project Browser & Platform Launchers | Done |
+| v0.14.19 | TA Studio: Plan Tab (Phase Browser, One-Click Run & Custom Goals) | Done |
+| v0.14.20 | TA Studio: Workflows, Agent Personas & New Project Wizard | Done |
 | v0.15.0 | VS Code extension | Pending |
 | v0.15.1 | JetBrains plugin (PyCharm / WebStorm / IntelliJ) | Pending |
 | v0.15.2 | Neovim plugin | Pending |

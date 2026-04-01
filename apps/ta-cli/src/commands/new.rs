@@ -890,6 +890,7 @@ fn run_new(
         false, // quiet = false
         None,  // existing_goal_id = None
         None,  // workflow = default (single-agent)
+        None,  // persona_name = None
     )?;
 
     // 12. Post-creation handoff.

@@ -22,6 +22,7 @@ pub mod events;
 pub mod goal_run;
 pub mod history;
 pub mod operations;
+pub mod persona;
 pub mod store;
 pub mod velocity;
 
@@ -31,5 +32,6 @@ pub use events::{EventDispatcher, LogSink, NotificationSink, TaEvent};
 pub use goal_run::{slugify_title, GoalRun, GoalRunState};
 pub use history::{GoalHistoryEntry, GoalHistoryLedger, HistoryFilter};
 pub use operations::{ActionSeverity, ActionStatus, CorrectiveAction, OperationsLog};
+pub use persona::{PersonaCapabilities, PersonaConfig, PersonaInner, PersonaStyle, PersonaSummary};
 pub use store::GoalRunStore;
 pub use velocity::{GoalOutcome, VelocityAggregate, VelocityEntry, VelocityStore};

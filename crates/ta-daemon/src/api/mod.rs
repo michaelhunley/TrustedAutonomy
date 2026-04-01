@@ -19,6 +19,7 @@ pub mod health;
 pub mod input;
 pub mod interactions;
 pub mod notifications;
+pub mod persona;
 pub mod plan;
 pub mod project_browser;
 pub mod project_new;
@@ -346,6 +347,8 @@ pub fn build_api_router(state: Arc<AppState>) -> Router {
         .route("/api/plan/phases", get(plan::get_plan_phases))
         .route("/api/plan/phase/add", post(plan::add_plan_phase))
         .route("/api/goal/start", post(plan::start_goal))
+        // Plan generation (v0.14.20).
+        .route("/api/plan/generate", post(plan::generate_plan_phases))
         // Project browser routes (v0.14.18).
         .route("/api/project/open", post(project_browser::open_project))
         .route("/api/project/list", get(project_browser::list_projects))
@@ -353,6 +356,14 @@ pub fn build_api_router(state: Arc<AppState>) -> Router {
             "/api/project/browse",
             post(project_browser::browse_projects),
         )
+        // New project init (v0.14.20).
+        .route("/api/project/init", post(project_browser::init_project))
+        // Persona routes (v0.14.20).
+        .route("/api/personas", get(persona::list_personas))
+        .route("/api/persona/save", post(persona::save_persona))
+        // Workflow generate/save (v0.14.20).
+        .route("/api/workflow/generate", post(workflow::generate_workflow))
+        .route("/api/workflow/save", post(workflow::save_workflow))
         // Proactive notifications (v0.13.1.6).
         .route("/api/notifications", get(notifications::get_notifications))
         // Settings API (v0.14.13).

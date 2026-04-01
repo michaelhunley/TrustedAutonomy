@@ -213,6 +213,7 @@ fn run_init(
         false,            // quiet = false
         None,             // existing_goal_id
         None,             // workflow = default (single-agent)
+        None,             // persona_name = None
     )?;
 
     println!();
