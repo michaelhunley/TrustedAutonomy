@@ -9038,108 +9038,141 @@ supervisor = true         # run supervisor confidence check (default: true)
 
 **Design**:
 - `MessagingAdapter` protocol: same JSON-over-stdio pattern as `VcsPluginProtocol`
-- Built-in plugins: `ta-adapter-gmail`, `ta-adapter-outlook`, `ta-adapter-imap` (in `plugins/messaging/`)
+- Built-in plugins: `ta-messaging-gmail`, `ta-messaging-outlook`, `ta-messaging-imap` (in `plugins/messaging/`)
 - Plugin discovery: `~/.config/ta/plugins/messaging/`, `.ta/plugins/messaging/`, `$PATH` (prefix `ta-messaging-`)
 - Credentials stored in OS keychain via `keyring` crate — plugin calls `ta adapter credentials get <key>` to retrieve; `ta adapter credentials set <key>` to store. Never written to disk in plaintext.
 - `ta adapter setup messaging/<plugin>` — one-time credential capture wizard (OAuth browser flow or masked IMAP prompt)
 - Community plugins (Exchange on-prem, Fastmail, etc.) follow the same protocol with no changes to core
+
+**Hard constraint — `send` is not a goal-accessible operation**: Plugins expose `create_draft` and `fetch`; `send` is intentionally absent from the protocol. The user sends from their native email client. TA never sends on behalf of the user. This is a deliberate safety boundary enforced at the protocol level, not by config. The `SocialAdapter` (v0.15.12) follows the same pattern.
 
 **Protocol messages** (adapter ↔ plugin, JSON lines):
 ```
 → { "op": "fetch", "since": "2026-03-31T00:00:00Z", "account": "me@example.com" }
 ← { "messages": [{ "id", "from", "to", "subject", "body_text", "body_html", "thread_id", "received_at" }] }
 
-→ { "op": "send", "reply": { "to", "subject", "body", "in_reply_to" } }
-← { "ok": true } | { "ok": false, "error": "..." }
+→ { "op": "create_draft", "draft": { "to", "subject", "body_html", "in_reply_to", "thread_id" } }
+← { "ok": true, "draft_id": "gmail-draft-abc123" }   # native provider draft ID
+
+→ { "op": "draft_status", "draft_id": "gmail-draft-abc123" }
+← { "state": "drafted" | "sent" | "discarded" }      # provider-reported state; best-effort
 
 → { "op": "health" }
 ← { "ok": true, "address": "me@example.com", "provider": "gmail" }
 ```
 
+`create_draft` writes to the provider's native Drafts folder (Gmail `drafts.create`, Outlook `messages` with `isDraft:true`, IMAP APPEND to Drafts mailbox). The user sees the draft in their email client, edits freely, and sends when ready. TA records the `draft_id` in its audit log and can poll `draft_status` to track whether it was sent or discarded.
+
 #### Items
 
-1. [ ] **`MessagingAdapter` protocol spec** (`crates/ta-submit/src/messaging_plugin_protocol.rs`): Request/response enums mirroring `VcsPluginProtocol`. `fetch`, `send`, `health`, `capabilities` ops. Shared `ExternalMessagingAdapter` struct wrapping the subprocess.
+1. [ ] **`MessagingAdapter` protocol spec** (`crates/ta-submit/src/messaging_plugin_protocol.rs`): Request/response enums. `fetch`, `create_draft`, `draft_status`, `health`, `capabilities` ops. No `send` op — enforced at the type level (no variant exists). Shared `ExternalMessagingAdapter` struct wrapping the subprocess.
 
 2. [ ] **Plugin discovery** (`crates/ta-submit/src/messaging_adapter.rs`): Search `~/.config/ta/plugins/messaging/`, `.ta/plugins/messaging/`, `$PATH` for `ta-messaging-*` executables. Return first match for a given provider name. Clear error if no plugin found for configured provider.
 
 3. [ ] **`ta adapter setup messaging/<plugin>`**: Credential wizard. Gmail/Outlook: OAuth2 browser flow (open consent URL, localhost callback, store refresh token in keychain under `ta-messaging:<address>`). IMAP: masked prompt for host/port/username/app-password, validate connection, store in keychain. Prints health check result on success.
 
-4. [ ] **`plugins/messaging/ta-messaging-gmail`**: Rust binary. Implements `fetch` via Gmail REST API (OAuth2 refresh), `send` via Gmail API. Retrieves token from keychain via `ta adapter credentials get`. Packaged with the TA installer.
+4. [ ] **`plugins/messaging/ta-messaging-gmail`**: Rust binary. Implements `fetch` via Gmail REST API (OAuth2 refresh), `create_draft` via `drafts.create` API, `draft_status` via `drafts.get`. Retrieves token from keychain. Packaged with the TA installer.
 
-5. [ ] **`plugins/messaging/ta-messaging-outlook`**: Rust binary. Implements `fetch` via Microsoft Graph API, `send` via Graph API. Same keychain retrieval pattern.
+5. [ ] **`plugins/messaging/ta-messaging-outlook`**: Rust binary. Implements `fetch` via Microsoft Graph API, `create_draft` via `POST /messages` with `isDraft:true`, `draft_status` via `GET /messages/{id}`. Same keychain retrieval pattern.
 
-6. [ ] **`plugins/messaging/ta-messaging-imap`**: Rust binary. Implements `fetch` via IMAP (TLS/STARTTLS, `async-imap`), `send` via SMTP. Watermark-based — passes `since` as IMAP `SINCE` search criterion.
+6. [ ] **`plugins/messaging/ta-messaging-imap`**: Rust binary. Implements `fetch` via IMAP (TLS/STARTTLS, `async-imap`), `create_draft` via IMAP APPEND to Drafts mailbox, `draft_status` best-effort (checks if message UID still in Drafts or has moved to Sent). Watermark-based `fetch` via IMAP `SINCE`.
 
 7. [ ] **`ta adapter health messaging`**: Calls `health` op on each configured messaging plugin, prints provider, connected address, last-fetch timestamp. No credentials printed.
 
-8. [ ] **Tests**: Protocol round-trip with a mock plugin script; discovery finds plugin in each search path; credentials set/get via mocked keychain; `health` op returns address; IMAP `since` filter applied correctly.
+8. [ ] **`DraftEmailRecord`** (`crates/ta-goal/src/messaging_audit.rs`): Audit struct stored per goal: `draft_id`, `provider`, `to`, `subject`, `created_at`, `state`, `goal_id`, `constitution_check_passed`, `supervisor_score`. Persisted in `.ta/messaging-audit.jsonl`. `ta audit messaging` prints the log.
 
-9. [ ] **USAGE.md**: "Messaging Adapters" section — plugin protocol, how to set up each built-in provider, how to write a community plugin.
+9. [ ] **Tests**: Protocol round-trip with a mock plugin script; `send` op rejected at type level (no variant); `create_draft` returns provider draft_id; discovery finds plugin in each search path; credentials set/get via mocked keychain; `draft_status` transitions drafted→sent.
+
+10. [ ] **USAGE.md**: "Messaging Adapters" section — plugin protocol, how to set up each built-in provider, `create_draft` vs `send` design rationale, how to write a community plugin.
 
 #### Version: `0.15.9-alpha`
 
 ---
 
-### v0.15.10 — Email Management Workflow Template
+### v0.15.10 — Email Assistant Workflow (`email-manager`)
 <!-- status: pending -->
-**Goal**: A TA workflow template that drives the `MessagingAdapter` to manage email: fetch since last run → apply filter rules → run reply goal in user's voice → stage for review → apply auto-approve rules → send. Scheduled via the daemon scheduler or cron/Task Scheduler. The entire behavior is configured in a workflow TOML — no bespoke command surface. Adding calendar, Slack, or SMS later is a new adapter plugin + new workflow template, not new core commands.
+**Goal**: A TA workflow template that drives the `MessagingAdapter` to assist with email: fetch since last run → filter → run a reply-drafting goal per message → supervisory review against the constitution → push the approved draft to the user's native email Drafts folder. The user reviews, edits, and sends from their email client. TA never sends. Scheduled via daemon scheduler or cron/Task Scheduler.
 
 **Depends on**: v0.15.9 (`MessagingAdapter` plugins), v0.14.x workflow engine, v0.13.9 (constitution for user voice)
 
-**Design**:
-- Workflow template: `~/.config/ta/workflows/email-manager.toml` (or `.ta/workflows/email-manager.toml` for project inbox)
-- Workflow steps: `fetch` → `filter` → `for_each: reply_goal` → `stage` → `auto_approve` → `send`
-- Run via `ta workflow run email-manager` or daemon schedule (`run_every = "30min"` in workflow TOML)
-- Fully headless: `ta workflow run email-manager --dry-run`, `--json`, exits 0/1 — cron/Task Scheduler compatible
-- `--since <datetime>` override: "Manage outstanding emails since last Monday"
+**Core design principle**: TA's role ends at draft creation. The user's email client is the review and send surface. The supervisory agent enforces the constitution before the draft even reaches the inbox — not as an afterthought. There is no `auto_approve` path that bypasses human review; the only variation is whether the supervisor flags something for explicit TA review before it reaches the email Drafts folder, or lets it through directly.
+
+**Workflow steps**:
+```
+fetch(since: watermark)
+  → filter rules (ignore / flag / reply / escalate)
+  → [reply] spawn reply-drafting goal
+               agent: compose reply using constitution + thread context
+               supervisor: check voice, commitments, policy, confidence score
+               │
+            ┌──┴────────────────────────────────────────────────┐
+            │ pass (confidence ≥ threshold)                      │ flag
+            ▼                                                     ▼
+   MessagingAdapter.create_draft()                   TA review queue
+   → draft in Gmail/Outlook Drafts folder            → user sees flag reason
+   → DraftEmailRecord in audit log                     before any draft is pushed
+            │
+            ▼
+   user reviews, edits, sends from email client
+   TA polls draft_status (optional); records Sent/Discarded in audit log
+```
 
 **Workflow config** (`~/.config/ta/workflows/email-manager.toml`):
 ```toml
 [workflow]
-name = "email-manager"
-adapter = "messaging/gmail"
-account = "me@example.com"
-run_every = "30min"          # daemon scheduler; omit to run manually / via cron
-constitution = "~/.config/ta/email-constitution.md"
+name            = "email-manager"
+adapter         = "messaging/gmail"
+account         = "me@example.com"
+run_every       = "30min"
+constitution    = "~/.config/ta/email-constitution.md"
+
+[supervisor]
+# confidence below this threshold → TA review queue instead of Drafts folder
+min_confidence  = 0.80
+# always flag if the reply contains any of these (belt-and-suspenders)
+flag_if_contains = ["commit", "guarantee", "by tomorrow", "I promise"]
 
 [[filter]]
-name = "client-questions"
-from_domain = ["client.com", "partner.org"]
+name            = "client-questions"
+from_domain     = ["client.com", "partner.org"]
 subject_contains = ["?", "help", "question"]
-action = "reply"             # reply | flag | ignore | discard
+action          = "reply"      # reply | flag | ignore | escalate
 
 [[filter]]
-name = "newsletters"
+name            = "newsletters"
 subject_contains = ["unsubscribe", "newsletter"]
-action = "ignore"
-
-[[auto_approve]]
-from_domain = ["trusted-client.com"]
-filter = "client-questions"
-min_confidence = 0.85        # agent self-rates; below threshold → human review
+action          = "ignore"
 ```
+
+`action = "escalate"` flags the message directly to the TA review queue without running a reply goal — for messages that need human judgment before any draft is attempted (e.g., legal or HR topics).
 
 #### Items
 
-1. [ ] **`email-constitution.md` template**: Created by `ta workflow init email-manager` if absent. Documents voice, sign-off, topics to engage/decline, escalation language, out-of-office rules. Injected into every reply goal prompt.
+1. [ ] **`email-constitution.md` template**: Created by `ta workflow init email-manager` if absent. Documents voice, sign-off style, topics to engage/decline, escalation triggers, out-of-office language. Injected verbatim into every reply goal prompt and supervisor check.
 
-2. [ ] **Workflow fetch step**: Calls `MessagingAdapter.fetch(since: last_watermark)`. Stores watermark per workflow instance in `~/.config/ta/workflow-state/<name>.json`. Updates on successful completion.
+2. [ ] **Workflow fetch step**: Calls `MessagingAdapter.fetch(since: last_watermark)`. Stores watermark in `~/.config/ta/workflow-state/email-manager.json`. Advances watermark on successful completion of each batch.
 
-3. [ ] **Filter step**: Evaluates each message against `[[filter]]` rules in order (domain glob, subject keyword). First match wins. `ignore` drops the message; `discard` drops with no reply; `reply` queues for goal; `flag` queues for human review without running a goal.
+3. [ ] **Filter step**: Evaluates each message against `[[filter]]` rules in order. First match wins. `ignore` drops silently; `reply` queues for goal; `flag` sends directly to TA review queue; `escalate` sends to review queue with "requires human judgment" note.
 
-4. [ ] **Reply goal step**: For each `reply`-matched message, spawns a standard TA goal: prompt = email body + thread history (last N messages via `fetch`) + constitution. Agent produces `EmailReply { to, cc, subject, body, confidence }` as a draft artifact.
+4. [ ] **Reply-drafting goal step**: For each `reply`-matched message, spawns a TA goal: prompt = thread context (last N messages) + constitution + "compose a reply." Agent produces `EmailReply { to, cc, subject, body_html, confidence }`.
 
-5. [ ] **Auto-approve step**: After goal completes, evaluate `[[auto_approve]]` rules. If matched and `confidence ≥ min_confidence`, call `MessagingAdapter.send()` immediately. Otherwise place in `ta draft` queue for human review. `ta draft view <id>` shows original + proposed reply side-by-side.
+5. [ ] **Supervisory review step**: After each goal completes, supervisor agent checks the draft against the constitution: voice match, no unverified commitments, no policy keywords from `flag_if_contains`, confidence ≥ `min_confidence`. Pass → `create_draft`. Fail → TA review queue with the supervisor's flag reason shown to the user.
 
-6. [ ] **`ta workflow run email-manager --since <datetime>`**: One-off catch-up run overriding the watermark. Useful for "process everything since I left for holiday".
+6. [ ] **`create_draft` step**: Calls `MessagingAdapter.create_draft()`. Draft lands in the user's native email Drafts folder. Records `DraftEmailRecord` in `.ta/messaging-audit.jsonl`. Logs: goal_id, draft_id, to, subject, supervisor_score.
 
-7. [ ] **Daemon scheduling**: `run_every = "30min"` in workflow TOML registers with daemon scheduler. `ta workflow status email-manager` shows last run time, messages processed, sent, queued.
+7. [ ] **TA review queue entry** (for flagged items): Shows original message, proposed reply, supervisor flag reason, and two actions: "Push to Drafts anyway" or "Discard." If pushed, calls `create_draft` and logs `manually_approved: true`.
 
-8. [ ] **Cron / Task Scheduler**: `ta workflow run email-manager` is headless — no daemon required. Documents crontab and Windows Task Scheduler setup in USAGE.md.
+8. [ ] **`ta workflow run email-manager --since <datetime>`**: One-off catch-up run overriding the watermark. Useful for catching up after time away.
 
-9. [ ] **Tests**: Workflow fetch → filter → goal → auto-approve end-to-end with mock adapter; watermark advances; `--dry-run` prints plan without sending; below-threshold reply held for review; cron exit codes.
+9. [ ] **`ta audit messaging`**: Prints `DraftEmailRecord` log — date, to, subject, supervisor score, state (drafted/sent/discarded), manually_approved flag.
 
-10. [ ] **USAGE.md**: "Email Manager Workflow" section — init, constitution format, filter + auto-approve config, scheduling options, `--since` usage, reviewing staged replies.
+10. [ ] **Daemon scheduling**: `run_every = "30min"` in workflow TOML registers with daemon scheduler. `ta workflow status email-manager` shows last run, messages processed, drafts created, flagged for review.
+
+11. [ ] **Cron / Task Scheduler**: `ta workflow run email-manager` is headless — no daemon required. Documents crontab and Windows Task Scheduler setup.
+
+12. [ ] **Tests**: Full pipeline with mock adapter: fetch → filter → reply goal → supervisor pass → `create_draft` called with correct body; supervisor fail → review queue (no draft created); `escalate` filter → review queue without goal; `--dry-run` prints plan, no drafts created; watermark advances only on success; `flag_if_contains` triggers flag.
+
+13. [ ] **USAGE.md**: "Email Assistant Workflow" section — setup, constitution format, filter actions, supervisor config, reviewing flagged items, `--since`, scheduling, `ta audit messaging`.
 
 #### Version: `0.15.10-alpha`
 
@@ -9251,6 +9284,77 @@ bmad_home          = "~/.bmad"        # set when bmad selected
 16. [ ] **USAGE.md**: "First-Time Setup" section — what `ta onboard` does, how to re-run it, `--status` and `--reset` flags, how to configure API key separately (`ta config set api_key`), note on BMAD and Claude-Flow as optional but recommended for complex projects.
 
 #### Version: `0.15.11-alpha`
+
+---
+
+### v0.15.12 — `SocialAdapter` Trait & Social Media Plugins
+<!-- status: pending -->
+**Goal**: A pluggable social media adapter layer using the same JSON-over-stdio plugin protocol as `MessagingAdapter`. Social platforms (LinkedIn, X/Twitter, Instagram, Buffer/Later) are discoverable plugins. TA can draft posts and schedule them in the platform's native draft/scheduled state — but **never publishes autonomously**. The same constitution and supervisory gate from v0.15.10 applies: all outbound content is checked against the user's voice policy before it reaches the platform.
+
+**Depends on**: v0.15.9 (`MessagingAdapter` pattern), v0.15.10 (supervisory review step — reused here), v0.13.9 (constitution)
+
+**Hard constraint — `publish` is not a goal-accessible operation**: Plugins expose `create_draft` and `create_scheduled` only. Publishing is done by the user in the platform's own UI or scheduler. Same enforced-at-type-level boundary as `MessagingAdapter`. A goal can produce a post ready to send, but the human finger presses the button.
+
+**Design**:
+- Same JSON-over-stdio protocol as `MessagingAdapter`; different op names where needed
+- Built-in plugins: `ta-social-linkedin`, `ta-social-x`, `ta-social-instagram`, `ta-social-buffer` (in `plugins/social/`)
+- Plugin discovery: `~/.config/ta/plugins/social/`, `.ta/plugins/social/`, `$PATH` (prefix `ta-social-`)
+- Credentials: OAuth2 via `ta adapter setup social/<plugin>`, stored in OS keychain
+
+**Protocol messages**:
+```
+→ { "op": "create_draft", "post": { "body", "media_urls": [], "reply_to_id": null } }
+← { "ok": true, "draft_id": "linkedin-draft-xyz" }
+
+→ { "op": "create_scheduled", "post": { "body", "media_urls": [] }, "scheduled_at": "2026-04-07T14:00:00Z" }
+← { "ok": true, "scheduled_id": "buffer-post-xyz", "scheduled_at": "2026-04-07T14:00:00Z" }
+
+→ { "op": "draft_status", "draft_id": "linkedin-draft-xyz" }
+← { "state": "draft" | "published" | "deleted" }
+
+→ { "op": "health" }
+← { "ok": true, "handle": "@username", "provider": "linkedin" }
+```
+
+**Workflow integration**: Goals that produce social content (`ta run "Write a LinkedIn post about the cinepipe launch"`) go through the same supervisory gate as email: constitution check → supervisor score → if pass, `create_draft` or `create_scheduled`; if flag, TA review queue first. The `[[supervisor]]` config from the email workflow template is reused as a shared concept.
+
+**Goal examples**:
+```bash
+ta run "Draft a LinkedIn post about the cinepipe project launch — professional tone,
+        highlight the AI pipeline angle, no specific client names"
+
+ta run "Write a week of X posts for the TA public alpha — one per day,
+        consistent voice, link to the GitHub release"
+        --persona content-writer
+```
+
+Each goal produces one or more `SocialDraftRecord` entries in `.ta/social-audit.jsonl` and native drafts/scheduled posts in the target platform.
+
+#### Items
+
+1. [ ] **`SocialAdapter` protocol spec** (`crates/ta-submit/src/social_plugin_protocol.rs`): `create_draft`, `create_scheduled`, `draft_status`, `health`, `capabilities` ops. No `publish` op at the type level. `SocialDraftRecord` audit struct (same shape as `DraftEmailRecord`).
+
+2. [ ] **Plugin discovery** (`crates/ta-submit/src/social_adapter.rs`): Same pattern as `MessagingAdapter` discovery. `ta-social-*` prefix on `$PATH`.
+
+3. [ ] **`ta adapter setup social/<plugin>`**: OAuth2 wizard for each platform. LinkedIn / X use standard OAuth2 PKCE browser flow. Instagram uses Meta Business OAuth. Buffer/Later use their own OAuth. Tokens stored in keychain under `ta-social:<platform>:<handle>`.
+
+4. [ ] **`plugins/social/ta-social-linkedin`**: Rust binary. `create_draft` via LinkedIn Draft Share API; `create_scheduled` via scheduled share. `draft_status` via share status endpoint.
+
+5. [ ] **`plugins/social/ta-social-x`**: Rust binary. `create_draft` via X draft endpoint (available to Basic+ API tier). `create_scheduled` via scheduled tweet. Note API tier requirements in USAGE.md.
+
+6. [ ] **`plugins/social/ta-social-buffer`**: Rust binary. Buffer supports draft and scheduled queues natively. `create_draft` → Buffer Draft; `create_scheduled` → Buffer Queue. Cross-platform: one Buffer account can schedule to LinkedIn, X, Instagram simultaneously — single plugin call creates all three.
+
+7. [ ] **Supervisory review** (reuse v0.15.10 supervisor step): Same constitution check + confidence scoring. Social-specific additions: check for unverified claims, check `flag_if_contains` from workflow config, check that no client names appear unless explicitly allowed.
+
+8. [ ] **`DraftSocialRecord`** audit log: `post_id`, `platform`, `handle`, `body_preview` (first 100 chars), `created_at`, `state`, `goal_id`, `supervisor_score`, `manually_approved`. Stored in `.ta/social-audit.jsonl`. `ta audit social` prints the log.
+
+9. [ ] **Workflow template** (`~/.config/ta/workflows/social-content.toml`): Template for recurring content goals (weekly posts, launch announcements). Supports `platforms = ["linkedin", "x"]` to fan out the same content across adapters. Constitution + supervisor config identical to email workflow.
+
+10. [ ] **Tests**: `publish` op rejected at type level; `create_draft` returns platform draft_id; supervisor fail → review queue, no draft created; Buffer plugin fans out to multiple platforms; `draft_status` reflects published state; `ta audit social` output correct.
+
+11. [ ] **USAGE.md**: "Social Media Adapter" section — plugin setup per platform, `create_draft` vs `create_scheduled`, supervisor config, reviewing flagged posts, `ta audit social`, API tier notes (X), Buffer as a cross-platform option.
+
+#### Version: `0.15.12-alpha`
 
 ---
 
