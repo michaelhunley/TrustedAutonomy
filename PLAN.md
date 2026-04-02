@@ -8748,18 +8748,18 @@ cat requirements.md | ta plan new --stdin
 ---
 
 ### v0.15.1 — Video Artifact Support (`ta-changeset`)
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Add `ArtifactKind::Video` to core TA so video files (`.mp4`, `.mov`, `.webm`) produced by ComfyUI, Wan2.1, or other render pipelines flow through the draft/review/apply pipeline. Video diffs show metadata comparison (duration, resolution, codec) rather than binary content.
 
 **Depends on**: v0.14.15, v0.15.0
 
 #### Items
 
-1. [ ] **`ArtifactKind::Video` in `ta-changeset`**: `ArtifactKind::Video { width: Option<u32>, height: Option<u32>, fps: Option<f32>, duration_secs: Option<f32>, format: Option<String>, frame_count: Option<u32> }`. `is_video()` and `display_label()` helpers.
+1. [x] **`ArtifactKind::Video` in `ta-changeset`**: `ArtifactKind::Video { width: Option<u32>, height: Option<u32>, fps: Option<f32>, duration_secs: Option<f32>, format: Option<String>, frame_count: Option<u32> }`. `is_video()`, `display_label()`, and `video_metadata_summary()` helpers. `PartialEq` only (f32 precludes `Eq`).
 
-2. [ ] **`ta draft view` rendering**: Video diff suppressed; shows metadata summary: "Video: 1920×1080, 24fps, 6.2s, MP4". If both staging and source exist, shows delta ("duration: 6.2s → 8.1s").
+2. [x] **`ta draft view` rendering**: Video diff suppressed; shows "Video artifact:" header with metadata summary (e.g. "Video: 1920×1080, 24fps, 6.2s, MP4") and "[Binary video — text diff suppressed]". `render_video_artifact_set_summary()` for set-level summaries (e.g. "2 MP4 video files, 1920×1080, 24fps").
 
-3. [ ] **Unit tests**: Round-trip serialize/deserialize. `is_video()`, `display_label()`. Diff suppressed. Metadata summary lines.
+3. [x] **Unit tests**: Round-trip serialize/deserialize (full and minimal). `is_video()`, `display_label()`. Diff suppressed (AlwaysPanic provider). Metadata summary lines. Set summary (multiple, single, empty, no metadata).
 
 #### Version: `0.15.1-alpha`
 
