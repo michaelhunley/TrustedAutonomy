@@ -10,8 +10,41 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  version-check:
+    name: Version consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify Cargo.toml, CLAUDE.md, and .release.toml agree on version
+        run: |
+          # Cargo.toml is the single source of truth for semver.
+          CARGO_VER=$(grep '^version' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+
+          # CLAUDE.md must echo it for agent context.
+          CLAUDE_VER=$(grep 'Current version' CLAUDE.md | head -1 | sed "s/.*\`\(.*\)\`.*/\1/")
+
+          # .release.toml must not be present with a stale version comment.
+          # (It doesn't store version directly — Cargo.toml is authoritative — so we
+          # just verify the two human-editable files agree with each other.)
+
+          echo "Cargo.toml version : $CARGO_VER"
+          echo "CLAUDE.md version  : $CLAUDE_VER"
+
+          if [ "$CARGO_VER" != "$CLAUDE_VER" ]; then
+            echo ""
+            echo "ERROR: Version mismatch."
+            echo "  Cargo.toml says: $CARGO_VER"
+            echo "  CLAUDE.md says:  $CLAUDE_VER"
+            echo ""
+            echo "Fix: run ./scripts/bump-version.sh $CARGO_VER"
+            echo "  or update CLAUDE.md manually to match Cargo.toml."
+            exit 1
+          fi
+          echo "OK: versions consistent ($CARGO_VER)"
+
   lint-and-test:
     name: Lint and Test
+    needs: version-check
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -50,6 +83,7 @@ jobs:
   # Windows build verification (v0.9.1)
   windows-build:
     name: Windows Build
+    needs: version-check
     runs-on: windows-latest
     steps:
       - name: Checkout repository

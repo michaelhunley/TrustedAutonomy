@@ -400,18 +400,37 @@ jobs:
       - name: Build release body
         id: release_body
         run: |
-          # Start with release notes if .release-draft.md was committed
+          TAG="${{ steps.get_version.outputs.version }}"
+
+          # Read metadata from .release.toml (single source of truth for non-semver fields).
+          # Fall back to empty string if a field is absent so the release never fails silently.
+          read_toml() {
+            local key="$1"
+            grep "^${key}" .release.toml 2>/dev/null \
+              | head -1 \
+              | sed 's/^[^=]*= *"\(.*\)"/\1/'
+          }
+          TITLE_SUFFIX="$(read_toml title_suffix)"
+          CHANGES_SINCE="$(read_toml changes_since)"
+          LAST_RELEASE_TAG="$(read_toml last_release_tag)"
+
+          # Extract semver from tag (strips leading non-numeric prefix like "public-alpha-v").
+          CURRENT_VERSION=$(echo "$TAG" | grep -oE '[0-9]+\.[0-9]+\.[0-9].*')
+
+          # Expand template tokens in .release-draft.md, then build the body.
           BODY=""
           if [ -f .release-draft.md ]; then
-            BODY="$(cat .release-draft.md)"
+            BODY=$(cat .release-draft.md \
+              | sed "s/\${current_version}/${CURRENT_VERSION}/g" \
+              | sed "s/\${title_suffix}/${TITLE_SUFFIX}/g" \
+              | sed "s/\${changes_since}/${CHANGES_SINCE}/g" \
+              | sed "s/\${last_release_tag}/${LAST_RELEASE_TAG}/g")
             BODY="${BODY}
 
-          ---
+---
 
-          "
+"
           fi
-
-          TAG="${{ steps.get_version.outputs.version }}"
 
           # Append installation instructions
           BODY="${BODY}### Installation
@@ -504,8 +523,18 @@ jobs:
             PRERELEASE_FLAG="--prerelease"
           fi
 
+          # Build release title from .release.toml title_suffix + extracted semver.
+          TITLE_SUFFIX=$(grep '^title_suffix' .release.toml 2>/dev/null \
+            | head -1 | sed 's/^[^=]*= *"\(.*\)"/\1/')
+          CURRENT_VERSION=$(echo "$TAG" | grep -oE '[0-9]+\.[0-9]+\.[0-9].*')
+          if [ -n "$TITLE_SUFFIX" ]; then
+            RELEASE_TITLE="TA v${CURRENT_VERSION} — ${TITLE_SUFFIX}"
+          else
+            RELEASE_TITLE="TA ${TAG}"
+          fi
+
           gh release create "$TAG" \
-            --title "Release $TAG" \
+            --title "$RELEASE_TITLE" \
             --notes-file release-body.md \
             --draft \
             $PRERELEASE_FLAG

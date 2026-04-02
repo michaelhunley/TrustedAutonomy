@@ -1,0 +1,28 @@
+# .release.toml — canonical release metadata registry
+#
+# version is authoritative in Cargo.toml [workspace.package].
+# Everything here is non-semver metadata that Cargo doesn't track.
+#
+# Update with:  ./scripts/bump-version.sh <new-version> [options]
+# Read by:      release.yml (token expansion in release body)
+#               scripts/bump-version.sh
+#               CI version-consistency check
+
+# Is the current build a pre-release? Controls --prerelease flag on gh release create.
+prerelease = true
+
+# Human-readable description appended after "TA v<version> — " in the release title.
+# Update when the release cycle's theme changes (not on every rc bump).
+title_suffix = "TA Studio + Governed Workflow Phase Targeting"
+
+# Tag of the immediately preceding release (used in "Changes since" footer and delta
+# comparisons). Update to the tag you just published when bumping for the next cycle.
+last_release_tag = "public-alpha-v0.14.22.3"
+
+# Tag of the last stable (non-prerelease) release.
+# Used for "stable upgrade path" notes and long-running delta summaries.
+stable_release_tag = "public-alpha-v0.13.17.3"
+
+# Anchor tag for the "Changes since X" line at the bottom of release notes.
+# Usually matches stable_release_tag; override if notes cover a shorter window.
+changes_since = "public-alpha-v0.13.17.3"
