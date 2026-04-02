@@ -889,8 +889,28 @@ fn stage_run_goal(
     }
 
     // Extract goal_id and draft_id from output.
-    // `ta run --headless` prints "goal_id: <id>" and "draft_id: <id>".
-    for line in stdout.lines() {
+    //
+    // `ta run --headless` emits a JSON sentinel line at the end:
+    //   __TA_HEADLESS_RESULT__:{"goal_id":"...","draft_built":true,"draft_id":"...","state":"..."}
+    //
+    // Legacy/fallback: some paths print bare `goal_id: <id>` / `draft_id: <id>` lines.
+    // Parse both formats so we are robust to either.
+    for line in stdout.lines().chain(stderr.lines()) {
+        // Primary format: JSON sentinel
+        if let Some(json_str) = line.strip_prefix("__TA_HEADLESS_RESULT__:") {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_str) {
+                if let Some(id) = v["goal_id"].as_str() {
+                    run.goal_id = Some(id.to_string());
+                }
+                if let Some(id) = v["draft_id"].as_str() {
+                    if id != "null" && !id.is_empty() {
+                        run.draft_id = Some(id.to_string());
+                    }
+                }
+            }
+            break; // sentinel is the definitive line
+        }
+        // Fallback: bare prefix lines
         if let Some(id) = line.strip_prefix("goal_id: ") {
             run.goal_id = Some(id.trim().to_string());
         }
