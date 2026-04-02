@@ -275,6 +275,17 @@ impl TerminalAdapter {
             return output;
         }
 
+        // Video artifacts: suppress binary diff; show metadata summary instead.
+        if let Some(kind @ ArtifactKind::Video { .. }) = &artifact.kind {
+            output.push_str(&format!("\n    {bold}Video artifact:{reset}\n"));
+            let summary = kind.video_metadata_summary();
+            output.push_str(&format!("    {dim}{summary}{reset}\n"));
+            output.push_str(&format!(
+                "    {dim}[Binary video — text diff suppressed]{reset}\n"
+            ));
+            return output;
+        }
+
         // Binary artifacts: suppress diff; show size summary.
         if let Some(ArtifactKind::Binary {
             mime_type,
@@ -451,6 +462,67 @@ impl TerminalAdapter {
         }
 
         format!("{} text file{}", count, if count == 1 { "" } else { "s" })
+    }
+
+    /// Build a human-readable summary for a set of video artifacts.
+    ///
+    /// Returns a line like `"2 MP4 video files, 1920×1080, 24fps"` or an empty string
+    /// if there are no `ArtifactKind::Video` artifacts in the set.
+    pub fn render_video_artifact_set_summary(artifacts: &[&Artifact]) -> String {
+        let video_artifacts: Vec<_> = artifacts
+            .iter()
+            .filter(|a| a.kind.as_ref().map(|k| k.is_video()).unwrap_or(false))
+            .collect();
+
+        if video_artifacts.is_empty() {
+            return String::new();
+        }
+
+        let count = video_artifacts.len();
+        let format: Option<String> = video_artifacts.iter().find_map(|a| {
+            if let Some(ArtifactKind::Video { format, .. }) = &a.kind {
+                format.clone()
+            } else {
+                None
+            }
+        });
+        let resolution: Option<(u32, u32)> = video_artifacts.iter().find_map(|a| {
+            if let Some(ArtifactKind::Video {
+                width: Some(w),
+                height: Some(h),
+                ..
+            }) = &a.kind
+            {
+                Some((*w, *h))
+            } else {
+                None
+            }
+        });
+        let fps: Option<f32> = video_artifacts.iter().find_map(|a| {
+            if let Some(ArtifactKind::Video { fps, .. }) = &a.kind {
+                *fps
+            } else {
+                None
+            }
+        });
+
+        let label = match &format {
+            Some(fmt) => format!("{} video", fmt),
+            None => "video".to_string(),
+        };
+        let mut parts = vec![format!(
+            "{} {} file{}",
+            count,
+            label,
+            if count == 1 { "" } else { "s" }
+        )];
+        if let Some((w, h)) = resolution {
+            parts.push(format!("{}×{}", w, h));
+        }
+        if let Some(f) = fps {
+            parts.push(format!("{}fps", f));
+        }
+        parts.join(", ")
     }
 
     /// Group artifacts by module (top-level directory) for the "What Changed" section (v0.9.5).
@@ -1714,5 +1786,183 @@ mod tests {
     #[test]
     fn format_byte_size_gb() {
         assert_eq!(super::format_byte_size(1_073_741_824), "1.0 GB");
+    }
+
+    // ── v0.15.1 Video artifact rendering tests ──
+
+    fn video_artifact(
+        uri: &str,
+        width: Option<u32>,
+        height: Option<u32>,
+        fps: Option<f32>,
+        duration_secs: Option<f32>,
+        format: Option<&str>,
+    ) -> Artifact {
+        Artifact {
+            resource_uri: uri.to_string(),
+            change_type: ChangeType::Add,
+            diff_ref: "changeset:vid0".to_string(),
+            tests_run: vec![],
+            disposition: ArtifactDisposition::Pending,
+            rationale: Some("Rendered video".to_string()),
+            dependencies: vec![],
+            explanation_tiers: None,
+            comments: None,
+            amendment: None,
+            kind: Some(crate::artifact_kind::ArtifactKind::Video {
+                width,
+                height,
+                fps,
+                duration_secs,
+                format: format.map(|s| s.to_string()),
+                frame_count: None,
+            }),
+        }
+    }
+
+    #[test]
+    fn video_artifact_full_view_suppresses_diff() {
+        // Video artifact in full detail should show metadata, not attempt to render a text diff.
+        let adapter = TerminalAdapter::new();
+        let mut package = test_package();
+        package.changes.artifacts = vec![video_artifact(
+            "fs://workspace/output/clip.mp4",
+            Some(1920),
+            Some(1080),
+            Some(24.0),
+            Some(6.2),
+            Some("MP4"),
+        )];
+
+        struct AlwaysPanic;
+        impl crate::output_adapters::DiffProvider for AlwaysPanic {
+            fn get_diff(&self, _: &str) -> Result<String, ChangeSetError> {
+                panic!("get_diff must not be called for video artifacts");
+            }
+        }
+
+        let provider = AlwaysPanic;
+        let ctx = RenderContext {
+            package: &package,
+            detail_level: DetailLevel::Full,
+            file_filters: vec![],
+            diff_provider: Some(&provider),
+            section_filter: None,
+        };
+        let output = adapter.render(&ctx).unwrap();
+        assert!(
+            output.contains("Video artifact"),
+            "should show 'Video artifact' header; got: {}",
+            output
+        );
+        assert!(
+            output.contains("Binary video — text diff suppressed"),
+            "should indicate diff suppression; got: {}",
+            output
+        );
+        assert!(
+            output.contains("1920×1080"),
+            "should show resolution; got: {}",
+            output
+        );
+        assert!(
+            output.contains("MP4"),
+            "should show format; got: {}",
+            output
+        );
+        assert!(
+            output.contains("6.2s"),
+            "should show duration; got: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn video_artifact_set_summary_multiple() {
+        let artifacts = [
+            video_artifact(
+                "fs://workspace/output/clip_a.mp4",
+                Some(1920),
+                Some(1080),
+                Some(24.0),
+                None,
+                Some("MP4"),
+            ),
+            video_artifact(
+                "fs://workspace/output/clip_b.mp4",
+                Some(1920),
+                Some(1080),
+                Some(24.0),
+                None,
+                Some("MP4"),
+            ),
+        ];
+        let refs: Vec<&Artifact> = artifacts.iter().collect();
+        let summary = TerminalAdapter::render_video_artifact_set_summary(&refs);
+        assert!(
+            summary.contains("2 MP4 video files"),
+            "should say '2 MP4 video files'; got: {}",
+            summary
+        );
+        assert!(
+            summary.contains("1920×1080"),
+            "should contain resolution; got: {}",
+            summary
+        );
+        assert!(
+            summary.contains("24fps") || summary.contains("24"),
+            "should contain fps; got: {}",
+            summary
+        );
+    }
+
+    #[test]
+    fn video_artifact_set_summary_single() {
+        let artifacts = [video_artifact(
+            "fs://workspace/output/clip.mov",
+            None,
+            None,
+            None,
+            Some(10.0),
+            Some("MOV"),
+        )];
+        let refs: Vec<&Artifact> = artifacts.iter().collect();
+        let summary = TerminalAdapter::render_video_artifact_set_summary(&refs);
+        assert!(
+            summary.contains("1 MOV video file"),
+            "singular form; got: {}",
+            summary
+        );
+        assert!(
+            !summary.contains("1 MOV video files"),
+            "no plural 's'; got: {}",
+            summary
+        );
+    }
+
+    #[test]
+    fn video_artifact_set_summary_empty() {
+        let refs: Vec<&Artifact> = vec![];
+        let summary = TerminalAdapter::render_video_artifact_set_summary(&refs);
+        assert_eq!(summary, "", "no videos → empty summary");
+    }
+
+    #[test]
+    fn video_artifact_set_summary_no_metadata() {
+        let artifacts = [video_artifact(
+            "fs://workspace/output/clip.webm",
+            None,
+            None,
+            None,
+            None,
+            None,
+        )];
+        let refs: Vec<&Artifact> = artifacts.iter().collect();
+        let summary = TerminalAdapter::render_video_artifact_set_summary(&refs);
+        assert!(
+            summary.contains("1 video file"),
+            "should say '1 video file' without format; got: {}",
+            summary
+        );
     }
 }
