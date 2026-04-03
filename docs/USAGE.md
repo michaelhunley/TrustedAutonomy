@@ -10310,6 +10310,159 @@ capabilities:
 
 ---
 
+## Unity Integration
+
+TA wraps Unity's official `com.unity.mcp-server` UPM package as a connector so agents can trigger builds, query scenes, run PlayMode tests, export Addressables bundles, and capture renders — all mediated through TA's policy, audit, and draft review flow.
+
+### Installation
+
+**Step 1 — Add `com.unity.mcp-server` to your Unity project:**
+
+Open **Window → Package Manager → + → Add package by name** and enter:
+
+```
+com.unity.mcp-server
+```
+
+Or add it manually to `Packages/manifest.json`:
+
+```json
+{
+  "dependencies": {
+    "com.unity.mcp-server": "1.0.0"
+  }
+}
+```
+
+**Step 2 — Open your Unity project in the Editor.**
+
+The MCP server starts automatically and listens on `localhost:30200` by default.
+
+**Step 3 — Get TA setup instructions:**
+
+```bash
+ta connector install unity
+```
+
+**Step 4 — Verify connectivity:**
+
+```bash
+ta connector status unity
+# unity connector:
+#   status:  running
+#   backend: official
+#   socket:  localhost:30200
+```
+
+### Configuration
+
+Add a `[connectors.unity]` block to `.ta/workflow.toml`:
+
+```toml
+[connectors.unity]
+enabled = true
+backend = "official"
+project_path = "/path/to/YourProject"   # folder containing Assets/
+socket = "localhost:30200"              # where com.unity.mcp-server listens
+```
+
+**Backends:**
+
+| Backend | Description |
+|---|---|
+| `official` | `com.unity.mcp-server` UPM package — maintained by Unity Technologies (default) |
+| `community` | Stub for third-party servers (CoderGamester/unity-mcp, etc.) — configure `socket` manually |
+
+### Querying a Scene
+
+```python
+result = mcp.call("unity_scene_query", {
+    "scene_path": "Assets/Scenes/Main.unity",
+    "goal_run_id": "<goal-run-id>"
+})
+# Returns: { "scene_path": "...", "root_objects": [...], "total_objects": 42 }
+```
+
+Pass an empty `scene_path` to query the currently-open scene.
+
+### Triggering a Build
+
+```python
+result = mcp.call("unity_build_trigger", {
+    "target": "StandaloneOSX",   # or "StandaloneWindows64", "WebGL", "AssetBundle"
+    "config": "Release",
+    "goal_run_id": "<goal-run-id>"
+})
+# Returns: { "success": true, "output_path": "Builds/Release/StandaloneOSX", "log_summary": "..." }
+```
+
+### Running Tests
+
+```python
+result = mcp.call("unity_test_run", {
+    "filter": "MyFeature",    # optional substring filter; omit to run all tests
+    "goal_run_id": "<goal-run-id>"
+})
+# Returns: { "passed": 42, "failed": 0, "skipped": 1, "failures": [], "duration_secs": 1.42 }
+```
+
+### Building Addressables
+
+```python
+result = mcp.call("unity_addressables_build", {
+    "goal_run_id": "<goal-run-id>"
+})
+# Returns: { "success": true, "output_path": "ServerData/StandaloneOSX", "log_summary": "..." }
+```
+
+### Capturing a Render
+
+```python
+result = mcp.call("unity_render_capture", {
+    "camera_path": "/Main Camera",
+    "output_path": "Captures/preview_001.png",
+    "goal_run_id": "<goal-run-id>"
+})
+# Returns: { "output_path": "Captures/preview_001.png", "width": 1920, "height": 1080 }
+```
+
+### Policy Capabilities
+
+Four capability URI namespaces control access:
+
+- **`unity://build/**`** — gates build triggers (`unity_build_trigger`, `unity_addressables_build`).
+- **`unity://test/**`** — gates test runs (`unity_test_run`).
+- **`unity://scene/**`** — gates scene queries (`unity_scene_query`).
+- **`unity://render/**`** — gates render captures (`unity_render_capture`).
+
+Example `policy.yaml` grant:
+
+```yaml
+capabilities:
+  - agent_id: claude-code
+    grants:
+      - resource: "unity://build/**"
+        verbs: [trigger]
+      - resource: "unity://test/**"
+        verbs: [run]
+      - resource: "unity://scene/**"
+        verbs: [read]
+      - resource: "unity://render/**"
+        verbs: [capture]
+```
+
+### Available Tools
+
+| Tool | Description |
+|---|---|
+| `unity_build_trigger` | Trigger a Player or AssetBundle build. Gated behind `unity://build/**`. |
+| `unity_scene_query` | Query GameObject hierarchy and component summary. Gated behind `unity://scene/**`. |
+| `unity_test_run` | Run EditMode or PlayMode tests, return pass/fail counts. Gated behind `unity://test/**`. |
+| `unity_addressables_build` | Trigger an Addressables content build. Gated behind `unity://build/**`. |
+| `unity_render_capture` | Capture a screenshot from a scene camera as PNG. Gated behind `unity://render/**`. |
+
+---
+
 ## Generic Binary and Text Assets
 
 TA supports two catch-all artifact kinds for assets that don't have a more specific type: `Binary` for opaque binary files and `Text` for raw text files. Any connector or agent can produce these artifacts and they flow through the standard draft/review/apply pipeline.

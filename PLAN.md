@@ -8818,7 +8818,7 @@ ta-connectors/comfyui/
 ---
 
 ### v0.15.3 — Unity Connector (`ta-connectors/unity`)
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Parallel to the Unreal connector (v0.14.14). Wraps Unity's official MCP server package (`com.unity.mcp-server`) with the same backend-switchable architecture. Agents can trigger builds, query scenes, run PlayMode tests, and export assets — all through TA's governed flow.
 
 **Depends on**: v0.14.14 (shared connector infrastructure — `ta connector` CLI, backend trait, gateway integration)

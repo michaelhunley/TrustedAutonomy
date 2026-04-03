@@ -8,6 +8,7 @@ use anyhow::Result;
 use clap::Subcommand;
 
 use ta_connector_comfyui::config::ComfyUiConnectorConfig;
+use ta_connector_unity::config::UnityConnectorConfig;
 use ta_connector_unreal::{backends::make_backend, config::UnrealConnectorConfig};
 
 use ta_mcp_gateway::GatewayConfig;
@@ -71,14 +72,9 @@ fn install(connector: &str, backend: &str, url: Option<&str>) -> Result<()> {
     match connector {
         "unreal" => install_unreal(backend),
         "comfyui" => install_comfyui(url),
-        "unity" => {
-            println!(
-                "Unity connector is planned for v0.15.3. Use `ta connector install unreal` for now."
-            );
-            Ok(())
-        }
+        "unity" => install_unity(backend),
         other => anyhow::bail!(
-            "Unknown connector '{}'. Available connectors: unreal, comfyui\n\
+            "Unknown connector '{}'. Available connectors: unreal, comfyui, unity\n\
              Run `ta connector list` to see installed connectors.",
             other
         ),
@@ -116,6 +112,80 @@ fn install_comfyui(url: Option<&str>) -> Result<()> {
     println!(
         "  After starting ComfyUI, run `ta connector status comfyui` to verify the connection."
     );
+    Ok(())
+}
+
+fn install_unity(backend: &str) -> Result<()> {
+    match backend {
+        "official" | "flopperam" => {
+            // Accept "flopperam" as the default clap value gracefully; redirect to official.
+            println!("Setting up Unity connector (backend: official)...");
+            println!();
+            println!("  The official backend uses Unity's com.unity.mcp-server UPM package.");
+            println!(
+                "  It is maintained by Unity Technologies and supports Unity 6 LTS and later."
+            );
+            println!();
+            println!("  Step 1 — Add the package to your Unity project:");
+            println!();
+            println!("    Open Window → Package Manager → + → Add package by name:");
+            println!();
+            println!("      com.unity.mcp-server");
+            println!();
+            println!("    Or add manually to Packages/manifest.json:");
+            println!();
+            println!("      {{");
+            println!("        \"dependencies\": {{");
+            println!("          \"com.unity.mcp-server\": \"1.0.0\",");
+            println!("          ... (existing entries)");
+            println!("        }}");
+            println!("      }}");
+            println!();
+            println!("  Step 2 — Open your Unity project in the Editor.");
+            println!("    The MCP server starts automatically when the Editor opens.");
+            println!("    It listens on localhost:30200 by default.");
+            println!();
+            println!("  Step 3 — Enable in config (daemon.toml or workflow.toml):");
+            println!();
+            println!("    [connectors.unity]");
+            println!("    enabled = true");
+            println!("    backend = \"official\"");
+            println!("    project_path = \"/path/to/YourProject\"");
+            println!("    socket = \"localhost:30200\"");
+            println!();
+            println!("  Available MCP tools after enabling:");
+            println!("    unity_build_trigger       — trigger a Player or AssetBundle build");
+            println!("    unity_scene_query         — query GameObject hierarchy and components");
+            println!("    unity_test_run            — run EditMode or PlayMode tests");
+            println!("    unity_addressables_build  — trigger an Addressables content build");
+            println!("    unity_render_capture      — capture a screenshot from a scene camera");
+            println!();
+            println!("  After opening the Editor, run `ta connector status unity` to verify.");
+        }
+        "community" => {
+            println!("Setting up Unity connector (backend: community)...");
+            println!();
+            println!(
+                "  Community backends (CoderGamester/unity-mcp, justinpbarnett/unity-mcp, etc.)"
+            );
+            println!(
+                "  use varied protocols. The community backend stub is included for future use."
+            );
+            println!();
+            println!("  For now, use the official backend:");
+            println!("    ta connector install unity --backend official");
+            println!();
+            println!("  To configure a community server manually:");
+            println!("    [connectors.unity]");
+            println!("    enabled = true");
+            println!("    backend = \"community\"");
+            println!("    socket = \"localhost:30201\"   # adjust to your server's port");
+        }
+        other => anyhow::bail!(
+            "Unknown Unity backend '{}'. Valid options: official, community",
+            other
+        ),
+    }
     Ok(())
 }
 
@@ -278,8 +348,30 @@ fn list() -> Result<()> {
     };
     println!("    [{}] — REST API", comfyui_status);
     println!();
+    // Unity connector.
+    let unity_cfg = UnityConnectorConfig::default();
     println!("  unity (Unity Engine)");
-    println!("    [ not installed] — planned for v0.15.3");
+    println!(
+        "  Active backend: {} (configure via [connectors.unity] in workflow.toml)",
+        unity_cfg.backend
+    );
+    let unity_reachable = std::net::TcpStream::connect_timeout(
+        &unity_cfg
+            .socket
+            .parse()
+            .unwrap_or_else(|_| "127.0.0.1:30200".parse().unwrap()),
+        std::time::Duration::from_millis(200),
+    )
+    .is_ok();
+    let unity_status = if unity_reachable {
+        "✓ running"
+    } else {
+        "  not running"
+    };
+    println!(
+        "    [{}] official — com.unity.mcp-server (socket: {})",
+        unity_status, unity_cfg.socket
+    );
     println!();
     println!(
         "Run `ta connector install <name>` to install. For comfyui: `ta connector install comfyui --url <url>`"
@@ -290,7 +382,7 @@ fn list() -> Result<()> {
 fn status(connector: Option<&str>) -> Result<()> {
     let targets: Vec<&str> = match connector {
         Some(c) => vec![c],
-        None => vec!["unreal", "comfyui"],
+        None => vec!["unreal", "comfyui", "unity"],
     };
 
     for target in targets {
@@ -332,6 +424,30 @@ fn status(connector: Option<&str>) -> Result<()> {
                     println!("  status:  not running");
                     println!("  url:     {} (not reachable)", url);
                     println!("  hint:    Start ComfyUI with `python main.py --listen`, or check `[connectors.comfyui] url` in config.");
+                }
+            }
+            "unity" => {
+                println!("unity connector:");
+                let cfg = UnityConnectorConfig::default();
+                let addr = &cfg.socket;
+                let running = std::net::TcpStream::connect_timeout(
+                    &addr
+                        .parse()
+                        .unwrap_or_else(|_| "127.0.0.1:30200".parse().unwrap()),
+                    std::time::Duration::from_millis(500),
+                )
+                .is_ok();
+                if running {
+                    println!("  status:  running");
+                    println!("  backend: {}", cfg.backend);
+                    println!("  socket:  {}", addr);
+                } else {
+                    println!("  status:  not running");
+                    println!("  backend: {}", cfg.backend);
+                    println!("  socket:  {} (not reachable)", addr);
+                    println!(
+                        "  hint:    Open the Unity Editor with com.unity.mcp-server installed, or run `ta connector install unity`"
+                    );
                 }
             }
             other => {
@@ -381,8 +497,17 @@ fn start(connector: &str) -> Result<()> {
                 }
             }
         }
+        "unity" => {
+            println!("Unity MCP server is Editor-hosted — open the Unity Editor to start it.");
+            println!("  Ensure com.unity.mcp-server is installed in your project (Window → Package Manager).");
+            println!("  The server starts automatically when the Editor opens.");
+            println!("  Run `ta connector status unity` to verify.");
+        }
         other => {
-            anyhow::bail!("Unknown connector '{}'. Available: unreal, comfyui", other);
+            anyhow::bail!(
+                "Unknown connector '{}'. Available: unreal, comfyui, unity",
+                other
+            );
         }
     }
     Ok(())
@@ -401,8 +526,15 @@ fn stop(connector: &str) -> Result<()> {
                 "  For flopperam/special-agent: close the Unreal Editor (plugin stops with the Editor)."
             );
         }
+        "unity" => {
+            println!("To stop the unity connector:");
+            println!("  Close the Unity Editor (com.unity.mcp-server stops with the Editor).");
+        }
         other => {
-            anyhow::bail!("Unknown connector '{}'. Available: unreal, comfyui", other);
+            anyhow::bail!(
+                "Unknown connector '{}'. Available: unreal, comfyui, unity",
+                other
+            );
         }
     }
     Ok(())
