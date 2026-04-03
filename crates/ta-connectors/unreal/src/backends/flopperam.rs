@@ -32,9 +32,8 @@ impl UnrealBackend for FlopperamBackend {
     fn spawn(&self) -> Result<BackendHandle, UnrealConnectorError> {
         // The flopperam backend is a UE5 C++ plugin — it runs inside the Unreal Editor.
         // The MCP server starts automatically when the Editor loads the plugin.
-        // TA does not spawn a process; it returns a synthetic pid=0 handle.
-        // The plugin source at install_path is only needed to copy the plugin into a UE5
-        // project — it is not required for TA to connect to a running Editor session.
+        // TA does not spawn a process; install_path is the plugin source for reference only,
+        // not a runtime requirement.
         let addr = SocketAddr::from_str(&self.socket)
             .map_err(|e| UnrealConnectorError::Config(e.to_string()))?;
         Ok(BackendHandle {

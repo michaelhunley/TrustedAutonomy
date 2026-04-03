@@ -54,39 +54,18 @@ pub enum ConnectorCommands {
     },
 }
 
-pub fn execute(command: &ConnectorCommands, config: &GatewayConfig) -> Result<()> {
+pub fn execute(command: &ConnectorCommands, _config: &GatewayConfig) -> Result<()> {
     match command {
         ConnectorCommands::Install {
             connector,
             backend,
             url,
         } => install(connector, backend, url.as_deref()),
-        ConnectorCommands::List => list(config),
-        ConnectorCommands::Status { connector } => status(connector.as_deref(), config),
-        ConnectorCommands::Start { connector } => start(connector, config),
+        ConnectorCommands::List => list(),
+        ConnectorCommands::Status { connector } => status(connector.as_deref()),
+        ConnectorCommands::Start { connector } => start(connector),
         ConnectorCommands::Stop { connector } => stop(connector),
     }
-}
-
-/// Load the `[connectors.unreal]` block from `.ta/workflow.toml` in the workspace root.
-/// Falls back to `UnrealConnectorConfig::default()` if the file or the block is absent.
-fn load_unreal_config(gateway: &GatewayConfig) -> UnrealConnectorConfig {
-    let toml_path = gateway.workspace_root.join(".ta").join("workflow.toml");
-    let Ok(raw) = std::fs::read_to_string(&toml_path) else {
-        return UnrealConnectorConfig::default();
-    };
-    // Parse as a generic TOML table and extract [connectors.unreal].
-    let Ok(top) = raw.parse::<toml::Table>() else {
-        return UnrealConnectorConfig::default();
-    };
-    let Some(connectors) = top.get("connectors").and_then(|v| v.as_table()) else {
-        return UnrealConnectorConfig::default();
-    };
-    let Some(unreal_val) = connectors.get("unreal") else {
-        return UnrealConnectorConfig::default();
-    };
-    toml::from_str(&toml::to_string(unreal_val).unwrap_or_default())
-        .unwrap_or_else(|_| UnrealConnectorConfig::default())
 }
 
 fn install(connector: &str, backend: &str, url: Option<&str>) -> Result<()> {
@@ -294,11 +273,12 @@ fn install_unreal(backend: &str) -> Result<()> {
     Ok(())
 }
 
-fn list(gateway: &GatewayConfig) -> Result<()> {
+fn list() -> Result<()> {
     println!("Installed connectors:");
     println!();
 
-    let default_cfg = load_unreal_config(gateway);
+    // Check unreal backends using defaults.
+    let default_cfg = UnrealConnectorConfig::default();
 
     let backends = [
         (
@@ -399,7 +379,7 @@ fn list(gateway: &GatewayConfig) -> Result<()> {
     Ok(())
 }
 
-fn status(connector: Option<&str>, gateway: &GatewayConfig) -> Result<()> {
+fn status(connector: Option<&str>) -> Result<()> {
     let targets: Vec<&str> = match connector {
         Some(c) => vec![c],
         None => vec!["unreal", "comfyui", "unity"],
@@ -409,7 +389,7 @@ fn status(connector: Option<&str>, gateway: &GatewayConfig) -> Result<()> {
         match target {
             "unreal" => {
                 println!("unreal connector:");
-                let cfg = load_unreal_config(gateway);
+                let cfg = UnrealConnectorConfig::default();
                 let addr = &cfg.socket;
                 // Try a TCP connection to see if the MCP server is listening.
                 let running = std::net::TcpStream::connect(addr).is_ok();
@@ -478,7 +458,7 @@ fn status(connector: Option<&str>, gateway: &GatewayConfig) -> Result<()> {
     Ok(())
 }
 
-fn start(connector: &str, gateway: &GatewayConfig) -> Result<()> {
+fn start(connector: &str) -> Result<()> {
     match connector {
         "comfyui" => {
             println!("ComfyUI is a standalone server — start it manually:");
@@ -486,7 +466,7 @@ fn start(connector: &str, gateway: &GatewayConfig) -> Result<()> {
             println!("Then run `ta connector status comfyui` to verify.");
         }
         "unreal" => {
-            let cfg = load_unreal_config(gateway);
+            let cfg = UnrealConnectorConfig::default();
             match make_backend(&cfg) {
                 Ok(backend) => {
                     println!(
@@ -506,7 +486,9 @@ fn start(connector: &str, gateway: &GatewayConfig) -> Result<()> {
                         }
                         Err(e) => {
                             eprintln!("  Failed to start: {}", e);
-                            eprintln!("  Check that `socket` in [connectors.unreal] is a valid address (default: localhost:30100).");
+                            eprintln!(
+                                "  Run `ta connector install unreal` for setup instructions."
+                            );
                         }
                     }
                 }
