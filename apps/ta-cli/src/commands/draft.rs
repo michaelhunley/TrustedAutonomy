@@ -4508,6 +4508,22 @@ fn apply_package(
                 match bump_workspace_version(&target_dir, &new_ver) {
                     Ok(bumped) if !bumped.is_empty() => {
                         println!("[version] Phase {} → bumped to {}", last_phase_id, new_ver);
+                        // Stage bumped files immediately. bump_workspace_version writes
+                        // CLAUDE.md and Cargo.toml to disk but does NOT stage them.
+                        // adapter.commit() only stages draft artifacts + auto_stage_candidates;
+                        // neither list includes CLAUDE.md (it is restored by
+                        // check_and_clean_working_tree before apply). Without this git-add,
+                        // the version bump lands in the working tree but misses the commit,
+                        // causing the version-check CI job to fail with a mismatch.
+                        for bumped_path in &bumped {
+                            if let Ok(rel) = bumped_path.strip_prefix(&target_dir) {
+                                let _ = std::process::Command::new("git")
+                                    .args(["add", &rel.to_string_lossy()])
+                                    .current_dir(&target_dir)
+                                    .output();
+                                println!("[version] staged: {}", rel.display());
+                            }
+                        }
                     }
                     Ok(_) => {
                         // Already at target version — no change needed.
@@ -4726,6 +4742,17 @@ fn apply_package(
                                         "[version] Phase {} → bumped to {}",
                                         last_phase_id, new_ver
                                     );
+                                    // Stage bumped files so adapter.commit() picks them up.
+                                    // Same fix as the primary bump call site above.
+                                    for bumped_path in &bumped {
+                                        if let Ok(rel) = bumped_path.strip_prefix(&target_dir) {
+                                            let _ = std::process::Command::new("git")
+                                                .args(["add", &rel.to_string_lossy()])
+                                                .current_dir(&target_dir)
+                                                .output();
+                                            println!("[version] staged: {}", rel.display());
+                                        }
+                                    }
                                 }
                                 Ok(_) => {}
                                 Err(e) => {
