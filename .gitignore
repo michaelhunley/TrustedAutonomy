@@ -57,6 +57,7 @@ result-*
 #   .ta/velocity-stats.jsonl — CPU/disk-dependent build timing, meaningless cross-machine
 #   .ta/pr_packages/  — draft artifact packages
 #   .ta/workflow-runs/ — governed workflow session state (run IDs, stage progress)
+#   .ta/review/       — governed workflow reviewer verdicts (ephemeral per-run)
 #   *.local.toml      — personal local overrides (never committed)
 #
 
@@ -68,6 +69,7 @@ result-*
 .ta/pr_packages/
 .ta/interactive_sessions/
 .ta/workflow-runs/
+.ta/review/
 
 # Runtime / machine-specific files
 .ta/*.log
