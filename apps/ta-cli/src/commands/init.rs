@@ -584,7 +584,7 @@ fn generate_taignore(project_root: &Path, project_type: &ProjectType) -> anyhow:
         return Ok(());
     }
 
-    let common = "# TA staging and internal files\n.ta/staging/\n.ta/sessions/\n.ta/memory/\n\n";
+    let common = "# TA staging and internal files\n.ta/staging/\n.ta/sessions/\n.ta/memory/\n.ta/review/\n\n";
     let language_specific = match project_type {
         ProjectType::RustWorkspace => "# Rust\ntarget/\n*.rs.bk\n",
         ProjectType::TypeScript => {
