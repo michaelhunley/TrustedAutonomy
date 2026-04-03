@@ -9693,6 +9693,71 @@ Secrets required (GitHub Actions repository secrets):
 
 ---
 
+### v0.15.17 — `ta doctor`: Auth Validation & First-Class Subscription Support
+<!-- status: pending -->
+**Goal**: A `ta doctor` command that validates the full TA runtime chain and reports the active authentication mode with clear, actionable output. Claude supports two auth modes -- API key (`ANTHROPIC_API_KEY`) and subscription session (claude.ai login via `claude auth login`) -- but TA has no first-class awareness of which mode is active or whether auth will succeed before an agent run starts. This causes confusing silent failures when auth is misconfigured. `ta doctor` makes the auth state explicit and validates the entire stack in one command.
+
+**Depends on**: v0.13.11 (platform installers), v0.15.5 (terms acceptance gate)
+
+**Background**: Subscription users (claude.ai) authenticate via a session stored in the OS config directory (`~/.config/claude/` on Mac/Linux, `%APPDATA%\Claude\` on Windows). There is no environment variable to check -- auth is transparent to subprocesses that invoke `claude`. API key users set `ANTHROPIC_API_KEY`. Both modes work, but TA currently has no way to report which mode is active or warn when neither is configured. This was surfaced when `diagnose_ta.py` incorrectly flagged subscription users as unauthenticated.
+
+**Design**:
+
+```
+ta doctor
+```
+
+Output (all checks pass):
+```
+TA Doctor -- Runtime Validation
+
+  [ok] TA CLI         0.15.17-alpha (328ac82d)
+  [ok] Daemon         0.15.17-alpha -- connected at http://127.0.0.1:7700
+  [ok] Auth           Subscription session (claude.ai) -- ~/.config/claude/
+  [ok] Agent (claude) Found at /usr/local/bin/claude -- v1.x.x
+  [ok] gh CLI         Found at /usr/local/bin/gh -- github.com authenticated
+  [ok] Project root   /Users/michael/dev/myproject
+  [ok] .ta/config     Loaded -- agent: claude-code, model: claude-sonnet-4-6
+  [ok] Plan           Next phase: v0.16.0 (3 pending phases)
+
+All checks passed.
+```
+
+Output (auth not configured):
+```
+  [FAIL] Auth  No authentication found.
+         Option 1 (subscription): claude auth login
+         Option 2 (API key):      export ANTHROPIC_API_KEY=sk-ant-...
+         See: https://docs.anthropic.com/en/docs/claude-code
+```
+
+**Items**:
+
+1. [ ] **`ta doctor` command** (`apps/ta-cli/src/commands/doctor.rs`): Runs the following checks in order, prints a pass/fail line for each, exits non-zero if any check fails:
+   - CLI version (always passes; shows version + git hash)
+   - Daemon connection (calls `GET /health`; shows URL + version; warns on version mismatch)
+   - Auth mode detection: check `ANTHROPIC_API_KEY` (API key mode), then check OS config dirs for Claude session (subscription mode), then check `claude auth status` output; report mode + location
+   - `claude` binary presence (`which claude` / `where claude`)
+   - `gh` CLI presence and auth (`gh auth status`)
+   - Project root detection (`.ta/config.toml` present)
+   - Plan state (`ta plan next` output summarized)
+
+2. [ ] **Auth mode detection** (`crates/ta-core/src/auth.rs` or inline in `doctor.rs`): `detect_auth_mode() -> AuthMode` where `AuthMode` is an enum: `ApiKey`, `Subscription { config_dir: PathBuf }`, `Unknown`. Checks in order: `ANTHROPIC_API_KEY` env var, OS config dirs, `claude auth status` subprocess. Returns `Unknown` if none found.
+
+3. [ ] **`AuthMode` used in error messages**: When `ta run` or `ta workflow run` fails due to auth, the error message should report the detected `AuthMode` and suggest the appropriate fix (re-login for subscription, check key for API key). Replace the current generic "agent failed" messages with auth-aware suggestions.
+
+4. [ ] **`ta doctor --json`**: Machine-readable output for CI and `diagnose_ta.py` integration. Each check is a JSON object with `name`, `status` (`ok`/`warn`/`fail`), `detail`, and `fix` (actionable string on fail).
+
+5. [ ] **`ta doctor` in `ta onboard`** (v0.15.11 integration): The post-install onboarding wizard runs `ta doctor` as its first step and blocks on any `fail` result with a guided fix flow.
+
+6. [ ] **USAGE.md**: "ta doctor" section covering: what each check tests, how to fix common failures (version mismatch, auth not found, daemon not running), how to use `--json` for scripted validation.
+
+7. [ ] **Tests**: `AuthMode` detection with `ANTHROPIC_API_KEY` set; detection with fake config dir present; detection with neither (returns `Unknown`); `ta doctor --json` output is valid JSON; each check failure produces a non-zero exit code; version mismatch check warns but does not fail (daemon continues to work across minor versions).
+
+#### Version: `0.15.17-alpha`
+
+---
+
 ## v0.16 — IDE Integration & Developer Experience
 
 > **Focus**: First-class IDE integration for VS Code, JetBrains (PyCharm, WebStorm, IntelliJ), and Neovim. TA transitions from a pure CLI tool to an embedded development workflow component with sidebar panels, inline draft review, and one-click goal approval.
