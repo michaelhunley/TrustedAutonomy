@@ -1294,6 +1294,94 @@ impl TaGatewayServer {
         tools::comfyui::handle_comfyui_model_list(&self.state, params)
     }
 
+    // ── Unity Engine tools (v0.15.3) ─────────────────────────────────────────
+
+    #[tool(description = "Trigger a Unity Player or AssetBundle build. \
+        Specify the build target (e.g. \"StandaloneOSX\", \"StandaloneWindows64\", \"WebGL\", \"AssetBundle\") \
+        and optional config (\"Debug\" or \"Release\"). \
+        Gated behind `unity://build/**` capability. Returns build success status and output path.")]
+    fn unity_build_trigger(
+        &self,
+        Parameters(params): Parameters<tools::unity::UnityBuildTriggerParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.audit(
+            "unity_build_trigger",
+            Some(&format!("unity://build/{}", params.target)),
+            None,
+        );
+        tools::unity::handle_unity_build_trigger(&self.state, params)
+    }
+
+    #[tool(
+        description = "Query the GameObject hierarchy and component summary of a Unity scene. \
+        Pass a scene asset path (e.g. \"Assets/Scenes/Main.unity\") or an empty string for the currently-open scene. \
+        Gated behind `unity://scene/**` capability."
+    )]
+    fn unity_scene_query(
+        &self,
+        Parameters(params): Parameters<tools::unity::UnitySceneQueryParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.audit(
+            "unity_scene_query",
+            Some(&format!(
+                "unity://scene/{}",
+                if params.scene_path.is_empty() {
+                    "active"
+                } else {
+                    &params.scene_path
+                }
+            )),
+            None,
+        );
+        tools::unity::handle_unity_scene_query(&self.state, params)
+    }
+
+    #[tool(
+        description = "Run Unity EditMode or PlayMode tests and return pass/fail counts. \
+        Optionally supply a filter string to run only matching tests. \
+        Gated behind `unity://test/**` capability."
+    )]
+    fn unity_test_run(
+        &self,
+        Parameters(params): Parameters<tools::unity::UnityTestRunParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.audit("unity_test_run", Some("unity://test/run"), None);
+        tools::unity::handle_unity_test_run(&self.state, params)
+    }
+
+    #[tool(description = "Trigger a Unity Addressables content build. \
+        Requires the Addressables package to be installed in the project. \
+        Gated behind `unity://build/**` capability.")]
+    fn unity_addressables_build(
+        &self,
+        Parameters(params): Parameters<tools::unity::UnityAddressablesBuildParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.audit(
+            "unity_addressables_build",
+            Some("unity://build/addressables"),
+            None,
+        );
+        tools::unity::handle_unity_addressables_build(&self.state, params)
+    }
+
+    #[tool(
+        description = "Capture a screenshot from a Unity scene camera and save it as a PNG. \
+        Provide the GameObject path to the camera (e.g. \"/Main Camera\") and the output file path \
+        relative to the Unity project root. \
+        Gated behind `unity://render/**` capability."
+    )]
+    fn unity_render_capture(
+        &self,
+        Parameters(params): Parameters<tools::unity::UnityRenderCaptureParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.audit(
+            "unity_render_capture",
+            Some(&format!("unity://render/capture/{}", params.camera_path)),
+            None,
+        );
+        tools::unity::handle_unity_render_capture(&self.state, params)
+    }
+
     // ── External Action Governance (v0.13.4) ─────────────────────
 
     #[tool(
@@ -1394,8 +1482,10 @@ mod tests {
         //           ue5_python_exec, ue5_scene_query, ue5_asset_list,
         //           ue5_mrq_submit, ue5_mrq_status (v0.14.14),
         //           ue5_sequencer_query, ue5_lighting_preset_list (v0.14.15.1)
+        //           unity_build_trigger, unity_scene_query, unity_test_run,
+        //           unity_addressables_build, unity_render_capture (v0.15.3)
         let names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
-        assert_eq!(tools.len(), 30, "expected 30 tools, got: {:?}", names);
+        assert_eq!(tools.len(), 35, "expected 35 tools, got: {:?}", names);
     }
 
     #[test]
@@ -1406,8 +1496,9 @@ mod tests {
             assert!(
                 tool.name.starts_with("ta_")
                     || tool.name.starts_with("ue5_")
-                    || tool.name.starts_with("comfyui_"),
-                "tool '{}' should be prefixed with 'ta_', 'ue5_', or 'comfyui_'",
+                    || tool.name.starts_with("comfyui_")
+                    || tool.name.starts_with("unity_"),
+                "tool '{}' should be prefixed with 'ta_', 'ue5_', 'comfyui_', or 'unity_'",
                 tool.name
             );
         }

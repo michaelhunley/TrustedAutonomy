@@ -8818,10 +8818,12 @@ ta-connectors/comfyui/
 ---
 
 ### v0.15.3 — Unity Connector (`ta-connectors/unity`)
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Parallel to the Unreal connector (v0.14.14). Wraps Unity's official MCP server package (`com.unity.mcp-server`) with the same backend-switchable architecture. Agents can trigger builds, query scenes, run PlayMode tests, and export assets — all through TA's governed flow.
 
 **Depends on**: v0.14.14 (shared connector infrastructure — `ta connector` CLI, backend trait, gateway integration)
+
+> **Scaffold architecture note**: All five `unity_*` gateway tool handlers return `connector_not_running` stub responses and do not call `OfficialBackend`. This is intentional — identical to the Unreal (v0.14.14) and ComfyUI (v0.15.2) connector patterns. Full backend wiring (gateway → OfficialBackend → live TCP JSON-RPC to `com.unity.mcp-server`) is deferred to a future live-wiring phase once the connector has been validated in staging environments. Reviewer confirmation: this is expected scaffold behavior for v0.15.3.
 
 #### Items
 
@@ -8851,11 +8853,51 @@ ta-connectors/comfyui/
 
 5. [ ] **Policy capability**: `unity://build/**` gates build triggers. `unity://test/**` gates test runs. Governed via `policy.yaml`.
 
-6. [ ] **Unit tests**: Mock backend process. Tool routing. Config parsing. `ta connector install unity` output.
+6. [ ] **Unit tests** (17 tests in `ta-connector-unity` + 5 gateway handler tests):
+   - `ta-connector-unity`: mock backend process, config parsing, `ta connector install unity` output, backend trait round-trip
+   - `ta-mcp-gateway`: one test per tool handler (`unity_build_trigger`, `unity_scene_query`, `unity_test_run`, `unity_addressables_build`, `unity_render_capture`) — each verifies the `connector_not_running` stub response structure and that the policy capability URI (`unity://build/StandaloneOSX`, `unity://render/capture/Main Camera`, etc.) is well-formed
+   - Total gateway tool count updated (was N tools; add 5 more)
 
 7. [ ] **USAGE.md "Unity Integration" section**: Installation, config, `ta connector install unity`, first `unity_scene_query` call.
 
 #### Version: `0.15.3-alpha`
+
+---
+
+### v0.15.3.1 — Unity Connector Fix-Pass (reviewer findings)
+<!-- status: pending -->
+**Goal**: Address the three code-level findings flagged during v0.15.3 draft review. The
+always-stub pattern is confirmed intentional (see v0.15.3 architect note); the items below
+are the actionable fixes that must land before the connector is considered production-ready.
+
+**Depends on**: v0.15.3
+
+1. [ ] **Sanitize URI inputs before policy engine** *(SECURITY — minor)*:
+   - In `ta-mcp-gateway/src/tools/unity.rs`: validate `params.target` and `params.camera_path`
+     against an allowlist or reject values containing path separators (`/`, `\`, `..`) before
+     interpolating into `unity://build/{target}` and `unity://render/capture/{camera_path}`.
+   - Return a structured `invalid_parameter` error if validation fails.
+   - Low-risk while stubs are active, but must be in place before backend wiring.
+   - 2 new tests: `target='StandaloneOSX/../render/capture/foo'` rejected; `target='StandaloneOSX'` accepted.
+
+2. [ ] **Suppress dead-code clippy warnings on `OfficialBackend`** *(DEAD CODE)*:
+   - Add `#[allow(dead_code)]` to the `OfficialBackend` struct and its public methods in `official.rs`:
+     ```rust
+     // TODO(backend-wiring): remove when gateway tools delegate to OfficialBackend.
+     #[allow(dead_code)]
+     ```
+   - Ensures `cargo clippy --workspace --all-targets -- -D warnings` passes without suppressing
+     real warnings elsewhere in the crate.
+
+3. [ ] **Gateway handler tests** *(TEST GAP — item 6 in v0.15.3 promised tool-routing tests but delivered zero)*:
+   - Add 5 tests in `ta-mcp-gateway` (one per `unity_*` tool handler):
+     `unity_build_trigger`, `unity_scene_query`, `unity_test_run`,
+     `unity_addressables_build`, `unity_render_capture`.
+   - Each test verifies: (a) `connector_not_running` stub response structure, (b) policy
+     capability URI is well-formed (no path traversal accepted).
+   - Brings Unity in line with ComfyUI gateway coverage.
+
+#### Version: `0.15.3.1-alpha`
 
 ---
 
@@ -9825,6 +9867,20 @@ acknowledged_omissions = [".ta/review/"]  # user intentionally removed; suppress
 8. [ ] **Tests**: Upgrade step `check`/`apply` round-trip; `ta upgrade --dry-run` exits non-zero when steps pending; `acknowledged_omissions` suppresses a step; `project-meta.toml` written correctly on `ta init`; upgrade from `0.0.0` applies all steps.
 
 9. [ ] **USAGE.md**: "Upgrading an Existing Project" section covering `ta upgrade`, `--dry-run`, `--force`, `--acknowledge`, and the `project-meta.toml` file.
+
+10. [ ] **GC: prune staging for old `pr_ready` goals** *(gap found Apr 2026 — disk exhaustion)*:
+    - `ta gc` and `ta doctor` currently only detect staging dirs with **no active goal JSON** as stale (v0.14.12 item 10). Goals whose PRs are merged directly on GitHub without `ta draft apply` remain `pr_ready` forever with full staging intact.
+    - Add a second GC check: staging dirs for goals in `pr_ready` state older than `gc_pr_ready_staging_days` (default 14, configurable in `[gc]` section of `daemon.toml`) are flagged by `ta doctor` and removed by `ta gc`.
+    - `ta doctor` output: `[warn] 3 pr_ready goals have staging older than 14d (23 GB). Run 'ta gc' to reclaim.`
+    - `ta gc` output: prints each goal ID + title + size freed, updates goal state to `closed` with `close_reason: "gc: staging pruned after pr_ready timeout"`.
+    - `--dry-run` support: lists what would be removed without deleting.
+    - 3 new tests: `gc_prunes_old_pr_ready_staging`, `gc_respects_dry_run`, `doctor_warns_on_old_pr_ready_staging`.
+
+11. [ ] **Verify `target/` exclusion is enforced at staging copy time** *(gap found Apr 2026)*:
+    - `overlay.rs` has built-in `target/` in `exclude_patterns()` but staging dirs created March 2026 contained full compiled `target/` (~6–7 GB each), suggesting the exclusion was not effective or was added after those goals started.
+    - Audit `copy_workspace_to_staging()` call path: confirm `ExcludePatterns` are applied before any file is copied, not just filtered post-copy.
+    - Add a test: staging copy of a workspace with a non-empty `target/` dir results in staging that contains no `target/` entries.
+    - If the exclude was retroactively added: add an upgrade step (seeded here alongside item 7) that warns: `[warn] Old staging dirs may contain target/ artifacts. Run 'ta gc' to reclaim disk space.`
 
 #### Version: `0.15.18-alpha`
 

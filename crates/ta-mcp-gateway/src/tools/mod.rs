@@ -10,5 +10,6 @@ pub mod fs;
 pub mod goal;
 pub mod human;
 pub mod plan;
+pub mod unity;
 pub mod unreal;
 pub mod workflow;

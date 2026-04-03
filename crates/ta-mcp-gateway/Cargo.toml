@@ -26,6 +26,7 @@ ta-changeset = { path = "../ta-changeset" }
 ta-connector-fs = { path = "../ta-connectors/fs" }
 ta-connector-unreal = { path = "../ta-connectors/unreal" }
 ta-connector-comfyui = { path = "../ta-connectors/comfyui" }
+ta-connector-unity = { path = "../ta-connectors/unity" }
 ta-goal = { path = "../ta-goal" }
 ta-policy = { path = "../ta-policy" }
 ta-workspace = { path = "../ta-workspace" }
