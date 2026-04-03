@@ -416,6 +416,12 @@ fn find_parent_goal(
     }
 }
 
+/// Returns true if the goal subcommand is `start` — used by the terms gate in
+/// main.rs to identify agent-spawning operations that require acceptance.
+pub fn is_start_command(cmd: &GoalCommands) -> bool {
+    matches!(cmd, GoalCommands::Start { .. })
+}
+
 pub fn execute(cmd: &GoalCommands, config: &GatewayConfig) -> anyhow::Result<()> {
     let store = GoalRunStore::new(&config.goals_dir)?;
 

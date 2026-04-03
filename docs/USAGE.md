@@ -7052,23 +7052,48 @@ Tool calls are auto-classified by name patterns:
 - **ExternalSideEffect**: `_post`, `_create`, `_update`, `_put`, `_patch`, `_upload`
 - **StateChanging**: everything else
 
-### Terms of Use
+### Terms & First-Run Setup
 
-TA includes a terms-of-use acceptance step on first run.
+The first time you run a command that starts an agent (`ta init`, `ta run`, or `ta goal start`), TA displays its terms of use and asks you to accept them. Acceptance is recorded at `~/.config/ta/accepted_terms` and is not asked again unless the terms change.
+
+Read-only commands (`ta plan list`, `ta draft view`, `ta goal list`, `ta stats`, etc.) never require acceptance and work immediately after installation.
+
+**Interactive terminals** — TA prints the terms and prompts `[y/N]`:
+
+```
+$ ta run "Fix the login bug"
+Trusted Autonomy — Terms of Use
+================================
+...
+Do you accept these terms? [y/N] y
+
+Terms accepted. You can now use ta.
+```
+
+**CI / headless environments** — pre-accept with `--yes` before running any workflow:
 
 ```bash
-# Accept TA terms non-interactively (CI/scripted usage)
-ta accept-terms
+# Accept terms non-interactively (install scripts, CI pipelines)
+ta accept-terms --yes
 
-# View the current TA terms
+# Then run as normal
+ta run "task title"
+```
+
+**Other useful commands:**
+
+```bash
+# View the full terms text
 ta view-terms
 
-# Check TA acceptance status
+# Check acceptance status (current or stale)
 ta terms-status
 
-# All commands also accept --accept-terms flag
-ta run "task" --accept-terms
+# Accept interactively in a terminal session
+ta accept-terms
 ```
+
+If the terms change in a future release, TA prompts once more on the next mutating command.
 
 ### Agent Terms Consent
 

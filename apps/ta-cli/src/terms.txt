@@ -1,0 +1,36 @@
+Trusted Autonomy — Terms of Use
+================================
+
+By using this software you agree to the following terms.
+
+WHAT TA DOES
+TA (Trusted Autonomy) mediates AI agent actions through staging and review
+workflows. It copies your project files into a sandboxed staging workspace,
+launches AI agents (Claude Code, Codex, etc.) to perform tasks within that
+sandbox, and presents the resulting changes to you as a reviewable draft
+before anything is applied to your real workspace.
+
+WHAT TA MAY READ AND WRITE
+- TA reads files in your project directory to create the staging workspace.
+- AI agents read and write files inside the staging workspace only.
+- No changes reach your real filesystem until you explicitly approve a draft.
+- TA stores goal records, draft packages, and acceptance state in ~/.config/ta/
+  and .ta/ within your project directory.
+
+PRIVACY
+TA does not transmit your source code to Trusted Autonomy servers. Prompts
+and file content are sent only to the AI provider you configure (e.g.,
+Anthropic for Claude). Consult your AI provider's privacy policy for details.
+
+AI AGENTS
+AI agents invoked by TA (Claude, Codex, etc.) are subject to their respective
+providers' terms of service. You are responsible for reviewing and approving
+all changes before they are applied.
+
+LIABILITY
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM OR DAMAGES
+ARISING FROM THE USE OF THIS SOFTWARE.
+
+Full license: Apache 2.0 — see the LICENSE file in the distribution.
+Full terms:   https://trustedautonomy.ai/terms

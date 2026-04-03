@@ -1,14 +1,19 @@
 // terms.rs — First-run terms acceptance gate.
 //
-// On first run (or when DISCLAIMER.md changes), the user must accept the terms.
-// Acceptance state is stored at ~/.config/ta/terms.json with a SHA-256 hash
-// of the disclaimer text, so updated terms trigger re-acceptance.
+// On first run of a mutating command (ta init, ta run, ta goal start), TA
+// prompts the user to review and accept the terms of use. Acceptance state is
+// stored at ~/.config/ta/accepted_terms as JSON, keyed by a SHA-256 hash of
+// the terms text. When terms change (new binary with updated terms.txt), the
+// user is prompted once more.
+//
+// Read-only commands (ta plan list, ta draft view, ta goal list, ta stats, …)
+// never gate on terms acceptance.
 
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 
-/// The disclaimer text, embedded at compile time.
-const DISCLAIMER: &str = include_str!("../../../../DISCLAIMER.md");
+/// The terms of use text, embedded at compile time from terms.txt.
+const TERMS: &str = include_str!("../terms.txt");
 
 /// Where acceptance state is stored.
 fn terms_path() -> Option<PathBuf> {
@@ -17,15 +22,15 @@ fn terms_path() -> Option<PathBuf> {
         PathBuf::from(home)
             .join(".config")
             .join("ta")
-            .join("terms.json"),
+            .join("accepted_terms"),
     )
 }
 
-/// Compute SHA-256 hash of the disclaimer (first 16 hex chars for brevity).
-fn disclaimer_hash() -> String {
+/// Compute SHA-256 hash of the terms text (first 16 hex chars for brevity).
+fn terms_hash() -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
-    hasher.update(DISCLAIMER.as_bytes());
+    hasher.update(TERMS.as_bytes());
     let result = hasher.finalize();
     hex_encode(&result[..8])
 }
@@ -37,13 +42,14 @@ fn hex_encode(bytes: &[u8]) -> String {
 #[derive(serde::Serialize, serde::Deserialize)]
 struct TermsAcceptance {
     accepted: bool,
-    disclaimer_hash: String,
+    terms_hash: String,
     accepted_at: String,
     version: String,
 }
 
-/// Check if terms have been accepted for the current disclaimer version.
-/// Returns Ok(()) if accepted, Err with message if not.
+/// Check if terms have been accepted for the current terms version.
+/// Returns `Ok(())` if accepted, `Err` if not yet accepted or if the terms
+/// have changed since the last acceptance.
 pub fn check_accepted() -> anyhow::Result<()> {
     let path = match terms_path() {
         Some(p) => p,
@@ -51,27 +57,52 @@ pub fn check_accepted() -> anyhow::Result<()> {
     };
 
     if !path.exists() {
-        return Err(anyhow::anyhow!(
-            "Terms not yet accepted. Run `ta accept-terms` or use `ta --accept-terms <command>`."
-        ));
+        return Err(anyhow::anyhow!("terms not yet accepted"));
     }
 
     let content = std::fs::read_to_string(&path)?;
     let acceptance: TermsAcceptance = serde_json::from_str(&content)?;
 
-    if !acceptance.accepted || acceptance.disclaimer_hash != disclaimer_hash() {
+    if !acceptance.accepted || acceptance.terms_hash != terms_hash() {
         return Err(anyhow::anyhow!(
-            "Terms have been updated since your last acceptance. Run `ta accept-terms` to review and accept."
+            "terms have been updated since last acceptance"
         ));
     }
 
     Ok(())
 }
 
-/// Display the disclaimer and prompt the user for interactive acceptance.
+/// Ensure terms are accepted before a mutating operation.
+///
+/// - If already accepted: returns `Ok(())` immediately (fast path).
+/// - If not accepted and stdin is an interactive terminal: displays terms and
+///   prompts the user. On acceptance, records it and returns `Ok(())`.
+/// - If not accepted and stdin is **not** a terminal (CI / headless): prints a
+///   clear error message directing the user to `ta accept-terms --yes`.
+pub fn ensure_accepted() -> anyhow::Result<()> {
+    if check_accepted().is_ok() {
+        return Ok(());
+    }
+
+    if !std::io::stdin().is_terminal() {
+        return Err(anyhow::anyhow!(
+            "TA terms of use have not been accepted.\n\
+             \n\
+             This environment is non-interactive (CI/headless). To pre-accept the terms:\n\
+             \n\
+             \x20 ta accept-terms --yes\n\
+             \n\
+             View the terms first with:  ta view-terms"
+        ));
+    }
+
+    // Interactive terminal — show terms and prompt.
+    prompt_and_accept()
+}
+
+/// Display the terms and prompt the user for interactive acceptance.
 pub fn prompt_and_accept() -> anyhow::Result<()> {
-    // Print the disclaimer.
-    println!("{}", DISCLAIMER);
+    println!("{}", TERMS);
     println!("─────────────────────────────────────────────────────");
     print!("Do you accept these terms? [y/N] ");
     std::io::stdout().flush()?;
@@ -82,7 +113,8 @@ pub fn prompt_and_accept() -> anyhow::Result<()> {
     let answer = input.trim().to_lowercase();
     if answer != "y" && answer != "yes" {
         return Err(anyhow::anyhow!(
-            "Terms not accepted. Cannot continue without accepting the terms of use."
+            "Terms not accepted. Cannot continue without accepting the terms of use.\n\
+             Run `ta accept-terms` to review and accept, or `ta view-terms` to read them."
         ));
     }
 
@@ -91,8 +123,10 @@ pub fn prompt_and_accept() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Accept terms non-interactively (for CI / scripted usage).
+/// Accept terms non-interactively (for CI / scripted usage with --yes).
 pub fn accept_non_interactive() -> anyhow::Result<()> {
+    println!("{}", TERMS);
+    println!("─────────────────────────────────────────────────────");
     record_acceptance()?;
     println!("Terms accepted (non-interactive).");
     Ok(())
@@ -109,7 +143,7 @@ fn record_acceptance() -> anyhow::Result<()> {
 
     let acceptance = TermsAcceptance {
         accepted: true,
-        disclaimer_hash: disclaimer_hash(),
+        terms_hash: terms_hash(),
         accepted_at: chrono::Utc::now().to_rfc3339(),
         version: env!("CARGO_PKG_VERSION").to_string(),
     };
@@ -137,9 +171,9 @@ pub fn show_status() -> anyhow::Result<()> {
 
     let content = std::fs::read_to_string(&path)?;
     let acceptance: TermsAcceptance = serde_json::from_str(&content)?;
-    let current_hash = disclaimer_hash();
+    let current_hash = terms_hash();
 
-    if acceptance.disclaimer_hash == current_hash {
+    if acceptance.terms_hash == current_hash {
         println!("Terms accepted: {}", acceptance.accepted_at);
         println!("Version: {}", acceptance.version);
         println!("Status: current");
@@ -152,9 +186,9 @@ pub fn show_status() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// View the full disclaimer text.
+/// View the full terms text.
 pub fn view_terms() {
-    println!("{}", DISCLAIMER);
+    println!("{}", TERMS);
 }
 
 // ── Tests ──────────────────────────────────────────────────
@@ -164,30 +198,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn disclaimer_hash_is_stable() {
-        let h1 = disclaimer_hash();
-        let h2 = disclaimer_hash();
+    fn terms_hash_is_stable() {
+        let h1 = terms_hash();
+        let h2 = terms_hash();
         assert_eq!(h1, h2);
         assert_eq!(h1.len(), 16); // 8 bytes = 16 hex chars
     }
 
     #[test]
-    fn disclaimer_is_not_empty() {
-        assert!(!DISCLAIMER.is_empty());
-        assert!(DISCLAIMER.contains("Trusted Autonomy"));
-        assert!(DISCLAIMER.contains("WITHOUT WARRANTY"));
+    fn terms_text_is_not_empty() {
+        assert!(!TERMS.is_empty());
+        assert!(TERMS.contains("Trusted Autonomy"));
+        assert!(TERMS.contains("WITHOUT WARRANTY"));
+        assert!(TERMS.len() > 200, "terms should be substantive");
     }
 
     #[test]
     fn acceptance_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("terms.json");
+        let path = dir.path().join("accepted_terms");
 
         let acceptance = TermsAcceptance {
             accepted: true,
-            disclaimer_hash: disclaimer_hash(),
-            accepted_at: "2026-02-11T00:00:00Z".to_string(),
-            version: "0.2.2-alpha".to_string(),
+            terms_hash: terms_hash(),
+            accepted_at: "2026-04-01T00:00:00Z".to_string(),
+            version: "0.15.5-alpha".to_string(),
         };
 
         let json = serde_json::to_string_pretty(&acceptance).unwrap();
@@ -196,6 +231,114 @@ mod tests {
         let content = std::fs::read_to_string(&path).unwrap();
         let loaded: TermsAcceptance = serde_json::from_str(&content).unwrap();
         assert!(loaded.accepted);
-        assert_eq!(loaded.disclaimer_hash, disclaimer_hash());
+        assert_eq!(loaded.terms_hash, terms_hash());
+    }
+
+    #[test]
+    fn check_accepted_returns_err_when_no_file() {
+        // Point HOME at an empty temp dir so no accepted_terms file exists.
+        let dir = tempfile::tempdir().unwrap();
+        let orig_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", dir.path());
+
+        let result = check_accepted();
+
+        // Restore HOME before asserting (so other tests aren't affected).
+        match orig_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+
+        assert!(
+            result.is_err(),
+            "expected Err when no acceptance file exists"
+        );
+    }
+
+    #[test]
+    fn check_accepted_returns_err_on_stale_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join(".config").join("ta");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        let path = config_dir.join("accepted_terms");
+
+        // Write acceptance with a wrong hash.
+        let acceptance = TermsAcceptance {
+            accepted: true,
+            terms_hash: "0000000000000000".to_string(), // stale
+            accepted_at: "2026-01-01T00:00:00Z".to_string(),
+            version: "0.1.0-alpha".to_string(),
+        };
+        let json = serde_json::to_string_pretty(&acceptance).unwrap();
+        std::fs::write(&path, &json).unwrap();
+
+        let orig_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", dir.path());
+        let result = check_accepted();
+        match orig_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+
+        assert!(result.is_err(), "expected Err on stale hash");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("updated"),
+            "error should mention updated terms: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn check_accepted_returns_ok_with_valid_acceptance() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join(".config").join("ta");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        let path = config_dir.join("accepted_terms");
+
+        let acceptance = TermsAcceptance {
+            accepted: true,
+            terms_hash: terms_hash(),
+            accepted_at: "2026-04-01T00:00:00Z".to_string(),
+            version: "0.15.5-alpha".to_string(),
+        };
+        let json = serde_json::to_string_pretty(&acceptance).unwrap();
+        std::fs::write(&path, &json).unwrap();
+
+        let orig_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", dir.path());
+        let result = check_accepted();
+        match orig_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+
+        assert!(result.is_ok(), "expected Ok with valid acceptance file");
+    }
+
+    #[test]
+    fn record_acceptance_writes_correct_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let orig_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", dir.path());
+
+        let result = record_acceptance();
+
+        match orig_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+
+        assert!(result.is_ok());
+
+        let path = dir.path().join(".config").join("ta").join("accepted_terms");
+        assert!(path.exists(), "accepted_terms file should be written");
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        let loaded: TermsAcceptance = serde_json::from_str(&content).unwrap();
+        assert!(loaded.accepted);
+        assert_eq!(loaded.terms_hash, terms_hash());
+        assert!(!loaded.accepted_at.is_empty());
+        assert!(!loaded.version.is_empty());
     }
 }
