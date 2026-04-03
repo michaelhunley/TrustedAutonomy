@@ -51,6 +51,20 @@ pub struct WorkflowConfig {
     /// capturing the PR URL so the PR merges automatically once CI passes.
     #[serde(default)]
     pub auto_merge: bool,
+
+    /// When true (the default), `pr_sync` treats a missing PR URL as a hard error and
+    /// stops the workflow rather than silently skipping the sync step. Set to `false`
+    /// only for direct-commit VCS flows where PRs are never created.
+    ///
+    /// This default is also overridden to `true` at runtime when the project's
+    /// `workflow.toml` submit adapter is "git" with `auto_push = true`, so that VCS
+    /// settings are the single source of truth.
+    #[serde(default = "default_require_pr")]
+    pub require_pr: bool,
+}
+
+fn default_require_pr() -> bool {
+    true
 }
 
 fn default_reviewer_agent() -> String {
@@ -672,7 +686,20 @@ pub fn run_governed_workflow(opts: &RunOptions) -> anyhow::Result<()> {
     let runs_dir = opts.workspace_root.join(".ta").join("workflow-runs");
     let def = find_workflow_def(opts.workspace_root, opts.workflow_name)?;
     let stage_order = validate_stage_graph(&def.stages)?;
-    let config = &def.workflow.config;
+    // Clone so we can override `require_pr` based on VCS settings.
+    let mut owned_config = def.workflow.config.clone();
+    // Read the project's workflow.toml submit section. If the VCS adapter is "git" with
+    // auto_review enabled (i.e. PRs are expected), override require_pr = true regardless
+    // of what the workflow definition says. This makes VCS settings the single source of truth.
+    let submit_config_path = opts.workspace_root.join(".ta").join("workflow.toml");
+    {
+        let wf = ta_submit::WorkflowConfig::load_or_default(&submit_config_path);
+        let git_with_review = wf.submit.adapter == "git" && wf.submit.auto_review != Some(false);
+        if git_with_review {
+            owned_config.require_pr = true;
+        }
+    }
+    let config = &owned_config;
 
     // Dry run: just print the stage graph.
     if opts.dry_run {
@@ -1254,9 +1281,32 @@ fn stage_pr_sync(
     let pr_url = match &run.pr_url {
         Some(url) => url.clone(),
         None => {
-            // No PR URL — apply_draft didn't create/detect a PR.
-            // This is acceptable (e.g. no VCS integration). Skip poll.
-            return Ok(Some("no PR URL — sync skipped".to_string()));
+            // No PR URL captured from apply_draft output.
+            if config.require_pr {
+                // VCS settings indicate a PR-based flow — a missing URL is a hard error.
+                // Do NOT silently skip: the next phase would start on stale code.
+                anyhow::bail!(
+                    "pr_sync: no PR URL was captured from 'ta draft apply' output, \
+                     but this workflow requires a PR (require_pr = true).\n\
+                     \n\
+                     This usually means:\n\
+                     - 'ta draft apply' succeeded but did not print a 'PR: <url>' line\n\
+                     - The PR was created but output was in an unexpected format\n\
+                     - PR creation failed silently inside 'ta draft apply'\n\
+                     \n\
+                     To recover:\n\
+                     1. Find the PR created for this phase (check 'gh pr list')\n\
+                     2. Wait for it to merge, then 'git pull' manually\n\
+                     3. Re-run the build loop: ./build_phases.sh\n\
+                     \n\
+                     To skip PR sync for a direct-commit VCS flow, set:\n\
+                     require_pr = false   in .ta/workflows/build.toml [config]"
+                );
+            }
+            // Non-PR flow (direct commit, no VCS integration). Skip poll.
+            return Ok(Some(
+                "no PR URL — sync skipped (require_pr = false)".to_string(),
+            ));
         }
     };
 
