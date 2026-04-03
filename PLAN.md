@@ -9492,68 +9492,135 @@ condition = "!plan_next.done"
 
 ---
 
-### v0.15.14 — Hierarchical Workflows: Parallel Fan-Out & Milestone Draft
+### v0.15.14 — Hierarchical Workflows: Parallel Fan-Out, Phase Loops & Milestone Draft
 <!-- status: pending -->
-**Goal**: Fan-out multiple sub-workflows in parallel, wait for all to complete, and aggregate their drafts into a single **Milestone Draft** — a composite changeset spanning all phases that can be reviewed and approved as one unit. This is the native TA equivalent of running `build_phases.sh` and getting all changes in a single PR.
+**Goal**: Two first-class modes for multi-phase execution — **PR-per-phase** (iterate phases serially, PR and VCS-sync each one before moving on) and **milestone-draft** (iterate phases, accumulate all changes into a branch, present the entire series as one combined draft for human approval). Both modes support phase selection by count, version set (glob), or range. The sync step after each PR uses the `SourceAdapter` trait — not hardcoded git — so the loop works identically on Git, Perforce, and SVN.
 
 **Depends on**: v0.15.13 (sub-workflow steps, serial chaining)
 
-**Design**:
+> **Replaces `build_phases.sh`**: The `plan-build-phases.toml` template (Mode A) is the native, VCS-agnostic equivalent of the current `build_phases.sh` shell loop. The shell script remains as a lightweight fallback but the engine is the primary path going forward.
 
-A `parallel:` block in the workflow TOML groups steps that run concurrently:
+#### Phase selection controls
+
+Both modes accept a `[phases]` block in the workflow invocation or template:
 
 ```toml
-[[stage]]
-name = "security_review"
-kind = "workflow"
-workflow = "review-security"
-goal = "{{parent.goal}}"
-parallel_group = "review_panel"
+# By count — run at most N pending phases
+[phases]
+max = 3
 
-[[stage]]
-name = "arch_review"
-kind = "workflow"
-workflow = "review-arch"
-goal = "{{parent.goal}}"
-parallel_group = "review_panel"
+# By version set — run all pending phases matching the glob
+[phases]
+version_set = "v0.15.*"
 
-[[stage]]
-name = "join_reviews"
-kind = "join"
-parallel_group = "review_panel"   # waits for all members of the group
-depends_on = ["security_review", "arch_review"]
+# By range — run all pending phases from start through end (inclusive)
+[phases]
+range = { from = "v0.15.5", to = "v0.15.8" }
 ```
 
-For milestone aggregation, a `kind = "aggregate_draft"` step:
+These resolve at runtime via `ta plan next` iteration — only phases with `<!-- status: pending -->` are candidates.
+
+#### Mode A — PR-per-phase (serial, VCS-synced)
+
+Each phase is implemented, reviewed, PR'd, merged, and VCS-synced before the next phase starts. Uses the `SourceAdapter` trait for the sync step (not hardcoded `git pull`).
 
 ```toml
+# templates/workflows/plan-build-phases.toml
+[workflow]
+mode = "pr-per-phase"
+
+[phases]
+max = 99   # or version_set / range
+
+[[stage]]
+name = "run_goal"
+kind = "run_goal"
+goal = "{{phase.title}}"
+phase = "{{phase.id}}"
+
+[[stage]]
+name = "review_draft"
+kind = "review_draft"
+draft = "{{run_goal.draft_id}}"
+
+[[stage]]
+name = "apply_draft"
+kind = "apply_draft"
+draft = "{{run_goal.draft_id}}"
+
+[[stage]]
+name = "pr_sync"
+kind = "pr_sync"          # opens PR, polls for merge, VCS-syncs via SourceAdapter
+
+[[stage]]
+name = "next_phase"
+kind = "loop_next"        # advances to next pending phase; exits loop if none remain
+```
+
+#### Mode B — Milestone draft (accumulate, single combined approval)
+
+Each phase is implemented and applied into a local branch (no PR per phase). After all phases complete, a single `MilestoneDraft` is produced spanning all phase changesets. One human-approval step covers the entire series.
+
+```toml
+# templates/workflows/plan-build-milestone.toml
+[workflow]
+mode = "milestone-draft"
+milestone_branch = "milestone/{{phases.version_set}}"   # local branch for accumulation
+
+[phases]
+version_set = "v0.15.*"
+
+[[stage]]
+name = "run_goal"
+kind = "run_goal"
+goal = "{{phase.title}}"
+
+[[stage]]
+name = "apply_local"
+kind = "apply_draft"
+target = "branch"         # applies into milestone_branch, not main
+
 [[stage]]
 name = "milestone"
 kind = "aggregate_draft"
-source_stages = ["run_phase_1", "run_phase_2", "run_phase_3"]
-milestone_title = "v0.4 — Captioning & ComfyUI Milestone"
-depends_on = ["run_phase_1", "run_phase_2", "run_phase_3"]
+source_stages = "all"     # collects draft_id from every run_goal iteration
+milestone_title = "{{phases.version_set}} milestone"
+
+[[stage]]
+name = "human_gate"
+kind = "human_gate"
+prompt = "Review the milestone draft above. Approve to open a single PR for all phases."
+
+[[stage]]
+name = "pr_sync"
+kind = "pr_sync"          # opens one PR from milestone_branch → main, polls, VCS-syncs
 ```
 
 **Items**:
 
-1. [ ] **`parallel_group` on stages**: Stages with the same `parallel_group` are dispatched concurrently using `std::thread::spawn`. Each runs its own `run_governed_workflow()` or primitive step executor in a worker thread. Results (output map + artifacts) are collected at the `join` step.
+1. [ ] **`PhaseSelector`** (`crates/ta-goal/src/phase_selector.rs`): Resolves `[phases]` config block against the live plan. `PhaseSelector::resolve(plan, config) -> Vec<PlanPhase>` returns ordered pending phases matching the selector. Three variants: `Count(u32)`, `VersionSet(glob_pattern)`, `Range { from: String, to: String }`. Used by the loop engine to determine the phase sequence before execution starts.
 
-2. [ ] **`kind = "join"` step**: Blocks until all members of `parallel_group` complete. Fails the workflow if any member fails (unless `on_partial_failure = "continue"` is set). Merges output maps: conflicting keys are prefixed with stage name (`security_review.verdict`, `arch_review.verdict`).
+2. [ ] **`kind = "loop_next"` step**: Advances the workflow's phase cursor to the next unprocessed phase from the `PhaseSelector` result set. If no phases remain, exits the loop with status `complete`. If a phase fails, exits with `failed` (propagates to the outer workflow). Loop state (cursor, completed phases, failed phase if any) stored in the workflow run record.
 
-3. [ ] **`kind = "aggregate_draft"` step**: Reads `draft_id` from each listed source stage's output. For each draft, fetches the `DraftPackage` from the draft store. Merges artifact lists (dedup by URI, last-writer-wins within a phase). Creates a new `MilestoneDraft` record with `source_drafts: Vec<DraftId>`, `milestone_title`, and a combined summary. The milestone draft is treated as a standard draft for the `review_draft → human_gate → apply_draft` pipeline.
+3. [ ] **`pr_sync` stage — VCS-abstracted poll + sync**: Replace the current `pr_sync` implementation's hardcoded `git pull` with `SourceAdapter::sync(target_branch)`. After opening the PR and confirming auto-merge is enabled, poll `SourceAdapter::pr_status(pr_id)` until `merged` (or timeout). Then call `SourceAdapter::sync()`. No direct `git` subprocess calls remain in the sync path.
 
-4. [ ] **`MilestoneDraft` struct** (`ta-changeset`): Wraps a `DraftPackage` with `source_drafts: Vec<String>` and `milestone_title: String`. `ta draft view <milestone-id>` shows per-phase sections. `ta draft apply <milestone-id>` applies all constituent drafts in phase order.
+4. [ ] **`kind = "apply_draft"` with `target = "branch"`**: Applies the draft's file changes to a local VCS branch (`milestone_branch`) rather than to the working directory. Uses `SourceAdapter::apply_to_branch(branch, artifacts)`. Creates the branch if absent.
 
-5. [ ] **`plan-build-loop-milestone.toml`** template: Extended variant of `plan-build-loop` that runs phases in parallel batches (configurable `batch_size`) and aggregates into a milestone draft rather than applying each phase immediately.
+5. [ ] **`kind = "aggregate_draft"` step**: Reads `draft_id` from each listed source stage's output. Merges artifact lists (dedup by URI, last-writer-wins within a phase). Creates a `MilestoneDraft` record with `source_drafts: Vec<DraftId>`, `milestone_title`, and a combined summary per phase.
 
-6. [ ] **Parallel execution scheduler**: Thread pool with configurable `max_parallel` (default 3). Sub-workflows beyond the pool limit are queued. Ensures at most N concurrent agent processes per workflow run.
+6. [ ] **`MilestoneDraft` struct** (`ta-changeset`): Wraps a `DraftPackage` with `source_drafts: Vec<String>`, `milestone_title: String`, `milestone_branch: Option<String>`. `ta draft view <milestone-id>` shows per-phase sections. `ta draft apply <milestone-id>` applies constituent drafts in phase order.
 
-7. [ ] **Milestone draft review in `ta workflow status`**: Shows constituent drafts, per-phase status (applied / pending / failed), and the milestone aggregate summary.
+7. [ ] **`parallel_group` + `kind = "join"` steps**: Stages with the same `parallel_group` dispatch concurrently (thread pool, configurable `max_parallel`, default 3). `kind = "join"` blocks until all group members complete; merges output maps with stage-name prefixes on conflicts. `on_partial_failure = "continue"` proceeds despite one member failing.
 
-8. [ ] **Tests**: parallel stages start concurrently (mock clock); join waits for all before proceeding; `on_partial_failure = "continue"` proceeds despite one failure; `aggregate_draft` merges two draft packages correctly; `MilestoneDraft` apply applies phases in order; max_parallel cap queues correctly.
+8. [ ] **`plan-build-phases.toml`** template (Mode A): Replaces `build_phases.sh` in the template library. Phase selection defaults to `max = 99`. Uses `pr_sync` VCS-abstracted loop.
 
-9. [ ] **USAGE.md**: "Parallel Workflows & Milestone Drafts" section — `parallel_group`, `join`, `aggregate_draft`, `plan-build-loop-milestone` usage, reviewing a milestone draft.
+9. [ ] **`plan-build-milestone.toml`** template (Mode B): Milestone accumulation workflow. Phase selection defaults to accepting a `version_set` or `range` parameter at invocation time.
+
+10. [ ] **Milestone draft review in `ta workflow status`**: Shows constituent drafts, per-phase status (applied / pending / failed), overall milestone progress, and the `milestone_branch` if in Mode B.
+
+11. [ ] **Tests**: `PhaseSelector` resolves count/version-set/range correctly against a mock plan; `loop_next` advances cursor and exits on last phase; `pr_sync` calls `SourceAdapter::sync()` not git directly; `apply_draft` with `target = "branch"` calls `apply_to_branch`; `aggregate_draft` merges two draft packages with correct dedup; `MilestoneDraft` apply applies phases in order; parallel stages start concurrently (mock clock); join waits for all; max_parallel cap queues correctly.
+
+12. [ ] **USAGE.md**: "Multi-Phase Workflows" section — Mode A vs Mode B comparison table, `[phases]` block examples (count, version_set, range), `plan-build-phases` vs `plan-build-milestone` templates, reviewing a milestone draft, VCS adapter requirements for `pr_sync`.
 
 #### Version: `0.15.14-alpha`
 
