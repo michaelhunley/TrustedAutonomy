@@ -8952,7 +8952,7 @@ supervisor = true         # run supervisor confidence check (default: true)
 ---
 
 ### v0.15.5 — Terms Acceptance Gate on First-Run Operations
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Prompt the user to review and accept the TA terms of use during first-run operations (`ta init`, `ta run` first goal, `ta goal start`). Acceptance is recorded in the TA config dir and not asked again. Commands that don't mutate state (e.g. `ta plan list`, `ta draft view`) never gate on terms.
 
 **Why this phase exists**: As TA moves toward public release and studio deployments, a clear terms acceptance moment is required for legal and onboarding purposes. It should feel like a natural part of setup — not a blocker mid-workflow.
@@ -8968,17 +8968,17 @@ supervisor = true         # run supervisor confidence check (default: true)
 
 #### Items
 
-1. [ ] **Terms file** at `apps/ta-cli/src/terms.txt` (embedded via `include_str!`). Short (~20 lines): what TA does, what it may read/write, privacy note, link to full terms. Version hash is derived from the content.
+1. [x] **Terms file** at `apps/ta-cli/src/terms.txt` (embedded via `include_str!`). Short (~20 lines): what TA does, what it may read/write, privacy note, link to full terms. Version hash derived from SHA-256 of content (first 16 hex chars).
 
-2. [ ] **Acceptance check** in `apps/ta-cli/src/commands/run.rs`, `init.rs`, and `goal.rs`: call `check_terms_accepted()` before the mutating operation begins. Reads `~/.config/ta/accepted_terms`; if absent or stale version, runs the interactive prompt.
+2. [x] **Acceptance check** via `ensure_accepted()` in `terms.rs`; gated in `main.rs` using `requires_terms_acceptance()` which matches only `Commands::Init`, `Commands::Run`, and `Commands::Goal` where `is_start_command()` returns true. Reads `~/.config/ta/accepted_terms`; if absent or stale hash, runs the interactive prompt. `is_start_command()` helper added to `goal.rs`.
 
-3. [ ] **`ta accept-terms`** subcommand: prints terms, accepts with `--yes`, writes acceptance record. Used by CI and install scripts.
+3. [x] **`ta accept-terms`** subcommand updated with `--yes` flag: prints terms, records acceptance non-interactively. Used by CI and install scripts.
 
-4. [ ] **Non-interactive detection**: if `!std::io::stdin().is_terminal()` and terms not yet accepted, print error with `ta accept-terms --yes` as the suggested fix.
+4. [x] **Non-interactive detection**: `ensure_accepted()` checks `std::io::stdin().is_terminal()`; if non-interactive and terms not accepted, returns clear error directing user to `ta accept-terms --yes`.
 
-5. [ ] **Tests**: acceptance file written correctly; stale version triggers re-prompt; non-interactive path returns correct error; `ta accept-terms --yes` writes acceptance and exits 0.
+5. [x] **Tests** in `terms.rs`: `check_accepted_returns_err_when_no_file`, `check_accepted_returns_err_on_stale_hash`, `check_accepted_returns_ok_with_valid_acceptance`, `record_acceptance_writes_correct_file`, `terms_hash_is_stable`, `terms_text_is_not_empty`, `acceptance_roundtrip` (7 tests total).
 
-6. [ ] **USAGE.md "Terms & First-Run Setup" note**: one paragraph explaining when you'll see the prompt and how to pre-accept in CI.
+6. [x] **USAGE.md "Terms & First-Run Setup" section**: explains when the prompt appears, shows interactive and CI flows, lists all `ta accept-terms` / `ta view-terms` / `ta terms-status` commands.
 
 #### Version: `0.15.5-alpha`
 

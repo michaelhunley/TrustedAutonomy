@@ -512,8 +512,15 @@ enum Commands {
 
     // ── TERMS ───────────────────────────────────────────────────────────────
     /// Review and accept the terms of use.
+    ///
+    /// In interactive terminals, displays the terms and prompts for acceptance.
+    /// Use `--yes` to accept non-interactively (CI/scripted usage).
     #[command(hide = true)]
-    AcceptTerms,
+    AcceptTerms {
+        /// Accept without prompting (for CI / install scripts).
+        #[arg(long)]
+        yes: bool,
+    },
     /// View the current terms of use.
     #[command(hide = true)]
     ViewTerms,
@@ -619,7 +626,13 @@ fn main() -> anyhow::Result<()> {
     // Terms-related commands don't require prior acceptance.
     if let Some(cmd) = &cli.command {
         match cmd {
-            Commands::AcceptTerms => return commands::terms::prompt_and_accept(),
+            Commands::AcceptTerms { yes } => {
+                if *yes {
+                    return commands::terms::accept_non_interactive();
+                } else {
+                    return commands::terms::prompt_and_accept();
+                }
+            }
             Commands::ViewTerms => {
                 commands::terms::view_terms();
                 return Ok(());
@@ -658,16 +671,11 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    // All other commands require terms acceptance.
-    if let Err(e) = commands::terms::check_accepted() {
-        eprintln!("Error: {}", e);
-        eprintln!();
-        eprintln!("To accept terms interactively:");
-        eprintln!("  ta accept-terms");
-        eprintln!();
-        eprintln!("To accept non-interactively (CI/scripts):");
-        eprintln!("  ta --accept-terms <command>");
-        return Err(e);
+    // Mutating commands (ta init, ta run, ta goal start) require terms acceptance.
+    // Read-only commands (ta plan list, ta draft view, ta stats, etc.) are exempt.
+    let needs_terms = cli.command.as_ref().is_some_and(requires_terms_acceptance);
+    if needs_terms {
+        commands::terms::ensure_accepted()?;
     }
 
     let project_root = cli.project_root.canonicalize().unwrap_or(cli.project_root);
@@ -906,9 +914,22 @@ fn main() -> anyhow::Result<()> {
             commands::conversation::execute(&config, goal_id, *json)
         }
         // Already handled above.
-        Commands::AcceptTerms
+        Commands::AcceptTerms { .. }
         | Commands::ViewTerms
         | Commands::TermsStatus
         | Commands::Terms { .. } => unreachable!(),
+    }
+}
+
+/// Returns true for commands that cause agent-mediated workspace mutations and
+/// therefore require terms acceptance before proceeding.
+///
+/// Read-only commands (ta plan list, ta draft view, ta goal list, ta stats, …)
+/// return false and are never gated on terms acceptance.
+fn requires_terms_acceptance(cmd: &Commands) -> bool {
+    match cmd {
+        Commands::Init { .. } | Commands::Run { .. } => true,
+        Commands::Goal { command } => commands::goal::is_start_command(command),
+        _ => false,
     }
 }
