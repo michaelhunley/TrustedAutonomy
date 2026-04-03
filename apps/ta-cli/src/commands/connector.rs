@@ -486,9 +486,7 @@ fn start(connector: &str) -> Result<()> {
                         }
                         Err(e) => {
                             eprintln!("  Failed to start: {}", e);
-                            eprintln!(
-                                "  Run `ta connector install unreal` for setup instructions."
-                            );
+                            eprintln!("  Check that `socket` in [connectors.unreal] is a valid address (default: localhost:30100).");
                         }
                     }
                 }
