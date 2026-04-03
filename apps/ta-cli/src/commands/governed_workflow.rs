@@ -47,6 +47,10 @@ pub struct WorkflowConfig {
     #[serde(default)]
     #[allow(dead_code)]
     pub notify_channels: Vec<String>,
+    /// When true, `stage_apply_draft` calls `gh pr merge --auto --squash` immediately after
+    /// capturing the PR URL so the PR merges automatically once CI passes.
+    #[serde(default)]
+    pub auto_merge: bool,
 }
 
 fn default_reviewer_agent() -> String {
@@ -700,6 +704,7 @@ pub fn run_governed_workflow(opts: &RunOptions) -> anyhow::Result<()> {
         println!("  gate_on_verdict:      {:?}", config.gate_on_verdict);
         println!("  pr_poll_interval_secs:{}", config.pr_poll_interval_secs);
         println!("  sync_timeout_hours:   {}", config.sync_timeout_hours);
+        println!("  auto_merge:           {}", config.auto_merge);
         return Ok(());
     }
 
@@ -832,7 +837,7 @@ fn execute_stage(
         "run_goal" => stage_run_goal(run, opts),
         "review_draft" => stage_review_draft(run, opts, config),
         "human_gate" => stage_human_gate(run, config),
-        "apply_draft" => stage_apply_draft(run, opts),
+        "apply_draft" => stage_apply_draft(run, opts, config),
         "pr_sync" => stage_pr_sync(run, config),
         other => anyhow::bail!("Unknown stage: '{}'", other),
     }
@@ -1151,6 +1156,7 @@ fn deny_draft_for_rejection(
 fn stage_apply_draft(
     run: &mut GovernedWorkflowRun,
     opts: &RunOptions,
+    config: &WorkflowConfig,
 ) -> anyhow::Result<Option<String>> {
     let draft_id = run.draft_id.as_deref().ok_or_else(|| {
         anyhow::anyhow!("No draft_id available — run_goal stage did not capture a draft ID")
@@ -1202,6 +1208,34 @@ fn stage_apply_draft(
     for line in stdout.lines() {
         if line.starts_with("PR: ") || line.starts_with("PR:") {
             run.pr_url = Some(line.trim_start_matches("PR:").trim().to_string());
+        }
+    }
+
+    // Enable auto-merge if configured — PR merges automatically once CI passes.
+    if config.auto_merge {
+        if let Some(ref url) = run.pr_url {
+            println!("  Enabling auto-merge on PR (--squash)...");
+            let merge_out = std::process::Command::new("gh")
+                .args(["pr", "merge", "--auto", "--squash", url])
+                .output();
+            match merge_out {
+                Ok(o) if o.status.success() => {
+                    println!("  Auto-merge enabled — PR will merge when CI passes.");
+                }
+                Ok(o) => {
+                    // Non-fatal: auto-merge may fail if the repo doesn't have it enabled,
+                    // or if the PR is already mergeable. pr_sync will still poll normally.
+                    let msg = String::from_utf8_lossy(&o.stderr);
+                    println!(
+                        "  [warn] gh pr merge --auto returned non-zero ({}): {}",
+                        o.status.code().unwrap_or(-1),
+                        msg.trim()
+                    );
+                }
+                Err(e) => {
+                    println!("  [warn] Could not invoke gh to enable auto-merge: {}", e);
+                }
+            }
         }
     }
 
