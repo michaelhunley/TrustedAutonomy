@@ -10010,13 +10010,13 @@ acknowledged_omissions = [".ta/review/"]  # user intentionally removed; suppress
 
 9. [ ] **USAGE.md**: "Upgrading an Existing Project" section covering `ta upgrade`, `--dry-run`, `--force`, `--acknowledge`, and the `project-meta.toml` file.
 
-10. [ ] **GC: prune staging for old `pr_ready` goals** *(gap found Apr 2026 — disk exhaustion)*:
-    - `ta gc` and `ta doctor` currently only detect staging dirs with **no active goal JSON** as stale (v0.14.12 item 10). Goals whose PRs are merged directly on GitHub without `ta draft apply` remain `pr_ready` forever with full staging intact.
-    - Add a second GC check: staging dirs for goals in `pr_ready` state older than `gc_pr_ready_staging_days` (default 14, configurable in `[gc]` section of `daemon.toml`) are flagged by `ta doctor` and removed by `ta gc`.
-    - `ta doctor` output: `[warn] 3 pr_ready goals have staging older than 14d (23 GB). Run 'ta gc' to reclaim.`
-    - `ta gc` output: prints each goal ID + title + size freed, updates goal state to `closed` with `close_reason: "gc: staging pruned after pr_ready timeout"`.
-    - `--dry-run` support: lists what would be removed without deleting.
-    - 3 new tests: `gc_prunes_old_pr_ready_staging`, `gc_respects_dry_run`, `doctor_warns_on_old_pr_ready_staging`.
+10. [ ] **GC: `pr_ready` goals with denied drafts** *(gap found Apr 2026 — disk exhaustion)*:
+    - Goals whose draft was denied stay `pr_ready` with full staging indefinitely. `ta gc` must NOT auto-delete these — the user may want to inspect or re-run.
+    - **`ta doctor`**: lists them under a `[warn]` entry: `"2 goal(s) are pr_ready with a denied draft (X GB staging). Run 'ta doctor --fix-denied' to clean up or re-run the phase to supersede."` Includes goal ID, title, size, and date denied.
+    - **`ta doctor --fix-denied`**: interactive prompt per goal — delete staging + mark `closed`, or skip.
+    - **Starting a new goal for the same phase**: automatically marks the prior `pr_ready`+denied goal as `superseded`, deletes its staging, prints `"Superseded prior goal <id> for phase <phase>."`.
+    - **`ta gc`**: only warns (`"N pr_ready/denied goals — run 'ta doctor' to review"`), never deletes without explicit user confirmation.
+    - 3 new tests: `doctor_lists_pr_ready_denied_goals`, `doctor_fix_denied_deletes_staging`, `new_goal_supersedes_denied_prior`.
 
 11. [ ] **Verify `target/` exclusion is enforced at staging copy time** *(gap found Apr 2026)*:
     - `overlay.rs` has built-in `target/` in `exclude_patterns()` but staging dirs created March 2026 contained full compiled `target/` (~6–7 GB each), suggesting the exclusion was not effective or was added after those goals started.
