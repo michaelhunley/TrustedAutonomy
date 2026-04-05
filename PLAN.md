@@ -9044,6 +9044,42 @@ supervisor = true         # run supervisor confidence check (default: true)
 
 ---
 
+### v0.15.6.2 — Finalizing Timeout Fix + Aggressive Auto-GC
+<!-- status: pending -->
+**Goal**: Fix the recurring `Finalizing timed out after 300s` failure that leaves staging dirs in `failed` state and wastes gigabytes of disk. Add automatic GC that keeps staging disk usage bounded without manual intervention.
+
+**Root cause of timeout**: `ta draft build` runs synchronously inside the finalizing phase. On large workspaces, diffing staging vs source exceeds the 300s watchdog. The goal is marked `failed` and staging is left on disk — GC threshold for failed goals is 7 days, long enough to accumulate many multi-GB dirs.
+
+**Root cause of disk bloat**: Staging is a full copy of source. Each goal consumes several GB even though the agent only touched a handful of files. The planned VFS approach (ProjFS, v0.15.8) solves this on Windows only. This phase adds a cross-platform mitigation and makes GC aggressive enough that accumulation can't happen.
+
+#### Items — Finalizing Timeout
+
+1. [ ] **Increase finalizing timeout** (`crates/ta-goal/src/goal_run.rs`): raise watchdog from 300s to 600s for the `building draft package` operation. Add per-operation config: `[timeouts] finalizing_s = 600` in `daemon.toml`.
+
+2. [ ] **Async draft build** (`apps/ta-cli/src/commands/run.rs`): move `draft build` out of the synchronous finalizing path. After agent exits, spawn diff+package as a background task and write a `draft_build_pending` marker. Goal transitions to `Finalizing` immediately; `ta status` shows "building draft…" until the marker clears. Eliminates the watchdog race entirely.
+
+3. [ ] **Finalizing recovery** (`ta goal recover`): when a goal is `failed` with reason `Finalizing timed out` and staging still exists, `ta goal recover <id>` re-runs only the draft build step — not a new agent session.
+
+#### Items — Auto-GC & Disk Efficiency
+
+4. [ ] **Aggressive GC defaults**: reduce failed-goal staging retention from 7 days to **4 hours**. Add `[gc] failed_staging_retention_hours = 4` to `daemon.toml` defaults. Failed goals with no draft package have nothing to recover — staging is pure waste.
+
+5. [ ] **GC on daemon startup + periodic**: run a lightweight GC pass on daemon start and every 6 hours while running — remove staging for any goal that is `failed`, `applied`, `completed`, or `denied` beyond their retention window. Print: `gc: removed 8 staging dirs, freed ~12GB`.
+
+6. [ ] **`ta gc --status` subcommand** (`apps/ta-cli/src/commands/gc.rs`): first-class output of goal-id, title, state, age, staging size. `ta gc --delete-stale` deletes all non-running staging with confirmation prompt. Replaces `scripts/staging-status.sh`.
+
+7. [ ] **Staging size cap**: add `[gc] max_staging_gb = 20` — if total staging exceeds this, GC oldest failed/completed dirs before starting a new goal. Prevents runaway accumulation.
+
+8. [ ] **Sparse staging** (cross-platform, pre-ProjFS): instead of copying the entire source tree, staging copies only files the agent is likely to modify — those referenced in the goal's plan phase items, plus `CLAUDE.md`, `.ta/`, and files touched in the last git commits. Remaining files are symlinked read-only to source. Reduces staging from "entire repo" to tens of MB on most goals.
+
+9. [ ] **Tests**: GC startup pass removes failed dirs beyond threshold. Size cap triggers before new goal starts. `ta gc --status` matches staging state. Sparse staging: agent reads non-staged files via symlink; writes land in staging copy; diff only covers real copies.
+
+10. [ ] **USAGE.md "Disk & GC"** section: what staging uses, GC retention policy, `max_staging_gb`, `failed_staging_retention_hours`, `ta gc --delete-stale`.
+
+#### Version: `0.15.6.2-alpha`
+
+---
+
 ### v0.15.7 — Velocity Stats: Committed Aggregate & Multi-Machine Rollup
 <!-- status: pending -->
 **Goal**: Make velocity data committable, team-visible, and conflict-free. Currently `velocity-stats.jsonl` is purely local (gitignored), so stats never aggregate across machines or team members. This phase introduces a committed `velocity-history.jsonl` that is auto-staged on `ta draft apply --git-commit`, using the same append-only pattern as `plan_history.jsonl`.
