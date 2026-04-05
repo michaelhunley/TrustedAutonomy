@@ -22,6 +22,15 @@ check:
 fmt:
     cargo fmt --all
 
+# Remove build artifacts (frees 50-200GB; rebuilds automatically on next build)
+clean:
+    cargo clean
+    @echo "target/ removed. Run 'just build' to rebuild."
+
+# Show target/ disk usage — run periodically to avoid disk bloat
+target-size:
+    @du -sh target/ 2>/dev/null || echo "target/ does not exist"
+
 # Run a specific crate's tests (usage: just test-crate ta-audit)
 test-crate CRATE:
     cargo nextest run -p {{CRATE}} 2>/dev/null || cargo test -p {{CRATE}}
