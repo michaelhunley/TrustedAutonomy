@@ -9776,6 +9776,106 @@ One JSON record per item, appended by `ta draft apply`:
 
 ---
 
+### v0.15.14.2 — Agent-Driven PR Lifecycle: Monitor, Conflict-Fix & Merge
+<!-- status: pending -->
+**Goal**: Make `ta draft` the complete control surface for the branch→commit→PR→merge lifecycle. After a draft is applied, the user (or an automated step) can create a PR, monitor it, have an agent fix merge conflicts, and merge — all from `ta` commands backed by the existing VCS adapter. Each step emits an explanation for the human and can run automatically or pause for human sign-off.
+
+**Why this phase exists**: Today, after `ta draft apply --git-commit`, the user has a commit on a feature branch but must manually open a PR, watch for CI failures, fix conflicts, and merge. When conflicts arise mid-session the fix is ad-hoc (rebase, copy files, re-push). The embedded-patch work (v0.15.6.1) already proves we can reconstruct changes without staging — the same machinery enables an agent to re-apply changes on top of a rebased base. This phase closes the loop so TA manages the full lifecycle through a structured, observable, human-controllable workflow.
+
+**Depends on**: v0.15.14.1 (human review store — reused for PR review items), v0.12.0.2 (VCS adapter), v0.15.6.1 (embedded patches for conflict-rebased re-apply)
+
+**Non-goal**: TA never merges without explicit human approval unless the user has set `auto_merge = true` in the project constitution. The default is always `--human-gate`.
+
+---
+
+#### New commands
+
+**`ta pr submit <draft-id>`** (alias `ta draft submit <draft-id>`)
+Creates a branch, commits the applied changes, and opens a PR. Uses the VCS adapter (`create_branch`, `commit`, `open_pr`). Prints the PR URL and stores the PR handle in `.ta/goals/<goal-id>.json` as `vcs_pr`.
+
+Options:
+- `--title <text>` — PR title (default: goal title)
+- `--body <text>` — PR body (default: agent-generated summary from draft artifacts)
+- `--auto-merge` — enable auto-merge after CI + approvals (requires constitution consent)
+- `--draft-pr` — open as GitHub/GitLab draft PR
+
+**`ta pr status [<pr-id>]`**
+Shows current PR state: CI checks, conflict status, approvals, merge-readiness. If `<pr-id>` is omitted, shows all open PRs linked to TA goals.
+
+**`ta pr monitor [<pr-id>] [--auto-fix] [--auto-merge]`**
+Polls the PR continuously. On conflict detection, spawns a short-lived conflict-fix agent with the embedded patch as context. The agent rebases or re-applies changes, pushes the fix, and updates the PR description with a note explaining what was changed and why. Human receives a `ta ask` prompt unless `--auto-fix` is set.
+
+States the monitor handles:
+- `open` — CI pending, waiting
+- `conflict` → spawn fix agent → push fix → update PR body → (gate or auto-continue)
+- `ci_failed` → surface failure with log link + next-step suggestion
+- `approved` → merge (if `--auto-merge`) or prompt human
+- `merged` → mark goal `completed`, clean staging
+
+**`ta pr merge <pr-id>`**
+Merges the PR via the VCS adapter. Confirms CI is green and required approvals met before proceeding. Marks the linked goal `completed`. Prints a summary of what was merged.
+
+**`ta pr explain <pr-id>`**
+Generates or regenerates an agent-written PR description from the draft artifacts and embedded patches. Useful when the PR description needs refreshing after a conflict fix.
+
+---
+
+#### Conflict-fix agent loop
+
+When `ta pr monitor` detects a conflict:
+
+1. Load the draft package (from `.ta/store/<id>.json`) — includes embedded patches for all artifacts.
+2. Spawn a short-lived agent with the prompt: "The PR for goal `<title>` has a merge conflict. Here are the embedded patches. Rebase them onto the current HEAD of `<base-branch>` and re-push. Explain the conflict and resolution in the PR description."
+3. Agent calls `ta_fs_write` for each conflicted file, then `ta_external_action` to `git push --force-with-lease`.
+4. Agent calls `ta_draft` with an updated PR body explaining: what conflicted, what the resolution was, which side was favored and why.
+5. Monitor posts the updated body to the PR and notifies the human via `ta ask` (unless `--auto-fix`).
+
+---
+
+#### Integration points
+
+- **`ta draft apply`**: After apply, print: `"Run 'ta pr submit <draft-id>' to open a PR."`
+- **`ta goal status`**: If the goal has a `vcs_pr` handle, show PR state inline: `PR #42 — CI passing, 1 approval needed`.
+- **`ta status`**: PRs with conflicts or failed CI surface as actionable items.
+- **VCS adapter protocol**: Extend the JSON-over-stdio protocol with two new request types:
+  - `open_pr { title, body, head, base, draft }` → `{ pr_id, url }`
+  - `get_pr_status { pr_id }` → `{ state, conflicts, ci_checks: [...], approvals, mergeable }`
+  - `merge_pr { pr_id, merge_method }` → `{ merged_at, commit_sha }`
+  - `update_pr_body { pr_id, body }` → `{ ok }`
+  - Built-in Git adapter implements these via `gh` CLI (for GitHub remotes).
+
+- **Constitution gate**: If `auto_merge = true` is not set in the project constitution, `ta pr monitor --auto-merge` is blocked with: "auto-merge requires explicit consent in .ta/constitution.toml: `auto_merge = true`."
+
+---
+
+#### Items
+
+1. [ ] **VCS adapter protocol extension** (`crates/ta-submit/src/vcs_plugin_protocol.rs`): Add `open_pr`, `get_pr_status`, `merge_pr`, `update_pr_body` request/response types. Implement in `BuiltinGitAdapter` using `gh pr create`, `gh pr view --json`, `gh pr merge`, `gh pr edit`.
+
+2. [ ] **`ta pr` command group** (`apps/ta-cli/src/commands/pr.rs`): New subcommand with `submit`, `status`, `monitor`, `merge`, `explain` subcommands. Wire into the top-level CLI.
+
+3. [ ] **`ta pr submit`**: Create branch + commit + PR. Store `vcs_pr` in goal record. Print URL. Respect `--draft-pr` and `--auto-merge` flags.
+
+4. [ ] **`ta pr monitor`**: Polling loop using `get_pr_status`. On conflict → conflict-fix agent spawn via `GoalEngine::spawn_agent_for_conflict`. On CI failure → surface log URL. On approval + CI green → `ta pr merge` (if `--auto-merge`) or `ta ask` prompt.
+
+5. [ ] **Conflict-fix agent** (`crates/ta-goal/src/conflict_fix.rs`): `spawn_conflict_fix_agent(goal_id, pr_id, embedded_patches)`. Short-lived goal run with `conflict_fix` type. Timeout: 10 min. On success, updates PR body via `update_pr_body`. On failure, reports to human with error detail.
+
+6. [ ] **`ta pr explain`**: Calls the draft's artifact list + embedded patches → agent → PR body string → `update_pr_body`. Can be called standalone to refresh stale PR descriptions.
+
+7. [ ] **`ta goal status` PR surfacing**: If `goal.vcs_pr` is set, call `get_pr_status` and display inline in `ta goal status <id>` output.
+
+8. [ ] **`ta status` conflict/CI-fail surfacing**: PRs with `conflicts` or `ci_failed` state appear as actionable items with a one-line fix suggestion.
+
+9. [ ] **Constitution gate for auto-merge**: `ConstitutionChecker::check_auto_merge()`. Blocks `--auto-merge` unless `auto_merge = true` is present. Error message names the config key and file path.
+
+10. [ ] **Tests**: VCS protocol roundtrip for new request types. `ta pr submit` stores `vcs_pr` in goal. `ta pr monitor` detects conflict state and calls fix agent. Conflict-fix agent produces updated PR body. Constitution gate blocks auto-merge without consent. `ta status` surfaces open conflicts.
+
+11. [ ] **USAGE.md "PR Lifecycle"** section: Walk through the full flow — `ta draft apply → ta pr submit → ta pr monitor → ta pr merge`. Show the `--auto-merge` flag and constitution consent. Show `ta pr explain` for refreshing PR descriptions.
+
+#### Version: `0.15.14.2-alpha`
+
+---
+
 ### v0.15.15 — Multi-Agent Consensus Review Workflow
 <!-- status: pending -->
 **Goal**: A workflow template for multi-agent panel reviews where specialist agents run in parallel, each producing a structured verdict with a score and findings, and a final consensus step aggregates their outputs into a readiness score and recommendation. Ships with a `code-review-consensus` template covering architect, security, principal engineer, and PM roles.
