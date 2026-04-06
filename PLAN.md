@@ -10095,6 +10095,96 @@ acknowledged_omissions = [".ta/review/"]  # user intentionally removed; suppress
 
 ---
 
+### v0.15.19 — Governed Interactive Session (`--gate agent`)
+<!-- status: pending -->
+**Goal**: Make `ta session run` fully conversational. Replace the binary `[A]pply/[S]kip/[Q]uit` terminal gate with an orchestrator agent that presents changes in plain English, answers questions, spawns follow-up goals when the human requests modifications, and calls `ta_draft apply` when satisfied. The human never sees a raw diff unless they ask for one. All writes stay in staging; all changes flow through the standard draft/review path. Works from `ta shell`, TA Studio chat pane, and workflow build runs.
+
+**Why this phase exists**: The `--gate prompt` gate is a binary checkpoint — it stops execution and demands a keypress. It doesn't explain what changed or why, can't accept natural language feedback ("also add rate limiting"), and has no memory of earlier items in the session. The orchestrator agent pattern already exists (`CallerMode::Orchestrator`, `ta_ask_human`, `ta_goal_start`, `ta_draft` MCP tools) — this phase wires it in as the gate mechanism, enabling multi-turn governed conversations without leaving the airgap.
+
+**Depends on**: v0.14.11 (ta session run, GateMode, AwaitHuman), v0.14.5 (agent session API, `ta_ask_human`), v0.15.6.1 (embedded patches — gives gate agent readable diff without staging)
+
+**Key insight**: The existing `ta_ask_human` + orchestrator CallerMode already provides the multi-turn conversation loop. The gate agent is not a new concept — it's the same orchestrator agent used in `ta dev`, scoped to one session item's draft and given the right context.
+
+---
+
+#### Design: `GateMode::Agent`
+
+```toml
+# .ta/workflow.toml
+[session]
+gate = "agent"                    # "auto" | "prompt" | "always" | "agent"
+gate_persona = "qa-reviewer"      # optional: .ta/personas/qa-reviewer.toml
+gate_auto_merge_on = "approved"   # "approved" | "always" (requires constitution consent)
+```
+
+```bash
+ta session run --gate agent
+ta session run --gate agent --persona qa-reviewer
+ta session run --gate agent --auto-approve   # skips gate for auto-approved items
+```
+
+**Gate agent lifecycle per session item:**
+
+```
+draft built
+  │
+  └─ spawn gate agent (CallerMode::Orchestrator, persona applied)
+       context injected:
+         - goal title + plan phase
+         - draft summary (agent decision log, file list, why)
+         - embedded patches (readable diff, no staging needed)
+         - session memory: what earlier items produced
+         - available tools: ta_ask_human, ta_fs_diff, ta_fs_read,
+                            ta_goal_start(follow_up=true), ta_draft(approve+apply|deny)
+
+       gate agent loop:
+         1. ta_ask_human("Here's what changed: [summary]. Apply, modify, or skip?")
+         2. human responds in natural language
+         3. gate agent interprets:
+            - "apply" → ta_draft approve → ta_draft apply → exit(Complete)
+            - "skip" → ta_draft deny("skipped at gate") → exit(Skipped)
+            - "also add X" → ta_goal_start(follow_up=true, prompt="add X")
+                             → wait for follow-up draft
+                             → ta_ask_human("Added X. Now: [accumulated summary]. Apply?")
+            - "why did you use approach Y?" → answers from decision log + ta_fs_read
+                                            → loops back to step 1
+         4. gate exits when apply or deny is called (session detects via draft status)
+```
+
+**Session item states** (extension of existing `WorkflowSessionItem`):
+- `AtGate` → `AgentGating { gate_goal_id: Uuid }` (gate agent running)
+- `AgentGating` → `Complete` (gate called apply) or `Skipped` (gate called deny) or `Modified { follow_up_ids }` (gate spawned follow-up, then Complete)
+
+---
+
+#### Items
+
+1. [ ] **`GateMode::Agent` variant** (`crates/ta-session/src/session.rs`): Add `Agent { persona: Option<String> }` to the `GateMode` enum. Add `from_str` support: `"agent"` → `GateMode::Agent { persona: None }`. Update `WorkflowSessionItem.state` with `AgentGating { gate_goal_id }` variant. Add `gate_agent_persona` field to `WorkflowSession`.
+
+2. [ ] **`ta session run --gate agent`** (`apps/ta-cli/src/commands/session.rs`): When `GateMode::Agent`, replace the `[A]pply/[S]kip/[Q]uit` terminal loop with `spawn_gate_agent(draft_id, session_item, persona)`. Wait for draft status to change to `Applied` or `Denied` (poll `/api/draft/{id}/status` or watch `.ta/store/` directly). Update item state on transition.
+
+3. [ ] **`spawn_gate_agent()`** (`crates/ta-session/src/gate_agent.rs`): Build the gate agent context — serialize draft summary, embedded patches digest, session memory snapshot, available tools list. Launch a short-lived `ta run --headless` subprocess with `CallerMode::Orchestrator`, injected gate system prompt, and the draft context. Return the `gate_goal_id`. Timeout: 30 min (configurable in `[session] gate_timeout_mins`).
+
+4. [ ] **Gate agent system prompt** (`templates/gate-agent-prompt.md`): "You are the QA gate for session item `{title}`. Your job: present changes clearly, answer questions, and iterate until the human is satisfied. Use `ta_ask_human` to converse. Use `ta_goal_start` with `follow_up=true` to incorporate requested changes. When the human approves, call `ta_draft approve` then `ta_draft apply`. If the human wants to skip, call `ta_draft deny`. Do not apply without explicit human approval unless `auto_approve = true`." Includes the embedded patch digest and session memory.
+
+5. [ ] **`ta_goal_start` follow-up from gate** (`crates/ta-mcp-gateway/src/tools/goal.rs`): When called by `CallerMode::Orchestrator` with `follow_up=true`, inherit the parent draft's staging dir. Gate agent waits for the follow-up's draft to reach `PendingReview`, then presents the accumulated diff (original + follow-up changes) to the human.
+
+6. [ ] **`ta shell` gate integration**: When a `ta session` is active and `gate = "agent"`, route shell input to the active gate agent's `ta_ask_human` channel rather than the normal shell. The user types in the shell, the gate agent receives it, responds via the shell output pane. No mode switching required — it feels like one conversation.
+
+7. [ ] **TA Studio gate pane**: When a gate agent is active for a session item, the Studio "Goals" tab shows the current item's gate conversation in a chat-style pane: gate agent messages + human replies + a "Type your response" input. Responses are sent via `POST /api/session/{id}/gate-input { message }`. This routes to the active `ta_ask_human` request.
+
+8. [ ] **Constitution gate for auto-apply**: Gate agent must not call `ta_draft apply` without `ta_ask_human` receiving explicit human approval, unless `gate_auto_approve = true` is in the project constitution. `ConstitutionChecker::check_gate_auto_approve()` enforces this. Error: "Gate auto-approve requires explicit consent in `.ta/constitution.toml`: `gate_auto_approve = true`."
+
+9. [ ] **Suppressed reviewer-goal noise**: Failed auto-reviewer goals (spawned by governed-goal workflow) must not appear as URGENT in `ta status`. Filter: if `goal.title` matches `"Review draft * for governed workflow"` and the referenced draft is already `Applied` or `Denied`, auto-mark the reviewer goal `Closed` on `ta gc` pass rather than `Failed`. Add `closed` state to `GoalRunState` for system-spawned goals that are moot.
+
+10. [ ] **Tests**: `GateMode::from_str("agent")` parses correctly. `spawn_gate_agent` builds correct context from draft + session memory. Gate agent receives apply signal → session item transitions to Complete. Gate agent receives deny signal → item transitions to Skipped. Follow-up spawned from gate → accumulated diff presented. Constitution gate blocks auto-apply without consent. Reviewer goal marked Closed when parent draft is Applied. `ta shell` routes input to gate channel when session gate is active.
+
+11. [ ] **USAGE.md "Interactive Governed Session"** section: Full walkthrough — `ta session run --gate agent`, what the gate agent presents, how to ask questions, how to request modifications, how Studio shows the conversation, how to configure gate persona and timeout.
+
+#### Version: `0.15.19-alpha`
+
+---
+
 ## v0.16 — IDE Integration & Developer Experience
 
 > **Focus**: First-class IDE integration for VS Code, JetBrains (PyCharm, WebStorm, IntelliJ), and Neovim. TA transitions from a pure CLI tool to an embedded development workflow component with sidebar panels, inline draft review, and one-click goal approval.
