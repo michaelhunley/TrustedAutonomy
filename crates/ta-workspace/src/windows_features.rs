@@ -79,7 +79,7 @@ fn registry_probe_projfs() -> bool {
     use windows::core::PCWSTR;
     use windows::Win32::System::Registry::{
         RegCloseKey, RegEnumKeyExW, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_LOCAL_MACHINE,
-        KEY_READ, REG_DWORD,
+        KEY_READ, REG_DWORD, REG_VALUE_TYPE,
     };
 
     let packages_path: Vec<u16> = concat!(
@@ -147,7 +147,7 @@ fn registry_probe_projfs() -> bool {
                 let value_name: Vec<u16> = "CurrentState\0".encode_utf16().collect();
                 let mut data = 0u32;
                 let mut data_size = std::mem::size_of::<u32>() as u32;
-                let mut reg_type = 0u32;
+                let mut reg_type = REG_VALUE_TYPE(0);
                 // SAFETY: data is valid u32 storage for a REG_DWORD value.
                 let query_res = unsafe {
                     RegQueryValueExW(
@@ -163,7 +163,7 @@ fn registry_probe_projfs() -> bool {
                 unsafe {
                     let _ = RegCloseKey(sub_hkey);
                 }
-                if query_res.is_ok() && reg_type == REG_DWORD.0 && data == 112 {
+                if query_res.is_ok() && reg_type == REG_DWORD && data == 112 {
                     found = true;
                     break;
                 }

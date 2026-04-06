@@ -54,9 +54,7 @@ mod windows_impl {
     use std::sync::{Arc, Mutex};
 
     use windows::core::{GUID, HRESULT, PCWSTR};
-    use windows::Win32::Foundation::{
-        ERROR_FILE_NOT_FOUND, ERROR_INSUFFICIENT_BUFFER, E_INVALIDARG,
-    };
+    use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, E_INVALIDARG};
     use windows::Win32::Storage::ProjectedFileSystem::{
         PrjFillDirEntryBuffer, PrjMarkDirectoryAsPlaceholder, PrjStartVirtualizing,
         PrjStopVirtualizing, PrjWriteFileData, PrjWritePlaceholderInfo, PRJ_CALLBACKS,
@@ -157,6 +155,7 @@ mod windows_impl {
                     PCWSTR(root_wide.as_ptr()),
                     &callbacks as *const PRJ_CALLBACKS,
                     Some(state_ptr as *const std::ffi::c_void),
+                    None, // PRJ_STARTVIRTUALIZING_OPTIONS — not needed
                     &mut virt_ctx,
                 )
             };
@@ -321,14 +320,15 @@ mod windows_impl {
                 ..Default::default()
             };
 
-            let hr = PrjFillDirEntryBuffer(
+            // PrjFillDirEntryBuffer returns Result<(), Error> in windows 0.58.
+            // Any error (including buffer-full) means stop and leave the index
+            // pointing at the current entry for the next call.
+            let fill_result = PrjFillDirEntryBuffer(
                 PCWSTR(name_wide.as_ptr()),
                 Some(&basic_info),
                 dir_entry_buffer_handle,
             );
-            // HRESULT for ERROR_INSUFFICIENT_BUFFER means the buffer is full — stop and
-            // leave the index pointing at the current entry for the next call.
-            if hr == HRESULT::from_win32(ERROR_INSUFFICIENT_BUFFER.0) {
+            if fill_result.is_err() {
                 break;
             }
             session.index += 1;
@@ -364,13 +364,16 @@ mod windows_impl {
 
         let dest_wide: Vec<u16> = rel_path.encode_utf16().chain(std::iter::once(0)).collect();
 
-        let hr = PrjWritePlaceholderInfo(
+        // PrjWritePlaceholderInfo returns Result<(), Error> in windows 0.58.
+        match PrjWritePlaceholderInfo(
             (*callback_data).NamespaceVirtualizationContext,
             PCWSTR(dest_wide.as_ptr()),
             &placeholder_info,
             std::mem::size_of::<PRJ_PLACEHOLDER_INFO>() as u32,
-        );
-        hr
+        ) {
+            Ok(()) => HRESULT(0),
+            Err(e) => e.code(),
+        }
     }
 
     unsafe extern "system" fn get_file_data_cb(
@@ -401,14 +404,17 @@ mod windows_impl {
         let mut buf = vec![0u8; chunk.len()];
         buf.copy_from_slice(chunk);
 
-        let hr = PrjWriteFileData(
+        // PrjWriteFileData returns Result<(), Error> in windows 0.58.
+        match PrjWriteFileData(
             (*callback_data).NamespaceVirtualizationContext,
             &(*callback_data).DataStreamId,
             buf.as_mut_ptr() as *mut std::ffi::c_void,
             byte_offset,
             chunk.len() as u32,
-        );
-        hr
+        ) {
+            Ok(()) => HRESULT(0),
+            Err(e) => e.code(),
+        }
     }
 
     // ── Windows-only tests ───────────────────────────────────────────────────
