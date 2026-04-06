@@ -155,7 +155,6 @@ mod windows_impl {
                     PCWSTR(root_wide.as_ptr()),
                     &callbacks as *const PRJ_CALLBACKS,
                     Some(state_ptr as *const std::ffi::c_void),
-                    None, // PRJ_STARTVIRTUALIZING_OPTIONS — not needed
                     &mut virt_ctx,
                 )
             };
