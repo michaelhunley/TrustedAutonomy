@@ -1,0 +1,17 @@
+[workspace]
+
+[package]
+name = "ta-messaging-outlook"
+version = "0.1.0"
+edition = "2021"
+description = "Outlook messaging adapter plugin for Trusted Autonomy — fetch and draft via Microsoft Graph API (OAuth2)"
+license = "Apache-2.0"
+
+[[bin]]
+name = "ta-messaging-outlook"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking"] }

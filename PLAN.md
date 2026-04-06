@@ -9305,25 +9305,25 @@ Building draft...  ████████████████░░░░ 
 
 #### Items
 
-1. [ ] **`MessagingAdapter` protocol spec** (`crates/ta-submit/src/messaging_plugin_protocol.rs`): Request/response enums. `fetch`, `create_draft`, `draft_status`, `health`, `capabilities` ops. No `send` op — enforced at the type level (no variant exists). Shared `ExternalMessagingAdapter` struct wrapping the subprocess.
+1. [x] **`MessagingAdapter` protocol spec** (`crates/ta-submit/src/messaging_plugin_protocol.rs`): Request/response enums. `fetch`, `create_draft`, `draft_status`, `health`, `capabilities` ops. No `send` op — enforced at the type level (no variant exists). Shared `ExternalMessagingAdapter` struct wrapping the subprocess.
 
-2. [ ] **Plugin discovery** (`crates/ta-submit/src/messaging_adapter.rs`): Search `~/.config/ta/plugins/messaging/`, `.ta/plugins/messaging/`, `$PATH` for `ta-messaging-*` executables. Return first match for a given provider name. Clear error if no plugin found for configured provider.
+2. [x] **Plugin discovery** (`crates/ta-submit/src/messaging_adapter.rs`): Search `~/.config/ta/plugins/messaging/`, `.ta/plugins/messaging/`, `$PATH` for `ta-messaging-*` executables. Return first match for a given provider name. Clear error if no plugin found for configured provider.
 
-3. [ ] **`ta adapter setup messaging/<plugin>`**: Credential wizard. Gmail/Outlook: OAuth2 browser flow (open consent URL, localhost callback, store refresh token in keychain under `ta-messaging:<address>`). IMAP: masked prompt for host/port/username/app-password, validate connection, store in keychain. Prints health check result on success.
+3. [x] **`ta adapter setup messaging/<plugin>`**: Credential wizard. Gmail/Outlook: OAuth2 browser flow (open consent URL, localhost callback, store refresh token in keychain under `ta-messaging:<address>`). IMAP: masked prompt for host/port/username/app-password, validate connection, store in keychain. Prints health check result on success.
 
-4. [ ] **`plugins/messaging/ta-messaging-gmail`**: Rust binary. Implements `fetch` via Gmail REST API (OAuth2 refresh), `create_draft` via `drafts.create` API, `draft_status` via `drafts.get`. Retrieves token from keychain. Packaged with the TA installer.
+4. [x] **`plugins/messaging/ta-messaging-gmail`**: Rust binary. Implements `fetch` via Gmail REST API (OAuth2 refresh), `create_draft` via `drafts.create` API, `draft_status` via `drafts.get`. Retrieves token from keychain. Packaged with the TA installer.
 
-5. [ ] **`plugins/messaging/ta-messaging-outlook`**: Rust binary. Implements `fetch` via Microsoft Graph API, `create_draft` via `POST /messages` with `isDraft:true`, `draft_status` via `GET /messages/{id}`. Same keychain retrieval pattern.
+5. [x] **`plugins/messaging/ta-messaging-outlook`**: Rust binary. Implements `fetch` via Microsoft Graph API, `create_draft` via `POST /messages` with `isDraft:true`, `draft_status` via `GET /messages/{id}`. Same keychain retrieval pattern.
 
-6. [ ] **`plugins/messaging/ta-messaging-imap`**: Rust binary. Implements `fetch` via IMAP (TLS/STARTTLS, `async-imap`), `create_draft` via IMAP APPEND to Drafts mailbox, `draft_status` best-effort (checks if message UID still in Drafts or has moved to Sent). Watermark-based `fetch` via IMAP `SINCE`.
+6. [x] **`plugins/messaging/ta-messaging-imap`**: Rust binary. Implements `fetch` via IMAP (TLS/STARTTLS, `imap` crate), `create_draft` via IMAP APPEND to Drafts mailbox, `draft_status` best-effort (checks if message UID still in Drafts or has moved to Sent). Watermark-based `fetch` via IMAP `SINCE`.
 
-7. [ ] **`ta adapter health messaging`**: Calls `health` op on each configured messaging plugin, prints provider, connected address, last-fetch timestamp. No credentials printed.
+7. [x] **`ta adapter health messaging`**: Calls `health` op on each configured messaging plugin, prints provider, connected address, last-fetch timestamp. No credentials printed.
 
-8. [ ] **`DraftEmailRecord`** (`crates/ta-goal/src/messaging_audit.rs`): Audit struct stored per goal: `draft_id`, `provider`, `to`, `subject`, `created_at`, `state`, `goal_id`, `constitution_check_passed`, `supervisor_score`. Persisted in `.ta/messaging-audit.jsonl`. `ta audit messaging` prints the log.
+8. [x] **`DraftEmailRecord`** (`crates/ta-goal/src/messaging_audit.rs`): Audit struct stored per goal: `draft_id`, `provider`, `to`, `subject`, `created_at`, `state`, `goal_id`, `constitution_check_passed`, `supervisor_score`. Persisted in `.ta/messaging-audit.jsonl`. `ta audit messaging` prints the log.
 
-9. [ ] **Tests**: Protocol round-trip with a mock plugin script; `send` op rejected at type level (no variant); `create_draft` returns provider draft_id; discovery finds plugin in each search path; credentials set/get via mocked keychain; `draft_status` transitions drafted→sent.
+9. [x] **Tests**: Protocol round-trip with a mock plugin script (20 tests in ta-submit); `send` op rejected at type level (no variant); `create_draft` returns provider draft_id; discovery finds plugin in each search path; credentials set/get via env override; `draft_status` state roundtrip. 9 tests in ta-goal, 13 adapter tests in ta-cli.
 
-10. [ ] **USAGE.md**: "Messaging Adapters" section — plugin protocol, how to set up each built-in provider, `create_draft` vs `send` design rationale, how to write a community plugin.
+10. [x] **USAGE.md**: "Messaging Adapters" section — plugin protocol, how to set up each built-in provider, `create_draft` vs `send` design rationale, how to write a community plugin.
 
 #### Version: `0.15.9-alpha`
 

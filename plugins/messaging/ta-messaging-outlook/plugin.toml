@@ -1,0 +1,9 @@
+name = "outlook"
+version = "0.1.0"
+type = "messaging"
+command = "ta-messaging-outlook"
+protocol = "json-stdio"
+capabilities = ["fetch", "create_draft", "draft_status", "health", "capabilities"]
+description = "Outlook / Microsoft Graph messaging adapter — fetch and draft via Microsoft Graph API (OAuth2)"
+timeout_secs = 60
+protocol_version = 1

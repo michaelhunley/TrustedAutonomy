@@ -1,0 +1,18 @@
+[workspace]
+
+[package]
+name = "ta-messaging-imap"
+version = "0.1.0"
+edition = "2021"
+description = "IMAP messaging adapter plugin for Trusted Autonomy — fetch and draft via IMAP SEARCH/APPEND (TLS/STARTTLS)"
+license = "Apache-2.0"
+
+[[bin]]
+name = "ta-messaging-imap"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+imap = { version = "3", default-features = false, features = ["rustls-tls"] }
+rustls-connector = { version = "0.21", default-features = false, features = ["rustls--ring"] }

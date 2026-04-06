@@ -20,6 +20,8 @@ pub mod adapter;
 pub mod config;
 pub mod external_vcs_adapter;
 pub mod git;
+pub mod messaging_adapter;
+pub mod messaging_plugin_protocol;
 pub mod none;
 pub mod perforce;
 pub mod registry;
@@ -45,6 +47,15 @@ pub use config::{
 };
 pub use external_vcs_adapter::ExternalVcsAdapter;
 pub use git::GitAdapter;
+pub use messaging_adapter::{
+    discover_messaging_plugins, find_messaging_plugin, DiscoveredMessagingPlugin,
+    ExternalMessagingAdapter, MessagingPluginManifest, MessagingPluginSource,
+};
+pub use messaging_plugin_protocol::{
+    CreateDraftParams, DraftEnvelope, DraftState, DraftStatusParams, FetchParams, FetchedMessage,
+    MessagingPluginError, MessagingPluginRequest, MessagingPluginResponse,
+    MESSAGING_PROTOCOL_VERSION,
+};
 pub use none::NoneAdapter;
 pub use perforce::PerforceAdapter;
 pub use registry::{
