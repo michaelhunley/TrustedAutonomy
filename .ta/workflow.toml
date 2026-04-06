@@ -5,7 +5,7 @@ context_budget_chars = 100000   # reviewer agent budget (default 40k is too smal
 commands = [
     "./dev 'cargo fmt --all -- --check'",
     "./dev 'cargo clippy --workspace --all-targets -- -D warnings'",
-    "./dev 'cargo test --workspace'",
+    "./dev 'cargo test --workspace -- --test-threads=4'",
 ]
 on_failure = "block"     # "block" (fail draft), "warn", or "agent" (let agent fix)
 timeout = 600            # seconds per command
