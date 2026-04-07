@@ -4,6 +4,9 @@ exclude = [
     "plugins/ta-channel-discord",
     "plugins/ta-channel-slack",
     "plugins/ta-channel-email",
+    "plugins/messaging/ta-messaging-gmail",
+    "plugins/messaging/ta-messaging-outlook",
+    "plugins/messaging/ta-messaging-imap",
 ]
 members = [
     "crates/ta-audit",

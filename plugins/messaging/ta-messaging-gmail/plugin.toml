@@ -1,0 +1,9 @@
+name = "gmail"
+version = "0.1.0"
+type = "messaging"
+command = "ta-messaging-gmail"
+protocol = "json-stdio"
+capabilities = ["fetch", "create_draft", "draft_status", "health", "capabilities"]
+description = "Gmail messaging adapter — fetch and draft via Google Gmail REST API (OAuth2)"
+timeout_secs = 60
+protocol_version = 1

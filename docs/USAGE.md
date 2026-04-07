@@ -3531,6 +3531,105 @@ Phase: v0.3.1
 Co-Authored-By: Trusted Autonomy <266386695+trustedautonomy-agent@users.noreply.github.com>
 ```
 
+### Messaging Adapters
+
+TA can read your inbox and create email drafts through pluggable messaging adapter plugins. Each provider (Gmail, Outlook, IMAP) is a separate binary that speaks the same JSON-over-stdio protocol as VCS adapter plugins.
+
+**Safety guarantee**: TA never sends email. Plugins expose only `fetch` (read) and `create_draft` (write to Drafts folder). The `send` operation is intentionally absent from the protocol — it doesn't exist as a variant. The user sends from their native email client.
+
+#### Setting up a provider
+
+```bash
+# Gmail (OAuth2)
+ta adapter setup messaging/gmail
+
+# Outlook / Microsoft 365 (OAuth2)
+ta adapter setup messaging/outlook
+
+# Any IMAP server (app password)
+ta adapter setup messaging/imap
+```
+
+The setup wizard walks you through OAuth2 consent (Gmail/Outlook) or prompts for your IMAP credentials (masked input). Tokens are stored in the OS keychain under `ta-messaging:<provider>:<address>` — never written in plaintext to disk.
+
+#### Checking connectivity
+
+```bash
+ta adapter health messaging
+```
+
+Output example:
+```
+Messaging adapter health:
+
+  gmail   (global)  OK  — gmail <me@example.com>
+  imap    (project) OK  — imap <me@fastmail.com>
+
+All reachable providers are healthy.
+```
+
+#### Reviewing the draft audit log
+
+Every draft TA creates is recorded in `.ta/messaging-audit.jsonl`:
+
+```bash
+# Show all drafts
+ta audit messaging
+
+# Filter by provider
+ta audit messaging --provider gmail
+
+# Show only unsent drafts
+ta audit messaging --state drafted
+
+# Show the 10 most recent
+ta audit messaging -n 10
+```
+
+#### Plugin protocol
+
+Messaging plugins speak JSON-over-stdio (one request line in, one response line out). Supported operations:
+
+| Op | Direction | Description |
+|----|-----------|-------------|
+| `fetch` | TA→plugin | Fetch messages since a watermark timestamp |
+| `create_draft` | TA→plugin | Write a draft to the provider's Drafts folder |
+| `draft_status` | TA→plugin | Poll whether a draft was sent, discarded, or still open |
+| `health` | TA→plugin | Connectivity + credential check |
+| `capabilities` | TA→plugin | Advertise which ops the plugin supports |
+
+There is no `send` op. This boundary is enforced at the type level.
+
+#### Writing a community plugin
+
+Any executable named `ta-messaging-<provider>` on `$PATH` is auto-discovered. Or place a directory with a `plugin.toml` manifest in `~/.config/ta/plugins/messaging/<provider>/`.
+
+Minimal `plugin.toml`:
+```toml
+name = "fastmail"
+version = "0.1.0"
+type = "messaging"
+command = "ta-messaging-fastmail"
+capabilities = ["fetch", "create_draft", "health"]
+```
+
+The plugin reads one JSON request from stdin and writes one JSON response to stdout:
+
+```json
+// Request
+{"op":"health"}
+
+// Response (success)
+{"ok":true,"address":"me@fastmail.com","provider":"fastmail"}
+
+// Response (error)
+{"ok":false,"error":"IMAP connection refused: Connection refused (os error 111)"}
+```
+
+See the built-in `plugins/messaging/ta-messaging-imap/` source for a complete reference implementation.
+
+---
+
 ### VCS Adapters
 
 TA uses pluggable adapters for version control operations. When `submit.adapter` is not explicitly set, TA auto-detects the VCS from the project directory:

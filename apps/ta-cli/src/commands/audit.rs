@@ -6,6 +6,7 @@ use ta_audit::{
     AttestationBackend, AuditDisposition, AuditEvent, AuditLog, BaselineStore, DraftSummary,
     DriftSeverity, GoalAuditLedger, LedgerFilter, SoftwareAttestationBackend,
 };
+use ta_goal::MessagingAuditLog;
 use ta_mcp_gateway::GatewayConfig;
 
 #[derive(Subcommand)]
@@ -95,6 +96,28 @@ pub enum AuditCommands {
     Ledger {
         #[command(subcommand)]
         command: LedgerCommands,
+    },
+    /// Show the messaging draft audit log (v0.15.9).
+    ///
+    /// Prints all `DraftEmailRecord` entries from `.ta/messaging-audit.jsonl`.
+    /// Each entry shows the draft ID, provider, recipient, subject, creation
+    /// time, and current state (drafted / sent / discarded).
+    ///
+    /// Example:
+    ///   ta audit messaging
+    Messaging {
+        /// Path to messaging audit log (defaults to .ta/messaging-audit.jsonl).
+        #[arg(long)]
+        log: Option<String>,
+        /// Filter by provider (e.g., "gmail", "outlook", "imap").
+        #[arg(long)]
+        provider: Option<String>,
+        /// Filter by draft state (drafted, sent, discarded, unknown).
+        #[arg(long)]
+        state: Option<String>,
+        /// Number of most-recent records to show (0 = all).
+        #[arg(short = 'n', long, default_value = "0")]
+        limit: usize,
     },
 }
 
@@ -294,6 +317,21 @@ pub fn execute(cmd: &AuditCommands, config: &GatewayConfig) -> anyhow::Result<()
 
         AuditCommands::Ledger { command } => {
             execute_ledger(command, config)?;
+        }
+
+        AuditCommands::Messaging {
+            log,
+            provider,
+            state,
+            limit,
+        } => {
+            messaging_audit(
+                config,
+                log.as_deref(),
+                provider.as_deref(),
+                state.as_deref(),
+                *limit,
+            )?;
         }
     }
 
@@ -1050,6 +1088,93 @@ fn export_audit(
     });
 
     println!("{}", serde_json::to_string_pretty(&export)?);
+
+    Ok(())
+}
+
+// ── Messaging audit (v0.15.9) ──────────────────────────────────────────────
+
+/// Print the messaging draft audit log.
+fn messaging_audit(
+    config: &GatewayConfig,
+    log_path: Option<&str>,
+    provider_filter: Option<&str>,
+    state_filter: Option<&str>,
+    limit: usize,
+) -> anyhow::Result<()> {
+    let path = log_path.map(std::path::PathBuf::from).unwrap_or_else(|| {
+        config
+            .workspace_root
+            .join(".ta")
+            .join("messaging-audit.jsonl")
+    });
+
+    let log = MessagingAuditLog::at(&path);
+    let mut records = log.read_all().map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to read messaging audit log at {}: {}",
+            path.display(),
+            e
+        )
+    })?;
+
+    if records.is_empty() {
+        println!("No messaging audit records found.");
+        if !path.exists() {
+            println!("(Log file does not exist yet: {})", path.display());
+            println!("Records are written when a MessagingAdapter creates a draft.");
+        }
+        return Ok(());
+    }
+
+    // Apply filters.
+    if let Some(prov) = provider_filter {
+        records.retain(|r| r.provider.eq_ignore_ascii_case(prov));
+    }
+    if let Some(st) = state_filter {
+        records.retain(|r| r.state.to_string().eq_ignore_ascii_case(st));
+    }
+
+    // Apply limit (most recent first).
+    if limit > 0 && records.len() > limit {
+        records = records.into_iter().rev().take(limit).rev().collect();
+    }
+
+    if records.is_empty() {
+        println!("No records match the specified filters.");
+        return Ok(());
+    }
+
+    println!(
+        "{:<30}  {:<10}  {:<30}  {:<40}  {:<10}  created_at",
+        "draft_id", "provider", "to", "subject", "state"
+    );
+    println!("{}", "─".repeat(140usize));
+
+    for r in &records {
+        let draft_id = if r.draft_id.len() > 28 {
+            format!("{}…", &r.draft_id[..27])
+        } else {
+            r.draft_id.clone()
+        };
+        let to = if r.to.len() > 28 {
+            format!("{}…", &r.to[..27])
+        } else {
+            r.to.clone()
+        };
+        let subject = if r.subject.len() > 38 {
+            format!("{}…", &r.subject[..37])
+        } else {
+            r.subject.clone()
+        };
+        println!(
+            "{:<30}  {:<10}  {:<30}  {:<40}  {:<10}  {}",
+            draft_id, r.provider, to, subject, r.state, r.created_at
+        );
+    }
+
+    println!();
+    println!("{} draft record(s)", records.len());
 
     Ok(())
 }

@@ -1,0 +1,9 @@
+name = "imap"
+version = "0.1.0"
+type = "messaging"
+command = "ta-messaging-imap"
+protocol = "json-stdio"
+capabilities = ["fetch", "create_draft", "draft_status", "health", "capabilities"]
+description = "IMAP messaging adapter — fetch via IMAP SEARCH, draft via IMAP APPEND to Drafts mailbox (TLS/STARTTLS)"
+timeout_secs = 60
+protocol_version = 1
