@@ -728,8 +728,8 @@ mod tests {
     #[test]
     fn setup_messaging_unknown_provider_no_plugin_fails() {
         let dir = TempDir::new().unwrap();
-        // Override PATH to empty so no binary is found.
-        std::env::set_var("PATH", "");
+        // "unknown-provider-xyz" is not a real plugin binary — discovery returns None
+        // without any PATH manipulation (which would race with parallel tests).
         let result = setup_messaging("messaging/unknown-provider-xyz", dir.path());
         assert!(result.is_err());
     }
