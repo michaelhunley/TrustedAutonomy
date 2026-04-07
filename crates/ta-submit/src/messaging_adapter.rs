@@ -629,8 +629,8 @@ command = "ta-messaging-imap"
     #[test]
     fn find_messaging_plugin_missing_returns_none() {
         let root = tempfile::tempdir().unwrap();
-        // Override PATH to empty so PATH fallback also fails.
-        std::env::set_var("PATH", "");
+        // "nonexistent-provider" is not a real plugin binary — discovery returns None
+        // without any PATH manipulation (which would race with parallel tests that need git).
         let found = find_messaging_plugin("nonexistent-provider", root.path());
         assert!(found.is_none());
     }
