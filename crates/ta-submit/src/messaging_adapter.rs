@@ -647,7 +647,7 @@ command = "ta-messaging-imap"
     fn external_adapter_calls_mock_plugin() {
         use std::os::unix::fs::PermissionsExt;
 
-        let dir = tempfile::tempdir().unwrap();
+        let _dir = tempfile::tempdir().unwrap();
 
         // Write a mock plugin script.
         use std::sync::atomic::{AtomicU32, Ordering};
@@ -659,7 +659,7 @@ command = "ta-messaging-imap"
         #[cfg(target_os = "linux")]
         let plugin_path = std::path::PathBuf::from("/tmp").join(&name);
         #[cfg(not(target_os = "linux"))]
-        let plugin_path = dir.path().join(&name);
+        let plugin_path = _dir.path().join(&name);
 
         {
             use std::io::Write;
