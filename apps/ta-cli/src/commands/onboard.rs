@@ -11,7 +11,9 @@
 //   ta onboard --reset          — clear config and re-run wizard
 //   ta onboard --force          — re-run even if already configured
 
-use std::io::{IsTerminal, Write};
+use std::io::IsTerminal;
+#[cfg(unix)]
+use std::io::Write;
 use std::path::PathBuf;
 
 use anyhow::Context;
