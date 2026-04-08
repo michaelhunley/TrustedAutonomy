@@ -1564,8 +1564,17 @@ fn run_wizard_loop(
 
 /// Print the first-run hint and return Err if not configured.
 /// Callers pass `--skip-onboard-check` to bypass in CI.
+///
+/// "Configured" means any of:
+///   1. `~/.config/ta/config.toml` has a `[provider]` section (written by `ta onboard`), OR
+///   2. `ANTHROPIC_API_KEY` env var is set (pre-existing installations that rely on env), OR
+///   3. `OLLAMA_HOST` env var is set (Ollama-only setups).
 pub fn check_provider_configured(skip_check: bool) -> anyhow::Result<()> {
-    if skip_check || is_configured() {
+    if skip_check
+        || is_configured()
+        || std::env::var("ANTHROPIC_API_KEY").is_ok()
+        || std::env::var("OLLAMA_HOST").is_ok()
+    {
         return Ok(());
     }
     eprintln!(
