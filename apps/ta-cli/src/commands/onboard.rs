@@ -1567,13 +1567,19 @@ fn run_wizard_loop(
 ///
 /// "Configured" means any of:
 ///   1. `~/.config/ta/config.toml` has a `[provider]` section (written by `ta onboard`), OR
-///   2. `ANTHROPIC_API_KEY` env var is set (pre-existing installations that rely on env), OR
-///   3. `OLLAMA_HOST` env var is set (Ollama-only setups).
+///   2. `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` env var is set (API-key installs), OR
+///   3. `OLLAMA_HOST` env var is set (Ollama-only setups), OR
+///   4. A supported agent binary is on PATH — covers subscription users (Claude Code, Codex,
+///      claude-flow) whose auth is managed by the agent itself rather than an API key.
 pub fn check_provider_configured(skip_check: bool) -> anyhow::Result<()> {
     if skip_check
         || is_configured()
         || std::env::var("ANTHROPIC_API_KEY").is_ok()
+        || std::env::var("OPENAI_API_KEY").is_ok()
         || std::env::var("OLLAMA_HOST").is_ok()
+        || is_on_path("claude")
+        || is_on_path("codex")
+        || is_on_path("claude-flow")
     {
         return Ok(());
     }
