@@ -4600,6 +4600,42 @@ To bypass the check (e.g., you intentionally deleted most of a file):
 ta draft apply <draft-id> --force-apply
 ```
 
+### Apply Lock (Co-Dev Guard)
+
+When `ta draft apply` starts, it writes `.ta/apply.lock` containing the draft ID, PID, and start time. The lock is removed when apply finishes — whether it succeeds or fails.
+
+This prevents two applies from running concurrently and gives co-developer processes (including AI assistants) a machine-readable signal to avoid git mutations while an apply is in progress.
+
+**Check apply status from a script or shell:**
+
+```bash
+ta draft apply --status
+# Exits 0 and prints "No apply in progress."
+# Exits 1 and prints "Apply in progress: draft <id>, PID <n>, started <time>"
+```
+
+**What happens if you try to start a second apply:**
+
+```
+Draft apply already in progress (PID 12345, draft abc123ef).
+Wait for it to finish, or kill PID 12345 if it has crashed and re-run.
+Lock file: /path/to/.ta/apply.lock
+```
+
+**Stale lock cleanup**: If the lock file exists but the PID is no longer alive (e.g., a previous apply crashed without cleanup), `ta draft apply` automatically removes the stale lock and proceeds.
+
+**Manually removing a stuck lock** (after confirming the PID is truly dead):
+
+```bash
+ta draft apply --clear-lock
+```
+
+This prints the lock contents (draft ID, PID, start time), warns if the PID still appears alive, then removes the file. Use it only after a confirmed crash on platforms where stale-lock auto-cleanup is unavailable (e.g., an exotic OS) or when the auto-cleanup incorrectly identifies the PID as alive.
+
+The lock file is ephemeral and machine-specific — it is covered by the `.ta/*.lock` entry in `.gitignore` and is never committed.
+
+**Team / multi-machine workflows**: Each developer has their own workspace directory and thus their own `.ta/apply.lock`. There is no cross-machine lock contention. Parallel agents implementing different goals on the same machine are serialized by the lock — only one apply runs at a time per workspace, which prevents file-layer conflicts regardless of which goal is being applied.
+
 ### External Diff Handlers
 
 Configure how non-text files are reviewed. Create `.ta/diff-handlers.toml`:

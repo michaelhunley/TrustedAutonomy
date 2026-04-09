@@ -9528,7 +9528,7 @@ bmad_home          = "~/.bmad"        # set when bmad selected
 ---
 
 ### v0.15.11.1 — Draft Apply Lock & Co-Dev Guard
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Prevent conflicting git operations (branch switches, manual commits) while `ta draft apply` is in progress. Introduces a `.ta/apply.lock` file written at the start of `apply_package` and removed on exit (success or failure). Claude Code should check this lock before any `git checkout`, `git commit`, or `git push` — and TA itself should detect the lock at apply startup to warn about concurrent applies.
 
 **Why this phase exists**: A race between a manual `git checkout` (or `git add -A && git commit`) and a running `ta draft apply --submit` caused the apply to find "no changes to commit" and roll back. The fix requires TA to advertise its apply state externally so any co-developer process (human or AI assistant) can detect it before making git mutations. This is also needed for parallel goal runs where two drafts must not apply concurrently to the same workspace.
@@ -9542,13 +9542,13 @@ bmad_home          = "~/.bmad"        # set when bmad selected
 - **`.gitignore`**: `.ta/apply.lock` added to gitignore (ephemeral, per-machine).
 
 **Deliverables**:
-- [ ] `ApplyLock` struct (`draft.rs`): `acquire()` writes lock, `Drop` removes it
-- [ ] `apply_package` acquires lock at entry, releases on exit
-- [ ] Concurrent apply detection with actionable error message
-- [ ] Stale lock (dead pid) auto-cleanup
-- [ ] `.ta/apply.lock` added to `.gitignore`
-- [ ] Claude Code CLAUDE.md rule: check for apply lock before git branch/commit/push operations
-- [ ] `ta draft apply --status` flag shows active lock info
+- [x] `ApplyLock` struct (`draft.rs`): `acquire()` writes lock, `Drop` removes it
+- [x] `apply_package` acquires lock at entry, releases on exit
+- [x] Concurrent apply detection with actionable error message
+- [x] Stale lock (dead pid) auto-cleanup
+- [x] `.ta/apply.lock` added to `.gitignore` (covered by `.ta/*.lock` pattern)
+- [x] Claude Code CLAUDE.md rule: check for apply lock before git branch/commit/push operations (pre-existing rule updated to note TA now enforces this)
+- [x] `ta draft apply --status` flag shows active lock info
 
 #### Version: `0.15.11-alpha.1`
 

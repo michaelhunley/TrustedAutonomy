@@ -226,6 +226,16 @@ pub enum DraftCommands {
         /// replacement). Use when the shrinkage is intentional (e.g., intentional rewrite).
         #[arg(long)]
         force_apply: bool,
+        /// Show whether a draft apply is currently in progress (reads .ta/apply.lock).
+        /// Exits 0 if no apply is running, 1 if one is.
+        #[arg(long)]
+        status: bool,
+        /// Remove a stuck .ta/apply.lock without running an apply.
+        /// Use only after confirming the PID in the lock is no longer running
+        /// (e.g., after a crash that left the lock behind on a platform where
+        /// stale-lock auto-cleanup is unavailable). Prints lock contents before removing.
+        #[arg(long)]
+        clear_lock: bool,
     },
     /// Amend an artifact in a draft (replace content, apply patch, or drop).
     Amend {
@@ -682,7 +692,67 @@ pub fn execute(cmd: &DraftCommands, config: &GatewayConfig) -> anyhow::Result<()
             watch,
             chain,
             force_apply,
+            status,
+            clear_lock,
         } => {
+            // --clear-lock: remove a stuck lock file and exit (no apply).
+            if *clear_lock {
+                let lock_path = config.workspace_root.join(".ta/apply.lock");
+                if !lock_path.exists() {
+                    println!("No apply.lock found — nothing to clear.");
+                    return Ok(());
+                }
+                let raw = std::fs::read_to_string(&lock_path).unwrap_or_default();
+                match serde_json::from_str::<ApplyLockData>(&raw) {
+                    Ok(lock) => {
+                        println!(
+                            "Removing apply.lock:\n  draft:   {}\n  PID:     {}\n  started: {}",
+                            lock.draft_id, lock.pid, lock.started_at
+                        );
+                        if ApplyLock::is_pid_alive(lock.pid) {
+                            eprintln!(
+                                "Warning: PID {} appears to be alive. Only remove this lock \
+                                 if you are certain the process has crashed or is not a TA apply.",
+                                lock.pid
+                            );
+                        }
+                    }
+                    Err(_) => {
+                        println!("Removing malformed apply.lock.");
+                    }
+                }
+                std::fs::remove_file(&lock_path).map_err(|e| {
+                    anyhow::anyhow!("Failed to remove lock file {}: {}", lock_path.display(), e)
+                })?;
+                println!("apply.lock removed.");
+                return Ok(());
+            }
+
+            // --status: show whether an apply is in progress, then exit.
+            if *status {
+                match read_apply_lock(config) {
+                    Some(lock) if ApplyLock::is_pid_alive(lock.pid) => {
+                        println!(
+                            "Apply in progress: draft {draft}, PID {pid}, started {at}",
+                            draft = lock.draft_id,
+                            pid = lock.pid,
+                            at = lock.started_at,
+                        );
+                        std::process::exit(1);
+                    }
+                    Some(stale) => {
+                        println!(
+                            "No apply in progress (stale lock: PID {} no longer alive).",
+                            stale.pid
+                        );
+                    }
+                    None => {
+                        println!("No apply in progress.");
+                    }
+                }
+                return Ok(());
+            }
+
             let resolved = resolve_draft_id_flexible(config, id.as_deref())?;
 
             // --chain: walk up to root parent and apply all unapplied drafts in order.
@@ -3927,6 +3997,151 @@ impl Drop for ApplyRollbackGuard {
     }
 }
 
+// ── Draft Apply Lock (v0.15.11.1) ─────────────────────────────────────────────
+// Prevents concurrent applies and gives co-developer processes (human or AI) a
+// machine-readable way to detect that `ta draft apply` is in progress before
+// touching the git repo.
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+struct ApplyLockData {
+    draft_id: String,
+    pid: u32,
+    started_at: String,
+}
+
+/// RAII guard for `.ta/apply.lock`.
+///
+/// - `acquire()` writes the lock file; fails if another live process holds it.
+/// - `Drop` removes the lock file unconditionally (success or panic).
+struct ApplyLock {
+    lock_path: std::path::PathBuf,
+}
+
+impl ApplyLock {
+    /// Returns `true` if process `pid` is currently alive.
+    ///
+    /// On Unix: uses `kill(pid, 0)` — 0 or EPERM means alive, ESRCH means dead.
+    /// On Windows: tries to open the process with SYNCHRONIZE rights — success
+    ///   means alive, ERROR_INVALID_PARAMETER / access-denied patterns mean dead.
+    #[cfg(unix)]
+    fn is_pid_alive(pid: u32) -> bool {
+        // kill(pid, 0) returns 0 if the process exists and we have permission,
+        // ESRCH if it does not exist, EPERM if it exists but we lack permission.
+        // Both 0 and EPERM mean the process is alive.
+        let ret = unsafe { libc::kill(pid as libc::pid_t, 0) };
+        if ret == 0 {
+            return true;
+        }
+        // Use std::io::Error::last_os_error() for portable errno access
+        // (avoids libc::__error() which is macOS-only; libc::__errno_location()
+        // is Linux-only). raw_os_error() returns the platform errno value.
+        std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    }
+
+    #[cfg(windows)]
+    fn is_pid_alive(pid: u32) -> bool {
+        // On Windows, attempt to open the process. If the process does not exist,
+        // OpenProcess returns NULL with ERROR_INVALID_PARAMETER (87). Any handle
+        // returned (even with just SYNCHRONIZE = 0x00100000) means the process exists.
+        // We close the handle immediately — we only need the existence check.
+        use std::os::windows::io::FromRawHandle;
+        extern "system" {
+            fn OpenProcess(
+                dw_desired_access: u32,
+                b_inherit_handle: i32,
+                dw_process_id: u32,
+            ) -> *mut std::ffi::c_void;
+            fn CloseHandle(h_object: *mut std::ffi::c_void) -> i32;
+        }
+        const SYNCHRONIZE: u32 = 0x00100000;
+        let handle = unsafe { OpenProcess(SYNCHRONIZE, 0, pid) };
+        if handle.is_null() {
+            // NULL → process not found (or we truly have no access, which is
+            // rare on Windows for SYNCHRONIZE). Treat as dead.
+            false
+        } else {
+            unsafe { CloseHandle(handle) };
+            true
+        }
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    fn is_pid_alive(_pid: u32) -> bool {
+        // Conservative fallback for exotic platforms: assume alive.
+        // Users can always use --clear-lock to manually remove a stuck lock.
+        true
+    }
+
+    /// Acquire the lock for `draft_id`. Errors if another live apply is running.
+    /// Silently removes stale locks (dead PID) before acquiring.
+    fn acquire(lock_path: std::path::PathBuf, draft_id: &str) -> anyhow::Result<Self> {
+        // Ensure the .ta directory exists.
+        if let Some(parent) = lock_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        // Check for an existing lock.
+        if lock_path.exists() {
+            let raw = std::fs::read_to_string(&lock_path).unwrap_or_default();
+            match serde_json::from_str::<ApplyLockData>(&raw) {
+                Ok(existing) if Self::is_pid_alive(existing.pid) => {
+                    anyhow::bail!(
+                        "Draft apply already in progress (PID {pid}, draft {draft}, started {at}).\n\
+                         Wait for it to finish or kill PID {pid} if it has crashed.\n\
+                         \n\
+                         To force-remove the lock after a crash (use only if PID {pid} is truly dead):\n\
+                           ta draft apply --clear-lock\n\
+                         Lock file: {path}",
+                        pid = existing.pid,
+                        draft = existing.draft_id,
+                        at = existing.started_at,
+                        path = lock_path.display(),
+                    );
+                }
+                Ok(stale) => {
+                    eprintln!(
+                        "[apply] Removing stale apply.lock (PID {} is no longer alive).",
+                        stale.pid
+                    );
+                    let _ = std::fs::remove_file(&lock_path);
+                }
+                Err(_) => {
+                    // Malformed lock — remove it.
+                    eprintln!("[apply] Removing malformed apply.lock.");
+                    let _ = std::fs::remove_file(&lock_path);
+                }
+            }
+        }
+
+        // Write our lock.
+        let data = ApplyLockData {
+            draft_id: draft_id.to_string(),
+            pid: std::process::id(),
+            started_at: Utc::now().to_rfc3339(),
+        };
+        let json = serde_json::to_string_pretty(&data)?;
+        std::fs::write(&lock_path, json)?;
+
+        Ok(Self { lock_path })
+    }
+}
+
+impl Drop for ApplyLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.lock_path);
+    }
+}
+
+/// Read and return the current apply lock, if any.
+fn read_apply_lock(config: &GatewayConfig) -> Option<ApplyLockData> {
+    let lock_path = config.workspace_root.join(".ta/apply.lock");
+    if !lock_path.exists() {
+        return None;
+    }
+    let raw = std::fs::read_to_string(&lock_path).ok()?;
+    serde_json::from_str::<ApplyLockData>(&raw).ok()
+}
+
 #[allow(clippy::too_many_arguments)]
 fn apply_package(
     config: &GatewayConfig,
@@ -3943,6 +4158,12 @@ fn apply_package(
     force_apply: bool,
 ) -> anyhow::Result<()> {
     let package_id = resolve_draft_id(id, config)?;
+
+    // Acquire the apply lock before any file work so co-developer processes
+    // (human or AI) can detect the in-progress apply and avoid git mutations.
+    let lock_path = config.workspace_root.join(".ta/apply.lock");
+    let _apply_lock = ApplyLock::acquire(lock_path, &package_id.to_string())?;
+
     eprintln!("[apply] Loading draft package {}...", package_id);
     let mut pkg = load_package(config, package_id)?;
     eprintln!(
