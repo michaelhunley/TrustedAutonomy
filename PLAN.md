@@ -9270,6 +9270,45 @@ Building draft...  ████████████████░░░░ 
 
 ---
 
+### v0.15.8.2 — Supervisor Review: Heartbeat-Based Liveness (Replace Wall-Clock Timeout)
+<!-- status: pending -->
+**Goal**: The built-in supervisor review (`run_builtin_supervisor()`) uses a wall-clock `timeout_secs` (default 120s) that fires even when the supervisor is actively streaming a response. A large diff or a slow API response legitimately takes longer than 120s. The fix is the same model used for the agent watchdog in v0.15.7.1: the supervisor writes heartbeats while it works, and the monitor kills it only when heartbeats stop — not when wall-clock elapsed exceeds a fixed value.
+
+**Depends on**: v0.15.7.1 (heartbeat infrastructure in `.ta/heartbeats/`)
+
+**Why wall-clock is wrong here**: The supervisor is an LLM call. Response time scales with diff size and model load. A 400-file diff may take 90s of streaming followed by 40s of JSON parsing — 130s total, killed by a 120s wall-clock timer with no output to the user. The user sees "timed out" and gets a `Warn` fallback verdict with no findings. The supervisor did real work and it was discarded.
+
+**Design**: The supervisor's streaming loop writes a heartbeat file (`.ta/heartbeats/<goal-id>.supervisor`) every time it receives a token chunk. A monitor thread checks mtime. If mtime is older than `heartbeat_stale_secs` (default 30s — meaning no token received in 30s), the supervisor is considered hung and is killed. Actively streaming supervisors never time out regardless of total elapsed.
+
+```toml
+[supervisor]
+enabled = true
+heartbeat_stale_secs = 30    # kill if no token received for this long (default 30)
+# timeout_secs removed — replaced by heartbeat_stale_secs
+```
+
+`timeout_secs` remains accepted for backward compatibility but is ignored with a deprecation warning: `[supervisor] timeout_secs is deprecated — use heartbeat_stale_secs (monitors token activity, not wall-clock elapsed)`.
+
+**Items**:
+
+1. [ ] **Heartbeat writes in streaming loop** (`crates/ta-changeset/src/supervisor_review.rs`): In `call_supervisor_streaming()`, after each chunk received from the API, `fs::write(".ta/heartbeats/<goal-id>.supervisor", timestamp)`. Uses the existing `.ta/heartbeats/` directory (created by v0.15.7.1).
+
+2. [ ] **Monitor thread replaces deadline check**: Spawn a monitor thread alongside the streaming loop. Thread polls `.ta/heartbeats/<goal-id>.supervisor` mtime every 5s. If mtime > `heartbeat_stale_secs` ago, send abort signal to streaming loop. Remove the `Instant::now() + Duration::from_secs(timeout_secs)` deadline from the polling loop.
+
+3. [ ] **`SupervisorRunConfig` update**: Replace `timeout_secs: u64` with `heartbeat_stale_secs: u64` (default 30). Keep `timeout_secs` in serde deserialization as a deprecated alias that maps to `heartbeat_stale_secs * 4` with a warning printed to stderr.
+
+4. [ ] **Kill message distinguishes stall from hang**: Timeout error now reads: `"Supervisor stalled — no response tokens received for {stale_secs}s. The API may be overloaded or the diff too large for a single call. Findings so far: {partial}"`. Include any partial response accumulated before the stall.
+
+5. [ ] **Heartbeat cleanup**: On supervisor completion (pass or fail), delete `.ta/heartbeats/<goal-id>.supervisor`. On process exit / signal, cleanup runs in a Drop guard.
+
+6. [ ] **Tests**: streaming loop writes heartbeat on each chunk; monitor kills loop when mtime stale; active streaming never killed regardless of elapsed; `timeout_secs` in config emits deprecation warning and maps to `heartbeat_stale_secs`; stall message includes partial response.
+
+7. [ ] **USAGE.md**: Update "Supervisor Agent" section — remove `timeout_secs`, add `heartbeat_stale_secs` with explanation that active streaming is never killed.
+
+#### Version: `0.15.8-alpha.2`
+
+---
+
 ### v0.15.9 — `MessagingAdapter` Trait & Email Provider Plugins
 <!-- status: pending -->
 **Goal**: A pluggable messaging adapter layer — the same external plugin protocol used by VCS adapters — extended to cover mailbox access. Email providers (Gmail, Outlook, IMAP/SMTP) are discoverable plugins that speak a common `MessagingAdapter` JSON-over-stdio protocol. No bespoke `ta email` command surface; credentials live in the OS keychain. This phase delivers the adapter trait, the plugin protocol, and three built-in provider plugins. The workflow in v0.15.10 drives them.
