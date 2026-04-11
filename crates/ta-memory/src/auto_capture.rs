@@ -978,6 +978,143 @@ pub fn build_memory_context_section_with_manifest_filter(
     Ok(section)
 }
 
+// ---------------------------------------------------------------------------
+// Project-memory aware injection (v0.15.13.3)
+// ---------------------------------------------------------------------------
+
+/// Build a CLAUDE.md injection section that includes project-memory entries.
+///
+/// Project-memory entries (scope = "project" or "team") are injected
+/// **unconditionally** — they represent shared team knowledge and must appear
+/// regardless of goal-title similarity. File-path-tagged entries are promoted
+/// to the front when any of their tagged paths exist in `staging_dir`.
+///
+/// The resulting section has two sub-sections:
+/// 1. "Team Memory" — project/team-scoped entries (unconditional)
+/// 2. "History" and other categories — goal-title-similarity entries (existing behaviour)
+///
+/// If `staging_dir` is `None`, file-path triggering is skipped.
+pub fn build_memory_context_section_with_project(
+    local_store: &dyn crate::store::MemoryStore,
+    project_store: &dyn crate::store::MemoryStore,
+    goal_title: &str,
+    max_entries: usize,
+    phase_id: Option<&str>,
+    staging_dir: Option<&std::path::Path>,
+) -> Result<String, MemoryError> {
+    if max_entries == 0 {
+        return Ok(String::new());
+    }
+
+    // ── 1. Load all project-memory entries ──────────────────────────────────
+    let all_project = project_store.list(None)?;
+
+    // Split: file-path-tagged vs. non-tagged.
+    let (mut tagged, mut untagged): (Vec<_>, Vec<_>) = all_project
+        .into_iter()
+        .partition(|e| !e.file_paths.is_empty());
+
+    // Promote file-path-tagged entries whose paths exist in staging.
+    let mut triggered: Vec<crate::store::MemoryEntry> = Vec::new();
+    if let Some(staging) = staging_dir {
+        tagged.retain(|e| {
+            if e.file_paths.iter().any(|p| staging.join(p).exists()) {
+                triggered.push(e.clone());
+                false
+            } else {
+                true
+            }
+        });
+        // Put non-triggered tagged entries back into untagged pool.
+        untagged.extend(tagged);
+    } else {
+        // No staging dir: include all tagged entries in untagged pool.
+        untagged.extend(tagged);
+    }
+
+    // Order: triggered first, then untagged (by category priority).
+    fn category_priority(cat: &Option<crate::store::MemoryCategory>) -> u8 {
+        use crate::store::MemoryCategory;
+        match cat {
+            Some(MemoryCategory::Architecture) => 0,
+            Some(MemoryCategory::NegativePath) => 1,
+            Some(MemoryCategory::Convention) => 2,
+            Some(MemoryCategory::State) => 3,
+            Some(MemoryCategory::Preference) => 4,
+            Some(MemoryCategory::History) => 5,
+            Some(MemoryCategory::Relationship) => 6,
+            _ => 7,
+        }
+    }
+    untagged.sort_by_key(|e| category_priority(&e.category));
+
+    let project_budget = max_entries.min(triggered.len() + untagged.len());
+    let mut project_entries: Vec<_> = triggered
+        .into_iter()
+        .chain(untagged)
+        .take(project_budget)
+        .collect();
+
+    // ── 2. Load similarity-based entries from local store ────────────────────
+    let remaining_budget = max_entries.saturating_sub(project_entries.len());
+    let similarity_section = if remaining_budget > 0 {
+        build_memory_context_section_with_phase(
+            local_store,
+            goal_title,
+            remaining_budget,
+            phase_id,
+        )?
+    } else {
+        String::new()
+    };
+
+    // ── 3. Build combined section ────────────────────────────────────────────
+    if project_entries.is_empty() && similarity_section.is_empty() {
+        return Ok(String::new());
+    }
+
+    let mut section = String::from("\n## Prior Context (from TA memory)\n\n");
+    section.push_str(
+        "The following knowledge was captured from previous sessions across all agent frameworks.\n\n",
+    );
+
+    if !project_entries.is_empty() {
+        section.push_str("### Team Memory\n\n");
+        for entry in &mut project_entries {
+            let cat_label = entry
+                .category
+                .as_ref()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "other".to_string());
+            let file_hint = if !entry.file_paths.is_empty() {
+                format!(" [files: {}]", entry.file_paths.join(", "))
+            } else {
+                String::new()
+            };
+            section.push_str(&format!(
+                "- **[{}] {}{}**: {}\n",
+                cat_label, entry.key, file_hint, entry.value
+            ));
+        }
+        section.push('\n');
+    }
+
+    // Append the similarity-based section (without re-printing the header).
+    if !similarity_section.is_empty() {
+        // similarity_section starts with "\n## Prior Context…\n\n...\n" — strip that header.
+        let body_start = similarity_section
+            .find("The following knowledge")
+            .map(|i| i + "The following knowledge was captured from previous sessions across all agent frameworks.\n\n".len())
+            .unwrap_or(0);
+        let body = &similarity_section[body_start..];
+        if !body.trim().is_empty() {
+            section.push_str(body);
+        }
+    }
+
+    Ok(section)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1665,6 +1802,162 @@ max_context_entries = 20
         store.store("k", "v".into(), vec![], "ta-system").unwrap();
         let section =
             build_memory_context_section_with_manifest_filter(&store, "", 0, None, &[], 0).unwrap();
+        assert!(section.is_empty());
+    }
+
+    // ── build_memory_context_section_with_project tests (v0.15.13.3) ──
+
+    #[test]
+    fn project_memory_injected_unconditionally() {
+        let dir = TempDir::new().unwrap();
+        let mut project_store = FsMemoryStore::new(dir.path().join("project-memory"));
+        let local_store = FsMemoryStore::new(dir.path().join("memory"));
+
+        project_store
+            .store_with_params(
+                "arch:api-design",
+                serde_json::json!("use REST"),
+                vec![],
+                "test",
+                crate::store::StoreParams {
+                    scope: Some("project".to_string()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        let section = build_memory_context_section_with_project(
+            &local_store,
+            &project_store,
+            "unrelated goal",
+            10,
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert!(
+            section.contains("arch:api-design"),
+            "project entry should appear unconditionally"
+        );
+        assert!(
+            section.contains("Team Memory"),
+            "should have Team Memory heading"
+        );
+    }
+
+    #[test]
+    fn file_path_tagged_entry_surfaced_when_file_exists_in_staging() {
+        let dir = TempDir::new().unwrap();
+        let staging_dir = TempDir::new().unwrap();
+
+        // Create the tagged file in staging.
+        let target_file = staging_dir.path().join("apps/ta-cli/src/commands/api.rs");
+        std::fs::create_dir_all(target_file.parent().unwrap()).unwrap();
+        std::fs::write(&target_file, "// dummy").unwrap();
+
+        let mut project_store = FsMemoryStore::new(dir.path().join("project-memory"));
+        let local_store = FsMemoryStore::new(dir.path().join("memory"));
+
+        project_store
+            .store_with_params(
+                "arch:api",
+                serde_json::json!("use REST not gRPC"),
+                vec![],
+                "test",
+                crate::store::StoreParams {
+                    scope: Some("project".to_string()),
+                    file_paths: vec!["apps/ta-cli/src/commands/api.rs".to_string()],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        let section = build_memory_context_section_with_project(
+            &local_store,
+            &project_store,
+            "goal",
+            10,
+            None,
+            Some(staging_dir.path()),
+        )
+        .unwrap();
+
+        assert!(
+            section.contains("arch:api"),
+            "file-tagged entry should be present when file exists in staging"
+        );
+        assert!(
+            section.contains("apps/ta-cli/src/commands/api.rs"),
+            "file path hint should appear in output"
+        );
+    }
+
+    #[test]
+    fn injection_order_project_before_similarity() {
+        let dir = TempDir::new().unwrap();
+        let mut project_store = FsMemoryStore::new(dir.path().join("project-memory"));
+        let mut local_store = FsMemoryStore::new(dir.path().join("memory"));
+
+        project_store
+            .store_with_params(
+                "arch:decision",
+                serde_json::json!("important team decision"),
+                vec![],
+                "test",
+                crate::store::StoreParams {
+                    scope: Some("project".to_string()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        local_store
+            .store(
+                "goal:abc:complete",
+                serde_json::json!("some history"),
+                vec![],
+                "test",
+            )
+            .unwrap();
+
+        let section = build_memory_context_section_with_project(
+            &local_store,
+            &project_store,
+            "some goal",
+            10,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let team_pos = section.find("Team Memory").unwrap_or(usize::MAX);
+        let hist_pos = section.find("History").unwrap_or(usize::MAX);
+        // "Team Memory" section should appear before "History" section.
+        assert!(
+            team_pos < hist_pos,
+            "Team Memory ({}) should appear before History ({})",
+            team_pos,
+            hist_pos
+        );
+    }
+
+    #[test]
+    fn empty_both_stores_returns_empty() {
+        let dir = TempDir::new().unwrap();
+        let project_store = FsMemoryStore::new(dir.path().join("project-memory"));
+        let local_store = FsMemoryStore::new(dir.path().join("memory"));
+
+        let section = build_memory_context_section_with_project(
+            &local_store,
+            &project_store,
+            "goal",
+            10,
+            None,
+            None,
+        )
+        .unwrap();
+
         assert!(section.is_empty());
     }
 }

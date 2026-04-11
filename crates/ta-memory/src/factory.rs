@@ -26,7 +26,6 @@
 use std::path::Path;
 
 use crate::error::MemoryError;
-use crate::fs_store::FsMemoryStore;
 use crate::key_schema::load_memory_config;
 use crate::plugin_manifest::find_memory_plugin;
 use crate::store::MemoryStore;
@@ -196,8 +195,11 @@ pub fn memory_store_strict(project_root: &Path) -> Result<Box<dyn MemoryStore>, 
 }
 
 fn fs_fallback(project_root: &Path) -> Box<dyn MemoryStore> {
-    let memory_dir = project_root.join(".ta").join("memory");
-    Box::new(FsMemoryStore::new(&memory_dir))
+    // v0.15.13.3: Use ProjectMemoryStore so project/team-scoped entries route
+    // to .ta/project-memory/ (VCS-committed) automatically.
+    Box::new(crate::fs_store::ProjectMemoryStore::for_project(
+        project_root,
+    ))
 }
 
 // ---------------------------------------------------------------------------

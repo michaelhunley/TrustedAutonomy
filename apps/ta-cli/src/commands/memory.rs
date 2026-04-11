@@ -8,6 +8,7 @@
 
 use clap::Subcommand;
 use ta_mcp_gateway::GatewayConfig;
+use ta_memory::MemoryStore;
 
 #[derive(Subcommand, Debug)]
 pub enum MemoryCommands {
@@ -36,12 +37,16 @@ pub enum MemoryCommands {
     ///   1. --scope flag (explicit override)
     ///   2. Per-key-prefix override in [memory.sharing.scopes] config
     ///   3. Default scope from [memory.sharing] config (default: "local")
+    ///
+    /// Use --scope project (or team) to write to .ta/project-memory/ which is
+    /// VCS-committed and shared with the whole team.
     Store {
         /// Memory key to store (e.g., "arch:api-design" or "decisions:auth-strategy").
         key: String,
         /// Value (JSON string or plain text).
         value: String,
-        /// Optional scope override: "local" or "team".
+        /// Scope: "local" (default), "project", or "team".
+        /// "project" and "team" entries go to .ta/project-memory/ (VCS-committed).
         #[arg(long)]
         scope: Option<String>,
         /// Optional category (e.g., convention, architecture, history).
@@ -50,7 +55,30 @@ pub enum MemoryCommands {
         /// Optional tags (repeatable).
         #[arg(long, short = 't')]
         tags: Vec<String>,
+        /// Tag this entry with one or more file paths (repeatable).
+        /// The entry will be surfaced automatically when any listed path exists in staging.
+        #[arg(long, short = 'f')]
+        file: Vec<String>,
     },
+
+    /// List and resolve same-key conflicts in .ta/project-memory/.
+    ///
+    /// Conflicts arise when two VCS branches write different values for the same
+    /// memory key. TA detects them at read time and stores them in
+    /// .ta/project-memory/.conflicts/ for review.
+    ///
+    /// Use --resolve-ours or --resolve-theirs to pick a version for a specific key.
+    Conflicts {
+        /// Accept "ours" (newer timestamp) for the given key and remove the conflict.
+        #[arg(long)]
+        resolve_ours: Option<String>,
+        /// Accept "theirs" (older timestamp) for the given key and remove the conflict.
+        #[arg(long)]
+        resolve_theirs: Option<String>,
+    },
+
+    /// Scan project-memory for issues: conflicts, stale entries, missing .gitattributes.
+    Doctor,
 
     /// List discovered memory backend plugins and optionally probe them.
     ///
@@ -106,6 +134,7 @@ pub fn execute(command: &MemoryCommands, config: &GatewayConfig) -> anyhow::Resu
             scope,
             category,
             tags,
+            file,
         } => store_entry(
             config,
             key,
@@ -113,9 +142,15 @@ pub fn execute(command: &MemoryCommands, config: &GatewayConfig) -> anyhow::Resu
             scope.as_deref(),
             category.as_deref(),
             tags,
+            file,
         ),
         MemoryCommands::Plugin { probe } => list_plugins(config, *probe),
         MemoryCommands::Sync { dry_run } => sync_to_backend(config, *dry_run),
+        MemoryCommands::Conflicts {
+            resolve_ours,
+            resolve_theirs,
+        } => handle_conflicts(config, resolve_ours.as_deref(), resolve_theirs.as_deref()),
+        MemoryCommands::Doctor => memory_doctor(config),
     }
 }
 
@@ -257,6 +292,7 @@ fn sync_to_backend(config: &GatewayConfig, dry_run: bool) -> anyhow::Result<()> 
             confidence: Some(entry.confidence),
             phase_id: entry.phase_id.clone(),
             scope: entry.scope.clone(),
+            file_paths: entry.file_paths.clone(),
         };
         match dest.store_with_params(
             &entry.key,
@@ -410,6 +446,9 @@ fn show_backend(config: &GatewayConfig) -> anyhow::Result<()> {
 /// 1. `--scope` flag (explicit override)
 /// 2. Per-key-prefix override in `[memory.sharing.scopes]` config
 /// 3. `[memory.sharing] default_scope` (default: "local")
+///
+/// When scope is "project" or "team", the entry is written to
+/// `.ta/project-memory/` (VCS-committed). All other scopes go to `.ta/memory/`.
 fn store_entry(
     config: &GatewayConfig,
     key: &str,
@@ -417,6 +456,7 @@ fn store_entry(
     scope_override: Option<&str>,
     category_str: Option<&str>,
     tags: &[String],
+    file_paths: &[String],
 ) -> anyhow::Result<()> {
     use ta_memory::StoreParams;
 
@@ -445,23 +485,46 @@ fn store_entry(
         confidence: Some(0.9),
         phase_id: None,
         scope: Some(resolved_scope.clone()),
+        file_paths: file_paths.to_vec(),
     };
 
+    // Route project/team-scoped entries to the ProjectMemoryStore so they land
+    // in .ta/project-memory/ automatically.
     let mut store = ta_memory::memory_store_from_config(&config.workspace_root);
     store
         .store_with_params(key, json_value, tags.to_vec(), "ta-cli", params)
         .map_err(|e| anyhow::anyhow!("failed to store memory entry: {}", e))?;
 
-    println!("Stored: {} [scope: {}]", key, resolved_scope);
+    let storage_hint = match resolved_scope.as_str() {
+        "project" | "team" => " → .ta/project-memory/ (VCS-committed)",
+        _ => " → .ta/memory/ (local)",
+    };
+    println!(
+        "Stored: {} [scope: {}{}]",
+        key, resolved_scope, storage_hint
+    );
+    if !file_paths.is_empty() {
+        println!("  file tags: {}", file_paths.join(", "));
+    }
     Ok(())
 }
 
 /// `ta memory list --scope <scope>` — list entries filtered by sharing scope.
 fn list_by_scope(config: &GatewayConfig, scope_filter: &str, limit: usize) -> anyhow::Result<()> {
-    let store = ta_memory::memory_store_from_config(&config.workspace_root);
-    let all = store
-        .list(None)
-        .map_err(|e| anyhow::anyhow!("failed to list memory entries: {}", e))?;
+    // For project/team scope, read directly from .ta/project-memory/ to get the
+    // committed entries without mixing in local entries.
+    let all = if scope_filter == "project" || scope_filter == "team" {
+        let project_dir = config.workspace_root.join(".ta").join("project-memory");
+        let store = ta_memory::FsMemoryStore::new(&project_dir);
+        store
+            .list(None)
+            .map_err(|e| anyhow::anyhow!("failed to list project-memory entries: {}", e))?
+    } else {
+        let store = ta_memory::memory_store_from_config(&config.workspace_root);
+        store
+            .list(None)
+            .map_err(|e| anyhow::anyhow!("failed to list memory entries: {}", e))?
+    };
 
     let filtered: Vec<_> = all
         .into_iter()
@@ -473,14 +536,28 @@ fn list_by_scope(config: &GatewayConfig, scope_filter: &str, limit: usize) -> an
         .collect();
 
     if filtered.is_empty() {
-        println!("No memory entries with scope '{}' found.", scope_filter);
+        let storage_path = if scope_filter == "project" || scope_filter == "team" {
+            ".ta/project-memory/"
+        } else {
+            ".ta/memory/"
+        };
+        println!(
+            "No memory entries with scope '{}' found in {}.",
+            scope_filter, storage_path
+        );
         return Ok(());
     }
 
+    let storage_path = if scope_filter == "project" || scope_filter == "team" {
+        ".ta/project-memory/ (VCS-committed)"
+    } else {
+        ".ta/memory/ (local)"
+    };
     println!(
-        "Memory entries [scope: {}] ({} shown):",
+        "Memory entries [scope: {}] ({} shown) from {}:",
         scope_filter,
-        filtered.len()
+        filtered.len(),
+        storage_path
     );
     println!();
     for e in &filtered {
@@ -508,8 +585,191 @@ fn list_by_scope(config: &GatewayConfig, scope_filter: &str, limit: usize) -> an
         };
         println!("  {}{}", cat, e.key);
         println!("    {}", value_preview);
+        if !e.file_paths.is_empty() {
+            println!("    files: {}", e.file_paths.join(", "));
+        }
     }
 
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// `ta memory conflicts` — list and resolve project-memory conflicts (v0.15.13.3)
+// ---------------------------------------------------------------------------
+
+fn handle_conflicts(
+    config: &GatewayConfig,
+    resolve_ours: Option<&str>,
+    resolve_theirs: Option<&str>,
+) -> anyhow::Result<()> {
+    let project_dir = config.workspace_root.join(".ta").join("project-memory");
+
+    // Handle resolution requests.
+    if let Some(key) = resolve_ours.or(resolve_theirs) {
+        let take_ours = resolve_ours.is_some();
+        let conflicts = ta_memory::load_conflicts(&project_dir);
+        let conflict = conflicts.iter().find(|c| c.key == key).ok_or_else(|| {
+            anyhow::anyhow!(
+                "No conflict found for key '{}'. Run `ta memory conflicts` to list.",
+                key
+            )
+        })?;
+
+        let winner = if take_ours {
+            conflict.ours.clone()
+        } else {
+            conflict.theirs.clone()
+        };
+
+        // Write the winner back to project-memory.
+        let project_store_dir = project_dir.clone();
+        let mut store = ta_memory::FsMemoryStore::new(&project_store_dir);
+        let params = ta_memory::StoreParams {
+            goal_id: winner.goal_id,
+            category: winner.category.clone(),
+            expires_at: winner.expires_at,
+            confidence: Some(winner.confidence),
+            phase_id: winner.phase_id.clone(),
+            scope: winner.scope.clone(),
+            file_paths: winner.file_paths.clone(),
+        };
+        store
+            .store_with_params(
+                &winner.key,
+                winner.value.clone(),
+                winner.tags.clone(),
+                &winner.source,
+                params,
+            )
+            .map_err(|e| anyhow::anyhow!("failed to write resolved entry: {}", e))?;
+
+        // Remove the conflict record.
+        ta_memory::remove_conflict(&project_dir, key);
+        println!(
+            "Resolved: {} [accepted {}]",
+            key,
+            if take_ours { "ours" } else { "theirs" }
+        );
+        return Ok(());
+    }
+
+    // List all unresolved conflicts.
+    let conflicts = ta_memory::load_conflicts(&project_dir);
+    if conflicts.is_empty() {
+        println!("No unresolved project-memory conflicts.");
+        println!("Project-memory dir: {}", project_dir.display());
+        return Ok(());
+    }
+
+    println!("Unresolved project-memory conflicts ({}):", conflicts.len());
+    println!();
+    for c in &conflicts {
+        println!("  Key: {}", c.key);
+        println!("  Detected: {}", c.detected_at.format("%Y-%m-%d %H:%M UTC"));
+        println!();
+        println!(
+            "  Ours   ({}): {}",
+            c.ours.updated_at.format("%Y-%m-%d %H:%M"),
+            c.ours.value
+        );
+        println!(
+            "  Theirs ({}): {}",
+            c.theirs.updated_at.format("%Y-%m-%d %H:%M"),
+            c.theirs.value
+        );
+        println!();
+        println!("  To resolve:");
+        println!("    ta memory conflicts --resolve-ours \"{}\"", c.key);
+        println!("    ta memory conflicts --resolve-theirs \"{}\"", c.key);
+        println!();
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// `ta memory doctor` — scan project-memory health (v0.15.13.3)
+// ---------------------------------------------------------------------------
+
+fn memory_doctor(config: &GatewayConfig) -> anyhow::Result<()> {
+    let project_dir = config.workspace_root.join(".ta").join("project-memory");
+    let mut issues = 0usize;
+
+    println!("Project-Memory Doctor");
+    println!();
+
+    // 1. Check .ta/project-memory/ exists and entry count.
+    if project_dir.exists() {
+        let store = ta_memory::FsMemoryStore::new(&project_dir);
+        let count = store.list(None).map(|e| e.len()).unwrap_or(0);
+        println!("  project-memory dir:  {}", project_dir.display());
+        println!("  entries:             {}", count);
+    } else {
+        println!("  project-memory dir:  not present (no project-scoped entries stored yet)");
+        println!("  To create: ta memory store --scope project \"key\" \"value\"");
+    }
+
+    // 2. Check for unresolved conflicts.
+    let conflicts = ta_memory::load_conflicts(&project_dir);
+    if conflicts.is_empty() {
+        println!("  conflicts:           none");
+    } else {
+        println!("  conflicts:           {} unresolved", conflicts.len());
+        for c in &conflicts {
+            println!("    [!] {}", c.key);
+        }
+        println!("  To review: ta memory conflicts");
+        issues += conflicts.len();
+    }
+
+    // 3. Check .gitattributes for merge driver hint.
+    let gitattributes_path = config.workspace_root.join(".gitattributes");
+    let has_gitattributes_hint = if gitattributes_path.exists() {
+        std::fs::read_to_string(&gitattributes_path)
+            .map(|s| s.contains(".ta/project-memory/"))
+            .unwrap_or(false)
+    } else {
+        false
+    };
+    if has_gitattributes_hint {
+        println!("  .gitattributes:      .ta/project-memory/ merge strategy present");
+    } else {
+        println!("  .gitattributes:      no .ta/project-memory/ entry (optional but recommended)");
+        println!("  To add: echo '.ta/project-memory/*.json merge=union' >> .gitattributes");
+    }
+
+    // 4. Check .gitignore does NOT ignore project-memory.
+    let gitignore_path = config.workspace_root.join(".gitignore");
+    let gitignore_ignores_project_memory = if gitignore_path.exists() {
+        std::fs::read_to_string(&gitignore_path)
+            .map(|s| {
+                s.lines().any(|l| {
+                    let l = l.trim();
+                    l == ".ta/project-memory"
+                        || l == ".ta/project-memory/"
+                        || l == ".ta/project-memory/**"
+                })
+            })
+            .unwrap_or(false)
+    } else {
+        false
+    };
+    if gitignore_ignores_project_memory {
+        println!("  .gitignore:          [!] .ta/project-memory/ is gitignored — entries will NOT be committed");
+        println!("  Fix: remove .ta/project-memory/ from .gitignore");
+        issues += 1;
+    } else {
+        println!("  .gitignore:          .ta/project-memory/ is NOT ignored (correct)");
+    }
+
+    println!();
+    if issues == 0 {
+        println!("  All checks passed.");
+    } else {
+        println!(
+            "  {} issue(s) found. See above for remediation steps.",
+            issues
+        );
+    }
     Ok(())
 }
 
