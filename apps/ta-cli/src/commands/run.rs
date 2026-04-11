@@ -4916,6 +4916,17 @@ pub fn build_memory_context_section_for_inject(
     goal_title: &str,
     phase_id: Option<&str>,
 ) -> String {
+    build_memory_context_section_for_inject_with_staging(config, goal_title, phase_id, None)
+}
+
+/// Like `build_memory_context_section_for_inject` but receives the staging workspace
+/// path so file-path-tagged project-memory entries can be triggered by file presence.
+pub fn build_memory_context_section_for_inject_with_staging(
+    config: &GatewayConfig,
+    goal_title: &str,
+    phase_id: Option<&str>,
+    staging_dir: Option<&std::path::Path>,
+) -> String {
     let workflow_toml = config.workspace_root.join(".ta").join("workflow.toml");
     let capture_config = ta_memory::auto_capture::load_config(&workflow_toml);
     let max_entries = capture_config.max_context_entries;
@@ -4923,6 +4934,11 @@ pub fn build_memory_context_section_for_inject(
     // Respect backend toggle from .ta/memory.toml.
     let memory_config = ta_memory::key_schema::load_memory_config(&config.workspace_root);
     let backend = memory_config.backend.as_deref().unwrap_or("ruvector");
+
+    // Always load project-memory (FsMemoryStore — it's always local JSON files).
+    // Project-memory is VCS-committed and must be injected regardless of backend.
+    let project_memory_dir = config.workspace_root.join(".ta").join("project-memory");
+    let project_store = ta_memory::FsMemoryStore::new(&project_memory_dir);
 
     // Load project constitution content for indexing (v0.12.5).
     let constitution_content = {
@@ -4954,11 +4970,14 @@ pub fn build_memory_context_section_for_inject(
                         tracing::warn!("failed to index constitution rules: {}", e);
                     }
                 }
-                return ta_memory::auto_capture::build_memory_context_section_with_phase(
+                // v0.15.13.3: prepend project-memory entries unconditionally.
+                return ta_memory::auto_capture::build_memory_context_section_with_project(
                     &store,
+                    &project_store,
                     goal_title,
                     max_entries,
                     phase_id,
+                    staging_dir,
                 )
                 .unwrap_or_default();
             }
@@ -4977,11 +4996,14 @@ pub fn build_memory_context_section_for_inject(
             tracing::warn!("failed to index constitution rules (fs): {}", e);
         }
     }
-    ta_memory::auto_capture::build_memory_context_section_with_phase(
+    // v0.15.13.3: prepend project-memory entries unconditionally.
+    ta_memory::auto_capture::build_memory_context_section_with_project(
         &fs_store,
+        &project_store,
         goal_title,
         max_entries,
         phase_id,
+        staging_dir,
     )
     .unwrap_or_default()
 }
@@ -4996,6 +5018,9 @@ fn build_memory_context_section_for_inject_with_limit(
 ) -> String {
     let memory_config = ta_memory::key_schema::load_memory_config(&config.workspace_root);
     let backend = memory_config.backend.as_deref().unwrap_or("ruvector");
+
+    let project_memory_dir = config.workspace_root.join(".ta").join("project-memory");
+    let project_store = ta_memory::FsMemoryStore::new(&project_memory_dir);
 
     let constitution_content = {
         let p = config.workspace_root.join(".ta").join("constitution.md");
@@ -5017,11 +5042,13 @@ fn build_memory_context_section_for_inject_with_limit(
             if let Some(ref content) = constitution_content {
                 let _ = ta_memory::index_constitution_rules(&mut store, content);
             }
-            return ta_memory::auto_capture::build_memory_context_section_with_phase(
+            return ta_memory::auto_capture::build_memory_context_section_with_project(
                 &store,
+                &project_store,
                 goal_title,
                 max_entries,
                 phase_id,
+                None,
             )
             .unwrap_or_default();
         }
@@ -5032,11 +5059,13 @@ fn build_memory_context_section_for_inject_with_limit(
     if let Some(ref content) = constitution_content {
         let _ = ta_memory::index_constitution_rules(&mut fs_store, content);
     }
-    ta_memory::auto_capture::build_memory_context_section_with_phase(
+    ta_memory::auto_capture::build_memory_context_section_with_project(
         &fs_store,
+        &project_store,
         goal_title,
         max_entries,
         phase_id,
+        None,
     )
     .unwrap_or_default()
 }

@@ -88,12 +88,19 @@ pub struct MemoryEntry {
     /// Abstract string (not coupled to semver). Entries with `None` are global.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub phase_id: Option<String>,
-    /// Sharing scope for this entry: "local" (default) or "team".
+    /// Sharing scope for this entry: "local" (default), "project", or "team".
     ///
     /// Set at write time from the `[memory.sharing]` config or via `--scope` CLI flag.
     /// Entries with `None` should be treated as "local".
+    /// `"project"` and `"team"` entries are stored in `.ta/project-memory/` (VCS-committed).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
+    /// File paths this entry is associated with (v0.15.13.3).
+    ///
+    /// When set, the entry is surfaced at injection time whenever any listed path
+    /// exists in the staging workspace, independent of similarity score.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub file_paths: Vec<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -154,8 +161,69 @@ pub struct StoreParams {
     pub confidence: Option<f64>,
     /// Plan phase to associate this entry with (v0.6.3).
     pub phase_id: Option<String>,
-    /// Sharing scope: "local" or "team". Resolved from config or CLI flag.
+    /// Sharing scope: "local", "project", or "team". Resolved from config or CLI flag.
+    /// "project" and "team" entries go to `.ta/project-memory/` (VCS-committed).
     pub scope: Option<String>,
+    /// File paths to tag this entry with (v0.15.13.3).
+    /// Entry will surface at injection time when any listed path exists in staging.
+    pub file_paths: Vec<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Conflict detection types (v0.15.13.3)
+// ---------------------------------------------------------------------------
+
+/// A same-key conflict between two concurrent project-memory writes.
+///
+/// Detected at read time when `.ta/project-memory/` contains two files with the
+/// same logical key (different `entry_id`s). This happens when two VCS
+/// branches both wrote an entry for the same key and were then merged.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConflictPair {
+    /// The conflicting key.
+    pub key: String,
+    /// Our version of the entry (newer or from current branch).
+    pub ours: MemoryEntry,
+    /// Their version of the entry (older or from merged branch).
+    pub theirs: MemoryEntry,
+    /// Base version before either branch modified it (if available).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<MemoryEntry>,
+    /// ISO timestamp when this conflict was detected.
+    pub detected_at: DateTime<Utc>,
+}
+
+/// Outcome of a conflict resolution.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConflictResolution {
+    /// Accept our version.
+    AcceptOurs,
+    /// Accept their version.
+    AcceptTheirs,
+    /// Accept a synthesized merged entry (produced by agent or human).
+    AcceptMerged(Box<MemoryEntry>),
+    /// Escalate to human — resolver could not produce a confident result.
+    EscalateToHuman { reason: String },
+}
+
+/// Trait for pluggable conflict resolution strategies (v0.15.13.3).
+///
+/// Built-in implementations:
+/// - `TimestampResolver`: last-write-wins (default)
+/// - `AgentResolver`: LLM-based synthesis (stub)
+///
+/// SA extension point: implement this trait to register a custom resolver
+/// (e.g., PBFT-based multi-party sign-off) in `workflow.toml`:
+/// ```toml
+/// [memory.conflict_resolution]
+/// strategy = "sa-pbft"
+/// ```
+pub trait MemoryConflictResolver: Send + Sync {
+    /// Resolve a conflict. Returns the chosen resolution.
+    fn resolve(&self, conflict: &ConflictPair) -> ConflictResolution;
+    /// Human-readable name of this resolver.
+    fn name(&self) -> &str;
 }
 
 /// Pluggable memory storage backend.
@@ -189,6 +257,7 @@ pub trait MemoryStore: Send + Sync {
         }
         entry.phase_id = params.phase_id;
         entry.scope = params.scope;
+        entry.file_paths = params.file_paths;
         Ok(entry)
     }
 

@@ -27,6 +27,7 @@
 //! ```
 
 pub mod auto_capture;
+pub mod conflict;
 pub mod error;
 pub mod external_adapter;
 pub mod factory;
@@ -40,14 +41,18 @@ pub mod solutions;
 pub mod store;
 
 pub use auto_capture::{
-    build_memory_context_section_with_manifest_filter, capture_plan_phase_complete,
-    index_constitution_rules, slug_from_text_pub, AutoCapture, AutoCaptureConfig, DraftRejectEvent,
-    GoalCompleteEvent, HumanGuidanceEvent,
+    build_memory_context_section_with_manifest_filter, build_memory_context_section_with_project,
+    capture_plan_phase_complete, index_constitution_rules, slug_from_text_pub, AutoCapture,
+    AutoCaptureConfig, DraftRejectEvent, GoalCompleteEvent, HumanGuidanceEvent,
+};
+pub use conflict::{
+    load_conflicts, remove_conflict, resolver_from_config, write_conflict, AgentResolver,
+    ConflictResolverConfig, HumanResolver, TimestampResolver, CONFLICTS_SUBDIR,
 };
 pub use error::MemoryError;
 pub use external_adapter::ExternalMemoryAdapter;
 pub use factory::{memory_store_from_config, memory_store_strict};
-pub use fs_store::FsMemoryStore;
+pub use fs_store::{FsMemoryStore, ProjectMemoryStore};
 pub use key_schema::{KeyDomainMap, KeySchema, MemoryConfig, MemorySharingConfig, ProjectType};
 pub use plugin_manifest::{
     discover_all_memory_plugins, find_memory_plugin, DiscoveredMemoryPlugin, MemoryPluginManifest,
@@ -57,4 +62,7 @@ pub use plugin_protocol::MEMORY_PROTOCOL_VERSION;
 #[cfg(feature = "ruvector")]
 pub use ruvector_store::RuVectorStore;
 pub use solutions::{SolutionContext, SolutionEntry, SolutionStore};
-pub use store::{MemoryCategory, MemoryEntry, MemoryQuery, MemoryStats, MemoryStore, StoreParams};
+pub use store::{
+    ConflictPair, ConflictResolution, MemoryCategory, MemoryConflictResolver, MemoryEntry,
+    MemoryQuery, MemoryStats, MemoryStore, StoreParams,
+};

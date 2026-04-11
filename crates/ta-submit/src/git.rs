@@ -232,6 +232,8 @@ impl GitAdapter {
         candidates.push(".ta/plan_history.jsonl".to_string());
         candidates.push(".ta/goal-audit.jsonl".to_string());
         candidates.push(".ta/velocity-history.jsonl".to_string());
+        // v0.15.13.3: Include project-memory directory (VCS-committed shared knowledge).
+        candidates.push(".ta/project-memory".to_string());
         // Merge user-configured entries from [commit] auto_stage.
         let workflow_path = work_dir.join(".ta/workflow.toml");
         let workflow = crate::config::WorkflowConfig::load_or_default(&workflow_path);

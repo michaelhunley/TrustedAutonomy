@@ -153,6 +153,7 @@ impl MemoryStore for RuVectorStore {
             confidence: params.confidence.unwrap_or(0.5),
             phase_id: params.phase_id,
             scope: params.scope,
+            file_paths: params.file_paths,
             created_at,
             updated_at: now,
         };
@@ -437,6 +438,9 @@ fn metadata_to_entry(rv_entry: &RvEntry) -> Option<MemoryEntry> {
 
     let scope = meta.get("scope").and_then(|v| v.as_str()).map(String::from);
 
+    // file_paths: not stored in vector metadata — treated as empty on deserialization.
+    let file_paths = Vec::new();
+
     Some(MemoryEntry {
         entry_id,
         key,
@@ -449,6 +453,7 @@ fn metadata_to_entry(rv_entry: &RvEntry) -> Option<MemoryEntry> {
         confidence,
         phase_id,
         scope,
+        file_paths,
         created_at,
         updated_at,
     })
@@ -592,6 +597,7 @@ mod tests {
             confidence: 0.5,
             phase_id: None,
             scope: None,
+            file_paths: vec![],
             created_at: Utc::now(),
             updated_at: Utc::now(),
         };

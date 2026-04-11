@@ -10844,6 +10844,123 @@ When `ta memory sync` copies entries to a configured backend (e.g., Supermemory,
 
 ---
 
+## Team Memory (Committed Project-Scoped Memory)
+
+Project-scoped memory entries are stored in `.ta/project-memory/` — a directory that is committed to VCS and shared across the team. Unlike `.ta/memory/` (gitignored, machine-local), project-memory survives machine wipes and is visible to every agent on every teammate's machine.
+
+### When to use project-scoped memory
+
+Store findings that apply to the whole project — architectural decisions, known gotchas, codebase facts, and conventions. Anything that you'd otherwise have to re-derive on every new goal run.
+
+### Storing a project-scoped entry
+
+```bash
+# Record an architectural decision.
+ta memory store arch:auth "Use JWT RS256; session cookies are deprecated" --scope project
+
+# Tag the entry to a specific file (surfaced whenever that file is in scope).
+ta memory store crates/ta-memory/src/fs_store.rs:notes \
+    "ProjectMemoryStore.read_merged() merges local and project; project wins on same key" \
+    --scope project \
+    --file crates/ta-memory/src/fs_store.rs
+
+# Multiple file associations.
+ta memory store api:pagination "Use cursor-based pagination throughout" \
+    --scope project \
+    --file apps/ta-daemon/src/routes/events.rs \
+    --file apps/ta-cli/src/commands/memory.rs
+```
+
+The entry is written to `.ta/project-memory/<key>.json`. Commit `.ta/project-memory/` to VCS to share it.
+
+### Listing project-scoped entries
+
+```bash
+# List all committed project-memory entries.
+ta memory list --scope project
+
+# Output includes key, file tags, category, and creation goal ID.
+```
+
+### How entries are injected at `ta run` time
+
+When a goal starts, TA injects a **Team Memory** section into CLAUDE.md before the usual goal-title similarity entries. Two types of project entries are included:
+
+1. **File-path-tagged entries** — surfaced unconditionally when any listed file path exists in the staging workspace. Ideal for architecture notes tied to specific modules.
+2. **Untagged project entries** — injected unconditionally (subject to the entry budget). These appear after triggered entries and before similarity-based local entries.
+
+This means an agent working on `crates/ta-memory/src/fs_store.rs` automatically sees any entry tagged to that file, regardless of goal title.
+
+### Conflict resolution
+
+When two VCS branches both write a project-memory entry for the same key and are then merged, TA detects the conflict at read time and stores it in `.ta/project-memory/.conflicts/`.
+
+TA uses a pluggable resolution pipeline (configured in `.ta/workflow.toml`):
+
+```toml
+[memory.conflict_resolution]
+strategy = "timestamp"        # "timestamp" | "agent" | "human"
+agent_confidence_threshold = 0.85
+escalate_to_human = true
+timestamp_threshold_secs = 60
+```
+
+- **`timestamp`** (default): if timestamps differ by more than `timestamp_threshold_secs` seconds, the newer entry wins automatically. Timestamps too close → escalate to human.
+- **`agent`**: spawn a short-lived LLM agent to synthesize a merged entry. If `confidence >= agent_confidence_threshold`, accept automatically; otherwise escalate.
+- **`human`**: always escalate to human review.
+
+### Viewing and resolving conflicts
+
+```bash
+# List all unresolved conflicts.
+ta memory conflicts
+
+# Accept our version for a specific key.
+ta memory conflicts --resolve-ours arch:auth
+
+# Accept their version.
+ta memory conflicts --resolve-theirs arch:auth
+```
+
+### Health check
+
+```bash
+# Check project-memory health: unresolved conflicts, .gitattributes, .gitignore.
+ta memory doctor
+```
+
+`ta memory doctor` reports:
+- Number of unresolved conflicts (with instructions to resolve)
+- Whether `.gitattributes` has the `merge=union` hint for project-memory files
+- Whether `.ta/project-memory/` is accidentally listed in `.gitignore`
+
+### VCS setup
+
+For git projects, `ta init` adds a `merge=union` hint to `.gitattributes`:
+
+```
+.ta/project-memory/*.json merge=union
+```
+
+This reduces line-level merge conflicts in JSON files when two branches add different keys. It does not replace TA's conflict detection — both mechanisms complement each other.
+
+`.ta/project-memory/` is intentionally **not** in `.gitignore`. It is meant to be committed.
+
+### Extension point
+
+Implement `MemoryConflictResolver` to register a custom resolution strategy:
+
+```rust
+impl MemoryConflictResolver for MyResolver {
+    fn resolve(&self, conflict: &ConflictPair) -> ConflictResolution { ... }
+    fn name(&self) -> &str { "my-resolver" }
+}
+```
+
+Then set `strategy = "my-resolver"` in `[memory.conflict_resolution]`.
+
+---
+
 ## Unreal Engine Integration
 
 TA can drive the Unreal Editor via MCP tools, with all agent actions mediated through TA's policy, audit, and draft review flow. Three community backends are supported and selectable without code changes.
