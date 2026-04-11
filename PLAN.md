@@ -10149,6 +10149,32 @@ One JSON record per item, appended by `ta draft apply`:
 
 ---
 
+### v0.15.14.2 — Velocity Stats: Rework Tracking, Auto-Migration, Version Filtering & Shell/Studio Surface
+<!-- status: pending -->
+**Goal**: Close four gaps in the velocity stats system: (1) follow-up goals that fix bugs are invisible — `rework_seconds` and `follow_up_count` fields exist on `VelocityEntry` but nothing writes to them; (2) `ta stats migrate` is a manual step that shouldn't exist — history should be written automatically; (3) no version-range filtering (can't ask "how fast did 0.15.x phases build?"); (4) velocity data is CLI-only — not surfaced in `ta shell` or Studio.
+
+**Items**:
+
+1. [ ] **Auto-migrate on every `ta draft apply`**: Move the `migrate_local_to_history()` call from the manual `ta stats migrate` command into the apply path — run it unconditionally after writing the velocity entry. Non-destructive (deduplicates by goal ID). Remove the "84 local-only entries" warning once auto-migration is in place. Keep `ta stats migrate` as a manual catch-up command with a deprecation note in USAGE.md.
+
+2. [ ] **Rework cost written to parent entry on follow-up apply**: In `draft.rs`, when a follow-up goal is applied, look up the parent goal's velocity entry (by `parent_goal_id`) in both `velocity-stats.jsonl` and `velocity-history.jsonl`. Increment `follow_up_count` and add the follow-up's `build_seconds` to `rework_seconds`. Update the entry in both files (local and committed). This makes `ta stats velocity` show real rework cost for phases that needed bug-fix follow-ups.
+
+3. [ ] **Follow-up chain tracking in `velocity-detail`**: `ta stats velocity-detail` gains a `FOLLOWUPS` column. For each goal, show follow-up count (0 = clean, 1+ = rework). `--expand-followups` flag shows each follow-up as an indented sub-row under its parent with its own build time.
+
+4. [ ] **Version-range filtering**: `ta stats velocity --phase-prefix 0.15` filters to goals whose title starts with `v0.15.` (matches plan phase naming convention). `--phase-prefix 0.15.13` narrows further. Works on both `velocity` (aggregate) and `velocity-detail` (per-goal list). Aggregate shows: total goals in range, avg/P90 build time for that version family, rework count.
+
+5. [ ] **`ta shell` velocity widget**: A new `:stats` shell command prints the same output as `ta stats velocity` inline. Also: after `ta draft apply` completes in the shell, append a one-liner velocity summary for the just-applied goal: `✓ Applied in 2h 14m  (avg: 1h 50m, P90: 4h 23m)`.
+
+6. [ ] **Studio velocity dashboard**: New "Velocity" tab in Studio (daemon HTTP API: `GET /api/stats/velocity`, `GET /api/stats/velocity-detail`). Shows: aggregate totals card, avg/P90 build time chart (last 20 goals), per-contributor breakdown table, rework heatmap (goals with follow-up count > 0 highlighted). Filterable by `phase_prefix` and `since` date. Auto-refreshes when a new goal is applied (SSE `GoalApplied` event).
+
+7. [ ] **Tests**: follow-up apply updates parent `rework_seconds` and `follow_up_count`; auto-migrate fires on apply with no manual step; `--phase-prefix 0.15` filters correctly; `--phase-prefix 0.15.13` narrows; shell `:stats` prints aggregate; Studio `/api/stats/velocity` returns correct JSON.
+
+8. [ ] **USAGE.md**: Update "Feature Velocity Stats" section — remove `ta stats migrate` as a required step, add follow-up rework tracking explanation, `--phase-prefix` examples, shell `:stats` command, Studio Velocity tab.
+
+#### Version: `0.15.14.2-alpha`
+
+---
+
 ### v0.15.15 — Multi-Agent Consensus Review Workflow
 <!-- status: pending -->
 **Goal**: A workflow template for multi-agent panel reviews where specialist agents run in parallel, each producing a structured verdict with a score and findings, and a final consensus step aggregates their outputs into a readiness score and recommendation. Ships with a `code-review-consensus` template covering architect, security, principal engineer, and PM roles. Include configurable consensus algorithms/models. Start with Raft and Paxos with Raft as the default — it should do no work if there is no swarm/multi-agent in the workflow.
