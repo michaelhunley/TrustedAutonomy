@@ -9831,28 +9831,8 @@ The draft view renders this as a readable summary ("Agent stored 4 memory entrie
 
 ---
 
-### v0.15.13.2.1 — Version Bump Reliability & Post-Apply Validation
-<!-- status: pending -->
-**Goal**: `ta draft apply` silently skips the workspace version bump if the goal has no `plan_phase` set (e.g., goal was started without `--phase`). Additionally, `bump_workspace_version` returning an empty vec is ambiguous — it could mean "already at target" or "regex matched nothing" — and is currently logged as neither. This phase makes version bumping reliable and observable.
-
-**Root cause**: At apply time, `phase_ids` is built from `goal.plan_phase` (set at `ta run --phase` time). If the goal was created without `--phase`, `phase_ids` is empty and the bump block at line 5180 is entirely skipped with no warning. The silent `Ok(vec![])` arm in `bump_workspace_version` makes it impossible to distinguish "already correct" from "failed to match."
-
-**Changes**:
-- [ ] `bump_workspace_version`: distinguish "already at version" (return `Ok(BumpResult::AlreadyCurrent)`) from "no files matched" (return `Err` or `Ok(BumpResult::NoMatch)`) — never treat no-match as success
-- [ ] After phase-apply completes (both VCS and non-VCS paths), derive expected semver from `last_phase_id` and compare against the post-apply Cargo.toml version; if mismatch, emit a loud actionable warning with the exact `./scripts/bump-version.sh <version>` command
-- [ ] If `phase_ids` is empty at apply time but the goal title contains a version string matching a known phase ID (fuzzy fallback), log a hint: "goal has no phase linked — run with `--phase v0.x.y.z` to enable auto-bump"
-- [ ] Add `ta draft apply --validate-version` flag (also runs as default post-apply check) that reads Cargo.toml and confirms it matches the applied phase semver, exiting non-zero if mismatched (useful in CI)
-- [ ] Test: apply a goal without `--phase` → confirm warning is printed; apply a goal with `--phase` → confirm Cargo.toml updated; apply to an already-correct version → confirm `AlreadyCurrent` log, no error
-- [ ] Update USAGE.md: document that `ta run` must be called with `--phase <id>` for auto-bump to fire; document `--validate-version` flag
-
-**Depends on**: v0.15.13.2
-
-#### Version: `0.15.13-alpha.2.1`
-
----
-
 ### v0.15.13.3 — Committed Project-Scoped Memory (`.ta/project-memory/`)
-<!-- status: pending -->
+<!-- status: in_progress -->
 **Goal**: Memory entries with `scope = "project"` or `scope = "team"` are currently stored in `.ta/memory/` (gitignored, machine-local) alongside ephemeral execution state. This means project knowledge — architectural decisions, codebase facts, known gotchas — is lost when a machine is wiped and never shared with teammates or their agents. This phase splits the storage layer: local-scoped entries stay in `.ta/memory/`; project/team-scoped entries land in `.ta/project-memory/` which is committed to VCS and shared across the team.
 
 **Depends on**: v0.15.13.2 (memory entry tracking per goal run)
@@ -9949,6 +9929,48 @@ heartbeat_stale_secs = 30    # kill if no token received for this long (replaces
 7. [ ] **USAGE.md**: Update "Supervisor Agent" — replace `timeout_secs` with `heartbeat_stale_secs`.
 
 #### Version: `0.15.13-alpha.4`
+
+---
+
+### v0.15.13.5 — Phase In-Progress Marking at Goal Start
+<!-- status: pending -->
+**Goal**: `ta run "..." --phase v0.x.y.z` starts the goal and creates the staging workspace, but PLAN.md still shows the phase as `pending` for the entire duration of the run. If another session adds a phase before the running one (or the user checks status mid-run), there's no signal that the phase is actively being worked. Fix: mark the phase `in_progress` in PLAN.md immediately when staging is created, before the agent launches.
+
+**Design**: `ta run` already injects CLAUDE.md and writes `.ta/goals/<id>/goal.json`. Add a `update_phase_status_in_source(phase_id, InProgress)` call in `run.rs` at the point where staging is confirmed and goal ID is assigned — before `launch_agent()`. The `in_progress` marker is written to the **source** PLAN.md (not the staging copy), so it is visible immediately in `ta plan status` and in any IDE that has PLAN.md open.
+
+On `ta draft apply`, the existing logic already advances the phase to `done`. No change needed there. If the goal is denied or cancelled, a new `ta draft deny`/`ta goal cancel` handler resets the status from `in_progress` back to `pending` (with a note in the plan history log).
+
+**Items**:
+- [ ] `run.rs`: call `update_phase_status(source_plan, phase_id, InProgress)` + write to source PLAN.md immediately after goal ID assigned, before agent launch
+- [ ] `draft.rs` deny path: if current status is `InProgress`, reset to `Pending` and log "phase reset to pending — goal denied"
+- [ ] `ta goal cancel <id>`: same reset if phase was in_progress
+- [ ] `ta plan status` output: distinguish `in_progress` visually (`[~]` or `[ running ]` prefix) from `pending` (`[ ]`) and `done` (`[x]`)
+- [ ] Tests: goal start with `--phase` → PLAN.md `in_progress` before agent launches; deny → reset to `pending`; cancel → reset to `pending`; no `--phase` → PLAN.md unchanged
+- [ ] USAGE.md: note that `--phase` marks phase in_progress immediately, visible in `ta plan status`
+
+**Depends on**: v0.15.13.4
+
+#### Version: `0.15.13-alpha.5`
+
+---
+
+### v0.15.13.6 — Version Bump Reliability & Post-Apply Validation
+<!-- status: pending -->
+**Goal**: `ta draft apply` silently skips the workspace version bump if the goal has no `plan_phase` set. `bump_workspace_version` returning an empty vec is ambiguous — "already at target" and "regex matched nothing" are both silent `Ok([])`. This phase makes the bump observable, validates the result, and adds CI enforcement.
+
+**Root cause**: `phase_ids` is built from `goal.plan_phase` (set at `ta run --phase` time). If a goal was started without `--phase`, `phase_ids` is empty and the entire bump block at `draft.rs:5180` is skipped with no warning. The silent `Ok(vec![])` arm in `bump_workspace_version` makes it impossible to distinguish "already correct" from "regex failed to match."
+
+**Items**:
+- [ ] `bump_workspace_version`: return `BumpResult` enum — `Bumped(Vec<PathBuf>)`, `AlreadyCurrent`, `NoMatch(String)`. `NoMatch` is an error; never silently succeed when no file was modified
+- [ ] Post-apply check (both VCS and non-VCS paths): derive expected semver from `last_phase_id`, read Cargo.toml, compare. If mismatch: emit loud actionable warning with exact `./scripts/bump-version.sh <version>` command
+- [ ] If `phase_ids` is empty at apply time: log hint "goal has no phase linked — version not auto-bumped; re-run with `ta run --phase <id>` or bump manually"
+- [ ] `ta draft apply --validate-version` flag: reads Cargo.toml post-apply, exits non-zero if version doesn't match phase semver — usable in CI
+- [ ] Tests: apply without `--phase` → warning printed, Cargo.toml unchanged; apply with `--phase` → Cargo.toml updated; already-correct → `AlreadyCurrent`, no error; regex no-match → `NoMatch` error surfaced
+- [ ] USAGE.md: document `--phase` requirement for auto-bump; document `--validate-version`
+
+**Depends on**: v0.15.13.5
+
+#### Version: `0.15.13-alpha.6`
 
 ---
 
