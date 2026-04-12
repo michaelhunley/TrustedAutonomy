@@ -1914,8 +1914,16 @@ Link goals to `PLAN.md` phases for automatic tracking:
 ```bash
 ta run "Complete Phase v0.4.5" --phase v0.4.5
 
+# When the goal starts, PLAN.md immediately marks the phase in_progress
 # When applied, PLAN.md is auto-updated to mark the phase done
 ```
+
+When `--phase` is specified, TA marks the phase `in_progress` in the **source** `PLAN.md` as soon as the staging workspace is ready — before the agent launches. This means `ta plan status` and any open editors immediately reflect that the phase is actively being worked.
+
+Phase status flow:
+- `pending` → `in_progress` when the goal starts (`ta run --phase <id>`)
+- `in_progress` → `done` when the draft is applied (`ta draft apply`)
+- `in_progress` → `pending` if the draft is denied (`ta draft deny`) or the goal is deleted (`ta goal delete`)
 
 Plan commands:
 

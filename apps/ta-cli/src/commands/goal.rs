@@ -1577,6 +1577,25 @@ fn delete_goal(
                 }
             }
 
+            // v0.15.13.5: Reset plan phase from in_progress → pending on delete/cancel.
+            if let Some(ref phase_id) = g.plan_phase {
+                let note = format!(
+                    "phase reset to pending — goal cancelled ({})",
+                    reason.unwrap_or("user deleted goal")
+                );
+                if let Err(e) =
+                    super::plan::reset_phase_if_in_progress(&config.workspace_root, phase_id, &note)
+                {
+                    tracing::warn!(
+                        phase = %phase_id,
+                        error = %e,
+                        "Failed to reset plan phase on goal delete"
+                    );
+                } else {
+                    println!("Plan: phase {} reset to pending (goal cancelled)", phase_id);
+                }
+            }
+
             // Remove the staging directory if it exists.
             let workspace = &g.workspace_path;
             if workspace.exists() {
@@ -4013,5 +4032,54 @@ mod tests {
         // The doctor() fn writes to stdout; just verify it returns Ok.
         // We can't easily control mtime in tests, so we verify no panic.
         let _ = doctor(&config);
+    }
+
+    // ── v0.15.13.5: delete resets in_progress plan phase ──────────────
+
+    #[test]
+    fn delete_goal_resets_in_progress_phase_to_pending() {
+        let project = TempDir::new().unwrap();
+        std::fs::write(project.path().join("README.md"), "# Test\n").unwrap();
+
+        // Write a PLAN.md with the target phase in_progress.
+        std::fs::write(
+            project.path().join("PLAN.md"),
+            "### v0.99.2 — Delete reset test\n<!-- status: in_progress -->\n\n- [ ] item\n",
+        )
+        .unwrap();
+
+        let config = GatewayConfig::for_project(project.path());
+        let store = GoalRunStore::new(&config.goals_dir).unwrap();
+
+        // Start a goal with a linked phase.
+        start_goal(
+            &config,
+            &store,
+            "Delete reset test",
+            Some(project.path()),
+            "test",
+            "test-agent",
+            Some("v0.99.2"),
+            None,
+            None,
+        )
+        .unwrap();
+
+        let goals = store.list().unwrap();
+        let goal_id = goals[0].goal_run_id.to_string();
+
+        delete_goal(&store, &config, &goal_id, None).unwrap();
+
+        let plan_after = std::fs::read_to_string(project.path().join("PLAN.md")).unwrap();
+        assert!(
+            plan_after.contains("<!-- status: pending -->"),
+            "phase should be reset to pending after goal delete: {}",
+            plan_after
+        );
+        assert!(
+            !plan_after.contains("<!-- status: in_progress -->"),
+            "in_progress marker should be gone: {}",
+            plan_after
+        );
     }
 }

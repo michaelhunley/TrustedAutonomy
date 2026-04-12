@@ -723,6 +723,7 @@ pub fn format_plan_checklist(phases: &[PlanPhase], current_phase: Option<&str>) 
         let checkbox = match phase.status {
             PlanStatus::Done => "[x]",
             PlanStatus::Deferred => "[-]",
+            PlanStatus::InProgress => "[~]",
             _ => "[ ]",
         };
         let current_marker = if current_phase.is_some_and(|cp| phase_ids_match(&phase.id, cp)) {
@@ -818,10 +819,10 @@ pub fn format_plan_checklist_windowed(
 
     // Any non-done phases before current (rare but possible).
     for phase in non_done_before {
-        let checkbox = if phase.status == PlanStatus::Deferred {
-            "[-]"
-        } else {
-            "[ ]"
+        let checkbox = match phase.status {
+            PlanStatus::Deferred => "[-]",
+            PlanStatus::InProgress => "[~]",
+            _ => "[ ]",
         };
         lines.push(format!(
             "- {} Phase {} — {}",
@@ -834,6 +835,7 @@ pub fn format_plan_checklist_windowed(
         let checkbox = match current.status {
             PlanStatus::Done => "[x]",
             PlanStatus::Deferred => "[-]",
+            PlanStatus::InProgress => "[~]",
             _ => "[ ]",
         };
         lines.push(format!(
@@ -851,6 +853,7 @@ pub fn format_plan_checklist_windowed(
         let checkbox = match phase.status {
             PlanStatus::Done => "[x]",
             PlanStatus::Deferred => "[-]",
+            PlanStatus::InProgress => "[~]",
             _ => "[ ]",
         };
         let deferred_marker = if phase.status == PlanStatus::Deferred {
@@ -918,6 +921,96 @@ pub fn record_history(
     });
 
     use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&history_path)?;
+    writeln!(file, "{}", entry)?;
+    Ok(())
+}
+
+/// Mark a phase as `in_progress` in the source PLAN.md.
+///
+/// Called by `ta run --phase <id>` immediately after staging is created,
+/// before the agent launches. Writes to the **source** PLAN.md so that
+/// `ta plan status` reflects active work immediately.
+///
+/// Logs the transition to `.ta/plan_history.jsonl`. No-ops if PLAN.md
+/// doesn't exist or the phase is not found.
+pub fn mark_phase_in_source(project_root: &Path, phase_id: &str) -> anyhow::Result<()> {
+    let plan_path = project_root.join("PLAN.md");
+    if !plan_path.exists() {
+        return Ok(());
+    }
+    let content = std::fs::read_to_string(&plan_path)?;
+    let phases = parse_plan(&content);
+    let old_status = phases
+        .iter()
+        .find(|p| phase_ids_match(&p.id, phase_id))
+        .map(|p| p.status.clone())
+        .unwrap_or(PlanStatus::Pending);
+
+    // Only update if the phase is currently pending (don't downgrade done→in_progress).
+    if !matches!(old_status, PlanStatus::Pending) {
+        return Ok(());
+    }
+
+    let updated = update_phase_status(&content, phase_id, PlanStatus::InProgress);
+    if updated == content {
+        // Phase not found or content unchanged — silently no-op.
+        return Ok(());
+    }
+    std::fs::write(&plan_path, &updated)?;
+    let _ = record_history(project_root, phase_id, &old_status, &PlanStatus::InProgress);
+    Ok(())
+}
+
+/// Reset a phase from `in_progress` back to `pending` in the source PLAN.md.
+///
+/// Called on `ta draft deny` and `ta goal delete` when the associated goal
+/// had a linked plan phase. Logs the transition to `.ta/plan_history.jsonl`
+/// with the provided `note`.
+///
+/// No-ops if the phase is not currently `in_progress`.
+pub fn reset_phase_if_in_progress(
+    project_root: &Path,
+    phase_id: &str,
+    note: &str,
+) -> anyhow::Result<()> {
+    let plan_path = project_root.join("PLAN.md");
+    if !plan_path.exists() {
+        return Ok(());
+    }
+    let content = std::fs::read_to_string(&plan_path)?;
+    let phases = parse_plan(&content);
+    let current_status = phases
+        .iter()
+        .find(|p| phase_ids_match(&p.id, phase_id))
+        .map(|p| p.status.clone());
+
+    match current_status {
+        Some(PlanStatus::InProgress) => {}
+        _ => return Ok(()), // not in_progress — nothing to reset
+    }
+
+    let updated = update_phase_status(&content, phase_id, PlanStatus::Pending);
+    if updated == content {
+        return Ok(());
+    }
+    std::fs::write(&plan_path, &updated)?;
+
+    // Log with a note field appended to the standard history entry.
+    let ta_dir = project_root.join(".ta");
+    std::fs::create_dir_all(&ta_dir)?;
+    let history_path = ta_dir.join("plan_history.jsonl");
+    let entry = serde_json::json!({
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+        "phase_id": phase_id,
+        "old_status": "in_progress",
+        "new_status": "pending",
+        "note": note,
+    });
+    use std::io::Write as _;
     let mut file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -3028,7 +3121,7 @@ Release automation.
         let phases = parse_plan(SAMPLE_PLAN);
         let checklist = format_plan_checklist(&phases, Some("4a.1"));
         assert!(checklist.contains("[x] Phase 0"));
-        assert!(checklist.contains("[ ] **Phase 4a.1 — Plan Tracking** <-- current"));
+        assert!(checklist.contains("[~] **Phase 4a.1 — Plan Tracking** <-- current"));
         assert!(checklist.contains("[ ] Phase 4b"));
     }
 
@@ -4169,5 +4262,132 @@ Build it.
         assert_eq!(phase_id_to_semver(""), None);
         assert_eq!(phase_id_to_semver("v0.14"), None); // two-part, not handled
         assert_eq!(phase_id_to_semver("alpha"), None);
+    }
+
+    // ── v0.15.13.5: Phase in-progress marking tests ──
+
+    #[test]
+    fn mark_phase_in_source_writes_in_progress() {
+        let dir = tempfile::tempdir().unwrap();
+        let plan_content = "### v0.5.0 — Test Phase\n<!-- status: pending -->\n\n- item\n";
+        std::fs::write(dir.path().join("PLAN.md"), plan_content).unwrap();
+
+        mark_phase_in_source(dir.path(), "v0.5.0").unwrap();
+
+        let updated = std::fs::read_to_string(dir.path().join("PLAN.md")).unwrap();
+        assert!(
+            updated.contains("<!-- status: in_progress -->"),
+            "should mark phase in_progress: {}",
+            updated
+        );
+    }
+
+    #[test]
+    fn mark_phase_in_source_records_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let plan_content = "### v0.5.0 — Test Phase\n<!-- status: pending -->\n\n- item\n";
+        std::fs::write(dir.path().join("PLAN.md"), plan_content).unwrap();
+        std::fs::create_dir_all(dir.path().join(".ta")).unwrap();
+
+        mark_phase_in_source(dir.path(), "v0.5.0").unwrap();
+
+        let history_path = dir.path().join(".ta/plan_history.jsonl");
+        assert!(history_path.exists(), "history file should be created");
+        let history = std::fs::read_to_string(&history_path).unwrap();
+        assert!(history.contains("\"old_status\":\"pending\""));
+        assert!(history.contains("\"new_status\":\"in_progress\""));
+    }
+
+    #[test]
+    fn mark_phase_in_source_noop_when_no_plan() {
+        let dir = tempfile::tempdir().unwrap();
+        // No PLAN.md — should not error.
+        mark_phase_in_source(dir.path(), "v0.5.0").unwrap();
+    }
+
+    #[test]
+    fn mark_phase_in_source_noop_when_already_done() {
+        let dir = tempfile::tempdir().unwrap();
+        let plan_content = "### v0.5.0 — Test Phase\n<!-- status: done -->\n\n- item\n";
+        std::fs::write(dir.path().join("PLAN.md"), plan_content).unwrap();
+
+        mark_phase_in_source(dir.path(), "v0.5.0").unwrap();
+
+        let updated = std::fs::read_to_string(dir.path().join("PLAN.md")).unwrap();
+        // Should NOT change done → in_progress.
+        assert!(
+            updated.contains("<!-- status: done -->"),
+            "done phase should not be downgraded: {}",
+            updated
+        );
+    }
+
+    #[test]
+    fn reset_phase_if_in_progress_resets_to_pending() {
+        let dir = tempfile::tempdir().unwrap();
+        let plan_content = "### v0.5.0 — Test Phase\n<!-- status: in_progress -->\n\n- item\n";
+        std::fs::write(dir.path().join("PLAN.md"), plan_content).unwrap();
+        std::fs::create_dir_all(dir.path().join(".ta")).unwrap();
+
+        reset_phase_if_in_progress(dir.path(), "v0.5.0", "phase reset to pending — goal denied")
+            .unwrap();
+
+        let updated = std::fs::read_to_string(dir.path().join("PLAN.md")).unwrap();
+        assert!(
+            updated.contains("<!-- status: pending -->"),
+            "should reset to pending: {}",
+            updated
+        );
+
+        let history = std::fs::read_to_string(dir.path().join(".ta/plan_history.jsonl")).unwrap();
+        assert!(history.contains("\"old_status\":\"in_progress\""));
+        assert!(history.contains("\"new_status\":\"pending\""));
+        assert!(history.contains("goal denied"));
+    }
+
+    #[test]
+    fn reset_phase_if_in_progress_noop_when_pending() {
+        let dir = tempfile::tempdir().unwrap();
+        let plan_content = "### v0.5.0 — Test Phase\n<!-- status: pending -->\n\n- item\n";
+        std::fs::write(dir.path().join("PLAN.md"), plan_content).unwrap();
+
+        reset_phase_if_in_progress(dir.path(), "v0.5.0", "goal denied").unwrap();
+
+        let updated = std::fs::read_to_string(dir.path().join("PLAN.md")).unwrap();
+        // Unchanged.
+        assert!(updated.contains("<!-- status: pending -->"));
+        // No history file created (was already pending).
+        assert!(!dir.path().join(".ta/plan_history.jsonl").exists());
+    }
+
+    #[test]
+    fn format_plan_checklist_in_progress_shows_tilde() {
+        let phases = vec![
+            PlanPhase {
+                id: "v0.1.0".to_string(),
+                title: "Done Phase".to_string(),
+                status: PlanStatus::Done,
+                depends_on: vec![],
+            },
+            PlanPhase {
+                id: "v0.2.0".to_string(),
+                title: "Running Phase".to_string(),
+                status: PlanStatus::InProgress,
+                depends_on: vec![],
+            },
+            PlanPhase {
+                id: "v0.3.0".to_string(),
+                title: "Pending Phase".to_string(),
+                status: PlanStatus::Pending,
+                depends_on: vec![],
+            },
+        ];
+        let checklist = format_plan_checklist(&phases, None);
+        assert!(checklist.contains("[x] Phase v0.1.0"), "done uses [x]");
+        assert!(
+            checklist.contains("[~] Phase v0.2.0"),
+            "in_progress uses [~]"
+        );
+        assert!(checklist.contains("[ ] Phase v0.3.0"), "pending uses [ ]");
     }
 }
