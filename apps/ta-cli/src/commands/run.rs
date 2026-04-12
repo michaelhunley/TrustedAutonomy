@@ -1420,6 +1420,22 @@ pub fn execute(
     let goal_id = goal.goal_run_id.to_string();
     let staging_path = goal.workspace_path.clone();
 
+    // v0.15.13.5: Mark the plan phase as in_progress in the source PLAN.md
+    // immediately after staging is confirmed, before the agent launches.
+    // This makes active work visible in `ta plan status` right away.
+    if let Some(ref phase_id) = goal.plan_phase {
+        let source_root = goal.source_dir.as_deref().unwrap_or(&config.workspace_root);
+        if let Err(e) = super::plan::mark_phase_in_source(source_root, phase_id) {
+            tracing::warn!(
+                phase = %phase_id,
+                error = %e,
+                "Failed to mark plan phase in_progress — continuing"
+            );
+        } else if !quiet {
+            println!("Plan: phase {} marked in_progress", phase_id);
+        }
+    }
+
     // 2. Inject context and settings into the staging workspace.
     if agent_config.injects_context_file {
         // Load context budget config (v0.14.3.1).

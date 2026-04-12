@@ -3693,6 +3693,32 @@ fn deny_package(
         }
     }
 
+    // v0.15.13.5: Reset plan phase from in_progress → pending on denial.
+    // The goal was doing work on a phase; denial means it's no longer in progress.
+    if let Some(goal_id) = package_goal_id {
+        let goal_store = ta_goal::GoalRunStore::new(&config.goals_dir);
+        if let Ok(store) = goal_store {
+            if let Ok(Some(goal)) = store.get(goal_id) {
+                if let Some(ref phase_id) = goal.plan_phase {
+                    let note = "phase reset to pending — goal denied";
+                    if let Err(e) = super::plan::reset_phase_if_in_progress(
+                        &config.workspace_root,
+                        phase_id,
+                        note,
+                    ) {
+                        tracing::warn!(
+                            phase = %phase_id,
+                            error = %e,
+                            "Failed to reset plan phase on denial"
+                        );
+                    } else {
+                        println!("Plan: phase {} reset to pending (goal denied)", phase_id);
+                    }
+                }
+            }
+        }
+    }
+
     println!("Denied draft package {}: {}", package_id, reason);
     Ok(())
 }
@@ -12799,5 +12825,62 @@ fn run() {
             &["src/*.rs".to_string()]
         ));
         assert!(matches_file_filters("ta://memory/abc", &[]));
+    }
+
+    // ── v0.15.13.5: deny resets plan phase ──────────────────────────────
+
+    #[test]
+    fn deny_package_resets_in_progress_phase_to_pending() {
+        let project = TempDir::new().unwrap();
+        std::fs::write(project.path().join("README.md"), "# Test\n").unwrap();
+
+        // Write a PLAN.md with the target phase in_progress.
+        std::fs::write(
+            project.path().join("PLAN.md"),
+            "### v0.99.1 — Deny reset test\n<!-- status: in_progress -->\n\n- [ ] Do the thing\n",
+        )
+        .unwrap();
+
+        let config = GatewayConfig::for_project(project.path());
+
+        super::super::goal::execute(
+            &super::super::goal::GoalCommands::Start {
+                title: "Deny reset test".to_string(),
+                source: Some(project.path().to_path_buf()),
+                objective: "test".to_string(),
+                agent: "test-agent".to_string(),
+                phase: Some("v0.99.1".to_string()),
+                follow_up: None,
+                objective_file: None,
+            },
+            &config,
+        )
+        .unwrap();
+
+        let goal_store = GoalRunStore::new(&config.goals_dir).unwrap();
+        let goals = goal_store.list().unwrap();
+        let goal = &goals[0];
+        let goal_id = goal.goal_run_id.to_string();
+
+        std::fs::write(goal.workspace_path.join("README.md"), "# Updated\n").unwrap();
+        build_package(&config, &goal_id, "Deny reset test", false).unwrap();
+
+        let packages = load_all_packages(&config).unwrap();
+        let pkg_id = packages[0].package_id.to_string();
+
+        deny_package(&config, &pkg_id, "not good enough", "reviewer").unwrap();
+
+        // The source PLAN.md phase should be reset to pending.
+        let plan_after = std::fs::read_to_string(project.path().join("PLAN.md")).unwrap();
+        assert!(
+            plan_after.contains("<!-- status: pending -->"),
+            "phase should be reset to pending after deny: {}",
+            plan_after
+        );
+        assert!(
+            !plan_after.contains("<!-- status: in_progress -->"),
+            "in_progress marker should be gone: {}",
+            plan_after
+        );
     }
 }

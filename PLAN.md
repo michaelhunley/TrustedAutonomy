@@ -9933,7 +9933,7 @@ heartbeat_stale_secs = 30    # kill if no token received for this long (replaces
 ---
 
 ### v0.15.13.5 — Phase In-Progress Marking at Goal Start
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: `ta run "..." --phase v0.x.y.z` starts the goal and creates the staging workspace, but PLAN.md still shows the phase as `pending` for the entire duration of the run. If another session adds a phase before the running one (or the user checks status mid-run), there's no signal that the phase is actively being worked. Fix: mark the phase `in_progress` in PLAN.md immediately when staging is created, before the agent launches.
 
 **Design**: `ta run` already injects CLAUDE.md and writes `.ta/goals/<id>/goal.json`. Add a `update_phase_status_in_source(phase_id, InProgress)` call in `run.rs` at the point where staging is confirmed and goal ID is assigned — before `launch_agent()`. The `in_progress` marker is written to the **source** PLAN.md (not the staging copy), so it is visible immediately in `ta plan status` and in any IDE that has PLAN.md open.
@@ -9941,12 +9941,12 @@ heartbeat_stale_secs = 30    # kill if no token received for this long (replaces
 On `ta draft apply`, the existing logic already advances the phase to `done`. No change needed there. If the goal is denied or cancelled, a new `ta draft deny`/`ta goal cancel` handler resets the status from `in_progress` back to `pending` (with a note in the plan history log).
 
 **Items**:
-- [ ] `run.rs`: call `update_phase_status(source_plan, phase_id, InProgress)` + write to source PLAN.md immediately after goal ID assigned, before agent launch
-- [ ] `draft.rs` deny path: if current status is `InProgress`, reset to `Pending` and log "phase reset to pending — goal denied"
-- [ ] `ta goal cancel <id>`: same reset if phase was in_progress
-- [ ] `ta plan status` output: distinguish `in_progress` visually (`[~]` or `[ running ]` prefix) from `pending` (`[ ]`) and `done` (`[x]`)
-- [ ] Tests: goal start with `--phase` → PLAN.md `in_progress` before agent launches; deny → reset to `pending`; cancel → reset to `pending`; no `--phase` → PLAN.md unchanged
-- [ ] USAGE.md: note that `--phase` marks phase in_progress immediately, visible in `ta plan status`
+- [x] `run.rs`: call `mark_phase_in_source(source_root, phase_id)` + write to source PLAN.md immediately after goal ID assigned, before agent launch
+- [x] `draft.rs` deny path: if current status is `InProgress`, reset to `Pending` and log "phase reset to pending — goal denied"
+- [x] `ta goal delete <id>`: same reset if phase was in_progress (via `reset_phase_if_in_progress`)
+- [x] `ta plan status` output: distinguish `in_progress` visually (`[~]` prefix) from `pending` (`[ ]`) and `done` (`[x]`) — updated in `format_plan_checklist` and `format_plan_checklist_windowed`
+- [x] Tests: `mark_phase_in_source` → writes in_progress + history; `reset_phase_if_in_progress` → resets to pending + history; noop for done/pending; deny → resets phase; delete → resets phase; `format_plan_checklist` → [~] for in_progress (9 new tests)
+- [x] USAGE.md: note that `--phase` marks phase in_progress immediately, visible in `ta plan status`
 
 **Depends on**: v0.15.13.4
 
