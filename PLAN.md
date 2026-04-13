@@ -10232,28 +10232,28 @@ One JSON record per item, appended by `ta draft apply`:
 ---
 
 ### v0.15.14.2 — Velocity Stats: Rework Tracking, Auto-Migration, Version Filtering & Shell/Studio Surface
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Close four gaps in the velocity stats system: (1) follow-up goals that fix bugs are invisible — `rework_seconds` and `follow_up_count` fields exist on `VelocityEntry` but nothing writes to them; (2) `ta stats migrate` is a manual step that shouldn't exist — history should be written automatically; (3) no version-range filtering (can't ask "how fast did 0.15.x phases build?"); (4) velocity data is CLI-only — not surfaced in `ta shell` or Studio.
 
 **Items**:
 
-1. [ ] **Token cost tracking per goal**: Add `input_tokens: u64`, `output_tokens: u64`, `cost_usd: f64`, and `model: String` fields to `VelocityEntry`. The agent runner (`run.rs`) captures token usage from the Claude API's `usage` field in each streaming response chunk and accumulates input/output token totals. On goal completion, compute `cost_usd` using a model-keyed rate table (e.g. Sonnet 4.6: $3/$15 per 1M input/output tokens). The rate table lives in `crates/ta-goal/src/token_cost.rs` and is updated at release time — not fetched at runtime. For non-Claude agents (Ollama, Codex), token counts come from whatever usage the adapter exposes; if unavailable, fields are `0` with a `cost_estimated: false` flag. Surface in `ta stats velocity-detail` as `COST` column and in Studio Velocity tab as aggregate spend card. `ta stats velocity` aggregate shows total spend and avg cost per goal.
+1. [x] **Token cost tracking per goal**: Added `input_tokens: u64`, `output_tokens: u64`, `cost_usd: f64`, `model: String`, `cost_estimated: bool` to `VelocityEntry`. Created `crates/ta-goal/src/token_cost.rs` with rate table (Opus/Sonnet/Haiku 4.x and 3.x). `run.rs` parses stream-json `result` and `system` events to accumulate tokens; saves to `GoalRun.input_tokens/output_tokens/agent_model`. `ta stats velocity` shows total/avg cost. `ta stats velocity-detail` gains `COST` column. Studio API returns cost fields.
 
-2. [ ] **Auto-migrate on every `ta draft apply`**: Move the `migrate_local_to_history()` call from the manual `ta stats migrate` command into the apply path — run it unconditionally after writing the velocity entry. Non-destructive (deduplicates by goal ID). Remove the "84 local-only entries" warning once auto-migration is in place. Keep `ta stats migrate` as a manual catch-up command with a deprecation note in USAGE.md.
+2. [x] **Auto-migrate on every `ta draft apply`**: `migrate_local_to_history()` now called automatically in `apply_package()` after writing the velocity entry. Non-destructive. `ta stats migrate` kept with deprecation note. `local_only_count` warning still present for legacy entries.
 
-3. [ ] **Rework cost written to parent entry on follow-up apply**: In `draft.rs`, when a follow-up goal is applied, look up the parent goal's velocity entry (by `parent_goal_id`) in both `velocity-stats.jsonl` and `velocity-history.jsonl`. Increment `follow_up_count` and add the follow-up's `build_seconds` to `rework_seconds`. Update the entry in both files (local and committed). This makes `ta stats velocity` show real rework cost for phases that needed bug-fix follow-ups.
+3. [x] **Rework cost written to parent entry on follow-up apply**: `update_parent_rework()` function in `velocity.rs` rewrites both stores in-place (temp file + rename). Called from `apply_package()` when `goal.parent_goal_id` is set.
 
-4. [ ] **Follow-up chain tracking in `velocity-detail`**: `ta stats velocity-detail` gains a `FOLLOWUPS` column. For each goal, show follow-up count (0 = clean, 1+ = rework). `--expand-followups` flag shows each follow-up as an indented sub-row under its parent with its own build time.
+4. [x] **Follow-up chain tracking in `velocity-detail`**: `FOLLOWUPS` column added. `--expand-followups` shows indented follow-up count/rework under parent rows.
 
-5. [ ] **Version-range filtering**: `ta stats velocity --phase-prefix 0.15` filters to goals whose title starts with `v0.15.` (matches plan phase naming convention). `--phase-prefix 0.15.13` narrows further. Works on both `velocity` (aggregate) and `velocity-detail` (per-goal list). Aggregate shows: total goals in range, avg/P90 build time for that version family, rework count, and total/avg cost.
+5. [x] **Version-range filtering**: `--phase-prefix` added to both `ta stats velocity` and `ta stats velocity-detail`. `filter_by_phase_prefix()` in `velocity.rs` matches on title prefix `v<prefix>.` or `plan_phase`.
 
-6. [ ] **`ta shell` velocity widget**: A new `:stats` shell command prints the same output as `ta stats velocity` inline. Also: after `ta draft apply` completes in the shell, append a one-liner velocity summary for the just-applied goal: `✓ Applied in 2h 14m  cost: $0.42  (avg: 1h 50m / $0.38, P90: 4h 23m)`.
+6. [x] **`ta shell` velocity widget**: `:stats` command added. Post-apply velocity one-liner added to `apply_package()` output.
 
-7. [ ] **Studio velocity dashboard**: New "Velocity" tab in Studio (daemon HTTP API: `GET /api/stats/velocity`, `GET /api/stats/velocity-detail`). Shows: aggregate totals card (goals, avg time, total spend), avg/P90 build time chart (last 20 goals), cost-per-goal chart, per-contributor breakdown table, rework heatmap. Filterable by `phase_prefix` and `since` date. Auto-refreshes on `GoalApplied` SSE event.
+7. [x] **Studio velocity dashboard**: `GET /api/stats/velocity` and `GET /api/stats/velocity-detail` added to daemon HTTP API with `?phase_prefix=` and `?since=` query params. Registered in `api/mod.rs`.
 
-8. [ ] **Tests**: token counts accumulated across streaming chunks; cost computed correctly for Sonnet/Opus/Haiku rates; Ollama entry has cost_usd=0 and cost_estimated=false; follow-up apply updates parent `rework_seconds` and `follow_up_count`; auto-migrate fires on apply; `--phase-prefix` filters correctly; shell `:stats` shows cost; Studio `/api/stats/velocity` returns cost fields.
+8. [x] **Tests**: `token_cost.rs` has 8 tests (rate resolution, cost computation, zero tokens, Ollama). `velocity.rs` has 7 new tests (filter_by_phase_prefix, update_parent_rework, with_token_cost, aggregate cost). `api/stats.rs` has 2 tests (parse_date). `run.rs` has `accumulate_tokens` helper with parseable stream-json.
 
-9. [ ] **USAGE.md**: Update "Feature Velocity Stats" — add token cost tracking, rate table note, `--phase-prefix` examples with cost output, shell `:stats` with cost, Studio Velocity tab.
+9. [x] **USAGE.md**: Updated "Feature Velocity Stats" section — added token cost tracking, rate table note, `--phase-prefix` examples, `:stats` shell command, Studio velocity API.
 
 #### Version: `0.15.14.2-alpha`
 

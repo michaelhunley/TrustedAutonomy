@@ -9559,29 +9559,37 @@ community://api-docs/stripe-payment-intents
 
 ## Feature Velocity Stats
 
-`ta stats` tracks per-goal timing and outcomes. Data is recorded automatically when goals complete (applied, denied, cancelled, or timed out by GC).
+`ta stats` tracks per-goal timing, outcomes, and agent token costs. Data is recorded automatically when goals complete (applied, denied, cancelled, or timed out by GC).
 
 **Two files, two purposes:**
 
 | File | Location | Purpose |
 |------|----------|---------|
 | `velocity-stats.jsonl` | `.ta/` (gitignored) | Per-machine raw log — written on every goal terminal state |
-| `velocity-history.jsonl` | `.ta/` (committed) | Shared cross-machine log — written on `ta draft apply --submit` |
+| `velocity-history.jsonl` | `.ta/` (committed) | Shared cross-machine log — auto-migrated on every `ta draft apply` |
 
 Each entry in `velocity-history.jsonl` carries a `machine_id` (first 8 hex chars of SHA-256(hostname)) and a `committer` (from `git config user.name`). Multi-machine appends are unique lines that merge without conflicts.
+
+Migration is automatic — every `ta draft apply` promotes local entries into the committed history file before making the VCS commit, so the file stays in sync without any manual step.
+
+### Token cost tracking
+
+Each goal records the Claude API tokens used during the agent run. The cost is computed from a built-in rate table (Sonnet 4.6: $3/$15 per 1M input/output tokens; Opus 4.6: $15/$75; Haiku 4.5: $0.80/$4.0). Local models (Ollama) always show $0.00.
+
+The COST column appears automatically in `ta stats velocity` and `ta stats velocity-detail` when at least one entry has a non-zero cost.
 
 ### Viewing aggregate stats
 
 ```bash
-ta stats velocity                      # aggregate + per-contributor + conflict warnings
-ta stats velocity --since 2026-01-01   # since a date
-ta stats velocity --workflow code      # filter by workflow type
-ta stats velocity --json               # raw JSON (includes by_contributor, phase_conflicts)
+ta stats velocity                            # aggregate + per-contributor + conflict warnings
+ta stats velocity --since 2026-01-01         # since a date
+ta stats velocity --phase-prefix 0.15        # only v0.15.x phases
+ta stats velocity --json                     # raw JSON (includes by_contributor, phase_conflicts)
 ```
 
 `ta stats velocity` merges both files (dedup by goal_id) and always shows three sections:
 
-1. **Overall aggregate** — totals, outcomes, build time percentiles
+1. **Overall aggregate** — totals, outcomes, build time percentiles, total cost
 2. **Per-contributor breakdown** — from committed history entries only (requires `velocity-history.jsonl`)
 3. **Phase conflict warnings** — plan phases where more than one person submitted work
 
@@ -9600,12 +9608,14 @@ Velocity Stats
   P90 build time:     28m 5s
   Avg rework time:    2m 0s
   Total rework:       1h 24m
+  Total cost:         $12.45
+  Avg cost/goal:      $0.33
 
-CONTRIBUTOR              GOALS   APPLIED    AVG BUILD
-────────────────────────────────────────────────────────
-alice                       28        25     12m 30s
-bob                         10         9     18m 45s
-a3f1bc20                     4         4      9m 10s
+CONTRIBUTOR       GOALS   APPLIED   AVG BUILD     COST
+──────────────────────────────────────────────────────────
+alice                28        25     12m 30s    $8.20
+bob                  10         9     18m 45s    $3.15
+a3f1bc20              4         4      9m 10s    $1.10
 
 ⚠  Phase conflicts detected (1 phase):
    v0.15.7 — 3 entries from: alice, bob
@@ -9617,28 +9627,53 @@ Phase conflicts flag any plan phase where committed entries exist from more than
 ### Per-goal breakdown
 
 ```bash
-ta stats velocity-detail               # latest 20 goals (merged)
-ta stats velocity-detail --limit 50    # show more
-ta stats velocity-detail --outcome applied   # filter by outcome
+ta stats velocity-detail                        # latest 50 goals (merged)
+ta stats velocity-detail --limit 20             # show fewer
+ta stats velocity-detail --phase-prefix 0.15    # only v0.15.x phases
+ta stats velocity-detail --expand-followups     # show rework rows indented under parent
 ta stats velocity-detail --since 2026-03-01 --json
 ```
 
-The `SOURCE` column shows `shared` for entries present in the committed history or `[local]` for entries that exist only on this machine.
+The `SOURCE` column shows `shared` for entries present in the committed history or `[local]` for entries that exist only on this machine. The `FOLLOWUPS` column shows how many follow-up goals were applied against each goal (useful for identifying which phases needed rework).
+
+### Shell velocity widget
+
+In the interactive shell (`ta shell`), type `:stats` to see a live velocity summary inline without leaving the session:
+
+```
+:stats
+```
+
+Output is printed directly into the shell output panel. It shows the same aggregate + contributor breakdown as `ta stats velocity`.
+
+After every `ta draft apply`, a one-line velocity summary is printed in the post-apply status block showing build time and, when available, cost.
+
+### Studio Velocity Dashboard
+
+The Studio UI exposes two API endpoints for the velocity dashboard:
+
+| Endpoint | Query params |
+|----------|-------------|
+| `GET /api/stats/velocity` | `?since=YYYY-MM-DD`, `?phase_prefix=0.15` |
+| `GET /api/stats/velocity-detail` | `?since=YYYY-MM-DD`, `?phase_prefix=0.15`, `?limit=50` |
+
+Both endpoints merge local and committed history, apply optional filters, and return JSON. The `/api/stats/velocity` response includes `aggregate`, `by_contributor`, `phase_conflicts`, and `local_only_count` fields.
+
+### Rework tracking
+
+When a follow-up goal is applied against a parent goal, the parent's entry is updated with:
+- `follow_up_count` — number of follow-up goals applied
+- `rework_seconds` — total build time of all follow-up goals
+
+This lets you see which phases required extra work and how much time was spent on corrections.
 
 ### Migrating local history to shared
 
-If you have goals recorded before `velocity-history.jsonl` was introduced (or run on a machine that hasn't committed the history yet), use migrate:
+`ta draft apply` handles migration automatically. The manual `ta stats migrate` command is retained for legacy use (e.g., importing entries from before automatic migration was added):
 
 ```bash
 ta stats migrate --dry-run    # preview what would be promoted
-ta stats migrate              # promote all local-only entries
-```
-
-After migrating, commit `.ta/velocity-history.jsonl` to share with your team:
-
-```bash
-git add .ta/velocity-history.jsonl
-git commit -m "chore: promote local velocity history to shared"
+ta stats migrate              # promote all local-only entries (deprecated: now automatic)
 ```
 
 ### Exporting history
@@ -9649,7 +9684,7 @@ ta stats export --format csv  # CSV for spreadsheets
 ta stats export --committed-only --format csv  # only committed history
 ```
 
-The CSV export includes `machine_id` and `committer` columns in addition to the standard fields.
+The CSV export includes `machine_id`, `committer`, `input_tokens`, `output_tokens`, and `cost_usd` columns in addition to the standard fields.
 
 ---
 

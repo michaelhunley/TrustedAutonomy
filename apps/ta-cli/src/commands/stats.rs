@@ -2,6 +2,9 @@
 //
 // v0.15.7: Two-file design. ta stats velocity always shows merged aggregate,
 // per-contributor breakdown, and phase conflict warnings.
+//
+// v0.15.14.2: Added --phase-prefix filtering, COST column, FOLLOWUPS column,
+// auto-migrate deprecation note.
 
 use clap::Subcommand;
 use ta_goal::{GoalOutcome, VelocityHistoryStore, VelocityStore};
@@ -9,7 +12,7 @@ use ta_mcp_gateway::GatewayConfig;
 
 #[derive(Subcommand)]
 pub enum StatsCommands {
-    /// Show aggregate velocity stats (build time, outcomes, rework).
+    /// Show aggregate velocity stats (build time, outcomes, rework, cost).
     ///
     /// Merges local `velocity-stats.jsonl` and committed `velocity-history.jsonl`,
     /// deduplicating by goal_id. Always shows per-contributor breakdown and
@@ -21,6 +24,9 @@ pub enum StatsCommands {
         /// Filter to a specific workflow type.
         #[arg(long)]
         workflow: Option<String>,
+        /// Filter to goals whose title starts with v<prefix>. (e.g. 0.15 or 0.15.13).
+        #[arg(long)]
+        phase_prefix: Option<String>,
         /// Output raw JSON.
         #[arg(long)]
         json: bool,
@@ -34,9 +40,15 @@ pub enum StatsCommands {
         /// Filter by outcome (applied, denied, cancelled, failed).
         #[arg(long)]
         outcome: Option<String>,
+        /// Filter to goals whose title starts with v<prefix>. (e.g. 0.15 or 0.15.13).
+        #[arg(long)]
+        phase_prefix: Option<String>,
         /// Maximum entries to show (default: 20).
         #[arg(long, default_value = "20")]
         limit: usize,
+        /// Show follow-up goals as indented sub-rows under their parent.
+        #[arg(long)]
+        expand_followups: bool,
         /// Output raw JSON.
         #[arg(long)]
         json: bool,
@@ -54,6 +66,9 @@ pub enum StatsCommands {
     ///
     /// Non-destructive — local file is unchanged. Stamps each migrated entry with
     /// the current machine_id. Skips entries already present in the history file.
+    ///
+    /// [Deprecated] Migration now runs automatically on `ta draft apply`. This
+    /// command is kept for manual catch-up when history was not applied via TA.
     Migrate {
         /// Dry-run: show what would be migrated without writing.
         #[arg(long)]
@@ -69,6 +84,7 @@ pub fn execute(cmd: &StatsCommands, config: &GatewayConfig) -> anyhow::Result<()
         StatsCommands::Velocity {
             since,
             workflow,
+            phase_prefix,
             json,
         } => {
             // Merge local + committed, dedup by goal_id.
@@ -88,6 +104,10 @@ pub fn execute(cmd: &StatsCommands, config: &GatewayConfig) -> anyhow::Result<()
 
             if let Some(wf) = workflow {
                 entries.retain(|e| e.workflow == *wf);
+            }
+
+            if let Some(prefix) = phase_prefix {
+                entries = ta_goal::filter_by_phase_prefix(entries, prefix);
             }
 
             if entries.is_empty() {
@@ -165,23 +185,46 @@ pub fn execute(cmd: &StatsCommands, config: &GatewayConfig) -> anyhow::Result<()
                 "  Total rework:       {}",
                 fmt_duration(agg.total_rework_seconds)
             );
+            if agg.total_cost_usd > 0.0 {
+                println!("  Total cost:         ${:.2}", agg.total_cost_usd);
+                println!("  Avg cost/goal:      ${:.2}", agg.avg_cost_usd);
+            }
 
             // Per-contributor breakdown — only shown when committed history has entries.
             if !by_contributor.is_empty() {
+                let show_cost = by_contributor.iter().any(|c| c.total_cost_usd > 0.0);
                 println!();
-                println!(
-                    "{:<24} {:>8} {:>8} {:>12}",
-                    "CONTRIBUTOR", "GOALS", "APPLIED", "AVG BUILD"
-                );
-                println!("{}", "─".repeat(56));
-                for c in &by_contributor {
+                if show_cost {
+                    println!(
+                        "{:<24} {:>8} {:>8} {:>12} {:>10}",
+                        "CONTRIBUTOR", "GOALS", "APPLIED", "AVG BUILD", "COST"
+                    );
+                    println!("{}", "─".repeat(66));
+                    for c in &by_contributor {
+                        println!(
+                            "{:<24} {:>8} {:>8} {:>12} {:>10}",
+                            truncate(&c.contributor, 22),
+                            c.total_goals,
+                            c.applied,
+                            fmt_duration(c.avg_build_seconds),
+                            format!("${:.2}", c.total_cost_usd),
+                        );
+                    }
+                } else {
                     println!(
                         "{:<24} {:>8} {:>8} {:>12}",
-                        truncate(&c.contributor, 22),
-                        c.total_goals,
-                        c.applied,
-                        fmt_duration(c.avg_build_seconds)
+                        "CONTRIBUTOR", "GOALS", "APPLIED", "AVG BUILD"
                     );
+                    println!("{}", "─".repeat(56));
+                    for c in &by_contributor {
+                        println!(
+                            "{:<24} {:>8} {:>8} {:>12}",
+                            truncate(&c.contributor, 22),
+                            c.total_goals,
+                            c.applied,
+                            fmt_duration(c.avg_build_seconds)
+                        );
+                    }
                 }
             }
 
@@ -218,7 +261,9 @@ pub fn execute(cmd: &StatsCommands, config: &GatewayConfig) -> anyhow::Result<()
         StatsCommands::VelocityDetail {
             since,
             outcome,
+            phase_prefix,
             limit,
+            expand_followups,
             json,
         } => {
             let local = local_store.load_all()?;
@@ -242,6 +287,10 @@ pub fn execute(cmd: &StatsCommands, config: &GatewayConfig) -> anyhow::Result<()
                 entries.retain(|e| e.outcome == filter_outcome);
             }
 
+            if let Some(prefix) = phase_prefix {
+                entries = ta_goal::filter_by_phase_prefix(entries, prefix);
+            }
+
             // Newest first.
             entries.sort_by(|a, b| b.started_at.cmp(&a.started_at));
             entries.truncate(*limit);
@@ -256,11 +305,20 @@ pub fn execute(cmd: &StatsCommands, config: &GatewayConfig) -> anyhow::Result<()
                 return Ok(());
             }
 
-            println!(
-                "{:<36} {:<10} {:<12} {:<10} {:<8} {:<8}",
-                "TITLE", "OUTCOME", "BUILD", "REWORK", "AMENDED", "SOURCE"
-            );
-            println!("{}", "─".repeat(88));
+            let show_cost = entries.iter().any(|e| e.cost_estimated);
+            if show_cost {
+                println!(
+                    "{:<36} {:<10} {:<12} {:<10} {:<9} {:<8} {:<8}",
+                    "TITLE", "OUTCOME", "BUILD", "REWORK", "FOLLOWUPS", "COST", "SOURCE"
+                );
+                println!("{}", "─".repeat(97));
+            } else {
+                println!(
+                    "{:<36} {:<10} {:<12} {:<10} {:<9} {:<8}",
+                    "TITLE", "OUTCOME", "BUILD", "REWORK", "FOLLOWUPS", "SOURCE"
+                );
+                println!("{}", "─".repeat(89));
+            }
             for e in &entries {
                 let title = truncate(&e.title, 34);
                 let outcome = e.outcome.to_string();
@@ -270,16 +328,42 @@ pub fn execute(cmd: &StatsCommands, config: &GatewayConfig) -> anyhow::Result<()
                 } else {
                     "-".to_string()
                 };
-                let amended = if e.amended { "yes" } else { "no" };
+                let followups = if e.follow_up_count > 0 {
+                    e.follow_up_count.to_string()
+                } else {
+                    "-".to_string()
+                };
                 let source = if committed_ids.contains(&e.goal_id) {
                     "shared"
                 } else {
                     "[local]"
                 };
-                println!(
-                    "{:<36} {:<10} {:<12} {:<10} {:<8} {:<8}",
-                    title, outcome, build, rework, amended, source
-                );
+                if show_cost {
+                    let cost = if e.cost_estimated {
+                        format!("${:.2}", e.cost_usd)
+                    } else {
+                        "-".to_string()
+                    };
+                    println!(
+                        "{:<36} {:<10} {:<12} {:<10} {:<9} {:<8} {:<8}",
+                        title, outcome, build, rework, followups, cost, source
+                    );
+                } else {
+                    println!(
+                        "{:<36} {:<10} {:<12} {:<10} {:<9} {:<8}",
+                        title, outcome, build, rework, followups, source
+                    );
+                }
+                // --expand-followups: show follow-up count as a note (no separate rows without
+                // parent_goal_id tracking in the store).
+                if *expand_followups && e.follow_up_count > 0 {
+                    println!(
+                        "  └─ {} follow-up goal{} — {}",
+                        e.follow_up_count,
+                        if e.follow_up_count == 1 { "" } else { "s" },
+                        fmt_duration(e.rework_seconds)
+                    );
+                }
             }
         }
 
@@ -335,6 +419,11 @@ pub fn execute(cmd: &StatsCommands, config: &GatewayConfig) -> anyhow::Result<()
         }
 
         StatsCommands::Migrate { dry_run } => {
+            eprintln!(
+                "Note: `ta stats migrate` is now largely unnecessary — migration runs automatically\n\
+                 on every `ta draft apply`. Use this command only to catch up entries from goals\n\
+                 applied outside of TA (e.g. manual git commits)."
+            );
             let local_entries = local_store.load_all()?;
             let committed_entries = history_store.load_all()?;
             let committed_ids: std::collections::HashSet<_> =

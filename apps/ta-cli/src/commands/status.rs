@@ -704,6 +704,9 @@ mod tests {
             memory_entries_created: vec![],
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            input_tokens: 0,
+            output_tokens: 0,
+            agent_model: String::new(),
         };
         // Should match: this is a system reviewer goal.
         assert!(is_terminal_reviewer_goal(&make_goal(
