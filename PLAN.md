@@ -10223,6 +10223,8 @@ One JSON record per item, appended by `ta draft apply`:
 
 10. [ ] **Workflow run/stop from Studio** (carried from v0.14.20 item 9): "Run" button on a workflow row calls `POST /api/workflow/{id}/run`. "Stop" calls `DELETE /api/workflow/{id}`. Row shows live status via SSE polling (`GET /api/workflow/{id}/status`). Depends on daemon-side workflow engine (`WorkflowEngine` from v0.15.14).
 
+11. [ ] **`ta draft <unknown>` safety test** (supervisor finding from v0.15.14.0, item 5): Integration test asserting that `ta draft applied <id>` (or any unrecognized subcommand) exits non-zero AND leaves the target draft's state byte-for-byte identical to before the call. The `approval_required` and already-Applied tests added in v0.15.14.0 cover logic paths but not the clap dispatch boundary — this is the missing case.
+
 > **Note**: The format upgrade for existing projects (backfilling `#### Human Review` sections in old done phases) is handled by the project upgrade step in v0.15.18 (`ta upgrade`). Leave it there.
 
 #### Version: `0.15.14.1-alpha`
@@ -10254,6 +10256,61 @@ One JSON record per item, appended by `ta draft apply`:
 9. [ ] **USAGE.md**: Update "Feature Velocity Stats" — add token cost tracking, rate table note, `--phase-prefix` examples with cost output, shell `:stats` with cost, Studio Velocity tab.
 
 #### Version: `0.15.14.2-alpha`
+
+---
+
+### v0.15.14.3 — Language-Aware Static Analysis with Agent Correction Loop
+<!-- status: pending -->
+**Goal**: First-class static analysis integration — per-language tool configuration, structured output parsing, and an optional agent-driven correction loop that re-runs the analyzer after each fix pass until clean or a max iteration count is hit. Chainable as a `kind = "static_analysis"` workflow step so it slots naturally into `plan-build-phases.toml` and custom multi-phase workflows.
+
+**Why this phase exists**: Today `verify_command` in `workflow.toml` is a bare shell command — pass/fail only, no output parsing, no actionable follow-up. Developers using Python, TypeScript, or Go have no way to wire `mypy --strict`, `pyright`, or `golangci-lint` into the TA feedback loop. The correction loop closes the gap: instead of failing a goal run when analysis finds issues, TA can spawn a targeted fix agent, re-run the analyzer, and iterate — producing a single consolidated draft covering all corrections.
+
+**Depends on**: v0.15.14 (governed workflow engine for the loop step)
+
+#### Per-language config (`[analysis.<lang>]` in `workflow.toml`)
+
+```toml
+[analysis.python]
+tool = "mypy"            # or "pyright", "ruff check"
+args = ["--strict"]
+on_failure = "agent"     # "fail" | "warn" | "agent"
+max_iterations = 3       # correction loop limit (default: 3)
+
+[analysis.typescript]
+tool = "pyright"
+args = []
+on_failure = "agent"
+
+[analysis.rust]
+tool = "cargo-clippy"
+args = ["-D", "warnings"]
+on_failure = "warn"      # clippy is already in verify_command; warn here is non-blocking
+
+[analysis.go]
+tool = "golangci-lint"
+args = ["run"]
+on_failure = "agent"
+```
+
+#### Items
+
+1. [ ] **`AnalysisConfig`** (`crates/ta-goal/src/analysis.rs`): Per-language config struct. `tool: String`, `args: Vec<String>`, `on_failure: OnFailure` (`Fail | Warn | Agent`), `max_iterations: u32`. Loaded from `[analysis.<lang>]` blocks in `workflow.toml`. Language detected from workspace files (`.py` → python, `package.json` + `.ts` → typescript, `Cargo.toml` → rust, `go.mod` → go). Manual override: `[analysis.python]` always wins over auto-detect.
+
+2. [ ] **`AnalysisFinding`** struct: `{ file: String, line: u32, col: u32, code: String, message: String, severity: Severity }`. Parser implementations per tool: `mypy` (`:line: error: message  [code]`), `pyright` (JSON `--outputjson`), `cargo clippy` (JSON `--message-format json`), `golangci-lint` (JSON `--out-format json`), `eslint`/`tsc` (JSON). Unknown tools: raw line capture.
+
+3. [ ] **`kind = "static_analysis"` workflow step**: Runs the configured analyzer for the detected (or specified) language. On success → next step. On failure with `on_failure = "fail"` → workflow fails with findings table. On failure with `on_failure = "warn"` → logs findings, continues. On failure with `on_failure = "agent"` → enters correction loop (item 4).
+
+4. [ ] **Correction loop**: When `on_failure = "agent"`, spawn a targeted fix agent with: (a) structured `AnalysisFinding` list formatted as a compact table, (b) the files containing findings, (c) explicit scope instruction: fix only what the analyzer flagged, no unrelated changes, no PLAN.md mutations. After agent applies fixes, re-run the analyzer. Loop until clean or `max_iterations` exhausted. On max iterations hit: emit warning with remaining findings, continue or fail per `on_max_iterations: "warn" | "fail"` (default `"warn"`). All correction passes produce a single consolidated draft.
+
+5. [ ] **`ta analysis run [--lang <lang>]`** CLI command: Run the configured analyzer for the current workspace outside of a goal/workflow. Prints findings table. `--fix` flag triggers the agent correction loop as a standalone goal (produces a draft for review). Useful for ad-hoc cleanup before starting a new phase.
+
+6. [ ] **`ta init --template` integration**: Python template sets `[analysis.python] tool = "mypy" args = ["--strict"]`; TypeScript sets `pyright`; Go sets `golangci-lint`; Rust sets `cargo-clippy` with `on_failure = "warn"` (clippy already in verify). Rust `on_failure` defaults to `warn` since clippy runs in `verify_command` already.
+
+7. [ ] **Tests**: `AnalysisFinding` parser roundtrip for mypy, pyright JSON, clippy JSON, golangci-lint JSON. `on_failure = "fail"` workflow step exits with findings. `on_failure = "warn"` continues. Correction loop: mock agent fixes issues on iteration 2 — loop exits clean. Max iterations exceeded: remaining findings reported, workflow continues per `on_max_iterations`. Language auto-detect from workspace file presence.
+
+8. [ ] **USAGE.md "Static Analysis" section**: Config options per language, correction loop explanation, `ta analysis run --fix` ad-hoc usage, how to chain in `plan-build-phases.toml`.
+
+#### Version: `0.15.14.3-alpha`
 
 ---
 
