@@ -10314,6 +10314,70 @@ on_failure = "agent"
 
 ---
 
+### v0.15.14.4 — Security Level Profiles (Low / Mid / High)
+<!-- status: pending -->
+**Goal**: Replace today's implicit "everything is open" stance with a declared, tiered security model. A single `[security] level = "low" | "mid" | "high"` setting in `workflow.toml` sets a named preset of defaults; individual settings always override. This gives solo developers a frictionless default, teams a sensible hardened baseline, and regulated projects a documented high-assurance posture — without jumping to the full SA (OCI/gVisor/TPM) ceiling.
+
+**Design principle**: Level sets defaults only. Every individual control can be overridden. Escalation is silent; demotion logs a warning. SA (SecureTA) sits above `"high"` and is out of scope for this phase.
+
+**Depends on**: v0.15.14.0 (approval_required config), experimental sandbox infrastructure (v0.14.0)
+
+#### Security Level Defaults
+
+| Capability | `low` (default today) | `mid` (team/startup) | `high` (regulated) |
+|---|---|---|---|
+| Process sandbox | off | on (sandbox-exec/bwrap) | on, required — warn if overridden off |
+| `Bash` scope | `Bash(*)` unrestricted | `Bash(*)` allowed but staging-path-scoped warning | explicit `Bash` allowlist only |
+| Network | unrestricted | domain allowlist configurable; warn on unknown domains | explicit allowlist required; `WebSearch` disabled |
+| Forbidden tools | empty | sensible defaults (e.g. `Bash(rm -rf /)`, `Bash(*sudo*)`) | strict; agent cannot add tools at runtime |
+| Approval gate | off | off | `approval_required = true` enforced |
+| Audit trail | JSONL local | JSONL + per-entry SHA-256 | signed hash chain (HMAC-SHA256 with project key) |
+| Constitution enforcement | behavioral | behavioral + supervisor required | supervisor required; constitution violations block apply |
+| Secret scanning | off | warn on `ta draft apply` | block on `ta draft apply` |
+| `ta status` display | not shown | shows `[mid]` badge | shows `[high]` badge + any overrides |
+
+#### Config (`workflow.toml`)
+
+```toml
+[security]
+level = "mid"               # "low" | "mid" | "high" — sets all defaults below
+
+# Any of these override the level preset:
+# [sandbox]
+# enabled = true
+# allow_network = ["api.anthropic.com", "github.com"]
+
+# [security.secrets]
+# scan = "block"            # "off" | "warn" | "block"
+
+# [security.forbidden_tools]
+# extra = ["Bash(*sudo*)", "Bash(*aws*)"]
+```
+
+#### Items
+
+1. [ ] **`SecurityLevel` enum** (`crates/ta-goal/src/security.rs`): `Low | Mid | High`. `SecurityProfile::from_level(level, overrides) -> SecurityProfile` — merges level defaults with any explicit overrides from `workflow.toml`. `SecurityProfile` fields: `sandbox_enabled`, `network_policy`, `forbidden_tool_patterns`, `approval_required`, `audit_mode`, `constitution_enforcement`, `secret_scan_mode`.
+
+2. [ ] **Level preset tables** (`security.rs`): Const defaults per level for each field. `mid` populates `DEFAULT_FORBIDDEN_TOOLS` in `run.rs` with sensible patterns (`Bash(*rm -rf*)`, `Bash(*sudo *)`, `Bash(*curl * | bash*)`, `Bash(*wget * -O- * | sh*)`).
+
+3. [ ] **Apply profile in `run.rs`**: Load `SecurityProfile` at goal start. Pass to `inject_claude_settings()` (tool allow/deny), sandbox spawn, and audit writer. When `level = "high"` and sandbox is manually disabled, print: `[warn] security.level=high but sandbox.enabled=false — sandbox override active. High security requires process isolation.`
+
+4. [ ] **Secret scanning** (`crates/ta-changeset/src/secret_scan.rs`): Regex-based scan over draft artifact text content at `ta draft apply` time. Patterns: AWS key (`AKIA[0-9A-Z]{16}`), generic API key (`[Aa][Pp][Ii][_-]?[Kk][Ee][Yy].*=.*[A-Za-z0-9]{20,}`), private key PEM header, GitHub PAT (`ghp_[A-Za-z0-9]{36}`). On `scan = "warn"`: print findings, continue. On `scan = "block"`: print findings, abort apply with CTA: `Remove secrets from the draft or add to .ta-secret-ignore before applying.`
+
+5. [ ] **Audit hash chain** (`crates/ta-audit/src/chain.rs`): For `mid`/`high`, each `GoalAuditEntry` written to `goal-audit.jsonl` includes a `prev_hash: Option<String>` (SHA-256 of previous entry bytes). For `high`, entries are HMAC-SHA256 signed with a project key stored in `.ta/audit.key` (generated on `ta init` for `high` projects). `ta audit verify` checks chain integrity and reports any gaps or tampering.
+
+6. [ ] **`ta init` level prompt**: When `ta init` runs interactively, ask: `Security level? [low] / mid / high`. Default `low` for solo, suggest `mid` for team templates. Write `[security] level = "<choice>"` into generated `workflow.toml`.
+
+7. [ ] **`ta status` security badge**: Show `Security: mid` (or `high`) line in status output. For `high`, also list any active overrides that deviate from the preset.
+
+8. [ ] **Tests**: `SecurityProfile::from_level` applies correct defaults per level; override wins over preset; `mid` forbidden tool patterns block `rm -rf` and `sudo`; secret scanner finds AWS key and GitHub PAT in diff text; `block` mode aborts apply; `warn` mode continues; audit hash chain roundtrip; `ta audit verify` detects a tampered entry; `ta init` writes level to workflow.toml.
+
+9. [ ] **USAGE.md "Security Levels" section**: Table of levels and defaults, how to set level, individual override examples, secret scan patterns, audit chain verification, relationship to SecureTA (SA) above `high`.
+
+#### Version: `0.15.14.4-alpha`
+
+---
+
 ### v0.15.15 — Multi-Agent Consensus Review Workflow
 <!-- status: pending -->
 **Goal**: A workflow template for multi-agent panel reviews where specialist agents run in parallel, each producing a structured verdict with a score and findings, and a final consensus step aggregates their outputs into a readiness score and recommendation. Ships with a `code-review-consensus` template covering architect, security, principal engineer, and PM roles. Include configurable consensus algorithms/models. Start with Raft and Paxos with Raft as the default — it should do no work if there is no swarm/multi-agent in the workflow.
