@@ -24,6 +24,7 @@ pub mod plan;
 pub mod project_browser;
 pub mod project_new;
 pub mod settings;
+pub mod stats;
 pub mod status;
 pub mod webhooks;
 pub mod workflow;
@@ -391,6 +392,9 @@ pub fn build_api_router(state: Arc<AppState>) -> Router {
             post(settings::test_notification),
         )
         .route("/api/settings/vcs/check", post(settings::check_vcs))
+        // Velocity stats API (v0.15.14.2).
+        .route("/api/stats/velocity", get(stats::velocity_aggregate))
+        .route("/api/stats/velocity-detail", get(stats::velocity_detail))
         // Daemon lifecycle routes (v0.10.10).
         .route("/api/shutdown", post(shutdown_daemon))
         // Auth middleware on all API routes.

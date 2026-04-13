@@ -339,6 +339,21 @@ pub struct GoalRun {
 
     /// When this goal run was last updated.
     pub updated_at: DateTime<Utc>,
+
+    // ── Token usage fields (v0.15.14.2) ──────────────────────────────
+    /// Total LLM input tokens consumed during this goal's agent session.
+    /// Populated by `ta run` from stream-json usage events. `0` if unavailable.
+    #[serde(default, skip_serializing_if = "super::velocity::is_zero_u64_pub")]
+    pub input_tokens: u64,
+
+    /// Total LLM output tokens generated during this goal's agent session.
+    #[serde(default, skip_serializing_if = "super::velocity::is_zero_u64_pub")]
+    pub output_tokens: u64,
+
+    /// Model identifier string (e.g. `"claude-sonnet-4-6"`).
+    /// Populated from stream-json `system` init event.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub agent_model: String,
 }
 
 /// Generate a slug from a title: lowercase, hyphens, max 30 chars.
@@ -421,6 +436,9 @@ impl GoalRun {
             memory_entries_created: Vec::new(),
             created_at: now,
             updated_at: now,
+            input_tokens: 0,
+            output_tokens: 0,
+            agent_model: String::new(),
         }
     }
 
@@ -432,6 +450,12 @@ impl GoalRun {
     /// remember and type, and unique in practice across a project's history.
     pub fn shortref(&self) -> String {
         self.goal_run_id.to_string()[..8].to_string()
+    }
+
+    /// Approximate build time in seconds (time from creation to now, or 0).
+    /// Used by draft apply to record rework seconds for parent goals.
+    pub fn build_seconds_approx(&self) -> i64 {
+        (chrono::Utc::now() - self.created_at).num_seconds().max(0)
     }
 
     /// Return the display tag, auto-deriving from title + UUID prefix if not set.

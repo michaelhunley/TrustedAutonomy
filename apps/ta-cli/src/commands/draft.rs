@@ -5857,13 +5857,23 @@ fn apply_package(
                 // in the same VCS commit. Writing after commit means the file exists
                 // but was never staged, so it's silently dropped from the commit.
                 {
-                    use ta_goal::{GoalOutcome, VelocityEntry, VelocityHistoryStore};
+                    use ta_goal::{
+                        migrate_local_to_history, GoalOutcome, VelocityEntry, VelocityHistoryStore,
+                        VelocityStore,
+                    };
                     let history_entry = VelocityEntry::from_goal(goal, GoalOutcome::Applied)
                         .with_machine_id()
-                        .with_committer(&target_dir);
+                        .with_committer(&target_dir)
+                        .with_token_cost(goal.input_tokens, goal.output_tokens, &goal.agent_model);
                     let hs = VelocityHistoryStore::for_project(&target_dir);
                     if let Err(e) = hs.append(&history_entry) {
                         tracing::warn!("Failed to record velocity history entry: {}", e);
+                    }
+                    // Auto-migrate local entries → history before commit so the
+                    // full history file is included in the same VCS commit.
+                    let vs = VelocityStore::for_project(&target_dir);
+                    if let Err(e) = migrate_local_to_history(&vs, &hs, &target_dir) {
+                        tracing::warn!("Auto-migrate velocity history (pre-commit) failed: {}", e);
                     }
                 }
 
@@ -6228,15 +6238,43 @@ fn apply_package(
         }
     }
 
-    // §8b: record velocity entry for the applied goal.
-    {
-        use ta_goal::{GoalOutcome, VelocityEntry, VelocityStore};
+    // §8b: record velocity entry for the applied goal, with token cost (v0.15.14.2).
+    let velocity_entry_for_summary = {
+        use ta_goal::{
+            migrate_local_to_history, update_parent_rework, GoalOutcome, VelocityEntry,
+            VelocityHistoryStore, VelocityStore,
+        };
         let vs = VelocityStore::for_project(&config.workspace_root);
-        let entry = VelocityEntry::from_goal(goal, GoalOutcome::Applied);
+        let entry = VelocityEntry::from_goal(goal, GoalOutcome::Applied).with_token_cost(
+            goal.input_tokens,
+            goal.output_tokens,
+            &goal.agent_model,
+        );
         if let Err(e) = vs.append(&entry) {
             tracing::warn!("Failed to record velocity entry: {}", e);
         }
-    }
+
+        // §8b-auto-migrate: promote local entries into committed history on every apply
+        // so the history file is always in sync without a manual `ta stats migrate` call.
+        // Skip when git_commit=true — migration already ran in §8c (before the commit) so
+        // the history file was staged and committed; running again here would re-create the
+        // file after the commit and leave it dirty in the working tree.
+        let hs = VelocityHistoryStore::for_project(&config.workspace_root);
+        if !git_commit {
+            if let Err(e) = migrate_local_to_history(&vs, &hs, &config.workspace_root) {
+                tracing::warn!("Auto-migrate velocity history failed: {}", e);
+            }
+        }
+
+        // §8b-rework: update parent goal's rework stats when a follow-up is applied.
+        if let Some(parent_id) = goal.parent_goal_id {
+            if let Err(e) = update_parent_rework(&vs, &hs, parent_id, goal.build_seconds_approx()) {
+                tracing::warn!("Failed to update parent rework stats: {}", e);
+            }
+        }
+
+        entry
+    };
 
     // Auto-close parent draft on follow-up apply (v0.3.6, refined v0.4.1.2).
     // v0.4.1.2: Only auto-close the parent draft when this goal shares the same
@@ -6379,6 +6417,35 @@ fn apply_package(
                 if git_push { " + submitted" } else { "" },
                 if git_review { " + review" } else { "" }
             );
+        }
+    }
+
+    // Post-apply velocity one-liner (v0.15.14.2): show build time and cost for this goal,
+    // plus rolling averages from all entries so the user can see trend at a glance.
+    if !dry_run {
+        use ta_goal::{VelocityAggregate, VelocityStore};
+        let vs = VelocityStore::for_project(&config.workspace_root);
+        if let Ok(all) = vs.load_all() {
+            if !all.is_empty() {
+                let agg = VelocityAggregate::from_entries(&all);
+                let build_str = fmt_velocity_duration(velocity_entry_for_summary.build_seconds);
+                let cost_str = if velocity_entry_for_summary.cost_estimated {
+                    format!("  cost: ${:.2}", velocity_entry_for_summary.cost_usd)
+                } else {
+                    String::new()
+                };
+                let avg_build_str = fmt_velocity_duration(agg.avg_build_seconds);
+                let avg_cost_str = if agg.total_cost_usd > 0.0 {
+                    format!(" / ${:.2}", agg.avg_cost_usd)
+                } else {
+                    String::new()
+                };
+                let p90_str = fmt_velocity_duration(agg.p90_build_seconds);
+                println!(
+                    "  Velocity: Applied in {}{}  (avg: {}{}, P90: {})",
+                    build_str, cost_str, avg_build_str, avg_cost_str, p90_str
+                );
+            }
         }
     }
 
@@ -9448,6 +9515,22 @@ fn detect_unchecked_in_done_phases(content: &str) -> Vec<VerificationWarning> {
     }
 
     warnings
+}
+
+/// Format a duration in seconds as "Xh Ym", "Xm Ys", or "Xs" for velocity display.
+fn fmt_velocity_duration(seconds: i64) -> String {
+    if seconds <= 0 {
+        return "0s".to_string();
+    }
+    if seconds < 60 {
+        format!("{}s", seconds)
+    } else if seconds < 3600 {
+        format!("{}m {}s", seconds / 60, seconds % 60)
+    } else {
+        let h = seconds / 3600;
+        let m = (seconds % 3600) / 60;
+        format!("{}h {}m", h, m)
+    }
 }
 
 #[cfg(test)]

@@ -1880,6 +1880,8 @@ pub fn execute(
     // Type alias for the guidance log — on Unix this contains captured human inputs
     // from PTY sessions; on Windows the Vec is always empty.
     type GuidanceLog = Vec<(String, String)>;
+    // Agent token counts are accumulated from headless stream-json output (v0.15.14.2).
+    let mut agent_tokens_out = AgentTokens::default();
     let launch_result: std::io::Result<(std::process::ExitStatus, GuidanceLog)> = if headless
         || quiet
     {
@@ -1892,7 +1894,10 @@ pub fn execute(
             goal.goal_run_id,
             &events_dir_for_launch,
         )
-        .map(|exit| (exit, Vec::new()))
+        .map(|(exit, tokens)| {
+            agent_tokens_out = tokens;
+            (exit, Vec::new())
+        })
     } else if interactive {
         #[cfg(unix)]
         {
@@ -1919,7 +1924,10 @@ pub fn execute(
                 goal.goal_run_id,
                 &events_dir_for_launch,
             )
-            .map(|exit| (exit, Vec::new()))
+            .map(|(exit, tokens)| {
+                agent_tokens_out = tokens;
+                (exit, Vec::new())
+            })
         }
     } else {
         launch_agent_via_runtime(
@@ -1931,7 +1939,10 @@ pub fn execute(
             goal.goal_run_id,
             &events_dir_for_launch,
         )
-        .map(|exit| (exit, Vec::new()))
+        .map(|(exit, tokens)| {
+            agent_tokens_out = tokens;
+            (exit, Vec::new())
+        })
     };
 
     match launch_result {
@@ -1947,6 +1958,14 @@ pub fn execute(
             if let Ok(store) = GoalRunStore::new(&config.goals_dir) {
                 if let Ok(Some(mut g)) = store.get(goal.goal_run_id) {
                     g.agent_pid = None;
+                    // v0.15.14.2: Persist accumulated token counts from stream-json.
+                    if agent_tokens_out.input_tokens > 0 || agent_tokens_out.output_tokens > 0 {
+                        g.input_tokens = agent_tokens_out.input_tokens;
+                        g.output_tokens = agent_tokens_out.output_tokens;
+                    }
+                    if !agent_tokens_out.model.is_empty() {
+                        g.agent_model = agent_tokens_out.model.clone();
+                    }
                     if matches!(g.state, ta_goal::GoalRunState::Running) {
                         // Store our own PID so the watchdog can confirm we're
                         // still alive and skip the finalize timeout (v0.13.17).
@@ -3333,6 +3352,59 @@ fn launch_agent_interactive(
     Ok((result.exit_status, guidance_log))
 }
 
+/// Token counts accumulated from a headless agent's stream-json output.
+#[derive(Debug, Default, Clone)]
+struct AgentTokens {
+    input_tokens: u64,
+    output_tokens: u64,
+    model: String,
+}
+
+/// Parse a single stream-json line and accumulate token usage.
+///
+/// Claude Code emits a `result` event with a `usage` object:
+/// `{"type":"result","usage":{"input_tokens":N,"output_tokens":M}}`
+/// A `system` init event carries the model:
+/// `{"type":"system","subtype":"init","model":"claude-sonnet-4-6-..."}`
+fn accumulate_tokens(line: &str, tokens: &mut AgentTokens) {
+    let Ok(val) = serde_json::from_str::<serde_json::Value>(line) else {
+        return;
+    };
+    let event_type = val.get("type").and_then(|t| t.as_str());
+    match event_type {
+        Some("result") => {
+            if let Some(usage) = val.get("usage") {
+                tokens.input_tokens += usage
+                    .get("input_tokens")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                tokens.output_tokens += usage
+                    .get("output_tokens")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+            }
+        }
+        Some("system") => {
+            if tokens.model.is_empty() {
+                if let Some(model) = val.get("model").and_then(|v| v.as_str()) {
+                    tokens.model = model.to_string();
+                }
+            }
+        }
+        Some("assistant") => {
+            // Also extract model from assistant message metadata if present.
+            if tokens.model.is_empty() {
+                if let Some(msg) = val.get("message") {
+                    if let Some(model) = msg.get("model").and_then(|v| v.as_str()) {
+                        tokens.model = model.to_string();
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Launch an agent via the RuntimeAdapter and wait for it to exit (v0.13.3).
 ///
 /// This is the non-interactive, non-PTY path.  It replaces `launch_agent` and
@@ -3352,7 +3424,7 @@ fn launch_agent_via_runtime(
     pid_callback: Option<&dyn Fn(u32)>,
     goal_id: uuid::Uuid,
     events_dir: &std::path::Path,
-) -> std::io::Result<std::process::ExitStatus> {
+) -> std::io::Result<(std::process::ExitStatus, AgentTokens)> {
     use std::io::{BufRead, BufReader};
     use ta_events::{EventEnvelope, EventStore, FsEventStore, SessionEvent};
     use ta_runtime::{RuntimeRegistry, SpawnRequest, StdinMode, StdoutMode};
@@ -3522,11 +3594,13 @@ fn launch_agent_via_runtime(
         }));
     }
 
-    // If headless, stream stdout lines to parent stdout.
+    // If headless, stream stdout lines to parent stdout and accumulate token usage.
+    let mut tokens = AgentTokens::default();
     if headless {
         if let Some(stdout) = handle.take_stdout() {
             let reader = BufReader::new(stdout);
             for line in reader.lines().map_while(Result::ok) {
+                accumulate_tokens(&line, &mut tokens);
                 println!("{}", line);
             }
         }
@@ -3558,7 +3632,7 @@ fn launch_agent_via_runtime(
         }));
     }
 
-    Ok(exit_status)
+    Ok((exit_status, tokens))
 }
 
 /// Result of attempting a non-blocking draft build (v0.15.8.1).

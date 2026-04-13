@@ -1601,6 +1601,9 @@ fn create_review_draft(
         memory_entries_created: vec![],
         created_at: now,
         updated_at: now,
+        input_tokens: 0,
+        output_tokens: 0,
+        agent_model: String::new(),
     };
 
     let goal_store = GoalRunStore::new(&config.goals_dir)

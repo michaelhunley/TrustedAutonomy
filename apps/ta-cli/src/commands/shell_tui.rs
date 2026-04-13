@@ -1869,6 +1869,23 @@ async fn handle_terminal_event(
                                 app.auto_scroll = true; // re-enable auto-tail after clear (v0.14.9.3)
                                 return;
                             }
+                            // :stats — print velocity aggregate inline (v0.15.14.2).
+                            ":stats" => {
+                                let project_root = app.project_root.clone();
+                                let tx = tx.clone();
+                                tokio::spawn(async move {
+                                    let msg = tokio::task::spawn_blocking(move || {
+                                        shell_velocity_stats(&project_root)
+                                    })
+                                    .await
+                                    .unwrap_or_else(|e| format!("Error: {}", e));
+                                    let _ = tx.send(TuiMessage::CommandResponse(msg));
+                                });
+                                app.push_output(OutputLine::info(
+                                    "Loading velocity stats...".into(),
+                                ));
+                                return;
+                            }
                             _ => {}
                         }
 
@@ -4723,6 +4740,7 @@ Interactive mode:
 
 Shell commands:
   :status            Refresh the status bar
+  :stats             Show velocity stats inline (same as ta stats velocity)
   :latency on|off    Toggle input latency diagnostics (log: .ta/latency.log)
   :latency dump      Show latency report now
   clear              Clear the output pane
@@ -4845,6 +4863,108 @@ CLI Commands (prefix with 'ta' or use directly):
   config <cmd>       Inspect and validate configuration
 
 Run 'ta <command> --help' for details on any command.";
+
+/// Compute a velocity stats summary string for the `:stats` shell command (v0.15.14.2).
+///
+/// Reads velocity data directly from the project's local and committed stores.
+/// Returns a formatted multi-line string ready for display in the shell TUI.
+fn shell_velocity_stats(project_root: &std::path::Path) -> String {
+    use ta_goal::{
+        aggregate_by_contributor, merge_velocity_entries, VelocityAggregate, VelocityHistoryStore,
+        VelocityStore,
+    };
+
+    let local_store = VelocityStore::for_project(project_root);
+    let history_store = VelocityHistoryStore::for_project(project_root);
+
+    let local = match local_store.load_all() {
+        Ok(e) => e,
+        Err(e) => return format!("Error loading velocity stats: {}", e),
+    };
+    let committed = match history_store.load_all() {
+        Ok(e) => e,
+        Err(e) => return format!("Error loading velocity history: {}", e),
+    };
+
+    let (merged, committed_ids) = merge_velocity_entries(local, committed);
+
+    if merged.is_empty() {
+        return "No velocity data recorded yet. Data is written when goals complete.".to_string();
+    }
+
+    let agg = VelocityAggregate::from_entries(&merged);
+    let committed_entries: Vec<_> = merged
+        .iter()
+        .filter(|e| committed_ids.contains(&e.goal_id))
+        .cloned()
+        .collect();
+    let by_contributor = aggregate_by_contributor(&committed_entries);
+
+    let mut out = String::new();
+    out.push_str("Velocity Stats\n");
+    out.push_str(&"─".repeat(50));
+    out.push('\n');
+    out.push_str(&format!("  Total goals:    {}\n", agg.total_goals));
+    out.push_str(&format!(
+        "  Applied:        {} ({:.0}%)\n",
+        agg.applied,
+        if agg.total_goals > 0 {
+            agg.applied as f64 / agg.total_goals as f64 * 100.0
+        } else {
+            0.0
+        }
+    ));
+    out.push_str(&format!(
+        "  Avg build time: {}\n",
+        shell_fmt_duration(agg.avg_build_seconds)
+    ));
+    out.push_str(&format!(
+        "  P90 build time: {}\n",
+        shell_fmt_duration(agg.p90_build_seconds)
+    ));
+    if agg.total_rework_seconds > 0 {
+        out.push_str(&format!(
+            "  Total rework:   {}\n",
+            shell_fmt_duration(agg.total_rework_seconds)
+        ));
+    }
+    if agg.total_cost_usd > 0.0 {
+        out.push_str(&format!("  Total cost:     ${:.2}\n", agg.total_cost_usd));
+        out.push_str(&format!("  Avg cost/goal:  ${:.2}\n", agg.avg_cost_usd));
+    }
+    if !by_contributor.is_empty() {
+        out.push('\n');
+        out.push_str(&format!(
+            "  {:<22} {:>6} {:>8} {:>12}\n",
+            "CONTRIBUTOR", "GOALS", "APPLIED", "AVG BUILD"
+        ));
+        out.push_str(&format!("  {}\n", "─".repeat(52)));
+        for c in &by_contributor {
+            out.push_str(&format!(
+                "  {:<22} {:>6} {:>8} {:>12}\n",
+                if c.contributor.len() > 20 {
+                    &c.contributor[..20]
+                } else {
+                    &c.contributor
+                },
+                c.total_goals,
+                c.applied,
+                shell_fmt_duration(c.avg_build_seconds)
+            ));
+        }
+    }
+    out
+}
+
+fn shell_fmt_duration(seconds: i64) -> String {
+    if seconds < 60 {
+        format!("{}s", seconds)
+    } else if seconds < 3600 {
+        format!("{}m {}s", seconds / 60, seconds % 60)
+    } else {
+        format!("{}h {}m", seconds / 3600, (seconds % 3600) / 60)
+    }
+}
 
 #[cfg(test)]
 mod tests {

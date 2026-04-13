@@ -28,6 +28,7 @@ pub mod persona;
 pub mod phase_selector;
 pub mod social_audit;
 pub mod store;
+pub mod token_cost;
 pub mod velocity;
 
 pub use conversation::{ConversationStore, ConversationTurn, TurnRole};
@@ -44,8 +45,10 @@ pub use persona::{PersonaCapabilities, PersonaConfig, PersonaInner, PersonaStyle
 pub use phase_selector::{PhaseSelector, PhaseSelectorConfig, SelectedPhase};
 pub use social_audit::{DraftSocialRecord, SocialAuditLog, SocialPostRecordState};
 pub use store::GoalRunStore;
+pub use token_cost::{compute_cost, rate_for_model, ModelRate};
 pub use velocity::{
-    aggregate_by_contributor, detect_phase_conflicts, merge_velocity_entries,
-    migrate_local_to_history, ContributorAggregate, GoalOutcome, PhaseConflict, VelocityAggregate,
-    VelocityEntry, VelocityHistoryStore, VelocityStore,
+    aggregate_by_contributor, detect_phase_conflicts, filter_by_phase_prefix,
+    merge_velocity_entries, migrate_local_to_history, update_parent_rework, ContributorAggregate,
+    GoalOutcome, PhaseConflict, VelocityAggregate, VelocityEntry, VelocityHistoryStore,
+    VelocityStore,
 };
