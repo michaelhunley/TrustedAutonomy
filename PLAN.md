@@ -10080,29 +10080,29 @@ kind = "pr_sync"          # opens one PR from milestone_branch → main, polls, 
 
 **Items**:
 
-1. [ ] **`PhaseSelector`** (`crates/ta-goal/src/phase_selector.rs`): Resolves `[phases]` config block against the live plan. `PhaseSelector::resolve(plan, config) -> Vec<PlanPhase>` returns ordered pending phases matching the selector. Three variants: `Count(u32)`, `VersionSet(glob_pattern)`, `Range { from: String, to: String }`. Used by the loop engine to determine the phase sequence before execution starts.
+1. [x] **`PhaseSelector`** (`crates/ta-goal/src/phase_selector.rs`): Resolves `[phases]` config block against the live plan. `PhaseSelector::resolve(plan, config) -> Vec<PlanPhase>` returns ordered pending phases matching the selector. Three variants: `Count(u32)`, `VersionSet(glob_pattern)`, `Range { from: String, to: String }`. Used by the loop engine to determine the phase sequence before execution starts.
 
-2. [ ] **`kind = "loop_next"` step**: Advances the workflow's phase cursor to the next unprocessed phase from the `PhaseSelector` result set. If no phases remain, exits the loop with status `complete`. If a phase fails, exits with `failed` (propagates to the outer workflow). Loop state (cursor, completed phases, failed phase if any) stored in the workflow run record.
+2. [x] **`kind = "loop_next"` step**: Advances the workflow's phase cursor to the next unprocessed phase from the `PhaseSelector` result set. If no phases remain, exits the loop with status `complete`. If a phase fails, exits with `failed` (propagates to the outer workflow). Loop state (cursor, completed phases, failed phase if any) stored in the workflow run record.
 
-3. [ ] **`pr_sync` stage — VCS-abstracted poll + sync**: Replace the current `pr_sync` implementation's hardcoded `git pull` with `SourceAdapter::sync(target_branch)`. After opening the PR and confirming auto-merge is enabled, poll `SourceAdapter::pr_status(pr_id)` until `merged` (or timeout). Then call `SourceAdapter::sync()`. No direct `git` subprocess calls remain in the sync path.
+3. [x] **`pr_sync` stage — VCS-abstracted poll + sync**: Replace the current `pr_sync` implementation's hardcoded `git pull` with `SourceAdapter::sync(target_branch)`. After opening the PR and confirming auto-merge is enabled, poll `SourceAdapter::pr_status(pr_id)` until `merged` (or timeout). Then call `SourceAdapter::sync()`. No direct `git` subprocess calls remain in the sync path.
 
-4. [ ] **`kind = "apply_draft"` with `target = "branch"`**: Applies the draft's file changes to a local VCS branch (`milestone_branch`) rather than to the working directory. Uses `SourceAdapter::apply_to_branch(branch, artifacts)`. Creates the branch if absent.
+4. [x] **`kind = "apply_draft"` with `target = "branch"`**: Applies the draft's file changes to a local VCS branch (`milestone_branch`) rather than to the working directory. Uses `SourceAdapter::apply_to_branch(branch, artifacts)`. Creates the branch if absent.
 
-5. [ ] **`kind = "aggregate_draft"` step**: Reads `draft_id` from each listed source stage's output. Merges artifact lists (dedup by URI, last-writer-wins within a phase). Creates a `MilestoneDraft` record with `source_drafts: Vec<DraftId>`, `milestone_title`, and a combined summary per phase.
+5. [x] **`kind = "aggregate_draft"` step**: Reads `draft_id` from each listed source stage's output. Merges artifact lists (dedup by URI, last-writer-wins within a phase). Creates a `MilestoneDraft` record with `source_drafts: Vec<DraftId>`, `milestone_title`, and a combined summary per phase.
 
-6. [ ] **`MilestoneDraft` struct** (`ta-changeset`): Wraps a `DraftPackage` with `source_drafts: Vec<String>`, `milestone_title: String`, `milestone_branch: Option<String>`. `ta draft view <milestone-id>` shows per-phase sections. `ta draft apply <milestone-id>` applies constituent drafts in phase order.
+6. [x] **`MilestoneDraft` struct** (`ta-changeset`): Wraps a `DraftPackage` with `source_drafts: Vec<String>`, `milestone_title: String`, `milestone_branch: Option<String>`. `ta draft view <milestone-id>` shows per-phase sections. `ta draft apply <milestone-id>` applies constituent drafts in phase order.
 
-7. [ ] **`parallel_group` + `kind = "join"` steps**: Stages with the same `parallel_group` dispatch concurrently (thread pool, configurable `max_parallel`, default 3). `kind = "join"` blocks until all group members complete; merges output maps with stage-name prefixes on conflicts. `on_partial_failure = "continue"` proceeds despite one member failing.
+7. [x] **`parallel_group` + `kind = "join"` steps**: Stages with the same `parallel_group` dispatch concurrently (thread pool, configurable `max_parallel`, default 3). `kind = "join"` blocks until all group members complete; merges output maps with stage-name prefixes on conflicts. `on_partial_failure = "continue"` proceeds despite one member failing.
 
-8. [ ] **`plan-build-phases.toml`** template (Mode A): Replaces `build_phases.sh` in the template library. Phase selection defaults to `max = 99`. Uses `pr_sync` VCS-abstracted loop.
+8. [x] **`plan-build-phases.toml`** template (Mode A): Replaces `build_phases.sh` in the template library. Phase selection defaults to `max = 99`. Uses `pr_sync` VCS-abstracted loop.
 
-9. [ ] **`plan-build-milestone.toml`** template (Mode B): Milestone accumulation workflow. Phase selection defaults to accepting a `version_set` or `range` parameter at invocation time.
+9. [x] **`plan-build-milestone.toml`** template (Mode B): Milestone accumulation workflow. Phase selection defaults to accepting a `version_set` or `range` parameter at invocation time.
 
-10. [ ] **Milestone draft review in `ta workflow status`**: Shows constituent drafts, per-phase status (applied / pending / failed), overall milestone progress, and the `milestone_branch` if in Mode B.
+10. [x] **Milestone draft review in `ta workflow status`**: Shows constituent drafts, per-phase status (applied / pending / failed), overall milestone progress, and the `milestone_branch` if in Mode B.
 
-11. [ ] **Tests**: `PhaseSelector` resolves count/version-set/range correctly against a mock plan; `loop_next` advances cursor and exits on last phase; `pr_sync` calls `SourceAdapter::sync()` not git directly; `apply_draft` with `target = "branch"` calls `apply_to_branch`; `aggregate_draft` merges two draft packages with correct dedup; `MilestoneDraft` apply applies phases in order; parallel stages start concurrently (mock clock); join waits for all; max_parallel cap queues correctly.
+11. [x] **Tests**: `PhaseSelector` resolves count/version-set/range correctly against a mock plan; `loop_next` advances cursor and exits on last phase; `pr_sync` calls `SourceAdapter::sync()` not git directly; `apply_draft` with `target = "branch"` calls `apply_to_branch`; `aggregate_draft` merges two draft packages with correct dedup; `MilestoneDraft` apply applies phases in order; parallel stages start concurrently (mock clock); join waits for all; max_parallel cap queues correctly.
 
-12. [ ] **USAGE.md**: "Multi-Phase Workflows" section — Mode A vs Mode B comparison table, `[phases]` block examples (count, version_set, range), `plan-build-phases` vs `plan-build-milestone` templates, reviewing a milestone draft, VCS adapter requirements for `pr_sync`.
+12. [x] **USAGE.md**: "Multi-Phase Workflows" section — Mode A vs Mode B comparison table, `[phases]` block examples (count, version_set, range), `plan-build-phases` vs `plan-build-milestone` templates, reviewing a milestone draft, VCS adapter requirements for `pr_sync`.
 
 #### Version: `0.15.14-alpha`
 
