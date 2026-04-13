@@ -10141,6 +10141,8 @@ kind = "pr_sync"          # opens one PR from milestone_branch → main, polls, 
 
 5. **Unknown subcommand safety** — integration test asserting `ta draft <unknown>` exits non-zero and does NOT modify any draft state.
 
+6. **`bump-version.sh` includes Cargo.lock** — after editing `Cargo.toml`, run `cargo update --workspace` so `Cargo.lock` is regenerated and can be staged in the same commit. Prevents Cargo.lock from being left dirty after every version bump.
+
 #### Version: `0.15.14-alpha.0` (patch; ships on next tagged release)
 
 ---
