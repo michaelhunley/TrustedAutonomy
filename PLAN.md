@@ -8589,7 +8589,7 @@ Current state: `/api/workflows` lists workflows, `/api/workflow/{id}/input` acce
 
 8. [x] **Workflow creation from description**: "New Workflow" → description textarea → `POST /api/workflow/generate { description }` → agent drafts TOML → inline TOML editor → "Save" calls `POST /api/workflow/save`. Workflow appears in list immediately.
 
-9. [ ] **Workflow run/stop from Studio**: "Run" calls existing `POST /api/workflow/{id}/run` (or equivalent). "Stop" calls `DELETE /api/workflow/{id}`. Live status polling with step progress display. → Deferred to v0.15.4 (requires daemon-side workflow engine integration).
+9. [x] **Workflow run/stop from Studio**: → Moved to v0.15.14.1 (requires daemon-side workflow engine integration; v0.15.4 took a different scope).
 
 10. [x] **`POST /api/project/init`**: Creates a new TA project at a given path — `mkdir -p <path>/.ta`, writes starter `workflow.toml` and empty `PLAN.md` with correct semver header. Returns `{ ok, path, name }`.
 
@@ -10223,6 +10223,8 @@ One JSON record per item, appended by `ta draft apply`:
 8. [ ] **Tests**: `parse_plan()` extracts human review items from a phase with `#### Human Review` subsection. `HumanReviewStore` append/list/complete/defer roundtrip. `ta draft apply` calls `append()` for each unchecked human review item in the applied phase. `ta plan review` output groups by phase. `ta status` shows pending count when items exist. Store gracefully handles missing `.ta/human-review.jsonl` (returns empty list).
 
 9. [ ] **USAGE.md "Human Review Items"** section: What the `#### Human Review` subsection is for, how to add one to a phase spec, what happens when `ta draft apply` runs (items extracted, printed, stored), how to use `ta plan review` to track and close them, how to defer to a later phase.
+
+10. [ ] **Workflow run/stop from Studio** (carried from v0.14.20 item 9): "Run" button on a workflow row calls `POST /api/workflow/{id}/run`. "Stop" calls `DELETE /api/workflow/{id}`. Row shows live status via SSE polling (`GET /api/workflow/{id}/status`). Depends on daemon-side workflow engine (`WorkflowEngine` from v0.15.14).
 
 > **Note**: The format upgrade for existing projects (backfilling `#### Human Review` sections in old done phases) is handled by the project upgrade step in v0.15.18 (`ta upgrade`). Leave it there.
 
