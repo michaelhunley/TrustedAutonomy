@@ -10108,30 +10108,40 @@ kind = "pr_sync"          # opens one PR from milestone_branch → main, polls, 
 
 ---
 
-### v0.15.14.0 — Draft Apply Provenance & Already-Applied UX
+### v0.15.14.0 — Draft Review & Apply: Single-Author Flow + Provenance
 <!-- status: pending -->
-**Goal**: Fix two UX failures that cause users to think a draft is in a "bad state" when it was legitimately applied by a background task.
+**Goal**: Remove the unnecessary `approve` gate for single-author projects, fix the opaque already-Applied error, and add apply provenance so users always know when/how a draft was applied.
 
-**Root cause**: `ta draft apply` on an already-Applied draft returns an opaque error with no context about when or how it was applied. And the `Applied` state records no provenance (who/what applied it), so the user has no way to distinguish a legitimate background apply from a corrupted state.
+**Design decision**: `ta draft approve` exists to enforce multi-party sign-off. In a single-author setup it is an empty ceremony — the same person who writes the code reviews and applies it. `approve` should be a configurable gate, not a default requirement.
 
-**Incident**: User ran `ta draft applied <id>` (typo — unknown subcommand, no-op), then `ta draft apply <id>` returned "Cannot apply package in Applied state" with no further context. User concluded the state was corrupted and tried to recover manually.
+**Correct single-author flow**: `ta draft view <id>` → `ta draft apply <id>` (no separate approve step)
+
+**Multi-author flow** (when `approval_required = true` in `.ta/workflow.toml`): `ta draft view` → `ta draft approve` → `ta draft apply`
 
 #### Changes
 
-1. **Apply provenance field** — add `applied_via: ApplyProvenance` to `DraftStatus::Applied`:
-   - `ApplyProvenance::Manual { user: String }` — triggered by `ta draft apply`
-   - `ApplyProvenance::BackgroundTask { task_id: String }` — triggered by background task
+1. **`approval_required` config flag** — add to `.ta/workflow.toml` (default: `false`):
+   ```toml
+   [draft]
+   approval_required = false   # set true for multi-author approval workflows
+   ```
+   When `false`: `ta draft apply` accepts `PendingReview` state directly (current behavior, now intentional).
+   When `true`: `ta draft apply` requires `Approved` state; applying from `PendingReview` errors with a clear message.
+
+2. **Apply provenance field** — add `applied_via: ApplyProvenance` to `DraftStatus::Applied`:
+   - `ApplyProvenance::Manual` — triggered by explicit `ta draft apply`
+   - `ApplyProvenance::BackgroundTask { task_id: String }` — triggered by background/agent task
    - `ApplyProvenance::AutoMerge` — triggered by auto-merge hook
    - Persisted in draft store; shown in `ta draft list` and `ta draft view`
 
-2. **Better error on already-Applied** — instead of: `Cannot apply package in Applied { applied_at: ... } state`
-   Show: `Draft "v0.15.14 ..." was already applied on 2026-04-13 at 03:39 via background task bwdlflabx. PR #363 was created. No action needed. (Run \`ta draft view <id>\` to confirm.)`
+3. **Better message on already-Applied** — instead of: `Cannot apply package in Applied state`
+   Show: `Draft "..." was already applied on 2026-04-13 at 03:39 via background task. PR #363 was created. Nothing to do. (Run \`ta draft view <id>\` to review.)`
 
-3. **`ta draft list` Applied column** — show provenance inline: `Applied (background)` vs `Applied (manual)`
+4. **`ta draft list` Applied column** — show provenance inline: `Applied (manual)` vs `Applied (background)`
 
-4. **Unknown subcommand safety** — no code change needed (clap already handles this), but add an integration test asserting that `ta draft <unknown>` exits non-zero and does NOT modify any draft state.
+5. **Unknown subcommand safety** — integration test asserting `ta draft <unknown>` exits non-zero and does NOT modify any draft state.
 
-#### Version: `0.15.14-alpha.0` (patch, no semver bump needed; ships on next tagged release)
+#### Version: `0.15.14-alpha.0` (patch; ships on next tagged release)
 
 ---
 
