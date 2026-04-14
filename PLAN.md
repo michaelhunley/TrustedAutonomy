@@ -10378,6 +10378,34 @@ level = "mid"               # "low" | "mid" | "high" — sets all defaults below
 
 ---
 
+### v0.15.14.5 — Supervisor Agent: File-Inspection Mode (Headless Agent in Staging)
+<!-- status: pending -->
+**Goal**: Replace the single-shot supervisor prompt with a headless agent that has Read/Grep/Glob tool access to the staging workspace. The supervisor reads what it needs, produces specific file:line findings, and never receives pre-loaded diffs. Eliminates vague "cannot be verified without viewing staging files" findings entirely.
+
+**Root cause**: `invoke_claude_cli_supervisor` calls `claude --print` with a pre-built text prompt containing only the goal objective, a list of changed file paths (no content), and the constitution. No tools are available. The supervisor reasons from filenames alone, producing surface-level findings with qualified hedging. `run_manifest_supervisor` already runs in `staging_path` as `current_dir` — the same model applies to all built-in supervisors.
+
+**Why not pre-load diffs into the prompt**: Embedding full diffs doesn't scale — a 50-file PR saturates context before the supervisor can reason. An agent that selectively reads what it needs is both cheaper (tokens proportional to what it examines) and more accurate (it can follow the code, not just scan a wall of text).
+
+**Design**: Supervisor prompt contains goal spec + file paths (as a starting point) + constitution + explicit instruction to read files before forming findings. Supervisor runs as headless agent in staging dir with Read/Grep/Glob. Output is identical structured JSON — but findings must cite `file:line` when referencing code.
+
+#### Items
+
+1. [ ] **`invoke_claude_cli_supervisor` refactor** (`supervisor_review.rs`): Replace `claude --print <prompt>` with a headless agent invocation: `current_dir = staging_path`, `--allowedTools "Read(*),Grep(*),Glob(*)"`. Prompt instructs the supervisor to read relevant files before forming findings. Drop diff/content pre-loading from the prompt — file paths remain as starting points only.
+
+2. [ ] **`invoke_codex_supervisor` same treatment**: Mirror the same change for the codex supervisor path.
+
+3. [ ] **`build_supervisor_prompt` update**: Keep `changed_files: &[String]` (paths only). Add explicit instruction: "Read the files listed above using your Read tool before forming each finding. Cite `file:line` in every finding that references code. Never write 'cannot be verified without viewing files' — view the files first."
+
+4. [ ] **Unverified-finding quality gate**: After parsing the supervisor JSON, scan findings for hedging phrases ("cannot be verified", "unable to confirm", "without viewing", "depends on implementation"). Any such finding forces `SupervisorVerdict::Warn` and appends a meta-finding: `"Supervisor produced unverified finding — staging access may be missing or supervisor did not read the file"`. Catches regressions.
+
+5. [ ] **Tests**: Supervisor with staging access produces `file:line` citations. Hedging-phrase detector fires correctly. `build_supervisor_prompt` no longer embeds diff content. Headless invocation sets correct `current_dir` and tool allowlist.
+
+6. [ ] **USAGE.md "Supervisor Agent" section update**: Document that the supervisor reads staged files directly, what tools it has, how to interpret `file:line` findings in draft view.
+
+#### Version: `0.15.14.5-alpha`
+
+---
+
 ### v0.15.15 — Multi-Agent Consensus Review Workflow
 <!-- status: pending -->
 **Goal**: A workflow template for multi-agent panel reviews where specialist agents run in parallel, each producing a structured verdict with a score and findings, and a final consensus step aggregates their outputs into a readiness score and recommendation. Ships with a `code-review-consensus` template covering architect, security, principal engineer, and PM roles. Include configurable consensus algorithms/models. Start with Raft and Paxos with Raft as the default — it should do no work if there is no swarm/multi-agent in the workflow.
