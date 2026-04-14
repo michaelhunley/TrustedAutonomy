@@ -9401,6 +9401,107 @@ roles:
     prompt: "Review the implementation"
 ```
 
+### Multi-Agent Consensus Review
+
+The `code-review-consensus` workflow runs a panel of specialist agents in parallel — architect, security, principal engineer, and PM — and aggregates their scores into a single readiness score. Apply is blocked when the score falls below a configurable threshold.
+
+#### Running a consensus review
+
+```bash
+ta workflow run code-review-consensus --goal "Add rate limiting to the auth endpoint"
+```
+
+Live status shows each reviewer as it completes:
+
+```
+[1/4] architect_review  ✓  score=0.88
+[2/4] security_review   ✓  score=0.72
+[3/4] principal_review  ✓  score=0.85
+[4/4] pm_review         ✓  score=0.90
+[Raft] Committed log entry 4/4 (majority: 3), score=0.83, threshold=0.75, proceed=true
+Consensus: PROCEED  score=0.83
+```
+
+#### Reviewer roles
+
+| Role | Focus |
+|------|-------|
+| `architect` | System design, modularity, API contracts, dependency graph |
+| `security` | OWASP top-10, trust boundaries, secrets handling, input validation |
+| `principal` | Correctness, edge cases, test coverage, performance, maintainability |
+| `pm` | Goal alignment, scope, user-visible impact, backwards compatibility |
+
+Each reviewer runs as a headless agent in the staging workspace with `Read`/`Grep`/`Glob` tool access. It reads the staged files directly, produces a score (0.0–1.0), and lists findings with `file:line` citations.
+
+#### Configuring weights and threshold
+
+```toml
+# .ta/workflow.toml (or inline in code-review-consensus.toml)
+[workflow.config]
+gate_threshold = 0.75           # minimum score to auto-proceed
+reviewer_timeout_mins = 30      # per-reviewer timeout (slot omitted from quorum on timeout)
+consensus_algorithm = "raft"    # raft | paxos | weighted
+require_all_reviewers = false   # if true, any timeout is a hard failure
+
+[workflow.config.weights]
+architect = 1.0
+security  = 1.5   # security findings weighted higher
+principal = 1.0
+pm        = 0.5
+```
+
+#### Understanding `consensus_algorithm`
+
+| Algorithm | When to use |
+|-----------|-------------|
+| `raft` (default) | Multi-agent panels of 3+ reviewers. Crash-fault-tolerant: the Raft log is persisted to `.ta/workflow-runs/<run-id>/raft.log` so the run can recover if the coordinator crashes mid-decision. Majority quorum (⌊n/2⌋+1) commits each reviewer's entry. |
+| `paxos` | Single-round agreement when Raft's multi-round log is overkill. Suitable for two-reviewer panels. Uses the classic prepare/promise/accept/accepted phases, tracked in a Paxos audit log. |
+| `weighted` | No coordination overhead — just a weighted average. Auto-selected when there is only one active reviewer. Appropriate for single-agent or no-swarm workflows where consensus is a no-op. |
+
+Raft and Paxos **auto-degrade** to Weighted when only one non-timed-out reviewer is active, so there is no coordination overhead on single-agent workflows.
+
+#### When a reviewer times out
+
+A reviewer that does not complete within `reviewer_timeout_mins` has its slot marked `timed_out=true`. By default (`require_all_reviewers = false`) this:
+- Reduces the quorum threshold (Raft: majority of remaining active reviewers; Paxos: quorum of remaining active reviewers)
+- Notes the timed-out role in `ConsensusResult.timed_out_roles`
+- Flags the result in `ta workflow status`
+
+When `require_all_reviewers = true`, any timeout is a hard failure and the run stops.
+
+#### Overriding a blocked consensus
+
+If the consensus score falls below `gate_threshold` and you need to proceed anyway:
+
+```bash
+ta workflow run code-review-consensus --goal "Critical hotfix" \
+    --override --override-reason "Emergency hotfix — approved by tech lead (2026-04-14)"
+```
+
+The override:
+- Forces `proceed = true` regardless of score
+- Sets `override_active = true` in `ConsensusResult`
+- Appends an `OVERRIDE` entry with the reason to the consensus summary
+- Is logged to `goal-audit.jsonl` by the workflow runtime
+
+```
+[Weighted] score=0.42, threshold=0.75, proceed=true, OVERRIDE reason="Emergency hotfix..."
+```
+
+Overrides are visible in `ta workflow status <run-id>` and in the audit trail.
+
+#### Single-reviewer variant
+
+The `review-specialist` template runs a single reviewer with a configurable objective:
+
+```bash
+ta workflow run review-specialist --goal "Add OAuth2 to the API" \
+    --set role=security \
+    --set objective="Review as a security engineer. Focus: OWASP top-10, token handling."
+```
+
+Output: a `verdict.json` with `{ "role": "security", "score": 0.78, "findings": [...], "proceed": true }`. This is the same format consumed by the `consensus` step in `code-review-consensus`.
+
 ### External Workflows & Agents
 
 Share and reuse workflow definitions and agent configurations across projects by pulling them from external sources — registries, GitHub repos, or raw URLs.
