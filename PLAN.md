@@ -10394,21 +10394,27 @@ level = "mid"               # "low" | "mid" | "high" — sets all defaults below
 
 **Why not pre-load diffs into the prompt**: Embedding full diffs doesn't scale — a 50-file PR saturates context before the supervisor can reason. An agent that selectively reads what it needs is both cheaper (tokens proportional to what it examines) and more accurate (it can follow the code, not just scan a wall of text).
 
+**Framework assignment**: Any agent profile can be the supervisor — set `[supervisor] agent_profile = "supervisor"` and define `[agent_profiles.supervisor]` with any supported `framework` (claude, codex, ollama, custom manifest). The file-inspection refactor covers all four dispatch paths. Default (if unset) remains `claude-code`.
+
 **Design**: Supervisor prompt contains goal spec + file paths (as a starting point) + constitution + explicit instruction to read files before forming findings. Supervisor runs as headless agent in staging dir with Read/Grep/Glob. Output is identical structured JSON — but findings must cite `file:line` when referencing code.
 
 #### Items
 
-1. [ ] **`invoke_claude_cli_supervisor` refactor** (`supervisor_review.rs`): Replace `claude --print <prompt>` with a headless agent invocation: `current_dir = staging_path`, `--allowedTools "Read(*),Grep(*),Glob(*)"`. Prompt instructs the supervisor to read relevant files before forming findings. Drop diff/content pre-loading from the prompt — file paths remain as starting points only.
+1. [ ] **`agent_profile` link for supervisor** (`SupervisorRunConfig`): Add `agent_profile: Option<String>` field. When set, resolve via `agent_profiles` in `workflow.toml` to get `framework` and `model`. The resolved framework drives dispatch (replaces the bare `agent =` string). Config: `[supervisor] agent_profile = "supervisor"` + `[agent_profiles.supervisor] framework = "claude" model = "claude-sonnet-4-6"`. Any registered profile framework works — not just claude. If `agent_profile` is unset, existing `agent =` string fallback is preserved for backward compat.
 
-2. [ ] **`invoke_codex_supervisor` same treatment**: Mirror the same change for the codex supervisor path.
+2. [ ] **`invoke_claude_cli_supervisor` refactor** (`supervisor_review.rs`): Replace `claude --print <prompt>` with a headless agent invocation: `current_dir = staging_path`, `--allowedTools "Read(*),Grep(*),Glob(*)"`. Prompt instructs the supervisor to read relevant files before forming findings. Drop diff/content pre-loading from the prompt — file paths remain as starting points only.
 
-3. [ ] **`build_supervisor_prompt` update**: Keep `changed_files: &[String]` (paths only). Add explicit instruction: "Read the files listed above using your Read tool before forming each finding. Cite `file:line` in every finding that references code. Never write 'cannot be verified without viewing files' — view the files first."
+3. [ ] **`invoke_codex_supervisor` same treatment**: Mirror the same change for the codex supervisor path (equivalent headless + file-access flags for codex CLI).
 
-4. [ ] **Unverified-finding quality gate**: After parsing the supervisor JSON, scan findings for hedging phrases ("cannot be verified", "unable to confirm", "without viewing", "depends on implementation"). Any such finding forces `SupervisorVerdict::Warn` and appends a meta-finding: `"Supervisor produced unverified finding — staging access may be missing or supervisor did not read the file"`. Catches regressions.
+4. [ ] **`invoke_ollama_supervisor` + manifest path same treatment**: For ollama (`ta agent run ollama --headless`), pass `--tools read,grep,glob` when available. For `run_manifest_supervisor` (custom manifest agents), it already runs in `staging_path` as `current_dir` — update the context input to include the file-inspection instruction and require `file:line` citations. Document which paths have native tool access vs instruction-only prompting.
 
-5. [ ] **Tests**: Supervisor with staging access produces `file:line` citations. Hedging-phrase detector fires correctly. `build_supervisor_prompt` no longer embeds diff content. Headless invocation sets correct `current_dir` and tool allowlist.
+5. [ ] **`build_supervisor_prompt` update**: Keep `changed_files: &[String]` (paths only). Add explicit instruction: "Read the files listed above using your Read/Grep/Glob tools before forming each finding. Cite `file:line` in every finding that references code. Never write 'cannot be verified without viewing files' — view the files first."
 
-6. [ ] **USAGE.md "Supervisor Agent" section update**: Document that the supervisor reads staged files directly, what tools it has, how to interpret `file:line` findings in draft view.
+6. [ ] **Unverified-finding quality gate**: After parsing supervisor JSON, scan findings for hedging phrases ("cannot be verified", "unable to confirm", "without viewing", "depends on implementation"). Any such finding forces `SupervisorVerdict::Warn` and appends a meta-finding: `"Supervisor produced unverified finding — staging access may be missing or supervisor did not read the file"`. Catches regressions.
+
+7. [ ] **Tests**: Supervisor with staging access produces `file:line` citations. Hedging-phrase detector fires correctly. `build_supervisor_prompt` no longer embeds diff content. Headless invocation sets correct `current_dir` and tool allowlist. `agent_profile` resolution picks up framework and model from `agent_profiles` table.
+
+8. [ ] **USAGE.md "Supervisor Agent" section update**: Document that the supervisor reads staged files directly, what tools it has, how to assign a supervisor profile (any framework), how to interpret `file:line` findings in draft view.
 
 #### Version: `0.15.14.5-alpha`
 
