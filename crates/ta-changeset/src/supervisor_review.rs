@@ -918,6 +918,7 @@ mod tests {
     /// Mutex to serialize tests that mutate the global PATH environment variable.
     /// Tests that create mock `claude` binaries and prepend a temp dir to PATH must
     /// acquire this lock to prevent parallel races where the wrong mock binary is found.
+    #[cfg(unix)]
     static PATH_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
