@@ -10387,7 +10387,7 @@ level = "mid"               # "low" | "mid" | "high" — sets all defaults below
 ---
 
 ### v0.15.14.5 — Supervisor Agent: File-Inspection Mode (Headless Agent in Staging)
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Replace the single-shot supervisor prompt with a headless agent that has Read/Grep/Glob tool access to the staging workspace. The supervisor reads what it needs, produces specific file:line findings, and never receives pre-loaded diffs. Eliminates vague "cannot be verified without viewing staging files" findings entirely.
 
 **Root cause**: `invoke_claude_cli_supervisor` calls `claude --print` with a pre-built text prompt containing only the goal objective, a list of changed file paths (no content), and the constitution. No tools are available. The supervisor reasons from filenames alone, producing surface-level findings with qualified hedging. `run_manifest_supervisor` already runs in `staging_path` as `current_dir` — the same model applies to all built-in supervisors.
@@ -10400,21 +10400,21 @@ level = "mid"               # "low" | "mid" | "high" — sets all defaults below
 
 #### Items
 
-1. [ ] **`agent_profile` link for supervisor** (`SupervisorRunConfig`): Add `agent_profile: Option<String>` field. When set, resolve via `agent_profiles` in `workflow.toml` to get `framework` and `model`. The resolved framework drives dispatch (replaces the bare `agent =` string). Config: `[supervisor] agent_profile = "supervisor"` + `[agent_profiles.supervisor] framework = "claude" model = "claude-sonnet-4-6"`. Any registered profile framework works — not just claude. If `agent_profile` is unset, existing `agent =` string fallback is preserved for backward compat.
+1. [x] **`agent_profile` link for supervisor** (`SupervisorRunConfig`): Add `agent_profile: Option<String>` field. When set, resolve via `agent_profiles` in `workflow.toml` to get `framework` and `model`. The resolved framework drives dispatch (replaces the bare `agent =` string). Config: `[supervisor] agent_profile = "supervisor"` + `[agent_profiles.supervisor] framework = "claude" model = "claude-sonnet-4-6"`. Any registered profile framework works — not just claude. If `agent_profile` is unset, existing `agent =` string fallback is preserved for backward compat.
 
-2. [ ] **`invoke_claude_cli_supervisor` refactor** (`supervisor_review.rs`): Replace `claude --print <prompt>` with a headless agent invocation: `current_dir = staging_path`, `--allowedTools "Read(*),Grep(*),Glob(*)"`. Prompt instructs the supervisor to read relevant files before forming findings. Drop diff/content pre-loading from the prompt — file paths remain as starting points only.
+2. [x] **`invoke_claude_cli_supervisor` refactor** (`supervisor_review.rs`): Replace `claude --print <prompt>` with a headless agent invocation: `current_dir = staging_path`, `--allowedTools "Read(*),Grep(*),Glob(*)"`. Prompt instructs the supervisor to read relevant files before forming findings. Drop diff/content pre-loading from the prompt — file paths remain as starting points only.
 
-3. [ ] **`invoke_codex_supervisor` same treatment**: Mirror the same change for the codex supervisor path (equivalent headless + file-access flags for codex CLI).
+3. [x] **`invoke_codex_supervisor` same treatment**: Mirror the same change for the codex supervisor path (equivalent headless + file-access flags for codex CLI).
 
-4. [ ] **`invoke_ollama_supervisor` + manifest path same treatment**: For ollama (`ta agent run ollama --headless`), pass `--tools read,grep,glob` when available. For `run_manifest_supervisor` (custom manifest agents), it already runs in `staging_path` as `current_dir` — update the context input to include the file-inspection instruction and require `file:line` citations. Document which paths have native tool access vs instruction-only prompting.
+4. [x] **`invoke_ollama_supervisor` + manifest path same treatment**: For ollama (`ta agent run ollama --headless`), pass `--tools read,grep,glob` when available. For `run_manifest_supervisor` (custom manifest agents), it already runs in `staging_path` as `current_dir` — update the context input to include the file-inspection instruction and require `file:line` citations. Document which paths have native tool access vs instruction-only prompting.
 
-5. [ ] **`build_supervisor_prompt` update**: Keep `changed_files: &[String]` (paths only). Add explicit instruction: "Read the files listed above using your Read/Grep/Glob tools before forming each finding. Cite `file:line` in every finding that references code. Never write 'cannot be verified without viewing files' — view the files first."
+5. [x] **`build_supervisor_prompt` update**: Keep `changed_files: &[String]` (paths only). Add explicit instruction: "Read the files listed above using your Read/Grep/Glob tools before forming each finding. Cite `file:line` in every finding that references code. Never write 'cannot be verified without viewing files' — view the files first."
 
-6. [ ] **Unverified-finding quality gate**: After parsing supervisor JSON, scan findings for hedging phrases ("cannot be verified", "unable to confirm", "without viewing", "depends on implementation"). Any such finding forces `SupervisorVerdict::Warn` and appends a meta-finding: `"Supervisor produced unverified finding — staging access may be missing or supervisor did not read the file"`. Catches regressions.
+6. [x] **Unverified-finding quality gate**: After parsing supervisor JSON, scan findings for hedging phrases ("cannot be verified", "unable to confirm", "without viewing", "depends on implementation"). Any such finding forces `SupervisorVerdict::Warn` and appends a meta-finding: `"Supervisor produced unverified finding — staging access may be missing or supervisor did not read the file"`. Catches regressions.
 
-7. [ ] **Tests**: Supervisor with staging access produces `file:line` citations. Hedging-phrase detector fires correctly. `build_supervisor_prompt` no longer embeds diff content. Headless invocation sets correct `current_dir` and tool allowlist. `agent_profile` resolution picks up framework and model from `agent_profiles` table.
+7. [x] **Tests**: Supervisor with staging access produces `file:line` citations. Hedging-phrase detector fires correctly. `build_supervisor_prompt` no longer embeds diff content. Headless invocation sets correct `current_dir` and tool allowlist. `agent_profile` resolution picks up framework and model from `agent_profiles` table.
 
-8. [ ] **USAGE.md "Supervisor Agent" section update**: Document that the supervisor reads staged files directly, what tools it has, how to assign a supervisor profile (any framework), how to interpret `file:line` findings in draft view.
+8. [x] **USAGE.md "Supervisor Agent" section update**: Document that the supervisor reads staged files directly, what tools it has, how to assign a supervisor profile (any framework), how to interpret `file:line` findings in draft view.
 
 #### Version: `0.15.14.5-alpha`
 
