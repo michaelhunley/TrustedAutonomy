@@ -194,11 +194,13 @@
 
     <!--
       Custom action: run DISM to enable Client-ProjFS when the ProjFS feature is selected.
-      Dism.exe is a system tool in %SystemRoot%\System32 — no working directory needed.
+      Dism.exe lives in %SystemRoot%\System32 (SystemFolder). Directory is required by WiX v4
+      for ExeCommand-based custom actions.
       Condition: (&ProjFS = 3) means the feature is being installed (not already present).
     -->
     <CustomAction
       Id="EnableClientProjFS"
+      Directory="SystemFolder"
       ExeCommand="Dism.exe /Online /Enable-Feature /FeatureName:Client-ProjFS /NoRestart"
       Execute="deferred"
       Return="ignore"
