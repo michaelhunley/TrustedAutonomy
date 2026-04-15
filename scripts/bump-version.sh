@@ -68,21 +68,36 @@ with open("$CARGO_TOML", "w") as f:
 print("  Cargo.toml: version = \\"$NEW_VERSION\\"")
 PYEOF
 
-# --- apps/ta-cli/Cargo.toml internal path dep versions ---
+# --- Update internal path dep versions in all workspace crates ---
+# Any Cargo.toml with a { path = "...", version = "..." } pattern for a ta-* crate
+# needs the version bumped in sync with the workspace version.
 python3 - <<PYEOF
-import re
-cli_path = "apps/ta-cli/Cargo.toml"
-with open(cli_path) as f:
-    c = f.read()
-# Update version = "..." on lines that also have path = "../../crates/..."
-c = re.sub(
-    r'(ta-[a-z-]+ = \\{ path = "[^"]+", version = ")[^"]+(")',
-    lambda m: m.group(1) + "$NEW_VERSION" + m.group(2),
-    c
+import re, os, glob
+
+new_version = "$NEW_VERSION"
+pattern = re.compile(
+    r'(ta-[a-z-]+ = \{ path = "[^"]+", version = ")[^"]+(")',
 )
-with open(cli_path, "w") as f:
-    f.write(c)
-print("  apps/ta-cli/Cargo.toml: internal dep versions = \\"$NEW_VERSION\\"")
+# Collect all Cargo.toml files in the workspace
+toml_files = glob.glob("apps/**/Cargo.toml", recursive=True) + \
+             glob.glob("crates/**/Cargo.toml", recursive=True)
+
+updated = []
+for path in sorted(toml_files):
+    with open(path) as f:
+        c = f.read()
+    new_c = pattern.sub(lambda m: m.group(1) + new_version + m.group(2), c)
+    if new_c != c:
+        with open(path, "w") as f:
+            f.write(new_c)
+        updated.append(path)
+
+if updated:
+    print(f"  Updated internal dep versions = \\"{new_version}\\" in:")
+    for p in updated:
+        print(f"    {p}")
+else:
+    print("  No internal path dep versions to update.")
 PYEOF
 
 # --- .release.toml ---

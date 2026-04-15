@@ -3,6 +3,11 @@ name = "ta-agent-ollama"
 version.workspace = true
 edition = "2021"
 description = "Trusted Autonomy local-model agent — tool-use loop for any OpenAI-compatible endpoint"
+license = "Apache-2.0"
+repository = "https://github.com/trustedautonomy/ta"
+homepage = "https://github.com/trustedautonomy/ta"
+keywords = ["ai", "agent", "ollama", "llm", "autonomy"]
+categories = ["command-line-utilities", "development-tools"]
 
 [[bin]]
 name = "ta-agent-ollama"

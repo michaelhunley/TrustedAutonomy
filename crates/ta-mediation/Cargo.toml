@@ -3,6 +3,11 @@ name = "ta-mediation"
 version.workspace = true
 edition = "2021"
 description = "Resource mediation trait — generalizes the staging pattern from files to any resource"
+license = "Apache-2.0"
+repository = "https://github.com/trustedautonomy/ta"
+homepage = "https://github.com/trustedautonomy/ta"
+keywords = ["ai", "agent", "autonomy", "mediation", "staging"]
+categories = ["development-tools"]
 
 [dependencies]
 serde = { workspace = true }
@@ -13,8 +18,8 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 # Workspace crates for FsMediator
-ta-workspace = { path = "../ta-workspace" }
-ta-changeset = { path = "../ta-changeset" }
+ta-workspace = { path = "../ta-workspace", version = "0.15.15-alpha.1" }
+ta-changeset = { path = "../ta-changeset", version = "0.15.15-alpha.1" }
 
 [dev-dependencies]
 tempfile = { workspace = true }

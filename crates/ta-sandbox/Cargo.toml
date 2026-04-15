@@ -4,6 +4,10 @@ version.workspace = true
 edition = "2021"
 description = "Allowlisted command execution sandbox for Trusted Autonomy"
 license = "Apache-2.0"
+repository = "https://github.com/trustedautonomy/ta"
+homepage = "https://github.com/trustedautonomy/ta"
+keywords = ["ai", "agent", "autonomy", "sandbox", "security"]
+categories = ["development-tools"]
 
 [dependencies]
 serde = { workspace = true }
@@ -11,7 +15,7 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 sha2 = { workspace = true }
-ta-policy = { path = "../ta-policy" }
+ta-policy = { path = "../ta-policy", version = "0.15.15-alpha.1" }
 
 [dev-dependencies]
 tempfile = { workspace = true }

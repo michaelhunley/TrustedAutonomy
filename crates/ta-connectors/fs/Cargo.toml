@@ -4,6 +4,10 @@ version.workspace = true
 edition = "2021"
 description = "Filesystem connector for Trusted Autonomy"
 license = "Apache-2.0"
+repository = "https://github.com/trustedautonomy/ta"
+homepage = "https://github.com/trustedautonomy/ta"
+keywords = ["ai", "agent", "autonomy", "filesystem", "connector"]
+categories = ["development-tools", "filesystem"]
 
 [dependencies]
 serde = { workspace = true }
@@ -12,10 +16,10 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
-ta-changeset = { path = "../../ta-changeset" }
-ta-workspace = { path = "../../ta-workspace" }
-ta-audit = { path = "../../ta-audit" }
+ta-changeset = { path = "../../ta-changeset", version = "0.15.15-alpha.1" }
+ta-workspace = { path = "../../ta-workspace", version = "0.15.15-alpha.1" }
+ta-audit = { path = "../../ta-audit", version = "0.15.15-alpha.1" }
 
 [dev-dependencies]
 tempfile = { workspace = true }
-ta-policy = { path = "../../ta-policy" }
+ta-policy = { path = "../../ta-policy", version = "0.15.15-alpha.1" }

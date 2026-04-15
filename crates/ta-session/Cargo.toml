@@ -3,6 +3,11 @@ name = "ta-session"
 version.workspace = true
 edition = "2021"
 description = "Session & Human Control Plane — continuous conversation lifecycle for TA goals"
+license = "Apache-2.0"
+repository = "https://github.com/trustedautonomy/ta"
+homepage = "https://github.com/trustedautonomy/ta"
+keywords = ["ai", "agent", "autonomy", "session", "control"]
+categories = ["development-tools"]
 
 [dependencies]
 serde = { workspace = true }
@@ -13,8 +18,8 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 # Workspace crates
-ta-goal = { path = "../ta-goal" }
-ta-changeset = { path = "../ta-changeset" }
+ta-goal = { path = "../ta-goal", version = "0.15.15-alpha.1" }
+ta-changeset = { path = "../ta-changeset", version = "0.15.15-alpha.1" }
 
 [dev-dependencies]
 tempfile = { workspace = true }

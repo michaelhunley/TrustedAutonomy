@@ -5244,6 +5244,55 @@ To run a single E2E test:
 ./dev cargo test -p ta-changeset test_dependency_graph_e2e -- --ignored
 ```
 
+### Publishing to crates.io
+
+`cargo install ta-cli` works once all workspace crates are published to crates.io.
+Crates are published in dependency order by `scripts/publish-crates.sh`.
+
+#### CARGO_REGISTRY_TOKEN setup
+
+1. Generate a crates.io API token at <https://crates.io/settings/tokens>
+   - Scope: **Publish new crates** + **Publish updates** for the `ta-*` namespace
+2. Add the token as a GitHub repo secret:
+   - Repository → **Settings → Secrets and variables → Actions → New repository secret**
+   - Name: `CARGO_REGISTRY_TOKEN`
+   - Value: the token from step 1
+3. The `publish-crate` CI job in `release.yml` runs automatically after each GitHub release
+   and uses this secret. It skips gracefully if the secret is not set.
+
+#### Manual publish (first-time or recovery)
+
+```bash
+# Dry-run — check all crates pass publishability before committing to real publish
+CARGO_REGISTRY_TOKEN=<token> ./scripts/publish-crates.sh --dry-run
+
+# Full publish — publishes all crates in dependency order, skips already-published versions
+CARGO_REGISTRY_TOKEN=<token> ./scripts/publish-crates.sh
+```
+
+The script publishes 35 crates in 6 dependency tiers with a 20-second delay between each
+to allow crates.io index propagation. Total publish time is approximately 15 minutes.
+
+#### Verifying cargo install works
+
+After all crates are published, verify in a clean environment:
+
+```bash
+# In a container or fresh environment with no local workspace
+cargo install ta-cli
+ta --version
+```
+
+#### Troubleshooting
+
+- **"crate version already exists"**: The version is already published — this is harmless,
+  the script skips already-published versions automatically.
+- **"no matching package named ta-foo found in registry"**: A dependency was not published
+  yet. Run `./scripts/publish-crates.sh --skip-check` to force-attempt all crates in order.
+- **"CARGO_REGISTRY_TOKEN not set"**: Set the env var or add the GitHub secret.
+- **"insufficient permissions"**: The token does not have publish rights. Regenerate it
+  with the correct scopes at <https://crates.io/settings/tokens>.
+
 ### Versioning and Release Lifecycle
 
 TA uses [semver](https://semver.org/): `MAJOR.MINOR.PATCH-prerelease`.

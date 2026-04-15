@@ -4,6 +4,10 @@ version.workspace = true
 edition = "2021"
 description = "External Action Governance Framework for Trusted Autonomy (v0.13.4)"
 license = "Apache-2.0"
+repository = "https://github.com/trustedautonomy/ta"
+homepage = "https://github.com/trustedautonomy/ta"
+keywords = ["ai", "agent", "autonomy", "actions", "governance"]
+categories = ["development-tools"]
 
 [dependencies]
 serde = { workspace = true }

@@ -4,6 +4,10 @@ version.workspace = true
 edition = "2021"
 description = "Pluggable workflow engine for multi-stage, multi-role orchestration in Trusted Autonomy"
 license = "Apache-2.0"
+repository = "https://github.com/trustedautonomy/ta"
+homepage = "https://github.com/trustedautonomy/ta"
+keywords = ["ai", "agent", "autonomy", "workflow", "orchestration"]
+categories = ["development-tools"]
 
 [dependencies]
 serde = { workspace = true }
@@ -14,7 +18,7 @@ tracing = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 tokio = { workspace = true }
-ta-changeset = { path = "../ta-changeset" }
+ta-changeset = { path = "../ta-changeset", version = "0.15.15-alpha.1" }
 
 [dev-dependencies]
 tempfile = { workspace = true }
