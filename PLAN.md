@@ -10623,7 +10623,7 @@ condition = "consensus.proceed"
 
 ---
 
-### v0.15.15.2 — One-Command Release + Phase Auto-Detection
+### "v0.15.15.2 — One-Command Release + Phase Auto-Detection"
 <!-- status: pending -->
 **Goal**: Three things: (1) `ta release dispatch <tag>` becomes truly one-and-done — detects version drift, bumps inline, commits, waits for CI, dispatches. (2) `--phase` on `ta run` becomes optional via auto-detection from PLAN.md. (3) `ta-agent-ollama` binary is packaged in all platform installers so `ta agent install-qwen` works end-to-end out of the box.
 
@@ -10690,6 +10690,27 @@ condition = "consensus.proceed"
 10. [ ] **Tests**: Title semver extraction (`"v0.15.15.2 — Fix auth"` → `v0.15.15.2`; `"fix auth bug"` → none); gap semver with space available → sub-patch; gap semver with no space → sub-sub-phase; gap semver increments when sub-sub taken; PLAN.md stub inserted at correct position; `--phase` always overrides title semver; in-progress auto-link; `ta draft apply` reads phase from metadata without flag; phase shown in `ta draft view` and `ta draft list`.
 
 #### Version: `0.15.15-alpha.2`
+
+---
+
+### v0.15.15.2.1 — Installer USAGE.html Layout (top-level link, docs/ file)
+<!-- status: pending -->
+
+**Goal**: In all per-platform installers, the actual `USAGE.html` lives in the `docs/` subdirectory and the top-level install folder contains only a link/shortcut pointing to it. Consistent across MSI, Unix tarballs, and Windows ZIP.
+
+**Depends on**: v0.15.15.2 (USAGE.html generation must be stable before restructuring)
+
+**Items**:
+
+1. [ ] **WiX MSI (`apps/ta-cli/wix/main.wxs`)**: Move `UsageDoc` component from `DocsDir` to a top-level `Shortcut` element in `INSTALLFOLDER` pointing at `[#UsageHtml]`. The file itself stays in `DocsDir` (`%ProgramFiles%\TrustedAutonomy\docs\USAGE.html`); the shortcut at `%ProgramFiles%\TrustedAutonomy\USAGE.html` (a WiX `Shortcut` with `Target="[#UsageHtml]"`) gives users a top-level entry point. Update `StartMenuShortcut` `TaDocShortcut` to reference the same `[#UsageHtml]` — no change needed there.
+
+2. [ ] **Unix tarballs (`release.yml` packaging step)**: Add a symlink `USAGE.html -> docs/USAGE.html` to the tarball. In the shell packaging step, after generating `docs/USAGE.html`, run `ln -sf docs/USAGE.html USAGE.html` in the staging dir before `tar`. Symlink in the archive preserves the canonical file location while making it discoverable at top level.
+
+3. [ ] **Windows ZIP (`release.yml` Windows packaging step)**: ZIPs don't support symlinks portably. Instead copy `docs\USAGE.html` to `USAGE.html` at top level — the ZIP is a flat download artifact, not an installed layout, so duplication is acceptable. Add a comment in the packaging step noting this is a copy not the canonical file.
+
+4. [ ] **Verify installer path**: After MSI install, confirm `%ProgramFiles%\TrustedAutonomy\USAGE.html` resolves (shortcut works) and `docs\USAGE.html` is the actual file. Document test step in PR.
+
+#### Version: `0.15.15-alpha.2.1`
 
 ---
 
