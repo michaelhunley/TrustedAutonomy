@@ -10641,13 +10641,26 @@ condition = "consensus.proceed"
 
 5. [ ] **`ta release validate <tag>`**: Dry-run that checks all preconditions and prints a summary without dispatching or modifying anything.
 
-6. [ ] **Phase auto-detection in `ta run`** (`apps/ta-cli/src/commands/run.rs`): `--phase` becomes optional. When omitted, `ta run` calls `parse_plan()` and finds the first phase with `<!-- status: pending -->` or `<!-- status: in_progress -->`. If exactly one candidate is found, it is used automatically and printed: `"Auto-detected phase: v0.15.15.2"`. If zero candidates, run proceeds without a phase link (existing behaviour). If multiple in-progress phases exist, prompt the user to specify `--phase`. `--phase` always overrides auto-detection.
+6. [ ] **Phase resolution in `ta run`** (`apps/ta-cli/src/commands/run.rs`): `--phase` becomes optional. Resolution priority — first match wins:
+   1. `--phase <id>` explicit flag (always wins)
+   2. Semver found in goal title (e.g. `"v0.15.15.2 — Fix auth"` → phase `v0.15.15.2`)
+   3. Exactly one phase currently `in_progress` in PLAN.md → use it, print `"Auto-linked phase: v0.15.15.2"`
+   4. None of the above → generate a **gap semver** and insert a new phase stub into PLAN.md (see item 7)
 
-7. [ ] **Phase embedded in draft and surfaced in `ta draft view`** (`apps/ta-cli/src/commands/draft.rs`): The `GoalRun.plan_phase` field (already exists) is displayed prominently in `ta draft view` output — `"Phase: v0.15.15.2 — One-Command Release + Phase Auto-Detection"` — directly below the draft title. Currently the field is stored but not shown to the user. Also shown in `ta draft list` as a short column.
+   Arbitrary goals (`ta run "fix auth bug"`) with no semver in the title and no in-progress phase never silently steal a planned pending phase — that would corrupt the plan's intent.
 
-8. [ ] **Phase in end-of-goal apply instructions** (`apps/ta-cli/src/commands/run.rs`): The agent's injected end-of-goal "Before You Exit" prompt and the post-goal CLI output both include the resolved phase. When `ta draft apply` is invoked without `--phase`, it reads the phase from the draft package metadata (already stored) and applies it automatically — no `--phase` argument needed at apply time either. If phase is in the draft, `ta draft apply <id>` is sufficient.
+7. [ ] **Gap semver generation** (`apps/ta-cli/src/commands/plan.rs`): `create_gap_semver(last_done, next_planned)` computes a version that slots between the last completed phase and the next planned one without colliding:
+   - If numeric space exists between them (e.g. last=`v0.15.15.1`, next=`v0.15.16`) → use next available sub-patch: `v0.15.15.2`
+   - If no space (e.g. last=`v0.15.15.1`, next=`v0.15.15.2`) → use sub-sub-phase: `v0.15.15.1.1`; if that's taken, increment: `v0.15.15.1.2`, etc.
+   - Inserts a minimal phase stub into PLAN.md at the correct position: `### <gap-semver> — <goal-title>\n<!-- status: in_progress -->\n*Ad-hoc goal — not in original plan.*`
+   - Prints: `"No phase specified — created gap phase v0.15.15.1.1 in PLAN.md for this goal. Use --phase to override."`
+   - The stub keeps PLAN.md in sync and gives `ta plan status` a coherent view of all work, planned and ad-hoc.
 
-9. [ ] **Tests**: Phase auto-detection picks first pending phase; skips done phases; prompts on ambiguous in-progress; `--phase` overrides auto-detect; phase shows in `ta draft view` output; `ta draft apply` without `--phase` reads phase from draft metadata and applies correctly; tag format variants all resolve to correct semver.
+8. [ ] **Phase embedded in draft and surfaced in `ta draft view`** (`apps/ta-cli/src/commands/draft.rs`): `GoalRun.plan_phase` (already stored) shown prominently in `ta draft view` — `"Phase: v0.15.15.2 — One-Command Release + Phase Auto-Detection"` — directly below the draft title. Also shown as a column in `ta draft list`. Currently stored but not displayed.
+
+9. [ ] **Phase flows through to apply** (`apps/ta-cli/src/commands/run.rs`, `draft.rs`): End-of-goal CLI output and the agent's injected "Before You Exit" instructions both show the resolved phase. `ta draft apply <id>` reads the phase from draft package metadata and applies it automatically — no `--phase` at apply time. If phase is in the draft, `ta draft apply <id>` is sufficient.
+
+10. [ ] **Tests**: Title semver extraction (`"v0.15.15.2 — Fix auth"` → `v0.15.15.2`; `"fix auth bug"` → none); gap semver with space available → sub-patch; gap semver with no space → sub-sub-phase; gap semver increments when sub-sub taken; PLAN.md stub inserted at correct position; `--phase` always overrides title semver; in-progress auto-link; `ta draft apply` reads phase from metadata without flag; phase shown in `ta draft view` and `ta draft list`.
 
 #### Version: `0.15.15-alpha.2`
 
