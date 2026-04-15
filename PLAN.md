@@ -10678,19 +10678,19 @@ condition = "consensus.proceed"
 ---
 
 ### v0.15.15.3 — crates.io Publishing Infrastructure
-<!-- status: pending -->
+<!-- status: done -->
 
 **Goal**: Enable `cargo install ta-cli` by publishing all workspace crates to crates.io in dependency order. Currently blocked because `ta-cli` has 20 path dependencies that are not on crates.io.
 
 **Depends on**: v0.15.15.2
 
 **Items**:
-1. [ ] **Audit publishability**: Run `cargo publish --dry-run -p <crate>` for each workspace crate in dependency order. List which crates have unpublishable deps, missing metadata (description, license, repository), or restricted names.
-2. [ ] **Add crates.io metadata** to all workspace crates: `description`, `license`, `repository`, `homepage`, `keywords`, `categories` fields in each `Cargo.toml`. Required by crates.io.
-3. [ ] **Publish in order**: Leaf crates first (no internal deps), then up the dependency tree to `ta-cli`. Approximate order: `ta-audit` → `ta-events` → `ta-output-schema` → `ta-changeset` → `ta-credentials` → `ta-policy` → `ta-session` → `ta-memory` → `ta-goal` → `ta-submit` → `ta-workspace` → `ta-workflow` → `ta-build` → `ta-mcp-gateway` → `ta-mediation` → `ta-runtime` → connectors → `ta-cli`. Script this.
-4. [ ] **CI `publish-crate` step** (`release.yml`): Publish all workspace crates in order (not just `ta-cli`). Each crate is published only if the version is not already on crates.io (idempotent). Gate each publish on the previous one succeeding.
-5. [ ] **`CARGO_REGISTRY_TOKEN` secret**: Confirm the secret is set in the repo with a crates.io API token that has publish rights for the `ta-*` namespace. Document this in the release runbook.
-6. [ ] **Verify `cargo install ta-cli` works** end-to-end in a clean environment (no local workspace) after all crates are published.
+1. [x] **Audit publishability**: Audited all 35 workspace crates. Issues found: 3 crates missing `license` (ta-mediation, ta-session, ta-agent-ollama); all crates missing `keywords`/`categories`; 17 crates with unversioned internal path deps (crates.io requires both `path` and `version`).
+2. [x] **Add crates.io metadata** to all workspace crates: Added `repository`, `homepage`, `keywords`, `categories` to all 35 crates. Added `license` to the 3 crates missing it. Added `version` to all internal path deps. Updated `bump-version.sh` to keep internal path dep versions in sync across the whole workspace.
+3. [x] **Publish in order**: Created `scripts/publish-crates.sh` — 35 crates in 6 dependency tiers (leaf → ta-cli), idempotent crates.io version check, 20s propagation delay. `--dry-run` flag for pre-publish validation.
+4. [x] **CI `publish-crate` step** (`release.yml`): Updated to call `scripts/publish-crates.sh` (all crates in order) instead of just `ta-cli`. Skips gracefully when `CARGO_REGISTRY_TOKEN` is not set.
+5. [x] **`CARGO_REGISTRY_TOKEN` secret**: Documented in `docs/USAGE.md` "Publishing to crates.io" — how to generate the token, add it as a GitHub secret, required scopes, and troubleshooting steps.
+6. [ ] **Verify `cargo install ta-cli` works** end-to-end after first publish. Infrastructure is ready; verification requires a live crates.io publish to complete.
 
 #### Version: `0.15.15-alpha.3`
 

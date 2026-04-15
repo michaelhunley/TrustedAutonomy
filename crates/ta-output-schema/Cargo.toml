@@ -6,6 +6,8 @@ description = "Schema-driven agent output parsing for Trusted Autonomy"
 license = "Apache-2.0"
 repository = "https://github.com/trustedautonomy/ta"
 homepage = "https://github.com/trustedautonomy/ta"
+keywords = ["ai", "agent", "autonomy", "schema", "output"]
+categories = ["development-tools", "parsing"]
 
 [dependencies]
 serde = { workspace = true }

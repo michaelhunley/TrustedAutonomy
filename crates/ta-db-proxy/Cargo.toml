@@ -4,6 +4,10 @@ version.workspace = true
 edition = "2021"
 description = "DbProxyPlugin trait for database proxy governance in Trusted Autonomy"
 license = "Apache-2.0"
+repository = "https://github.com/trustedautonomy/ta"
+homepage = "https://github.com/trustedautonomy/ta"
+keywords = ["ai", "agent", "autonomy", "database", "proxy"]
+categories = ["development-tools", "database"]
 
 [dependencies]
 serde = { workspace = true }
@@ -13,4 +17,4 @@ tracing = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 
-ta-db-overlay = { path = "../ta-db-overlay" }
+ta-db-overlay = { path = "../ta-db-overlay", version = "0.15.15-alpha.1" }

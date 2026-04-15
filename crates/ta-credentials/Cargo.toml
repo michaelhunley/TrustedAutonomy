@@ -6,6 +6,8 @@ description = "Credential vault and identity broker for Trusted Autonomy"
 license = "Apache-2.0"
 repository = "https://github.com/trustedautonomy/ta"
 homepage = "https://github.com/trustedautonomy/ta"
+keywords = ["ai", "agent", "autonomy", "credentials", "vault"]
+categories = ["development-tools", "authentication"]
 
 [dependencies]
 serde = { workspace = true }

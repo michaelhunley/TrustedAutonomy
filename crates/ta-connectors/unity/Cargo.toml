@@ -4,6 +4,10 @@ version.workspace = true
 edition = "2021"
 description = "Unity Engine connector for Trusted Autonomy"
 license = "Apache-2.0"
+repository = "https://github.com/trustedautonomy/ta"
+homepage = "https://github.com/trustedautonomy/ta"
+keywords = ["ai", "agent", "autonomy", "unity", "gamedev"]
+categories = ["development-tools", "game-development"]
 
 [dependencies]
 serde = { workspace = true }

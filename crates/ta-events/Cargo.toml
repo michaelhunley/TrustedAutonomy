@@ -6,6 +6,8 @@ description = "Event system and subscription API for Trusted Autonomy"
 license = "Apache-2.0"
 repository = "https://github.com/trustedautonomy/ta"
 homepage = "https://github.com/trustedautonomy/ta"
+keywords = ["ai", "agent", "autonomy", "events", "async"]
+categories = ["development-tools", "asynchronous"]
 
 [dependencies]
 serde = { workspace = true }

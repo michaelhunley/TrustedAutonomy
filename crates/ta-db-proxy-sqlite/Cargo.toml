@@ -4,6 +4,10 @@ version.workspace = true
 edition = "2021"
 description = "SQLite proxy plugin for Trusted Autonomy database governance"
 license = "Apache-2.0"
+repository = "https://github.com/trustedautonomy/ta"
+homepage = "https://github.com/trustedautonomy/ta"
+keywords = ["ai", "agent", "autonomy", "sqlite", "database"]
+categories = ["development-tools", "database"]
 
 [dependencies]
 serde = { workspace = true }
@@ -14,8 +18,8 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 rusqlite = { workspace = true }
 
-ta-db-overlay = { path = "../ta-db-overlay" }
-ta-db-proxy = { path = "../ta-db-proxy" }
+ta-db-overlay = { path = "../ta-db-overlay", version = "0.15.15-alpha.1" }
+ta-db-proxy = { path = "../ta-db-proxy", version = "0.15.15-alpha.1" }
 
 [dev-dependencies]
 tempfile = { workspace = true }
