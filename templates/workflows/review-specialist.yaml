@@ -1,0 +1,46 @@
+# review-specialist.yaml — Single specialist reviewer workflow (v0.15.15).
+#
+# Minimal governed review workflow. Runs one agent with a configured role
+# objective and produces a structured verdict.
+#
+# Output: verdict.json with:
+#   { "role": "...", "score": 0.0–1.0, "findings": ["..."], "proceed": bool }
+#
+# The "score" field is the primary output consumed by a downstream `consensus`
+# step in the code-review-consensus template.
+#
+# Usage:
+#   ta workflow run review-specialist --goal "Add rate limiting to auth" \
+#       --set objective="Review as a security engineer. Focus: OWASP top-10."
+#
+# Or as a sub-workflow in code-review-consensus (invoked automatically).
+
+workflow:
+  name: review-specialist
+  description: |
+    Single specialist reviewer. Runs one agent with a role-specific objective,
+    reads staged files directly (headless agent in staging workspace), and writes
+    a structured verdict with a 0.0–1.0 score and list of findings.
+  config:
+    # Role name for the reviewer (used in consensus output).
+    role: specialist
+
+    # Objective injected into the reviewer's system prompt.
+    # Override per reviewer with --set or parallel_group configuration.
+    objective: "Review the staged changes. Provide a score from 0.0 to 1.0 and list findings."
+
+    # Agent framework to use for the reviewer.
+    reviewer_agent: claude-code
+
+    # How long to wait for the reviewer to complete before declaring a timeout.
+    reviewer_timeout_mins: 30
+
+    # Output file path (relative to staging root).
+    verdict_output: ".ta/review/verdict.json"
+
+stages:
+  - name: review
+    description: |
+      Spawn a headless reviewer agent in the staging workspace with Read/Grep/Glob
+      tool access. The agent reads staged files, evaluates against the objective,
+      and writes verdict.json with: role, score (0.0–1.0), findings, proceed.

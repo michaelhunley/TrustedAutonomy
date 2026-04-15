@@ -1,0 +1,58 @@
+# get-shit-done (GSD) — TA agent framework manifest
+#
+# GSD is a multi-agent meta-prompting system for Claude Code that provides
+# structured phase-based execution: research → plan → execute (wave-based) → verify → ship.
+#
+# Prerequisites:
+#   npx get-shit-done-cc@latest --claude   # installs gsd slash commands
+#
+# Usage:
+#   ta run "title" --framework gsd
+#   ta run "title" --framework gsd --phase 13.17
+#
+# Override per-project: .ta/agents/gsd.yaml
+# Override per-user:    ~/.config/ta/agents/gsd.yaml
+
+name: get-shit-done
+description: "GSD multi-agent orchestration via Claude Code (research → plan → execute → verify)"
+command: claude
+args_template:
+  - "--output-format"
+  - "stream-json"
+  - "--verbose"
+  - "--print"
+injects_context_file: true
+injects_settings: false
+pre_launch: null
+env: {}
+
+# GSD creates .planning/ state files; TA's overlay captures these in staging.
+# staging_excludes: [".planning/"]
+
+# Agent alignment profile (v0.4.0).
+alignment:
+  principal: "project-owner"
+  autonomy_envelope:
+    bounded_actions:
+      - "fs_read"
+      - "fs_write_patch"
+      - "fs_apply"
+      - "exec: cargo test"
+      - "exec: cargo build"
+      - "web_fetch"
+    escalation_triggers:
+      - "new_dependency"
+      - "security_sensitive"
+      - "breaking_change"
+    forbidden_actions:
+      - "network_external"
+      - "credential_access"
+  constitution: "default-v1"
+  coordination:
+    allowed_collaborators:
+      - "claude-code"
+      - "claude-flow"
+    shared_resources:
+      - "src/**"
+      - "tests/**"
+      - ".planning/**"
