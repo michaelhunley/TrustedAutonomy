@@ -10624,7 +10624,7 @@ condition = "consensus.proceed"
 ---
 
 ### "v0.15.15.2 — One-Command Release + Phase Auto-Detection"
-<!-- status: in_progress -->
+<!-- status: done -->
 **Goal**: Three things: (1) `ta release dispatch <tag>` becomes truly one-and-done — detects version drift, bumps inline, commits, waits for CI, dispatches. (2) `--phase` on `ta run` becomes optional via auto-detection from PLAN.md. (3) `ta-agent-ollama` binary is packaged in all platform installers so `ta agent install-qwen` works end-to-end out of the box.
 
 **Depends on**: v0.15.15.1
