@@ -648,6 +648,27 @@ impl ProjectConstitutionConfig {
                 severity: "high".to_string(),
             },
         );
+        // File-format-convention rule (v0.15.15.3.1): agent manifests and orchestration
+        // workflow templates must use YAML; user-authored workflow configs use TOML.
+        // Enforced structurally by `check_file_format_conventions` at draft build time.
+        rules.insert(
+            "file-format-convention".to_string(),
+            ConstitutionRule {
+                description: Some(
+                    "Agent manifests in `agents/` and orchestration workflow templates in \
+                     `templates/workflows/` (multi-step, role-based) must be YAML. \
+                     User-authored workflow configs (`.ta/workflow.toml` starters) stay TOML. \
+                     TOML files are permitted for Ollama model profiles (`qwen*.toml`) and \
+                     user-authored templates (`email-manager.toml`, `social-content.toml`). \
+                     Violations are detected by `check_file_format_conventions` at `ta draft build`."
+                        .to_string(),
+                ),
+                inject_fns: vec![],
+                restore_fns: vec![],
+                patterns: vec![],
+                severity: "medium".to_string(),
+            },
+        );
         ProjectConstitutionConfig {
             extends: None,
             rules,
@@ -801,6 +822,115 @@ pub fn scan_for_violations(
                         severity: rule.severity.clone(),
                     });
                 }
+            }
+        }
+    }
+
+    Ok(violations)
+}
+
+// ── File-format convention check (v0.15.15.3.1) ─────────────────────────────
+
+/// Check that agent manifests and orchestration workflow templates use the
+/// canonical file format (YAML for agents/, YAML for orchestration templates).
+///
+/// Rules enforced:
+/// - `agents/*.toml` is a violation unless the filename matches `qwen*.toml`
+///   (Ollama model profiles are permitted as TOML).
+/// - `templates/workflows/*.toml` is a violation unless the filename is one
+///   of the known user-authored config templates (`email-manager.toml`,
+///   `social-content.toml`, `blender-addon/workflow.toml`, etc.).
+///
+/// Returns a list of format violations as `ConstitutionViolation` entries
+/// with `rule = "file-format-convention"`.
+pub fn check_file_format_conventions(
+    workspace_root: &Path,
+) -> anyhow::Result<Vec<ConstitutionViolation>> {
+    let mut violations = Vec::new();
+
+    // ── agents/ ──────────────────────────────────────────────────────────────
+    //
+    // All agent manifests must be YAML. Exception: Ollama model profiles
+    // follow the pattern `qwen*.toml` and are permitted as TOML.
+    let agents_dir = workspace_root.join("agents");
+    if agents_dir.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(&agents_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !path.is_file() {
+                    continue;
+                }
+                let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                if ext != "toml" {
+                    continue;
+                }
+                let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                // Ollama model profiles (qwen*.toml) are exempted.
+                if filename.starts_with("qwen") {
+                    continue;
+                }
+                let relative = path
+                    .strip_prefix(workspace_root)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .to_string();
+                violations.push(ConstitutionViolation {
+                    file: relative,
+                    line: 0,
+                    rule: "file-format-convention".to_string(),
+                    message: format!(
+                        "'{}' uses TOML but agents/ manifests must be YAML. \
+                         Rename to .yaml or move to an Ollama profile path.",
+                        filename
+                    ),
+                    severity: "medium".to_string(),
+                });
+            }
+        }
+    }
+
+    // ── templates/workflows/ ─────────────────────────────────────────────────
+    //
+    // Orchestration templates (multi-step, role-based) must be YAML.
+    // User-authored config templates that ship as TOML starters are exempt:
+    //   - email-manager.toml
+    //   - social-content.toml
+    // Blender-addon and channel-plugin sub-templates are in sub-directories
+    // and have their own conventions — only check the top-level directory.
+    const USER_CONFIG_TEMPLATES: &[&str] = &["email-manager.toml", "social-content.toml"];
+    let workflows_dir = workspace_root.join("templates").join("workflows");
+    if workflows_dir.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(&workflows_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                // Only check files directly in templates/workflows/ (not sub-dirs).
+                if !path.is_file() {
+                    continue;
+                }
+                let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                if ext != "toml" {
+                    continue;
+                }
+                let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if USER_CONFIG_TEMPLATES.contains(&filename) {
+                    continue;
+                }
+                let relative = path
+                    .strip_prefix(workspace_root)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .to_string();
+                violations.push(ConstitutionViolation {
+                    file: relative,
+                    line: 0,
+                    rule: "file-format-convention".to_string(),
+                    message: format!(
+                        "'{}' uses TOML but orchestration workflow templates must be YAML. \
+                         Rename to .yaml (user-authored config starters may remain as TOML).",
+                        filename
+                    ),
+                    severity: "medium".to_string(),
+                });
             }
         }
     }
@@ -2332,6 +2462,132 @@ severity = "high"
         assert!(
             merged.extends.is_none(),
             "extends should be None after merging"
+        );
+    }
+
+    // ── File-format convention checks (v0.15.15.3.1) ─────────────────────────
+
+    #[test]
+    fn format_check_clean_workspace_no_violations() {
+        let dir = tempfile::tempdir().unwrap();
+        // No agents/ or templates/workflows/ dirs — should be clean.
+        let violations = check_file_format_conventions(dir.path()).unwrap();
+        assert!(violations.is_empty());
+    }
+
+    #[test]
+    fn format_check_toml_in_agents_is_violation() {
+        let dir = tempfile::tempdir().unwrap();
+        let agents_dir = dir.path().join("agents");
+        std::fs::create_dir_all(&agents_dir).unwrap();
+        std::fs::write(
+            agents_dir.join("my-agent.toml"),
+            "[agent]\nname = \"my-agent\"\n",
+        )
+        .unwrap();
+
+        let violations = check_file_format_conventions(dir.path()).unwrap();
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].rule, "file-format-convention");
+        assert!(violations[0].file.contains("my-agent.toml"));
+    }
+
+    #[test]
+    fn format_check_yaml_in_agents_is_clean() {
+        let dir = tempfile::tempdir().unwrap();
+        let agents_dir = dir.path().join("agents");
+        std::fs::create_dir_all(&agents_dir).unwrap();
+        std::fs::write(
+            agents_dir.join("my-agent.yaml"),
+            "name: my-agent\ncommand: claude\n",
+        )
+        .unwrap();
+
+        let violations = check_file_format_conventions(dir.path()).unwrap();
+        assert!(violations.is_empty());
+    }
+
+    #[test]
+    fn format_check_qwen_toml_in_agents_is_exempt() {
+        let dir = tempfile::tempdir().unwrap();
+        let agents_dir = dir.path().join("agents");
+        std::fs::create_dir_all(&agents_dir).unwrap();
+        // qwen*.toml files are Ollama model profiles and are exempt.
+        std::fs::write(
+            agents_dir.join("qwen3.5-4b.toml"),
+            "[model]\nname = \"qwen3.5:4b\"\n",
+        )
+        .unwrap();
+
+        let violations = check_file_format_conventions(dir.path()).unwrap();
+        assert!(violations.is_empty());
+    }
+
+    #[test]
+    fn format_check_orchestration_toml_in_workflows_is_violation() {
+        let dir = tempfile::tempdir().unwrap();
+        let wf_dir = dir.path().join("templates").join("workflows");
+        std::fs::create_dir_all(&wf_dir).unwrap();
+        std::fs::write(
+            wf_dir.join("my-orchestration.toml"),
+            "[workflow]\nname = \"my-orchestration\"\n",
+        )
+        .unwrap();
+
+        let violations = check_file_format_conventions(dir.path()).unwrap();
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].rule, "file-format-convention");
+        assert!(violations[0].file.contains("my-orchestration.toml"));
+    }
+
+    #[test]
+    fn format_check_user_config_toml_in_workflows_is_exempt() {
+        let dir = tempfile::tempdir().unwrap();
+        let wf_dir = dir.path().join("templates").join("workflows");
+        std::fs::create_dir_all(&wf_dir).unwrap();
+        // User-authored config templates are exempt.
+        std::fs::write(
+            wf_dir.join("email-manager.toml"),
+            "[workflow]\nname = \"email-manager\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            wf_dir.join("social-content.toml"),
+            "[workflow]\nname = \"social-content\"\n",
+        )
+        .unwrap();
+
+        let violations = check_file_format_conventions(dir.path()).unwrap();
+        assert!(violations.is_empty());
+    }
+
+    #[test]
+    fn format_check_yaml_in_workflows_is_clean() {
+        let dir = tempfile::tempdir().unwrap();
+        let wf_dir = dir.path().join("templates").join("workflows");
+        std::fs::create_dir_all(&wf_dir).unwrap();
+        std::fs::write(
+            wf_dir.join("governed-goal.yaml"),
+            "workflow:\n  name: governed-goal\nstages: []\n",
+        )
+        .unwrap();
+
+        let violations = check_file_format_conventions(dir.path()).unwrap();
+        assert!(violations.is_empty());
+    }
+
+    #[test]
+    fn ta_default_includes_file_format_convention_rule() {
+        let config = ProjectConstitutionConfig::ta_default();
+        assert!(
+            config.rules.contains_key("file-format-convention"),
+            "ta-default must include the file-format-convention rule"
+        );
+        let rule = &config.rules["file-format-convention"];
+        assert_eq!(rule.severity, "medium");
+        assert!(
+            rule.description.is_some(),
+            "file-format-convention rule must have a description"
         );
     }
 }

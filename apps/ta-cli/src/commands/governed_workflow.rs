@@ -628,46 +628,69 @@ impl GovernedWorkflowRun {
 
 // ── Workflow definition loader ────────────────────────────────────────────────
 
-/// Resolve a workflow name to its TOML definition path.
+/// Resolve a workflow name to its definition path and parse it.
 ///
-/// Search order:
-///   1. `.ta/workflows/<name>.toml` (project-local, takes precedence)
-///   2. `templates/workflows/<name>.toml` (built-in templates)
+/// Search order (YAML takes precedence over TOML):
+///   1. `.ta/workflows/<name>.yaml` (project-local YAML, highest priority)
+///   2. `.ta/workflows/<name>.toml` (project-local TOML, backwards compatibility)
+///   3. `templates/workflows/<name>.yaml` (built-in YAML template, canonical)
+///   4. `templates/workflows/<name>.toml` (built-in TOML template, legacy)
 pub fn find_workflow_def(workspace_root: &Path, name: &str) -> anyhow::Result<GovernedWorkflowDef> {
-    let project_path = workspace_root
-        .join(".ta")
-        .join("workflows")
-        .join(format!("{}.toml", name));
-    let builtin_path = workspace_root
-        .join("templates")
-        .join("workflows")
-        .join(format!("{}.toml", name));
+    let candidates = [
+        workspace_root
+            .join(".ta")
+            .join("workflows")
+            .join(format!("{}.yaml", name)),
+        workspace_root
+            .join(".ta")
+            .join("workflows")
+            .join(format!("{}.toml", name)),
+        workspace_root
+            .join("templates")
+            .join("workflows")
+            .join(format!("{}.yaml", name)),
+        workspace_root
+            .join("templates")
+            .join("workflows")
+            .join(format!("{}.toml", name)),
+    ];
 
-    let path = if project_path.exists() {
-        project_path
-    } else if builtin_path.exists() {
-        builtin_path
-    } else {
-        anyhow::bail!(
-            "Workflow '{}' not found.\n\
-             Checked:\n  \
-               {}\n  \
-               {}\n\
-             Available workflows:\n  \
-               ta workflow list --templates\n\
-             Create a project-local copy:\n  \
-               ta workflow new {} --from governed-goal",
-            name,
-            project_path.display(),
-            builtin_path.display(),
-            name,
-        )
-    };
+    let path = candidates
+        .iter()
+        .find(|p| p.exists())
+        .cloned()
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Workflow '{}' not found.\n\
+                 Checked:\n  \
+                   {}\n  \
+                   {}\n  \
+                   {}\n  \
+                   {}\n\
+                 Available workflows:\n  \
+                   ta workflow list --templates\n\
+                 Create a project-local copy:\n  \
+                   ta workflow new {} --from governed-goal",
+                name,
+                candidates[0].display(),
+                candidates[1].display(),
+                candidates[2].display(),
+                candidates[3].display(),
+                name,
+            )
+        })?;
 
     let content = std::fs::read_to_string(&path)
         .map_err(|e| anyhow::anyhow!("Failed to read {}: {}", path.display(), e))?;
-    toml::from_str(&content)
-        .map_err(|e| anyhow::anyhow!("Failed to parse {}: {}", path.display(), e))
+
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    if ext == "yaml" || ext == "yml" {
+        serde_yaml::from_str(&content)
+            .map_err(|e| anyhow::anyhow!("Failed to parse {}: {}", path.display(), e))
+    } else {
+        toml::from_str(&content)
+            .map_err(|e| anyhow::anyhow!("Failed to parse {}: {}", path.display(), e))
+    }
 }
 
 /// Validate that stage `depends_on` references are all defined and acyclic.
@@ -3488,12 +3511,12 @@ mod tests {
     #[test]
     fn dry_run_prints_stage_graph() {
         let dir = tempdir().unwrap();
-        // Create a minimal governed-goal.toml so the template loads.
+        // Create a minimal governed-goal.yaml so the template loads.
         let templates_dir = dir.path().join("templates").join("workflows");
         std::fs::create_dir_all(&templates_dir).unwrap();
         std::fs::write(
-            templates_dir.join("governed-goal.toml"),
-            include_str!("../../../../templates/workflows/governed-goal.toml"),
+            templates_dir.join("governed-goal.yaml"),
+            include_str!("../../../../templates/workflows/governed-goal.yaml"),
         )
         .unwrap();
         let opts = RunOptions {
@@ -3867,12 +3890,12 @@ kind = "plan_next"
         // Directly test the depth guard logic without spawning a real workflow.
         // The guard kicks in when opts.depth > MAX_DEPTH (5).
         let dir = tempdir().unwrap();
-        // Write a minimal workflow TOML so find_workflow_def succeeds.
+        // Write a minimal workflow YAML so find_workflow_def succeeds.
         let templates_dir = dir.path().join("templates").join("workflows");
         std::fs::create_dir_all(&templates_dir).unwrap();
         std::fs::write(
-            templates_dir.join("governed-goal.toml"),
-            include_str!("../../../../templates/workflows/governed-goal.toml"),
+            templates_dir.join("governed-goal.yaml"),
+            include_str!("../../../../templates/workflows/governed-goal.yaml"),
         )
         .unwrap();
         let opts = RunOptions {
@@ -3920,8 +3943,8 @@ kind = "plan_next"
         std::fs::create_dir_all(&templates_dir).unwrap();
         // Write the plan-build-loop template.
         std::fs::write(
-            templates_dir.join("plan-build-loop.toml"),
-            include_str!("../../../../templates/workflows/plan-build-loop.toml"),
+            templates_dir.join("plan-build-loop.yaml"),
+            include_str!("../../../../templates/workflows/plan-build-loop.yaml"),
         )
         .unwrap();
         let opts = RunOptions {
@@ -4438,5 +4461,92 @@ kind = "apply_draft"
         // With 1 timed-out reviewer (score=0.0), proceed=false → BLOCKED
         let err = stage_consensus(&mut run, &stage_def, &opts, &config).unwrap_err();
         assert!(err.to_string().contains("BLOCKED"));
+    }
+
+    // ── find_workflow_def YAML loading (v0.15.15.3.1) ────────────────────────
+
+    #[test]
+    fn find_workflow_def_loads_yaml_template() {
+        let dir = tempdir().unwrap();
+        let templates_dir = dir.path().join("templates").join("workflows");
+        std::fs::create_dir_all(&templates_dir).unwrap();
+        // Write a minimal YAML governed workflow definition.
+        let yaml = r#"workflow:
+  name: test-wf
+  description: Test workflow
+  config: {}
+stages:
+  - name: run_goal
+    description: Run the goal
+"#;
+        std::fs::write(templates_dir.join("test-wf.yaml"), yaml).unwrap();
+
+        let def = find_workflow_def(dir.path(), "test-wf").unwrap();
+        assert_eq!(def.workflow.name, "test-wf");
+        assert_eq!(def.stages.len(), 1);
+        assert_eq!(def.stages[0].name, "run_goal");
+    }
+
+    #[test]
+    fn find_workflow_def_yaml_takes_precedence_over_toml() {
+        let dir = tempdir().unwrap();
+        let templates_dir = dir.path().join("templates").join("workflows");
+        std::fs::create_dir_all(&templates_dir).unwrap();
+        // YAML template should win over TOML.
+        let yaml = r#"workflow:
+  name: yaml-winner
+  description: From YAML
+  config: {}
+stages:
+  - name: run_goal
+    description: Run
+"#;
+        let toml = "[workflow]\nname = \"toml-loser\"\ndescription = \"From TOML\"\n\
+                    [[stages]]\nname = \"run_goal\"\ndescription = \"Run\"\n";
+        std::fs::write(templates_dir.join("my-wf.yaml"), yaml).unwrap();
+        std::fs::write(templates_dir.join("my-wf.toml"), toml).unwrap();
+
+        let def = find_workflow_def(dir.path(), "my-wf").unwrap();
+        assert_eq!(def.workflow.name, "yaml-winner");
+    }
+
+    #[test]
+    fn find_workflow_def_project_local_yaml_beats_builtin_yaml() {
+        let dir = tempdir().unwrap();
+        // Project-local definition.
+        let local_dir = dir.path().join(".ta").join("workflows");
+        std::fs::create_dir_all(&local_dir).unwrap();
+        let local_yaml = r#"workflow:
+  name: local-override
+  description: Project-local
+  config: {}
+stages:
+  - name: run_goal
+    description: Run
+"#;
+        std::fs::write(local_dir.join("my-wf.yaml"), local_yaml).unwrap();
+        // Built-in definition (should be ignored).
+        let builtin_dir = dir.path().join("templates").join("workflows");
+        std::fs::create_dir_all(&builtin_dir).unwrap();
+        let builtin_yaml = r#"workflow:
+  name: builtin
+  description: Built-in
+  config: {}
+stages:
+  - name: run_goal
+    description: Run
+"#;
+        std::fs::write(builtin_dir.join("my-wf.yaml"), builtin_yaml).unwrap();
+
+        let def = find_workflow_def(dir.path(), "my-wf").unwrap();
+        assert_eq!(def.workflow.name, "local-override");
+    }
+
+    #[test]
+    fn find_workflow_def_not_found_returns_error() {
+        let dir = tempdir().unwrap();
+        let result = find_workflow_def(dir.path(), "nonexistent-workflow");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not found"));
     }
 }

@@ -2076,6 +2076,28 @@ pub(crate) fn build_package(
         }
     }
 
+    // v0.15.15.3.1: File-format convention check — agents/ must be YAML, orchestration
+    // workflow templates in templates/workflows/ must be YAML.
+    match super::constitution::check_file_format_conventions(&goal.workspace_path) {
+        Ok(format_violations) if !format_violations.is_empty() => {
+            eprintln!(
+                "[constitution:file-format-convention] {} format violation(s) — review before approving",
+                format_violations.len()
+            );
+            for v in &format_violations {
+                pkg.verification_warnings.push(VerificationWarning {
+                    command: format!("[constitution:{}]", v.rule),
+                    exit_code: None,
+                    output: format!("{}: {} (severity: {})", v.file, v.message, v.severity),
+                });
+            }
+        }
+        Ok(_) => {} // clean
+        Err(e) => {
+            tracing::warn!(error = %e, "file-format convention check failed");
+        }
+    }
+
     // v0.13.15: Version backward bump check.
     // If the agent changed Cargo.toml and set a version lower than the source,
     // emit a VerificationWarning so reviewers notice the regression.

@@ -492,20 +492,20 @@ fn new_workflow(
             // Fall back to built-in templates.
             match template_name {
                 "governed-goal" => {
-                    // Copy the TOML template to .ta/workflows/ for project-local customization.
-                    let toml_path = config
+                    // Copy the YAML template to .ta/workflows/ for project-local customization.
+                    let yaml_path = config
                         .workspace_root
                         .join("templates")
                         .join("workflows")
-                        .join("governed-goal.toml");
-                    if toml_path.exists() {
-                        let toml_content = std::fs::read_to_string(&toml_path).map_err(|e| {
-                            anyhow::anyhow!("Failed to read governed-goal.toml: {}", e)
+                        .join("governed-goal.yaml");
+                    if yaml_path.exists() {
+                        let yaml_content = std::fs::read_to_string(&yaml_path).map_err(|e| {
+                            anyhow::anyhow!("Failed to read governed-goal.yaml: {}", e)
                         })?;
-                        // Write as .toml not .yaml.
-                        let toml_dest = workflows_dir.join(format!("{}.toml", name));
-                        std::fs::write(&toml_dest, toml_content)?;
-                        println!("Created governed workflow: {}", toml_dest.display());
+                        // Write as .yaml — canonical format for orchestration templates.
+                        let yaml_dest = workflows_dir.join(format!("{}.yaml", name));
+                        std::fs::write(&yaml_dest, yaml_content)?;
+                        println!("Created governed workflow: {}", yaml_dest.display());
                         println!();
                         println!("Run it with:");
                         println!("  ta workflow run {} --goal \"Your goal title\"", name);
@@ -513,7 +513,7 @@ fn new_workflow(
                     }
                     anyhow::bail!(
                         "Built-in governed-goal template not found.\n\
-                         Expected: templates/workflows/governed-goal.toml\n\
+                         Expected: templates/workflows/governed-goal.yaml\n\
                          Run directly: ta workflow run governed-goal --goal \"Your goal\""
                     );
                 }

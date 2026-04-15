@@ -210,6 +210,10 @@ impl AgentFrameworkManifest {
     /// Search order:
     /// 1. `.ta/agents/` (project-level)
     /// 2. `~/.config/ta/agents/` (user-level)
+    ///
+    /// Canonical format is YAML (`.yaml`). TOML (`.toml`) is supported for
+    /// backwards compatibility with user-provided project-local manifests.
+    /// When both `<name>.yaml` and `<name>.toml` exist, YAML takes precedence.
     pub fn discover(project_root: &Path) -> Vec<AgentFrameworkManifest> {
         let mut manifests = Vec::new();
         let search_dirs = [
@@ -220,25 +224,56 @@ impl AgentFrameworkManifest {
         ];
         for dir in &search_dirs {
             if let Ok(entries) = std::fs::read_dir(dir) {
+                // Collect all entries first so we can de-duplicate by stem (YAML wins over TOML).
+                let mut by_stem: std::collections::HashMap<String, PathBuf> =
+                    std::collections::HashMap::new();
                 for entry in entries.flatten() {
                     let path = entry.path();
-                    if path.extension().and_then(|e| e.to_str()) == Some("toml") {
-                        match std::fs::read_to_string(&path).and_then(|s| {
+                    let ext = path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .unwrap_or("")
+                        .to_string();
+                    if ext != "yaml" && ext != "yml" && ext != "toml" {
+                        continue;
+                    }
+                    let stem = path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("")
+                        .to_string();
+                    // YAML takes precedence: only insert TOML if no YAML exists for this stem.
+                    if ext == "yaml" || ext == "yml" {
+                        by_stem.insert(stem, path);
+                    } else {
+                        by_stem.entry(stem).or_insert(path);
+                    }
+                }
+
+                for path in by_stem.values() {
+                    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                    let result = std::fs::read_to_string(path).and_then(|s| {
+                        if ext == "yaml" || ext == "yml" {
+                            serde_yaml::from_str::<AgentFrameworkManifest>(&s).map_err(|e| {
+                                std::io::Error::new(std::io::ErrorKind::InvalidData, e)
+                            })
+                        } else {
                             toml::from_str::<AgentFrameworkManifest>(&s).map_err(|e| {
                                 std::io::Error::new(std::io::ErrorKind::InvalidData, e)
                             })
-                        }) {
-                            Ok(mut manifest) => {
-                                manifest.builtin = false;
-                                manifests.push(manifest);
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    path = %path.display(),
-                                    "Skipping invalid agent framework manifest: {}",
-                                    e
-                                );
-                            }
+                        }
+                    });
+                    match result {
+                        Ok(mut manifest) => {
+                            manifest.builtin = false;
+                            manifests.push(manifest);
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                path = %path.display(),
+                                "Skipping invalid agent framework manifest: {}",
+                                e
+                            );
                         }
                     }
                 }
@@ -439,6 +474,43 @@ args = ["--headless"]
     }
 
     #[test]
+    fn discover_reads_yaml_manifest() {
+        let dir = tempdir().unwrap();
+        let agents_dir = dir.path().join(".ta/agents");
+        std::fs::create_dir_all(&agents_dir).unwrap();
+        let manifest_yaml = r#"
+name: my-yaml-agent
+version: "1.0.0"
+description: "A custom YAML test agent"
+command: my-yaml-agent-bin
+args:
+  - "--headless"
+"#;
+        std::fs::write(agents_dir.join("my-yaml-agent.yaml"), manifest_yaml).unwrap();
+        let discovered = AgentFrameworkManifest::discover(dir.path());
+        assert_eq!(discovered.len(), 1);
+        assert_eq!(discovered[0].name, "my-yaml-agent");
+        assert_eq!(discovered[0].command, "my-yaml-agent-bin");
+        assert!(!discovered[0].builtin);
+    }
+
+    #[test]
+    fn discover_yaml_takes_precedence_over_toml() {
+        // When both <name>.yaml and <name>.toml exist, YAML wins.
+        let dir = tempdir().unwrap();
+        let agents_dir = dir.path().join(".ta/agents");
+        std::fs::create_dir_all(&agents_dir).unwrap();
+        let yaml = "name: priority-agent\ncommand: from-yaml\n";
+        let toml = "name = \"priority-agent\"\ncommand = \"from-toml\"\n";
+        std::fs::write(agents_dir.join("priority-agent.yaml"), yaml).unwrap();
+        std::fs::write(agents_dir.join("priority-agent.toml"), toml).unwrap();
+        let discovered = AgentFrameworkManifest::discover(dir.path());
+        // Should discover exactly one manifest (YAML wins).
+        assert_eq!(discovered.len(), 1);
+        assert_eq!(discovered[0].command, "from-yaml");
+    }
+
+    #[test]
     fn resolve_builtin_found() {
         let dir = tempdir().unwrap();
         let manifest = AgentFrameworkManifest::resolve("claude-code", dir.path());
@@ -451,5 +523,18 @@ args = ["--headless"]
         let dir = tempdir().unwrap();
         let manifest = AgentFrameworkManifest::resolve("no-such-agent", dir.path());
         assert!(manifest.is_none());
+    }
+
+    #[test]
+    fn resolve_yaml_custom_manifest() {
+        // A YAML manifest in .ta/agents/ should be discoverable via resolve().
+        let dir = tempdir().unwrap();
+        let agents_dir = dir.path().join(".ta/agents");
+        std::fs::create_dir_all(&agents_dir).unwrap();
+        let yaml = "name: custom-yaml-fw\ncommand: custom-bin\n";
+        std::fs::write(agents_dir.join("custom-yaml-fw.yaml"), yaml).unwrap();
+        let manifest = AgentFrameworkManifest::resolve("custom-yaml-fw", dir.path());
+        assert!(manifest.is_some());
+        assert_eq!(manifest.unwrap().command, "custom-bin");
     }
 }

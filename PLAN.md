@@ -10705,15 +10705,15 @@ condition = "consensus.proceed"
 
 **Items**:
 
-1. [ ] **Normalize `agents/` to YAML**: Rename `agents/codex.toml` → `agents/codex.yaml` and migrate content. All agent framework manifests in `agents/` should be YAML for consistency.
+1. [x] **Normalize `agents/` to YAML**: Deleted `agents/codex.toml` (superseded by `agents/codex.yaml`). Converted `agents/gsd.toml` → `agents/gsd.yaml`. All agent manifests now YAML except `qwen*.toml` (Ollama profiles).
 
-2. [ ] **Normalize `templates/workflows/`**: Audit the TOML/YAML split. User-authored workflow configs (used as `.ta/workflow.toml` starters) stay TOML. Orchestration templates (multi-step, role-based) stay YAML. Any files that are mismatched get moved and their loaders updated.
+2. [x] **Normalize `templates/workflows/`**: Converted 6 orchestration templates to YAML (`governed-goal`, `code-review-consensus`, `plan-build-loop`, `plan-build-milestone`, `plan-build-phases`, `review-specialist`). User-authored starters (`email-manager.toml`, `social-content.toml`) remain TOML.
 
-3. [ ] **Constitution rule**: Add a constitution entry enforcing the format convention — any new file in `agents/`, `templates/workflows/roles/`, or `plugins/` that uses the wrong format triggers a `warn` rule during `ta draft build`. Pattern: `.toml` file in `agents/` (unless `qwen*.toml` or `codex*.toml` in Ollama profile paths), YAML file in `.ta/` config dirs.
+3. [x] **Constitution rule**: Added `file-format-convention` policy rule to `ta_default()`. Added `check_file_format_conventions()` function called at `ta draft build` — warns when `.toml` found in `agents/` (excluding `qwen*.toml`) or in `templates/workflows/` (excluding user starters).
 
-4. [ ] **Update loaders**: Audit `AgentFrameworkManifest::discover()` and workflow template loading to confirm they handle both formats gracefully during the transition, then lock to the canonical format once cleanup is done.
+4. [x] **Update loaders**: Updated `AgentFrameworkManifest::discover()` to load `.yaml`/`.yml` files with YAML taking precedence over TOML. Updated `find_workflow_def()` to search YAML before TOML (4-candidate search order). Updated tests and `include_str!` references. Added `serde_yaml` to `ta-runtime`.
 
-5. [ ] **Tests**: Format validation round-trip for each canonical path. Constitution rule fires correctly on mismatched formats.
+5. [x] **Tests**: Added 7 constitution format tests (`check_file_format_conventions` clean/violation/exempt cases + `ta_default` rule presence). Added 3 YAML discovery tests in `framework.rs` (YAML load, YAML-over-TOML precedence, resolve via YAML). Added 4 workflow YAML loading tests in `governed_workflow.rs` (YAML template load, YAML-over-TOML precedence, project-local override, not-found error).
 
 #### Version: `0.15.15-alpha.3.1`
 
