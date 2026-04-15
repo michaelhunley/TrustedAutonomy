@@ -10623,6 +10623,30 @@ condition = "consensus.proceed"
 
 ---
 
+### v0.15.15.2 — `ta release dispatch` One-Command Release
+<!-- status: pending -->
+**Goal**: `ta release dispatch <tag>` becomes a true one-and-done release command. Currently it requires a manual `bump-version.sh` run, commit, and push before dispatching. The command should detect version drift, bump atomically, commit, push, then dispatch — all in one invocation. No pre-flight manual steps for the normal case.
+
+**Depends on**: v0.15.15.1
+
+**Items**:
+
+1. [ ] **Version drift detection** (`apps/ta-cli/src/commands/release.rs`): Before dispatching, compare the tag's implied semver (e.g. `public-alpha-v0.15.15.2` → `0.15.15-alpha.2`) against `Cargo.toml`. If they differ, prompt: `"Cargo.toml is at 0.15.15-alpha.1 but tag implies 0.15.15-alpha.2 — bump and commit automatically? [Y/n]"`. On confirm, run the equivalent of `bump-version.sh` inline (no shell exec — native Rust file edits to `Cargo.toml`, `CLAUDE.md`, `.release.toml`), stage, commit `"chore: bump version to 0.15.15-alpha.2"`, and push before dispatching.
+
+2. [ ] **CI green check** (`apps/ta-cli/src/commands/release.rs`): Before dispatching the tag, call `gh run list --branch main --limit 1` and check latest CI conclusion. If `in_progress`, print `"CI is still running on <sha> — waiting..."` with a spinner and poll every 15s until complete. If `failure`, abort with `"CI failed on <sha> — fix before releasing. Re-run with --skip-ci-check to override."`. `--skip-ci-check` flag available for emergencies.
+
+3. [ ] **Local build + install** (optional step): `--build` flag runs `cargo build --release --workspace` locally before dispatch and aborts on failure. Off by default (CI is authoritative), but useful pre-flight for the releasing engineer. Print which binary is being built and elapsed time.
+
+4. [ ] **`ta release dispatch` full flow with no pre-steps**: After items 1–2, the complete release flow is: `ta release dispatch public-alpha-v0.15.15.2 --prerelease` — detects drift, bumps, commits, pushes, waits for CI if needed, creates and pushes the tag, triggers `workflow_dispatch` on `release.yml`, prints the GitHub Actions run URL. That's it.
+
+5. [ ] **`ta release validate <tag>`**: Dry-run that checks all preconditions and prints a summary without dispatching or modifying anything. Useful to verify before the real run.
+
+6. [ ] **Tests**: Version drift detection parses `public-alpha-v0.15.15.2` → `0.15.15-alpha.2` correctly; `--skip-ci-check` bypasses the CI poll; `ta release validate` exits 0 when clean; bump-inline writes correct semver to all three files; tag format variants (`v0.15.15.2`, `public-alpha-v0.15.15.2`, `0.15.15.2`) all resolve to the same semver.
+
+#### Version: `0.15.15-alpha.2`
+
+---
+
 ### v0.15.16 — Windows Code Signing (EV Certificate + CI Integration)
 <!-- status: pending -->
 **Goal**: Eliminate the Microsoft SmartScreen "Windows protected your PC" warning on the TA Windows MSI installer by signing all Windows binaries and the MSI with an Extended Validation (EV) code signing certificate. EV certs bypass SmartScreen's reputation-building period — signed EV binaries show no warning on first install regardless of download count. Ships with a fully automated signing step in the release CI workflow.
