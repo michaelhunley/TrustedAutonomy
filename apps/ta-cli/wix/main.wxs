@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   Trusted Autonomy MSI installer definition.
-  Built with WiX v4 (dotnet tool install -g wix).
+  Built with WiX v4 (dotnet tool install -g wix --version "4.*").
 
   Usage (from workspace root):
     wix build apps/ta-cli/wix/main.wxs -d SourceDir=target\x86_64-pc-windows-msvc\release \
@@ -29,7 +29,6 @@
     Version="$(var.Version)"
     Manufacturer="Trusted Autonomy"
     Language="1033"
-    Codepage="1252"
     UpgradeCode="A8B3C4D5-E6F7-4A5B-9C8D-1E2F3A4B5C6D">
 
     <!-- Allow upgrade from prior versions -->
@@ -72,6 +71,29 @@
             KeyPath="yes" />
         </Component>
 
+        <Component Id="TaStudioBat" Guid="B7C8D9E0-F1A2-4B3C-4D5E-6F7A8B9C0D1E">
+          <File
+            Id="TaStudioBatFile"
+            Name="ta-studio.bat"
+            Source="$(var.SourceDir)\ta-studio.bat"
+            KeyPath="yes" />
+        </Component>
+
+        <!--
+          Optional ProjFS feature registry marker.
+          Component is referenced by the ProjFS Feature below.
+          The actual DISM enable runs via the EnableClientProjFS CustomAction.
+        -->
+        <Component Id="EnableProjFS" Guid="D5E6F7A8-B9C0-4D1E-2F3A-4B5C6D7E8F9A">
+          <RegistryValue
+            Root="HKLM"
+            Key="SOFTWARE\TrustedAutonomy\Features"
+            Name="ProjFSEnabled"
+            Type="integer"
+            Value="1"
+            KeyPath="yes" />
+        </Component>
+
         <Directory Id="DocsDir" Name="docs">
           <Component Id="UsageDoc" Guid="E4F5A6B7-C8D9-4E0F-1A2B-3C4D5E6F7A8B">
             <File
@@ -81,14 +103,6 @@
               KeyPath="yes" />
           </Component>
         </Directory>
-
-        <Component Id="TaStudioBat" Guid="B7C8D9E0-F1A2-4B3C-4D5E-6F7A8B9C0D1E">
-          <File
-            Id="TaStudioBatFile"
-            Name="ta-studio.bat"
-            Source="$(var.SourceDir)\ta-studio.bat"
-            KeyPath="yes" />
-        </Component>
 
         <Directory Id="PluginsDir" Name="plugins">
           <Directory Id="VcsPluginsDir" Name="vcs">
@@ -175,28 +189,20 @@
       Description="Enables Windows Projected File System (ProjFS) for near-instant, zero-disk-cost staging. Files are hydrated from source on demand — only files the agent actually reads are physically accessed."
       Level="2"
       AllowAdvertise="no">
-      <Component Id="EnableProjFS" Guid="D5E6F7A8-B9C0-4D1E-2F3A-4B5C6D7E8F9A" Directory="INSTALLFOLDER">
-        <!-- Enable Client-ProjFS via DISM on first install. /NoRestart avoids
-             forced reboots; the feature is usable immediately on Windows 10 2004+. -->
-        <RegistryValue
-          Root="HKLM"
-          Key="SOFTWARE\TrustedAutonomy\Features"
-          Name="ProjFSEnabled"
-          Type="integer"
-          Value="1"
-          KeyPath="yes" />
-      </Component>
       <ComponentRef Id="EnableProjFS" />
     </Feature>
 
-    <!-- Custom action: run DISM to enable Client-ProjFS when the ProjFS feature is selected. -->
+    <!--
+      Custom action: run DISM to enable Client-ProjFS when the ProjFS feature is selected.
+      Dism.exe is a system tool in %SystemRoot%\System32 — no working directory needed.
+      Condition: (&ProjFS = 3) means the feature is being installed (not already present).
+    -->
     <CustomAction
       Id="EnableClientProjFS"
       ExeCommand="Dism.exe /Online /Enable-Feature /FeatureName:Client-ProjFS /NoRestart"
       Execute="deferred"
       Return="ignore"
-      Impersonate="no"
-      Directory="INSTALLFOLDER" />
+      Impersonate="no" />
 
     <InstallExecuteSequence>
       <Custom Action="EnableClientProjFS" After="InstallFiles" Condition="(&amp;ProjFS = 3) AND NOT Installed" />
