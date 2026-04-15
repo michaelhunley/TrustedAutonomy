@@ -601,11 +601,22 @@ jobs:
 
       - name: Publish ta-cli to crates.io
         run: |
-          if [ -n "$CARGO_REGISTRY_TOKEN" ]; then
-            cargo publish -p ta-cli --token "$CARGO_REGISTRY_TOKEN"
-          else
+          if [ -z "$CARGO_REGISTRY_TOKEN" ]; then
             echo "CARGO_REGISTRY_TOKEN not set — skipping crates.io publish"
+            exit 0
           fi
+          # Dry-run first to detect unresolvable workspace deps (not yet on crates.io).
+          # Exit 0 (skip) for that case; exit 1 for any other publish error.
+          DRY_OUT=$(cargo publish -p ta-cli --token "$CARGO_REGISTRY_TOKEN" --dry-run 2>&1 || true)
+          if echo "$DRY_OUT" | grep -q "does not specify a version\|no matching package named"; then
+            echo "crates.io publish skipped: workspace path deps not yet published to crates.io."
+            echo "Publish all workspace crates in dependency order, then re-enable this step."
+            exit 0
+          fi
+          if echo "$DRY_OUT" | grep -q "error"; then
+            echo "$DRY_OUT"
+            exit 1
+          fi
+          cargo publish -p ta-cli --token "$CARGO_REGISTRY_TOKEN"
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        continue-on-error: true

@@ -67,6 +67,23 @@ with open("$CARGO_TOML", "w") as f:
 print("  Cargo.toml: version = \\"$NEW_VERSION\\"")
 PYEOF
 
+# --- apps/ta-cli/Cargo.toml internal path dep versions ---
+python3 - <<PYEOF
+import re
+cli_path = "apps/ta-cli/Cargo.toml"
+with open(cli_path) as f:
+    c = f.read()
+# Update version = "..." on lines that also have path = "../../crates/..."
+c = re.sub(
+    r'(ta-[a-z-]+ = \\{ path = "[^"]+", version = ")[^"]+(")',
+    lambda m: m.group(1) + "$NEW_VERSION" + m.group(2),
+    c
+)
+with open(cli_path, "w") as f:
+    f.write(c)
+print("  apps/ta-cli/Cargo.toml: internal dep versions = \\"$NEW_VERSION\\"")
+PYEOF
+
 # --- .release.toml ---
 # If --last-tag not supplied, derive from OLD_VERSION pattern (don't guess, just skip)
 if [[ -z "$LAST_TAG" ]]; then
