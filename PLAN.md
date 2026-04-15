@@ -10778,6 +10778,45 @@ condition = "consensus.proceed"
 
 ---
 
+### v0.15.15.5 — Nightly Build Pipeline
+<!-- status: pending -->
+
+**Goal**: Add a scheduled nightly CI workflow that builds all 5 platforms at 2am PT and publishes a rolling pre-release only when main has new commits since the last nightly. Latest nightly appears alongside latest stable on the GitHub releases page. Historical nightly builds are accessible via a separate link, not interleaved with the stable release list.
+
+**Depends on**: v0.15.15 (CI pipeline stable), v0.15.15.2 (ta-agent-ollama in release)
+
+#### Release page structure
+
+- **Latest stable** (`v0.15.15-alpha` etc.) → `Latest` badge, `v*` tag. Unchanged from current flow.
+- **Latest nightly** (`nightly` tag, rolling) → `Pre-release` badge, single entry on the releases page. Replaces itself on each build — never accumulates.
+- **Nightly history** → linked from the `nightly` release body. The body is updated each build with a table: date | SHA | platform asset links (last 60 builds). Users click once to reach the full nightly archive without leaving GitHub.
+
+Stable and nightly use different tag prefixes (`v*` vs `nightly`), so GitHub's default "Latest release" always shows the latest stable; nightly shows below it as a single pre-release entry.
+
+#### Items
+
+1. [ ] **`.github/workflows/nightly.yml`**: Scheduled trigger `cron: '0 10 * * *'` (10:00 UTC = 2am PT). Workflow dispatch also supported for manual triggers.
+
+2. [ ] **Commit-change guard**: On run start, download `last-sha.txt` from the current `nightly` release assets (if it exists). Compare with `git rev-parse HEAD`. If identical, exit with `Skipping — no commits since last nightly (SHA: <sha>)`. On first ever run (no `nightly` release yet), proceed unconditionally.
+
+3. [ ] **Build matrix**: Same 5-platform matrix as `release.yml` (`x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`, `x86_64-apple-darwin`, `aarch64-apple-darwin`, `x86_64-pc-windows-msvc`). Same USAGE.html pandoc step. Output: `ta-<platform>.tar.gz` / `.zip` / `.msi` and `checksums.txt`.
+
+4. [ ] **Publish step**: Uses `nightly` as the tag. Force-pushes the tag to `HEAD`. Creates the GitHub release on first run; updates it (`gh release edit nightly`) on subsequent runs. Sets `--prerelease --title "Nightly $(date +%Y-%m-%d) ($(git rev-parse --short HEAD))"`.
+
+5. [ ] **`last-sha.txt` asset**: Upload `HEAD` SHA as a release asset on each build. Used by step 2 on the next run. Content: the full 40-char commit SHA.
+
+6. [ ] **Nightly history in release body**: The publish step regenerates the release body on each build. Body includes: build timestamp, trigger type (scheduled / manual), commit SHA with link, and a Markdown table of the last 60 nightly builds pulled from the existing body (parse and prepend the new row). Format: `| 2026-04-15 | abc1234 | [Linux x86](...) [Linux ARM](...) [macOS Intel](...) [macOS ARM](...) [Windows MSI](...) |`. History link added to stable release body template and README install section.
+
+7. [ ] **README install section**: Add a "Nightly builds" callout under the stable install links. Two lines: a `nightly` release badge/link for the latest nightly, and a "Nightly history →" link pointing to the nightly release body's history table (`https://github.com/Trusted-Autonomy/TrustedAutonomy/releases/tag/nightly#nightly-history`).
+
+8. [ ] **`.release.toml`**: Add `nightly_tag = "nightly"` and `nightly_history_limit = 60` fields for reference.
+
+9. [ ] **Tests / validation**: Manual `workflow_dispatch` run confirms: skip fires on re-run with no new commit; history table updates on new commit; `nightly` tag moves to HEAD; `last-sha.txt` asset is replaced. Document the manual test steps in the PR.
+
+#### Version: `0.15.15-alpha.5`
+
+---
+
 ### v0.15.16 — Windows Code Signing (EV Certificate + CI Integration)
 <!-- status: pending -->
 **Goal**: Eliminate the Microsoft SmartScreen "Windows protected your PC" warning on the TA Windows MSI installer by signing all Windows binaries and the MSI with an Extended Validation (EV) code signing certificate. EV certs bypass SmartScreen's reputation-building period — signed EV binaries show no warning on first install regardless of download count. Ships with a fully automated signing step in the release CI workflow.
