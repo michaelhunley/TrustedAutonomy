@@ -10677,6 +10677,25 @@ condition = "consensus.proceed"
 
 ---
 
+### v0.15.15.3 — crates.io Publishing Infrastructure
+<!-- status: pending -->
+
+**Goal**: Enable `cargo install ta-cli` by publishing all workspace crates to crates.io in dependency order. Currently blocked because `ta-cli` has 20 path dependencies that are not on crates.io.
+
+**Depends on**: v0.15.15.2
+
+**Items**:
+1. [ ] **Audit publishability**: Run `cargo publish --dry-run -p <crate>` for each workspace crate in dependency order. List which crates have unpublishable deps, missing metadata (description, license, repository), or restricted names.
+2. [ ] **Add crates.io metadata** to all workspace crates: `description`, `license`, `repository`, `homepage`, `keywords`, `categories` fields in each `Cargo.toml`. Required by crates.io.
+3. [ ] **Publish in order**: Leaf crates first (no internal deps), then up the dependency tree to `ta-cli`. Approximate order: `ta-audit` → `ta-events` → `ta-output-schema` → `ta-changeset` → `ta-credentials` → `ta-policy` → `ta-session` → `ta-memory` → `ta-goal` → `ta-submit` → `ta-workspace` → `ta-workflow` → `ta-build` → `ta-mcp-gateway` → `ta-mediation` → `ta-runtime` → connectors → `ta-cli`. Script this.
+4. [ ] **CI `publish-crate` step** (`release.yml`): Publish all workspace crates in order (not just `ta-cli`). Each crate is published only if the version is not already on crates.io (idempotent). Gate each publish on the previous one succeeding.
+5. [ ] **`CARGO_REGISTRY_TOKEN` secret**: Confirm the secret is set in the repo with a crates.io API token that has publish rights for the `ta-*` namespace. Document this in the release runbook.
+6. [ ] **Verify `cargo install ta-cli` works** end-to-end in a clean environment (no local workspace) after all crates are published.
+
+#### Version: `0.15.15-alpha.3`
+
+---
+
 ### v0.15.16 — Windows Code Signing (EV Certificate + CI Integration)
 <!-- status: pending -->
 **Goal**: Eliminate the Microsoft SmartScreen "Windows protected your PC" warning on the TA Windows MSI installer by signing all Windows binaries and the MSI with an Extended Validation (EV) code signing certificate. EV certs bypass SmartScreen's reputation-building period — signed EV binaries show no warning on first install regardless of download count. Ships with a fully automated signing step in the release CI workflow.
