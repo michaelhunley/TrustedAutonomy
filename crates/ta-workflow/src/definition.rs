@@ -41,6 +41,16 @@ impl WorkflowCatalog {
                 "plan-build-loop",
                 "Iterate all pending plan phases through the governed build workflow (v0.15.13)",
             ),
+            (
+                "code-review-consensus",
+                "Multi-agent panel review: architect, security, principal, PM in parallel — \
+                consensus score gates apply (v0.15.15)",
+            ),
+            (
+                "review-specialist",
+                "Single specialist reviewer: runs one agent with a role objective, \
+                produces a structured score + findings (v0.15.15)",
+            ),
         ]
     }
 
@@ -434,7 +444,9 @@ verdict:
         assert!(names.contains(&"approval-chain"));
         assert!(names.contains(&"governed-goal"));
         assert!(names.contains(&"plan-build-loop"));
-        assert_eq!(catalog.len(), 6);
+        assert!(names.contains(&"code-review-consensus"));
+        assert!(names.contains(&"review-specialist"));
+        assert_eq!(catalog.len(), 8);
     }
 
     #[test]
@@ -445,6 +457,8 @@ verdict:
         assert!(WorkflowCatalog::is_known("approval-chain"));
         assert!(WorkflowCatalog::is_known("governed-goal"));
         assert!(WorkflowCatalog::is_known("plan-build-loop"));
+        assert!(WorkflowCatalog::is_known("code-review-consensus"));
+        assert!(WorkflowCatalog::is_known("review-specialist"));
         assert!(!WorkflowCatalog::is_known("unknown-workflow"));
         assert!(!WorkflowCatalog::is_known(""));
     }

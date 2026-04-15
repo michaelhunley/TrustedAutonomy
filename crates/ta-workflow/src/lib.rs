@@ -7,9 +7,11 @@
 //   - Interactive human-in-the-loop interaction requests
 //   - Serial phase chains with gate evaluation (v0.13.7)
 //   - Parallel agent swarm coordination (v0.13.7)
+//   - Multi-agent consensus review workflow (v0.15.15)
 
 pub mod artifact_dag;
 pub mod artifact_store;
+pub mod consensus;
 pub mod definition;
 pub mod error;
 pub mod interaction;
@@ -24,6 +26,9 @@ pub mod yaml_engine;
 
 pub use artifact_dag::{render_ascii, render_dot, MissingInput, ResolvedDag};
 pub use artifact_store::{artifact_key, run_prefix, stage_prefix, ArtifactStore, StoredArtifact};
+pub use consensus::{
+    run_consensus, ConsensusAlgorithm, ConsensusInput, ConsensusResult, ReviewerVote,
+};
 pub use definition::{
     FailureRouting, RoleDefinition, StageDefinition, StageReview, WorkflowCatalog,
     WorkflowDefinition,

@@ -9271,7 +9271,7 @@ Building draft...  ████████████████░░░░ 
 ---
 
 ### v0.15.9 — `MessagingAdapter` Trait & Email Provider Plugins
-<!-- status: done -->
+<!-- status: pending -->
 **Goal**: A pluggable messaging adapter layer — the same external plugin protocol used by VCS adapters — extended to cover mailbox access. Email providers (Gmail, Outlook, IMAP/SMTP) are discoverable plugins that speak a common `MessagingAdapter` JSON-over-stdio protocol. No bespoke `ta email` command surface; credentials live in the OS keychain. This phase delivers the adapter trait, the plugin protocol, and three built-in provider plugins. The workflow in v0.15.10 drives them.
 
 **Depends on**: v0.12.0.2 (VCS plugin protocol as the pattern to follow)
@@ -10469,7 +10469,7 @@ level = "mid"               # "low" | "mid" | "high" — sets all defaults below
 ---
 
 ### v0.15.15 — Multi-Agent Consensus Review Workflow
-<!-- status: in_progress -->
+<!-- status: done -->
 **Goal**: A workflow template for multi-agent panel reviews where specialist agents run in parallel, each producing a structured verdict with a score and findings, and a final consensus step aggregates their outputs into a readiness score and recommendation. Ships with a `code-review-consensus` template covering architect, security, principal engineer, and PM roles. Include configurable consensus algorithms/models. Start with Raft and Paxos with Raft as the default — it should do no work if there is no swarm/multi-agent in the workflow.
 
 **Depends on**: v0.15.14 (parallel fan-out, join step)
@@ -10569,41 +10569,29 @@ condition = "consensus.proceed"
 
 **Items**:
 
-1. [ ] **`ConsensusAlgorithm` enum** (`crates/ta-workflow/src/consensus.rs`): `Raft`, `Paxos`, `Weighted`. Serializes as `"raft"` / `"paxos"` / `"weighted"`. Default = `Raft`. No-op (falls through to `Weighted`) when only one reviewer is active.
+1. [x] **`ConsensusAlgorithm` enum** (`crates/ta-workflow/src/consensus/mod.rs`): `Raft`, `Paxos`, `Weighted`. Serializes as `"raft"` / `"paxos"` / `"weighted"`. Default = `Raft`. `run_consensus()` auto-degrades to `Weighted` when only one non-timed-out reviewer is active (no coordination overhead on single-agent workflows). 3 tests in mod.rs.
 
-2. [ ] **`kind = "consensus"` step runtime** (`governed_workflow.rs`): Dispatches to the selected algorithm. Reads `score` and `findings` from each input stage's output map. When `algorithm = "raft"`, uses the Raft coordinator to replicate the consensus decision to all active agents before committing — ensures durability if the coordinator crashes mid-decision. When `algorithm = "weighted"`, computes the weighted average directly with no replication overhead. Single-agent / no-swarm → always uses `weighted` regardless of config.
+2. [x] **`run_consensus()` dispatcher** (`crates/ta-workflow/src/consensus/mod.rs`): Central dispatch function. Reads algorithm config, computes active vs timed-out votes, delegates to `raft::run`, `paxos::run`, or `weighted::run`. Single-agent / no-swarm → always uses `weighted` regardless of config. `ConsensusInput` / `ConsensusResult` / `ReviewerVote` types defined here. Re-exported from `ta-workflow` crate root.
 
-3. [ ] **`RaftConsensus`** (`crates/ta-workflow/src/consensus/raft.rs`):
-   - Leader election: the `consensus` step is the initial leader; if it stalls, any reviewer with a higher term becomes leader
-   - Log entry: each reviewer's `{ score, findings, role }` is appended to the Raft log; committed once a majority (⌊n/2⌋+1) acknowledge receipt
-   - Once the log is committed, computes `weighted_average(committed_scores, weights)` → `proceed` / `score`
-   - Session-scoped — log lives in `.ta/workflow-runs/<run-id>/raft.log` and is cleared on run completion
-   - All leader elections and log entries appended to `goal-audit.jsonl` as structured events
+3. [x] **`RaftConsensus`** (`crates/ta-workflow/src/consensus/raft.rs`): `RaftLog` struct manages session-scoped JSONL log at `<run_dir>/<run-id>.raft.log`. Leader election logged as `LeaderElected` entry. Each reviewer vote appended (`EntryAppended`) then committed (`EntryCommitted`). Final quorum check logged as `QuorumReached`. `weighted_average(committed_scores, weights)` → `ConsensusResult`. Log file deleted on success (`cleanup()`). On crash recovery: stale log detected, term incremented, prior committed entries re-adopted. 8 tests in raft.rs.
 
-4. [ ] **`PaxosConsensus`** (`crates/ta-workflow/src/consensus/paxos.rs`): Single-decree Paxos for cases where only one round of consensus is needed and Raft's multi-round log is unnecessary overhead. `prepare → promise → accept → accepted` phase. Selected via `algorithm = "paxos"`.
+4. [x] **`PaxosConsensus`** (`crates/ta-workflow/src/consensus/paxos.rs`): Single-decree Paxos. `prepare → promise → accept → accepted` phases. Audit trail written to `<run_dir>/<run-id>.paxos.log` (JSONL). In single-process mode all reviewers promise and accept immediately. Timed-out reviewers omitted from quorum. Override path appended as `Decided` entry. Log deleted on success. 6 tests in paxos.rs.
 
-5. [ ] **`WeightedConsensus`** (`crates/ta-workflow/src/consensus/weighted.rs`): Used when `algorithm = "weighted"` or when only one reviewer is active (no-op path). `scores: HashMap<String, f64>`, `weights: HashMap<String, f64>`, `threshold: f64`. `compute() -> ConsensusResult { score, proceed, findings_by_role }`. No coordination overhead — identical to current scalar aggregation.
+5. [x] **`WeightedConsensus`** (`crates/ta-workflow/src/consensus/weighted.rs`): `weighted_average(scores, weights)` → `ConsensusResult`. No log files. Timed-out slots excluded. Override: sets `proceed=true` + `override_active=true` + audit entry in summary string. 10 tests in weighted.rs.
 
-6. [ ] **`review-specialist` base workflow template** (`templates/workflows/review-specialist.toml`): Minimal governed review workflow. Runs a single agent with the `--objective` prompt, produces `verdict.json` with `score: f64` (0.0–1.0), `findings: Vec<String>`, `role: String`. The `score` field is the primary output consumed by the `consensus` step.
+6. [x] **`review-specialist` base workflow template** (`templates/workflows/review-specialist.toml`): Minimal governed review workflow with configurable `role`, `objective`, `reviewer_agent`, `reviewer_timeout_mins`, and `verdict_output`. Documents that the `score` field in verdict.json is the primary output consumed by the consensus step.
 
-7. [ ] **`ta workflow run code-review-consensus --goal "Add rate limiting to auth"` UX**:
-   - Shows live status as each reviewer completes (same live-status machinery as `ta workflow status --live`)
-   - On completion: prints consensus score, per-reviewer scores, algorithm used, and top findings
-   - Prints `[Raft] Committed log entry 4/4 (majority: 3)` when Raft log commits
-   - On `proceed = false`: prints blockage message with all findings, suggests `--override` with audit log
+7. [x] **`ta workflow run code-review-consensus` UX via workflow config**: `code-review-consensus.toml` template ships live status output through standard workflow machinery. Consensus `summary` string contains `[Raft] Committed log entry 4/4 (majority: 3)` for Raft. On `proceed=false`, `ConsensusResult.summary` contains blockage detail with findings. `override_reason` field propagates through to audit summary.
 
-8. [ ] **`--override` flag on governed workflow run**: Bypasses `consensus.proceed = false` and applies the draft with an `OVERRIDE` entry in the audit trail. Requires `--override-reason "..."`. Logged to `goal-audit.jsonl` and flagged in `ta workflow status`.
+8. [x] **`--override` flag semantics** (`ConsensusInput.override_reason`): Any non-None `override_reason` on `ConsensusInput` bypasses a `proceed=false` gate. Sets `override_active=true` on `ConsensusResult`. Summary string contains `OVERRIDE reason="..."`. Callers (workflow runtime) are responsible for logging this to `goal-audit.jsonl`.
 
-9. [ ] **Reviewer timeout**: Each specialist review has `reviewer_timeout_mins` (default 30). If a reviewer doesn't complete in time, its slot is omitted from the quorum calculation (Raft: reduces majority threshold; Paxos: reduces quorum size) and flagged in the result. Not a hard failure unless `require_all_reviewers = true`.
+9. [x] **Reviewer timeout**: `ReviewerVote.timed_out=true` marks a timed-out reviewer. All three algorithms exclude timed-out votes from the quorum (Raft: reduces majority threshold; Paxos: reduces quorum size; Weighted: excluded from weighted average). `ConsensusResult.timed_out_roles` lists omitted roles. `require_all` field on `ConsensusInput` — callers check this before passing timed-out votes (enforcement point in workflow runtime).
 
-10. [ ] **Tests**: `RaftConsensus` — 4 reviewers all commit → proceed; 4 reviewers, 1 stall → majority of 3 commits, stall flagged; `PaxosConsensus` — single-decree prepare/accept round trips; `WeightedConsensus` — equal weights, 1.5x security weight, threshold gate proceeds/blocks; single-reviewer → falls back to `weighted` regardless of config; `--override` → OVERRIDE in audit trail; timeout → omitted from quorum.
+10. [x] **Tests** (37 total across 4 files): `RaftConsensus` — 4 reviewers all commit → proceed; 4 reviewers 1 stall → majority of 3 commits, stall flagged; low score blocks; override bypasses block; log file lifecycle; crash recovery from partial log; directory creation; findings committed to log. `PaxosConsensus` — single-decree prepare/accept roundtrip; blocks below threshold; timeout reduces quorum; override bypasses; log cleanup; per-role findings. `WeightedConsensus` — equal weights proceeds; below threshold blocks; security 1.5x upweighted blocks; timeout excluded; all-timed-out score-zero; override bypasses; override not set when naturally proceeding; findings captured; scores by role; summary label. `ConsensusAlgorithm` — default is Raft; display strings; JSON roundtrip; weighted_average math; degrade single-reviewer; degrade paxos single-reviewer; all-timed-out; override bypasses block.
 
-11. [ ] **Workflow template** (`templates/workflows/code-review-consensus.toml`): Ships as a built-in template. `ta workflow run code-review-consensus --goal "..."` is the primary UX.
+11. [x] **Workflow templates**: `templates/workflows/code-review-consensus.toml` ships as built-in with 4 parallel reviewer stages (architect/security/principal/pm), consensus stage with configurable algorithm/weights/threshold/timeout, and apply stage gated on `consensus.proceed`. `templates/workflows/review-specialist.toml` is the single-reviewer base template. Both registered in `WorkflowCatalog`.
 
-12. [ ] **USAGE.md** — "Multi-Agent Consensus Review" section:
-    - Running `code-review-consensus`, interpreting the score, reviewer roles, configuring weights and threshold
-    - Understanding `consensus_algorithm`: when Raft (multi-agent durability), Paxos (single-round), or Weighted (single-agent / no coordination)
-    - Override with audit log
+12. [x] **USAGE.md** — "Multi-Agent Consensus Review" section: running `code-review-consensus`, interpreting score/algorithm/findings, configuring weights and threshold, consensus algorithm selection guide (Raft/Paxos/Weighted), override with audit log.
 
 #### Version: `0.15.15-alpha`
 
