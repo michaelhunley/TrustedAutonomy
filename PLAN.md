@@ -10625,11 +10625,27 @@ condition = "consensus.proceed"
 
 ### v0.15.15.2 — One-Command Release + Phase Auto-Detection
 <!-- status: pending -->
-**Goal**: Two friction points eliminated. (1) `ta release dispatch <tag>` becomes truly one-and-done — detects version drift, bumps inline, commits, waits for CI, dispatches. No pre-flight manual steps. (2) `--phase` on `ta run` becomes an optional override rather than a required argument — the next pending plan phase is auto-detected from `PLAN.md`. When phase is known, it is embedded in the draft and surfaced in `ta draft view` and end-of-goal apply instructions so the user never has to look it up.
+**Goal**: Three things: (1) `ta release dispatch <tag>` becomes truly one-and-done — detects version drift, bumps inline, commits, waits for CI, dispatches. (2) `--phase` on `ta run` becomes optional via auto-detection from PLAN.md. (3) `ta-agent-ollama` binary is packaged in all platform installers so `ta agent install-qwen` works end-to-end out of the box.
 
 **Depends on**: v0.15.15.1
 
 **Items**:
+
+#### ta-agent-ollama Packaging (unblocks local model users)
+
+1. [ ] **Build `ta-agent-ollama` in release CI** (`.github/workflows/release.yml`): Add `-p ta-agent-ollama` to all `cargo build` / `cross build` steps alongside `ta-cli` and `ta-daemon`.
+
+2. [ ] **Bundle in all platform archives**: Copy `ta-agent-ollama` into `staging/` in the Unix tarball, Windows ZIP, and macOS DMG packaging steps — same pattern as `ta-daemon`.
+
+3. [ ] **Bundle in Windows MSI** (`apps/ta-cli/wix/main.wxs`): Add a `Component`/`File` entry for `ta-agent-ollama.exe` in `INSTALLFOLDER`, referenced by the `Complete` feature. Same pattern as `DaemonExecutable`.
+
+4. [ ] **Doctor check in `install_qwen`** (`apps/ta-cli/src/commands/agent.rs`): After pulling the model and writing the profile, verify `ta-agent-ollama` is findable in `$PATH` or sibling to the `ta` binary. If missing: `"ta-agent-ollama binary not found — update your TA installation to v0.15.15.2 or later"` — not a cryptic runtime failure on first `ta run`.
+
+5. [ ] **`ta agent doctor <profile>` binary check**: Ollama-backed profile check includes `ta-agent-ollama` presence with the same message.
+
+> **Note**: The `ta agent install <target> --size <size>` generalization (unified command for Qwen, Gemma 4, etc.) is tracked in **v0.16.3** alongside the full `ta-agent-ollama` plugin extraction. `install-qwen` stays as-is until then.
+
+#### One-Command Release + Phase Auto-Detection
 
 1. [ ] **Version drift detection** (`apps/ta-cli/src/commands/release.rs`): Before dispatching, compare the tag's implied semver (e.g. `public-alpha-v0.15.15.2` → `0.15.15-alpha.2`) against `Cargo.toml`. If they differ, prompt: `"Cargo.toml is at 0.15.15-alpha.1 but tag implies 0.15.15-alpha.2 — bump and commit automatically? [Y/n]"`. On confirm, run the equivalent of `bump-version.sh` inline (native Rust file edits to `Cargo.toml`, `CLAUDE.md`, `.release.toml`), stage, commit, and push before dispatching.
 
@@ -10693,6 +10709,26 @@ condition = "consensus.proceed"
 6. [ ] **Verify `cargo install ta-cli` works** end-to-end in a clean environment (no local workspace) after all crates are published.
 
 #### Version: `0.15.15-alpha.3`
+
+---
+
+### v0.15.15.4 — Email Governance: Draft-Only Policy Enforcement
+<!-- status: pending -->
+
+**Goal**: Enforce at the policy and constitution level that email is always a human-reviewed draft — never auto-sent. The `MessagingAdapter.create_draft()` path is the only permitted outcome; `policy = "auto"` for email is blocked by the constitution. Prompt-injection-driven sends are blocked before any draft reaches the user's email Drafts folder without supervision.
+
+**Depends on**: v0.15.9 (MessagingAdapter), v0.15.10 (email-manager workflow), v0.15.15.1 (constitution enforcement wiring)
+
+**Items**:
+1. [ ] **Constitution `[[rules.block]]` for email auto-send** (`.ta/constitution.toml` default rules): Add a default block rule that fires when any `ta_external_action` call has `action_type = "email"` and `policy != "review"`. Message: `"Email actions must use policy = review — TA never sends email autonomously. Drafts are created in your Drafts folder for you to review and send."` This rule is on by default; projects can override to `[[rules.warn]]` but not remove entirely without explicit `allow_override = true`.
+2. [ ] **`ta_external_action` dispatch guard** (`crates/ta-actions/src/dispatch.rs`): At the action dispatch layer, intercept `action_type = "email"` regardless of policy setting and route to `MessagingAdapter.create_draft()`. No path exists from `ta_external_action` to a direct email send. The `send` op is absent from the protocol at the type level (already enforced in `MessagingPluginProtocol`); this adds the dispatch-layer enforcement.
+3. [ ] **Draft view: email artifacts as first-class items** (`apps/ta-cli/src/commands/draft.rs`, Studio): Email drafts in the pending-actions queue rendered as structured cards in `ta draft view` — To, Subject, body preview, supervisor score, flag reason if any — not as raw action JSON. Human sees exactly what will land in their Drafts folder before approving.
+4. [ ] **`ta audit messaging` linked from `ta draft view`**: Draft view footer shows `"[Email drafts] Run ta audit messaging to see full history"` when email actions are present. Studio shows link inline.
+5. [ ] **Recipient allowlist** (`[actions.email]` in workflow.toml): Optional `allowed_recipients` list. If set, any email draft to an address not matching the list is flagged to the TA review queue with `"Recipient not in allowed_recipients"` before creating the draft. Empty list = no restriction. Default empty.
+6. [ ] **Rate limiting across sessions** (`crates/ta-actions/src/ratelimit.rs`): Add cross-session email rate limit: `max_per_hour` and `max_per_day` in `[actions.email]`. State persisted in `.ta/action-ratelimit.json`. Prevents runaway workflows from flooding Drafts.
+7. [ ] **Tests**: Constitution rule blocks `policy = "auto"` email; dispatch routes email to `create_draft` regardless of policy; recipient not in allowlist → review queue not Drafts; rate limit state persists across sessions; draft view renders email card not raw JSON.
+
+#### Version: `0.15.15-alpha.4`
 
 ---
 
@@ -11325,11 +11361,82 @@ high-VRAM machines.
 
 ---
 
-## v0.17 — Release Management
+### v0.16.4 — Windows OS Sandbox (Job Object + AppContainer)
+<!-- status: pending -->
 
-> **Focus**: A unified, extensible `ta release` subsystem that works for any release type — binary distributions, content deliveries, service deployments — via a pluggable `ReleaseAdapter` abstraction. Replaces the current ad-hoc dispatch/channel/VCS approach with a single coherent model and a simplified command surface.
+**Goal**: Complete the OS sandbox matrix. macOS (Seatbelt) and Linux (bwrap) are already implemented in `crates/ta-runtime/src/sandbox.rs`. This phase adds Windows containment via a Windows Job Object + AppContainer so that `[sandbox] enabled = true` provides genuine kernel-enforced isolation on all three platforms.
 
-### v0.17.0 — Release Management Design Review (Pre-Phase)
+**Depends on**: v0.15.16 (Windows EV signing — establishes working Windows CI pipeline)
+
+**Design**:
+- **Job Object**: Wrap the agent process in a Windows Job Object (`CreateJobObject` / `AssignProcessToJobObject`). Set `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` so the process tree is torn down if TA crashes. Set `JOB_OBJECT_LIMIT_ACTIVE_PROCESS` to prevent runaway child process spawning.
+- **AppContainer**: For high-security mode, create an AppContainer (`CreateAppContainerProfile`) and launch the agent in it. AppContainers restrict filesystem access to the staging workspace path and named capabilities. Network access restricted to `[sandbox.allow_network]` hosts via a network filter driver hook.
+- **Filesystem**: The staging workspace path is explicitly allowed in the AppContainer capability list. System libraries (`C:\Windows\System32`, MSVC runtime) are read-only accessible by default AppContainer rules.
+- **Graceful fallback**: If the process is not running elevated and AppContainer creation fails, fall back to Job Object only (still provides process tree control and resource limits). Log which containment level is active.
+
+**Items**:
+1. [ ] **Job Object wrapper** (`crates/ta-runtime/src/sandbox_windows.rs`): `SandboxProvider::WindowsJobObject` variant. `CreateJobObject`, `AssignProcessToJobObject`, `SetInformationJobObject` with `JOBOBJECT_BASIC_LIMIT_INFORMATION` and `JOBOBJECT_EXTENDED_LIMIT_INFORMATION`. Process tree torn down on TA exit. Kills zombie agent processes.
+2. [ ] **AppContainer profile** (`sandbox_windows.rs`): `SandboxProvider::WindowsAppContainer` variant. `CreateAppContainerProfile`, set `SECURITY_CAPABILITIES` with staging-workspace SID. Launches agent via `CreateProcess` with the AppContainer token. Deletes profile on goal completion (`DeleteAppContainerProfile`).
+3. [ ] **Network filtering** (AppContainer mode): Restrict outbound to `[sandbox.allow_network]` hosts. Use AppContainer's built-in outbound-only firewall rule + a `WFP` callout for host filtering. Falls back to command allowlist filtering if WFP is unavailable.
+4. [ ] **`provider = "auto"` on Windows**: Detects elevation level — AppContainer if elevated + available; Job Object if not. Prints active containment level at goal start: `"Sandbox: Windows AppContainer (write-restricted)"` or `"Sandbox: Windows Job Object (process isolation only)"`.
+5. [ ] **CI test** (Windows runner): Spawn a sandboxed agent subprocess, attempt to write outside the staging path, assert it is denied. Assert process tree is torn down when Job Object handle closes.
+6. [ ] **USAGE.md**: Windows sandbox section — what each containment level restricts, how to enable, elevation requirement for AppContainer, `ta doctor` sandbox check.
+
+#### Version: `0.16.4-alpha`
+
+---
+
+## v0.17 — Governed Filesystem & Release Management
+
+> **Focus**: Tier 2 managed-paths filesystem governance (SHA journal, Postgres/MySQL staging), followed by the unified `ta release` command system. Governance infrastructure comes first so the release pipeline itself can run under full governance.
+
+### v0.17.0 — Managed Paths: SHA Filesystem + URI Journal
+<!-- status: pending -->
+
+**Goal**: Implement Tier 2 filesystem governance from `docs/file-system-strategy.md`. The agent can write to directories outside the project; every write is captured in a content-addressed SHA store with a URI journal. Writes appear in `ta draft view` as first-class governed-path artifacts. `ta draft apply` replays them; `ta draft deny` prevents replay (writes already landed — denial stops apply, not the write itself).
+
+**Depends on**: v0.15.19 (governed interactive session baseline), v0.16.4 (Windows sandbox — sandbox + SHA journal combine for full Tier 2+3 coverage)
+
+**Items**:
+1. [ ] **`governed_paths` config** (`[workflow.toml]`): `[[governed_paths]]` entries with `path`, `mode` (`read-only`/`read-write`), `purpose`, `max_sha_store_mb`. Parsed by `WorkflowConfig`. `read-only` paths block writes at the FUSE/intercept layer.
+2. [ ] **SHA store** (`.ta/sha-fs/<sha256>`): Content-addressed blob store. Write: compute SHA-256, store full file at `.ta/sha-fs/<sha256>` if not present (dedup automatic). Read: transparent passthrough to real path if URI not in journal. Entries immutable once written.
+3. [ ] **URI journal** (`.ta/sha-journal.jsonl`): Append-only. Each write: `{"uri":"fs://governed/<rel-path>","sha":"<sha256>","written_at":"...","goal_id":"...","size_bytes":...}`. Pre-goal snapshot entry records the real-path SHA before the goal starts (enables rollback). Read algorithm checks journal for latest entry matching URI → serves from SHA store or falls back to disk.
+4. [ ] **Write intercept** (macOS/Linux FUSE daemon `ta-governed-fs`): Userspace filesystem mounted over the governed path during a goal. Intercepts writes, executes SHA store + journal append, then writes through to real path. On macOS: FUSE-T or macFUSE. On Linux: `fuse3` crate. On Windows (Tier 2 only, not AppContainer): directory junction + file watcher fallback if FUSE unavailable (lower fidelity — misses atomic renames, but captures most writes).
+5. [ ] **Draft integration**: `ta draft build` reads the journal for the current goal and emits `Artifact { resource_uri: "fs://governed/<path>", ... }` for each governed-path write. `ta draft view` renders these as a "Governed Path Changes" section alongside project file diffs. Shows real path, content preview (truncated for large files), size delta.
+6. [ ] **Apply/rollback**: `ta draft apply` writes SHA blob content to each real path in the journal. `ta draft deny` records a `DENIED` entry in the journal (the write already landed; deny prevents any further replay). Rollback: write pre-goal SHA blob to real path.
+7. [ ] **GC** (`ta gc governed-paths`): Remove SHA blobs not referenced by any live journal entry (entries older than `--retain-days`, default 30). Print bytes reclaimed. Runs automatically after `ta draft apply` for entries older than the retention window.
+8. [ ] **Tests**: Write to governed path → SHA blob created, journal entry appended; read-your-writes via journal; pre-goal snapshot SHA recorded; `ta draft apply` writes blob to real path; `ta draft deny` records DENIED; GC removes unreferenced blobs; `read-only` mode blocks write at FUSE layer; Windows file-watcher fallback captures write.
+
+#### Version: `0.17.0-alpha`
+
+---
+
+### v0.17.1 — Postgres & MySQL Staging (DB Overlay)
+<!-- status: pending -->
+
+**Goal**: Close the highest-severity resource governance gap: Postgres and MySQL mutations are currently invisible to TA. Implement `DbProxyPlugin` backends for both databases using WAL-based mutation capture. Agent-driven DB mutations appear in `ta draft view` as row-level diffs; `ta draft apply` replays; `ta draft deny` discards.
+
+**Depends on**: v0.17.0 (URI journal pattern established for governed resources)
+
+**Items**:
+1. [ ] **`ta-db-proxy-postgres` crate** (`crates/ta-db-proxy-postgres/`): Implements `DbProxyPlugin`. Connects to a Postgres logical replication slot created at goal start. Agent connects to a read-write replica or the primary (configured via `db://postgres/<conn>#<table>` URI). WAL events captured to JSONL mutation log during the goal. `apply()` replays log against target; `deny()` discards log and drops replication slot.
+2. [ ] **`ta-db-proxy-mysql` crate** (`crates/ta-db-proxy-mysql/`): Implements `DbProxyPlugin` via MySQL binary log (binlog) position snapshot. Agent connects to a shadow schema (cloned at goal start via `mysqldump --no-data` + row-level shadow). Binlog delta captured. `apply()` replays against real schema.
+3. [ ] **Row-level diff rendering** (`crates/ta-changeset/`): `Artifact` for `db://` URIs renders as a table: column headers, before/after values per row, change type (INSERT/UPDATE/DELETE). Shown in `ta draft view` under "Database Changes". Large tables truncated with count.
+4. [ ] **Constitution rules for DB** (default `constitution.toml`): `[[rules.warn]]` fires when a DB draft contains > N rows modified (configurable, default 100). `[[rules.block]]` fires on schema-altering statements (`DROP TABLE`, `TRUNCATE`, `ALTER TABLE DROP COLUMN`) unless `allow_schema_drops = true` in `[actions.db_query]`.
+5. [ ] **`ta-db-proxy` registry** (`crates/ta-db-proxy/src/registry.rs`): Maps URI scheme + driver to the correct plugin backend. `db://postgres/*` → `PostgresProxyPlugin`; `db://sqlite/*` → `SqliteProxyPlugin`; `db://mysql/*` → `MysqlProxyPlugin`. Plugins are optional features — `ta-db-proxy-postgres` behind `[features] postgres`.
+6. [ ] **Credential vault integration**: DB connection strings resolved from the credential vault — no plaintext Postgres DSN in `workflow.toml`. Agent calls `ta_external_action { action_type: "db_query", target_uri: "db://postgres/prod#orders" }` with no credentials; TA resolves the DSN from the vault by URI.
+7. [ ] **`policy = "review"` as default** for `[actions.db_query]`: Default is `review` (not `auto`). Every DB mutation is held for human review showing the row-level diff before execution. `policy = "auto"` requires explicit opt-in.
+8. [ ] **Tests**: Postgres replication slot created/dropped on goal start/deny; WAL capture round-trip; row-level diff rendering for INSERT/UPDATE/DELETE; schema-drop constitution rule blocks `DROP TABLE`; credential vault resolves DSN without exposing it to agent; large-mutation warning fires at configured threshold.
+
+#### Version: `0.17.1-alpha`
+
+---
+
+## v0.17 — Release Management (continued)
+
+> **Focus**: Unified `ta release` command system. Builds on the governed filesystem from v0.17.0-v0.17.1 — release pipelines run under full governance. that works for any release type — binary distributions, content deliveries, service deployments — via a pluggable `ReleaseAdapter` abstraction. Replaces the current ad-hoc dispatch/channel/VCS approach with a single coherent model and a simplified command surface.
+
+### v0.17.2 — Release Management Design Review (Pre-Phase)
 <!-- status: pending -->
 **Goal**: Before committing implementation, run a structured design session to finalise the `ta release` command surface, `ReleaseAdapter` trait, channel model, and how release fits into TA's broader conversational UX. Produces a signed-off design document (`docs/release-design.md`) that v0.17.1+ implement against.
 
@@ -11409,15 +11516,15 @@ Code releases use semver. Content releases don't. Decide:
 - Versioning rules for code vs content artifacts
 - Migration path from current `ta release dispatch` / manual tagging workflow
 
-#### Version: `0.17.0-alpha` *(design only — no code)*
+#### Version: `0.17.2-alpha` *(design only — no code)*
 
 ---
 
-### v0.17.1 — `ta release` Core + Built-in Adapters
+### v0.17.3 — `ta release` Core + Built-in Adapters
 <!-- status: pending -->
 **Goal**: Implement the `ta release` command surface and `ReleaseAdapter` trait as specified in `docs/release-design.md` (v0.17.0). Ship three built-in adapters: `GitHubReleaseAdapter` (replaces current manual tag + dispatch flow), `RemoteFileReleaseAdapter`, and `ServiceReleaseAdapter`.
 
-**Depends on**: v0.17.0 (design doc signed off)
+**Depends on**: v0.17.2 (design doc signed off)
 
 #### Items
 
@@ -11443,15 +11550,15 @@ Code releases use semver. Content releases don't. Decide:
 
 11. [ ] **USAGE.md "Release Management" section**: Quick-start (5 steps: configure `release.toml`, run `ta release run`, test RC, promote to stable), adapter reference table, `release.toml` field reference.
 
-#### Version: `0.17.1-alpha`
+#### Version: `0.17.3-alpha`
 
 ---
 
-### v0.17.2 — Extended Adapters (YouTube, Steam, Homebrew)
+### v0.17.4 — Extended Adapters (YouTube, Steam, Homebrew)
 <!-- status: pending -->
 **Goal**: Implement the content-delivery and distribution adapters identified in the v0.17.0 design review. Enables content creators to release video outputs to YouTube and game studios to push to Steam — all through the same `ta release run` command.
 
-**Depends on**: v0.17.1 (core adapter trait + `ta release run`)
+**Depends on**: v0.17.3 (core adapter trait + `ta release run`)
 
 #### Items
 
@@ -11467,7 +11574,55 @@ Code releases use semver. Content releases don't. Decide:
 
 6. [ ] **USAGE.md**: Adapter sections for YouTube, Steam, Homebrew. Plugin adapter authoring guide.
 
-#### Version: `0.17.2-alpha`
+#### Version: `0.17.4-alpha`
+
+---
+
+---
+
+## v0.18 — SA Infrastructure & Full VFS
+
+> **Focus**: Supervised Autonomy (SA) enterprise credential store, host-wide FUSE filesystem virtualization, and external process governance (ComfyUI, SimpleTuner, arbitrary daemons). This milestone is the foundation for deploying TA in regulated enterprise environments.
+
+### v0.18.0 — SA Enterprise Credential Store Plugin
+<!-- status: pending -->
+
+**Goal**: Replace `FileVault` with an enterprise credential store backend for SA deployments. Agent session tokens are issued against credentials stored in HashiCorp Vault, AWS Secrets Manager, Azure Key Vault, or equivalent. User validation is required before token issuance — agent identity is asserted via session ID, signed token, or SPIFFE SVID.
+
+**Depends on**: v0.17.4 (release management stable — SA is a separate product build on top of stable TA)
+
+**Items**:
+1. [ ] **Plugin interface finalization** (`crates/ta-credentials/src/vault.rs`): Extend `CredentialVault` trait with `validate_caller(&self, caller_identity: &CallerIdentity) -> Result<(), VaultError>` — called before `issue_token`. `CallerIdentity` wraps session ID, optional SPIFFE SVID, and IP/hostname. Plugin implements validation logic.
+2. [ ] **`ta-credentials-vault-hashicorp`** plugin: HashiCorp Vault AppRole + Kubernetes auth. `issue_token` calls `vault.sys.generateToken()` with policy matching requested scopes. Revocation via `vault.auth.token.revoke()`. Renewable tokens with TTL matching goal duration.
+3. [ ] **`ta-credentials-vault-aws`** plugin: AWS Secrets Manager. Credential lookup via `GetSecretValue`. Token issuance via temporary IAM credentials (`AssumeRole` with goal-scoped policy). Token revocation via IAM session invalidation.
+4. [ ] **`ta-credentials-vault-azure`** plugin: Azure Key Vault. Managed Identity auth. Secret retrieval via `KeyClient`. Temporary access tokens via Azure AD app roles.
+5. [ ] **Plugin config** (`workflow.toml`): `[credentials] backend = "hashicorp-vault"` with backend-specific connection config. `ta credentials health` checks backend connectivity.
+6. [ ] **User validation requirement**: In SA mode, `issue_token` requires the caller to present a valid identity assertion (not just a scope request). The plugin validates identity before issuing. Failed validation → audit log entry + alert.
+7. [ ] **Audit trail**: All token issuances, validations, and revocations logged to the SA audit log (separate from the project-level `.ta/audit.jsonl`). Supports compliance reporting.
+8. [ ] **Tests**: Mock HashiCorp Vault server; token issuance against AppRole; caller validation rejects unknown identities; token revocation; `ta credentials health` reports backend status.
+
+#### Version: `0.18.0-alpha`
+
+---
+
+### v0.18.1 — Full FUSE VFS + External Process Governance
+<!-- status: pending -->
+
+**Goal**: Extend Tier 2 managed paths from v0.17.0 to cover writes from any process — not just the TA agent process. ComfyUI, SimpleTuner, game engines, and arbitrary daemons writing to governed paths are captured in the SHA journal. The URI journal becomes a host-wide audit record for all filesystem activity in governed paths, regardless of which process produced it.
+
+**Depends on**: v0.17.0 (SHA journal, URI journal, FUSE daemon baseline), v0.18.0 (SA credential store — external process governance is an SA-tier capability)
+
+**Items**:
+1. [ ] **Process-agnostic FUSE mount**: The `ta-governed-fs` FUSE daemon (from v0.17.0) is enhanced to capture writes from any process (not just the TA agent subprocess) that writes to a governed path. The FUSE mount stays active for the full session, not just the duration of a single goal.
+2. [ ] **Process attribution**: Each SHA journal entry records `pid`, `process_name`, and `goal_id` (if active) of the writing process. `ta audit governed` shows per-process write history: `ComfyUI wrote 47 images to /data/comfyui/outputs (2.3 GB)`.
+3. [ ] **Session-level governed paths**: `ta session start --govern /data/comfyui/outputs` mounts the FUSE intercept for the session duration. All ComfyUI/SimpleTuner runs within that session are captured automatically without per-goal configuration.
+4. [ ] **Checkpoint and rollback**: `ta checkpoint create "before-training-run"` records a named snapshot of all governed-path SHA entries. `ta checkpoint restore "before-training-run"` rewrites real paths to pre-checkpoint SHA blobs. Enables "undo this SimpleTuner run" without re-training.
+5. [ ] **Large file policy** (`max_sha_store_mb` per governed path): When the SHA store for a path exceeds the limit, the oldest blobs (not referenced by a live checkpoint) are evicted. Warning emitted. GC is automatic.
+6. [ ] **DB governance for external processes**: Postgres logical replication slot stays open for the session, capturing mutations from any process connecting to the governed DB — not just the TA agent. Mutations attributed by Postgres `application_name`.
+7. [ ] **`ta governed status`**: Shows all active FUSE mounts, session-level governed paths, SHA store sizes, live checkpoints, and the last 10 writes per governed path.
+8. [ ] **Tests**: ComfyUI mock process writes to governed path → captured in journal with correct process attribution; checkpoint/restore round-trip; eviction when max size exceeded; DB mutation from external process captured via replication slot.
+
+#### Version: `0.18.1-alpha`
 
 ---
 
@@ -11495,9 +11650,9 @@ If the decision is to keep TUI, the original v0.13.6 items (survey Rust TUI apps
 
 > **When TA development pauses and SA (Secure Autonomy / SecureTA) development begins.**
 
-### Pivot trigger: completion of v0.17.2
+### Pivot trigger: completion of v0.17.4
 
-TA core development pauses when **v0.17.2** is shipped and stable. At that point:
+TA core development pauses when **v0.17.4** is shipped and stable. At that point:
 
 - The full TA feature surface is complete (staging, drafts, governance, IDE plugins, release management, local models, content pipeline).
 - The extension-point traits that SA depends on are stable and versioned: `RuntimeAdapter` (v0.13.3), `AttestationBackend` (v0.14.1), `DaemonExtension` (v0.14.4), `MessagingAdapter` (v0.15.9), `ReleaseAdapter` (v0.17.1).
