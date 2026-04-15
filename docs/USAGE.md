@@ -1,26 +1,44 @@
 # Trusted Autonomy -- User Guide
 
-**Version**: 0.13.1-alpha.1
+**Version**: 0.15.15-alpha.1
 
 Trusted Autonomy (TA) is a governance wrapper for AI agents. It lets any agent work freely in an isolated workspace, then holds the proposed changes at a human review checkpoint before anything takes effect. You see what the agent wants to do, approve or reject each change, and maintain a complete audit trail.
 
 ---
 
+## Choose Your Setup Path
+
+| | TA Studio | CLI |
+|---|---|---|
+| **Best for** | Everyone — creative, business, and technical users | Engineers, CI pipelines, scripting |
+| **Interface** | Browser dashboard — no terminal needed | Terminal |
+| **Setup time** | ~2 min (guided wizard) | ~5 min |
+| **Start here** | [Setup for Studio](#setup-for-studio) | [Setup for CLI](#setup-for-cli) |
+
+Both paths install the same `ta` binary. Studio and CLI work side-by-side — you can switch any time.
+
+---
+
 ## Table of Contents
 
-1. [Quick Start](#quick-start)
+1. [Setup for Studio](#setup-for-studio) *(recommended for most users)*
+   - [Install](#install)
+   - [Launch TA Studio](#launch-ta-studio)
+   - [First-Time Wizard](#first-time-wizard)
+   - [Starting Goals with the Plan Tab](#starting-goals-with-the-plan-tab)
+   - [Opening and Managing Projects](#opening-a-project-with-ta-studio)
+2. [Setup for CLI](#setup-for-cli) *(for engineers and power users)*
    - [Install](#install)
    - [First-Time Setup](#first-time-setup)
    - [Set up your project](#set-up-your-project)
    - [Start a development session](#start-a-development-session)
    - [Your first goal](#your-first-goal)
-   - [Quick Start with ta shell](#quick-start-with-ta-shell)
-2. [Core Concepts](#core-concepts)
+3. [Core Concepts](#core-concepts)
    - [The Staging Model](#the-staging-model)
    - [Goals](#goals)
    - [Drafts](#drafts)
    - [Agents](#agents)
-3. [Common Workflows](#common-workflows)
+4. [Common Workflows](#common-workflows)
    - [Single Task](#single-task)
    - [Follow-Up Iterations](#follow-up-iterations)
    - [Macro Goals (multi-draft sessions)](#macro-goals-multi-draft-sessions)
@@ -30,7 +48,7 @@ Trusted Autonomy (TA) is a governance wrapper for AI agents. It lets any agent w
    - [Review Sessions](#review-sessions)
    - [Correcting a Draft](#correcting-a-draft)
    - [Draft Lifecycle Hygiene](#draft-lifecycle-hygiene)
-4. [Configuration](#configuration)
+5. [Configuration](#configuration)
    - [Workflow Config](#workflow-config-taworkflowtoml)
    - [Agent Configuration](#agent-configuration)
    - [Alignment Profiles](#alignment-profiles)
@@ -38,7 +56,7 @@ Trusted Autonomy (TA) is a governance wrapper for AI agents. It lets any agent w
    - [Configurable Summary Exemption](#configurable-summary-exemption)
    - [Plan Schema](#plan-schema-taplan-schemayaml)
    - [Channel Setup](#channel-setup)
-5. [Advanced Features](#advanced-features)
+6. [Advanced Features](#advanced-features)
    - [Selective Approval](#selective-approval)
    - [Behavioral Drift Detection](#behavioral-drift-detection)
    - [Conflict Detection](#conflict-detection)
@@ -50,7 +68,7 @@ Trusted Autonomy (TA) is a governance wrapper for AI agents. It lets any agent w
    - [Context Memory](#context-memory)
    - [Web Review UI](#web-review-ui)
    - [Daemon API](#daemon-api)
-   - [Interactive Shell](#interactive-shell)
+   - [Interactive Shell (ta shell)](#interactive-shell)
    - [Webhook Review Channel](#webhook-review-channel)
    - [Discord Channel Plugin](#discord-channel-plugin)
    - [Slack Channel Plugin](#slack-channel-plugin)
@@ -71,59 +89,52 @@ Trusted Autonomy (TA) is a governance wrapper for AI agents. It lets any agent w
    - [Framework Registry](#framework-registry)
    - [Workflow Engine](#workflow-engine)
    - [Community Knowledge Hub](#community-knowledge-hub)
-6. [Roadmap](#roadmap)
-7. [Troubleshooting](#troubleshooting)
-8. [Getting Help](#getting-help)
+7. [Roadmap](#roadmap)
+8. [Troubleshooting](#troubleshooting)
+9. [Getting Help](#getting-help)
 
 ---
 
-## Getting Started
+## Setup for Studio
 
-The fastest way to get started is the setup wizard — no YAML editing required:
+TA Studio is a browser dashboard — no terminal required. It's the recommended starting point for most users.
 
-1. **Install TA** — download the installer from the [latest release](https://github.com/Trusted-Autonomy/TrustedAutonomy/releases/latest) and run it, or build from source.
+### Launch TA Studio
 
-2. **Run `ta install`** — this starts the TA daemon and opens the web wizard in your browser:
-   ```bash
-   ta install
-   ```
+**macOS**: Open `TA Studio.app` from the DMG, or from Applications.
 
-3. **Complete the setup wizard at `http://localhost:7700/setup`** — the 5-step wizard guides you through:
-   - Choosing an AI agent system (Claude, OpenAI, or Ollama)
-   - Connecting your version control (Git or Perforce)
-   - Setting up optional notifications (Discord, Slack)
-   - Creating your first project
-   - Reviewing your configuration summary
+**Windows**: Start Menu → **TA Studio** (installed by the MSI).
 
-Once the wizard is complete, the TA Studio dashboard is your home for starting goals, reviewing drafts, and answering agent questions — no command line needed.
+**Linux / manual**: Run `ta daemon start` then open `http://localhost:7700` in your browser.
 
-> If you're an engineer and prefer the CLI, see the [Quick Start](#quick-start) section below.
+All launchers start the TA daemon automatically if it isn't already running.
 
-## Getting Started (No Terminal)
+### First-Time Wizard
 
-If you prefer working in a browser, run `ta install` or start the daemon manually:
+The first launch opens the setup wizard at `http://localhost:7700/setup` — a 5-step browser UI with no YAML editing required:
 
-```bash
-ta install          # starts daemon + opens setup wizard
-# or, if already set up:
-ta daemon start
-open http://localhost:7700
-```
+1. **AI Provider** — choose Claude (API key or Claude Max subscription), OpenAI, or Ollama (local models)
+2. **Version Control** — Git or Perforce
+3. **Notifications** — optional Discord or Slack alerts
+4. **First Project** — create or open a project
+5. **Summary** — review and confirm
 
-From the dashboard you can:
+Once the wizard is complete, the dashboard is your home for everything:
 
-- **Plan** — browse upcoming phases, run any phase with one click, create custom goals, or add new phases (see below)
+- **Plan** — browse upcoming phases, run any phase with one click, create custom goals, or add new phases
 - **Review Drafts** — see proposed changes, approve or deny with one click
 - **Answer Agent Questions** — respond to agents that need your input
 - **Browse Memory** — inspect and manage what the agents remember about your project
-- **Projects** — open, switch, and browse recent TA projects (see below)
-- **Settings** — update your configuration through the browser UI
+- **Projects** — open, switch, and browse recent TA projects
+- **Settings** — update your configuration in the browser
 
-## Starting Goals with the Plan Tab
+> Engineers who prefer the terminal: see [Setup for CLI](#setup-for-cli) below.
+
+### Starting Goals with the Plan Tab
 
 The **Plan** tab is the primary way to kick off work in TA Studio. It replaces the old "Start a Goal" form with a phase-aware interface.
 
-### Phase List (Next Up)
+#### Phase List (Next Up)
 
 Pending and in-progress phases from your `PLAN.md` are shown as expandable cards:
 
@@ -132,7 +143,7 @@ Pending and in-progress phases from your `PLAN.md` are shown as expandable cards
 - **Run** button — starts the phase immediately (calls `ta run --phase <id>` in the background)
   - The button is greyed out if a goal for that phase is already running
 
-### Custom Goal
+#### Custom Goal
 
 To start a goal that isn't in the plan (ad-hoc work, experiments, quick fixes):
 
@@ -141,7 +152,7 @@ To start a goal that isn't in the plan (ad-hoc work, experiments, quick fixes):
 3. Optionally link it to a **plan phase** from the dropdown
 4. Click **Run Goal**
 
-### Adding Plan Phases
+#### Adding Plan Phases
 
 To add a new phase to your `PLAN.md` without opening a terminal:
 
@@ -151,7 +162,7 @@ To add a new phase to your `PLAN.md` without opening a terminal:
 
 The new phase is appended to `PLAN.md` with a `<!-- status: pending -->` marker and appears in the phase list immediately.
 
-## Opening a Project with TA Studio
+### Opening and Managing Projects
 
 TA Studio includes a built-in **Project Browser** so you can open, switch between, and discover TA projects without using a terminal.
 
@@ -317,7 +328,11 @@ agent = "claude-code"
 
 ---
 
-## Quick Start
+## Setup for CLI
+
+For engineers and power users who prefer the terminal, CI pipelines, or scripting.
+
+> Not a developer? Start with [Setup for Studio](#setup-for-studio) — no terminal needed.
 
 ### Install
 
@@ -653,9 +668,11 @@ ta draft apply <draft-id>
 
 The agent never touched your real files. Reject the draft and nothing changes.
 
-### Quick Start with ta shell
+### Interactive Shell (`ta shell`)
 
-If you prefer a persistent interactive session over one-off commands, use the shell. This walkthrough takes you from zero to a working project:
+> **Advanced feature** — most users should use TA Studio or the standard CLI commands above. `ta shell` is a persistent terminal REPL for engineers who prefer a continuous session over one-off commands. Not available on Windows.
+
+If you prefer a persistent interactive session over one-off commands, use the shell:
 
 ```bash
 # 1. Set up the project (new or existing)
