@@ -10720,7 +10720,7 @@ condition = "consensus.proceed"
 ---
 
 ### v0.15.15.3.2 — Orchestration Stack Guide (USAGE.md)
-<!-- status: pending -->
+<!-- status: done -->
 
 **Goal**: Document the three-layer orchestration model (TA + Claude Code native agents + ruflow) in `docs/USAGE.md` with concrete decision criteria and code examples. The README now has the design-level explanation; USAGE.md needs the "how to actually configure this" how-to guide.
 
@@ -10781,6 +10781,8 @@ No files are written. Staging is intact — user can `ta draft deny`, fix in sta
 4. [ ] **Post-copy check demoted to warning-only**: Keep `validate_cargo_version(&target_dir, ...)` as a fallback for the embedded-patch path, but change the box header to `"VERSION MISMATCH — staging was unavailable at apply time"` so it's clear this is a secondary check, not the primary gate.
 
 5. [ ] **Tests**: Pre-copy blocks when staging `Cargo.toml` has wrong version; pre-copy passes when staging has correct version; falls through to post-copy when staging path missing; CLAUDE.md mismatch blocked; post-copy still fires for embedded-patch path.
+
+6. [ ] **`update_phase_status()` transitions from any non-done state** (`draft.rs`): Currently the function only replaces `<!-- status: in_progress -->` with `<!-- status: done -->`. If `in_progress` was never set (goal started without phase link, or stale staging base), the status stays `pending` and `done` is silently skipped. Fix: match `in_progress` OR `pending` when writing `done`. Add test: phase that was never marked `in_progress` gets marked `done` on apply.
 
 #### Version: `0.15.15-alpha.3.3`
 
