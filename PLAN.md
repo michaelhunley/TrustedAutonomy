@@ -10894,6 +10894,27 @@ Stable and nightly use different tag prefixes (`v*` vs `nightly`), so GitHub's d
 
 ---
 
+### v0.15.15.7 — Apply UX: Dirty VCS Check + Staging Version Bump Fix
+<!-- status: pending -->
+
+**Goal**: Eliminate the two recurring apply blockers that have caused multiple failed apply attempts: (1) `ta run` should warn and prompt when the VCS working tree has uncommitted changes before copying source to staging — catching drift early instead of producing confusing warnings at apply time. (2) The staging version bump path is broken — running `bump-version.sh` from the project root updates only source, not staging, and running it from staging fails silently or gets undone by rollback. The fix must be deterministic and operator-free.
+
+**Depends on**: v0.15.15.5 (apply engine baseline)
+
+**Items**:
+
+1. [ ] **Pre-run VCS cleanliness check** (`apps/ta-cli/src/commands/run.rs`): Before `OverlayWorkspace::copy_source_to_staging()`, call `git status --porcelain` (or the VCS adapter equivalent). If dirty files exist, print a structured warning listing each file and prompt: `"Working tree has uncommitted changes — continue anyway? [y/N]"`. If `--yes`/`--non-interactive` is set, warn and proceed automatically. If VCS is not configured (no `.git`, no adapter), skip the check silently.
+
+2. [ ] **Staging version bump at apply time** (`apps/ta-cli/src/commands/draft.rs`): When `validate_staging_version` detects a mismatch, instead of immediately bailing, attempt to auto-patch `staging/Cargo.toml` and `staging/CLAUDE.md` in-place (sed-equivalent on the version line only) to match `expected_ver`. Re-validate after the patch. Only bail if the patch fails or re-validation still fails. Print: `"[apply] Auto-patched staging version from {draft_ver} to {expected_ver} — proceeding."` This eliminates the manual bump-version.sh-in-staging workaround entirely.
+
+3. [ ] **Clarify error message**: Remove the contradiction in the current error box — it says "run bump-version.sh inside the staging directory" in the box but "Never run bump-version.sh from inside the staging directory" in the Note. With item 2 done, replace both with: `"[apply] Staging version mismatch auto-corrected. If correction failed, use ta draft deny and re-run."`.
+
+4. [ ] **Tests**: pre-run check warns on dirty tree and aborts on N; `--yes` bypasses prompt; clean tree skips check; version mismatch auto-patches and apply proceeds; auto-patch failure bails with clear message.
+
+#### Version: `0.15.15-alpha.7`
+
+---
+
 ### v0.15.16 — Windows Code Signing (EV Certificate + CI Integration)
 <!-- status: pending -->
 **Goal**: Eliminate the Microsoft SmartScreen "Windows protected your PC" warning on the TA Windows MSI installer by signing all Windows binaries and the MSI with an Extended Validation (EV) code signing certificate. EV certs bypass SmartScreen's reputation-building period — signed EV binaries show no warning on first install regardless of download count. Ships with a fully automated signing step in the release CI workflow.
