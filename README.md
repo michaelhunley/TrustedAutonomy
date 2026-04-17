@@ -376,6 +376,10 @@ These are additive — not architectural rewrites.
 
 ### 1. Install TA from source
 
+> **Nightly builds** — latest unreleased features, built nightly from `main`:
+> [![Nightly](https://img.shields.io/badge/nightly-pre--release-orange)](https://github.com/Trusted-Autonomy/TrustedAutonomy/releases/tag/nightly)
+> [Download latest nightly](https://github.com/Trusted-Autonomy/TrustedAutonomy/releases/tag/nightly) · [Nightly history →](https://github.com/Trusted-Autonomy/TrustedAutonomy/releases/tag/nightly#nightly-history)
+
 ```bash
 # Clone the repo
 git clone https://github.com/Trusted-Autonomy/TrustedAutonomy.git
