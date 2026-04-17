@@ -27,8 +27,6 @@ pub fn is_zero_u64_pub(v: &u64) -> bool {
     *v == 0
 }
 
-use std::cmp::Reverse;
-
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
