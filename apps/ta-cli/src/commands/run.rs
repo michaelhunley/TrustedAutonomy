@@ -3452,20 +3452,16 @@ fn accumulate_tokens(line: &str, tokens: &mut AgentTokens) {
                     .unwrap_or(0);
             }
         }
-        Some("system") => {
-            if tokens.model.is_empty() {
-                if let Some(model) = val.get("model").and_then(|v| v.as_str()) {
-                    tokens.model = model.to_string();
-                }
+        Some("system") if tokens.model.is_empty() => {
+            if let Some(model) = val.get("model").and_then(|v| v.as_str()) {
+                tokens.model = model.to_string();
             }
         }
-        Some("assistant") => {
+        Some("assistant") if tokens.model.is_empty() => {
             // Also extract model from assistant message metadata if present.
-            if tokens.model.is_empty() {
-                if let Some(msg) = val.get("message") {
-                    if let Some(model) = msg.get("model").and_then(|v| v.as_str()) {
-                        tokens.model = model.to_string();
-                    }
+            if let Some(msg) = val.get("message") {
+                if let Some(model) = msg.get("model").and_then(|v| v.as_str()) {
+                    tokens.model = model.to_string();
                 }
             }
         }
