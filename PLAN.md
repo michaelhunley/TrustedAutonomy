@@ -10856,7 +10856,7 @@ No files are written. Staging is intact — user can `ta draft deny`, fix in sta
 ---
 
 ### v0.15.15.6 — Nightly Build Pipeline
-<!-- status: pending -->
+<!-- status: done -->
 
 **Goal**: Add a scheduled nightly CI workflow that builds all 5 platforms at 2am PT and publishes a rolling pre-release only when main has new commits since the last nightly. Latest nightly appears alongside latest stable on the GitHub releases page. Historical nightly builds are accessible via a separate link, not interleaved with the stable release list.
 

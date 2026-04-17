@@ -26,3 +26,9 @@ stable_release_tag = "public-alpha-v0.13.17.3"
 # Anchor tag for the "Changes since X" line at the bottom of release notes.
 # Usually matches stable_release_tag; override if notes cover a shorter window.
 changes_since = "public-alpha-v0.13.17.3"
+
+# Nightly build configuration (v0.15.15.6)
+# Tag used for the rolling nightly pre-release on GitHub.
+nightly_tag = "nightly"
+# Maximum number of nightly builds to retain in the history table in the release body.
+nightly_history_limit = 60

@@ -1,0 +1,460 @@
+name: Nightly Build
+
+on:
+  schedule:
+    # 10:00 UTC = 2:00 AM Pacific Time (PT)
+    - cron: '0 10 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Force build even if no new commits since last nightly'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  BINARY_NAME: ta
+  NIGHTLY_TAG: nightly
+  NIGHTLY_HISTORY_LIMIT: 60
+
+jobs:
+  check-for-changes:
+    name: Check for new commits since last nightly
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.check.outputs.should_build }}
+      head_sha: ${{ steps.check.outputs.head_sha }}
+      head_sha_short: ${{ steps.check.outputs.head_sha_short }}
+      trigger_type: ${{ steps.check.outputs.trigger_type }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check commit SHA against last nightly
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FORCE: ${{ github.event.inputs.force }}
+        run: |
+          HEAD_SHA=$(git rev-parse HEAD)
+          HEAD_SHA_SHORT=$(git rev-parse --short HEAD)
+          echo "head_sha=${HEAD_SHA}" >> $GITHUB_OUTPUT
+          echo "head_sha_short=${HEAD_SHA_SHORT}" >> $GITHUB_OUTPUT
+
+          # Determine trigger type for history table
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "trigger_type=manual" >> $GITHUB_OUTPUT
+          else
+            echo "trigger_type=scheduled" >> $GITHUB_OUTPUT
+          fi
+
+          # Force flag bypasses the SHA check
+          if [ "$FORCE" = "true" ]; then
+            echo "Force flag set — proceeding unconditionally."
+            echo "should_build=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Download last-sha.txt from the existing nightly release (if any).
+          # On first ever run (no nightly release yet), proceed unconditionally.
+          LAST_SHA=""
+          if gh release view "$NIGHTLY_TAG" --json assets 2>/dev/null | grep -q 'last-sha.txt'; then
+            LAST_SHA=$(gh release download "$NIGHTLY_TAG" --pattern "last-sha.txt" --output - 2>/dev/null | tr -d '[:space:]') || true
+          fi
+
+          if [ -z "$LAST_SHA" ]; then
+            echo "No previous nightly found — proceeding with first nightly build."
+            echo "should_build=true" >> $GITHUB_OUTPUT
+          elif [ "$LAST_SHA" = "$HEAD_SHA" ]; then
+            echo "Skipping — no commits since last nightly (SHA: ${HEAD_SHA})."
+            echo "should_build=false" >> $GITHUB_OUTPUT
+          else
+            echo "New commits detected since last nightly (${LAST_SHA} → ${HEAD_SHA})."
+            echo "should_build=true" >> $GITHUB_OUTPUT
+          fi
+
+  build-nightly:
+    name: Build ${{ matrix.target }}
+    needs: check-for-changes
+    if: needs.check-for-changes.outputs.should_build == 'true'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            cross: false
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            cross: false
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            cross: true
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            cross: true
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            cross: false
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross (Linux cross-compilation)
+        if: matrix.cross == true
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build binary (native)
+        if: matrix.cross == false
+        run: |
+          cargo build --release --target ${{ matrix.target }} -p ta-cli
+          cargo build --release --target ${{ matrix.target }} -p ta-daemon
+          cargo build --release --target ${{ matrix.target }} -p ta-agent-ollama
+
+      - name: Build binary (cross)
+        if: matrix.cross == true
+        run: |
+          cross build --release --target ${{ matrix.target }} -p ta-cli
+          cross build --release --target ${{ matrix.target }} -p ta-daemon
+          cross build --release --target ${{ matrix.target }} -p ta-agent-ollama
+
+      - name: Package binary with docs (Unix)
+        if: runner.os != 'Windows'
+        env:
+          HEAD_SHA: ${{ needs.check-for-changes.outputs.head_sha }}
+        run: |
+          mkdir -p staging
+          cp target/${{ matrix.target }}/release/${{ env.BINARY_NAME }} staging/
+          cp target/${{ matrix.target }}/release/ta-daemon staging/
+          cp target/${{ matrix.target }}/release/ta-agent-ollama staging/ 2>/dev/null || true
+          # Stamp the nightly SHA into USAGE.md before packaging
+          if [ -f docs/USAGE.md ]; then
+            sed "s/^\*\*Version\*\*:.*/**Version**: nightly-${HEAD_SHA:0:7}/" \
+              docs/USAGE.md > staging/USAGE.md
+          fi
+          # Generate USAGE.html
+          if command -v pandoc >/dev/null 2>&1; then
+            pandoc staging/USAGE.md --standalone --embed-resources \
+              --metadata title="Trusted Autonomy Usage Guide" \
+              -o staging/USAGE.html
+          else
+            printf '<!DOCTYPE html><html><meta charset="utf-8"><title>Trusted Autonomy Usage Guide</title><body><pre>%s</pre></body></html>' \
+              "$(cat staging/USAGE.md)" > staging/USAGE.html
+          fi
+          cp DISCLAIMER.md staging/ 2>/dev/null || true
+          cp LICENSE staging/ 2>/dev/null || true
+          mkdir -p staging/plugins/vcs
+          if [ -f plugins/vcs-perforce ]; then
+            cp plugins/vcs-perforce staging/plugins/vcs/
+            chmod +x staging/plugins/vcs/vcs-perforce
+          fi
+          if [ -f plugins/vcs-perforce.toml ]; then
+            cp plugins/vcs-perforce.toml staging/plugins/vcs/
+          fi
+          mkdir -p artifacts
+          cd staging
+          tar czf ../artifacts/${{ env.BINARY_NAME }}-nightly-${{ matrix.target }}.tar.gz *
+
+      - name: Install pandoc (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install pandoc -y --no-progress | Out-Null
+          $env:PATH = [System.Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [System.Environment]::GetEnvironmentVariable('Path', 'User')
+          pandoc --version | Select-Object -First 1
+
+      - name: Package binary with docs (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          HEAD_SHA: ${{ needs.check-for-changes.outputs.head_sha }}
+        run: |
+          $env:PATH = [System.Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [System.Environment]::GetEnvironmentVariable('Path', 'User')
+          $ShortSha = "$env:HEAD_SHA".Substring(0, [Math]::Min(7, "$env:HEAD_SHA".Length))
+          New-Item -ItemType Directory -Force -Path staging, artifacts | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/${{ env.BINARY_NAME }}.exe" staging/
+          Copy-Item "target/${{ matrix.target }}/release/ta-daemon.exe" staging/
+          if (Test-Path "target/${{ matrix.target }}/release/ta-agent-ollama.exe") {
+            Copy-Item "target/${{ matrix.target }}/release/ta-agent-ollama.exe" staging/
+          }
+          if (Test-Path "docs/USAGE.md") {
+            (Get-Content "docs/USAGE.md") -replace '^\*\*Version\*\*:.*', "**Version**: nightly-${ShortSha}" |
+              Set-Content "staging/USAGE.md"
+          }
+          pandoc "staging\USAGE.md" --standalone --embed-resources `
+            --metadata title="Trusted Autonomy Usage Guide" `
+            -o "staging\USAGE.html"
+          foreach ($f in @("DISCLAIMER.md", "LICENSE")) {
+            if (Test-Path $f) { Copy-Item $f staging/ }
+          }
+          Compress-Archive -Path staging/* -DestinationPath "artifacts/${{ env.BINARY_NAME }}-nightly-${{ matrix.target }}.zip"
+
+      - name: Build Windows MSI
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        env:
+          HEAD_SHA: ${{ needs.check-for-changes.outputs.head_sha }}
+        run: |
+          dotnet tool install --global wix --version "4.*"
+          $ShortSha = "$env:HEAD_SHA".Substring(0, [Math]::Min(7, "$env:HEAD_SHA".Length))
+          # Use a fixed semver for MSI since nightly doesn't have a version tag.
+          # Read from Cargo.toml to get current version digits.
+          $cargoVersion = (Select-String -Path "Cargo.toml" -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches.Groups[1].Value
+          $versionDigits = [regex]::Match($cargoVersion, '(\d+\.\d+\.\d+)').Groups[1].Value
+          $msiVersion = "${versionDigits}.0"
+          Write-Host "MSI version: $msiVersion (nightly SHA: $ShortSha)"
+
+          $env:PATH = [System.Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [System.Environment]::GetEnvironmentVariable('Path', 'User')
+          $releaseDir = "target\x86_64-pc-windows-msvc\release"
+          $stampedMd = "staging-usage.md"
+          (Get-Content "docs\USAGE.md") -replace '^\*\*Version\*\*:.*', "**Version**: nightly-${ShortSha}" |
+            Set-Content $stampedMd -Encoding utf8
+          pandoc $stampedMd --standalone --embed-resources `
+            --metadata title="Trusted Autonomy Usage Guide" `
+            -o "$releaseDir\USAGE.html"
+          if (Test-Path "scripts\ta-studio.bat") {
+            Copy-Item "scripts\ta-studio.bat" "$releaseDir\ta-studio.bat"
+          }
+          New-Item -ItemType Directory -Force -Path "$releaseDir\plugins\vcs" | Out-Null
+          if (Test-Path "plugins\vcs-perforce") {
+            Copy-Item "plugins\vcs-perforce" "$releaseDir\plugins\vcs\vcs-perforce"
+          }
+          if (Test-Path "plugins\vcs-perforce.toml") {
+            Copy-Item "plugins\vcs-perforce.toml" "$releaseDir\plugins\vcs\vcs-perforce.toml"
+          }
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          wix build apps/ta-cli/wix/main.wxs `
+            -d SourceDir="$releaseDir" `
+            -d Version="$msiVersion" `
+            -d Platform=x64 `
+            -arch x64 `
+            -o "artifacts\${{ env.BINARY_NAME }}-nightly-x86_64-pc-windows-msvc.msi"
+          Write-Host "MSI created: artifacts\ta-nightly-x86_64-pc-windows-msvc.msi"
+
+      - name: Generate SHA256 checksums (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          cd artifacts
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum * > SHA256SUMS-${{ matrix.target }}.txt
+          else
+            shasum -a 256 * > SHA256SUMS-${{ matrix.target }}.txt
+          fi
+
+      - name: Generate SHA256 checksums (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cd artifacts
+          $files = @(Get-ChildItem -Filter "*.zip") + @(Get-ChildItem -Filter "*.msi")
+          if ($files.Count -eq 0) {
+            Write-Warning "No zip/msi files found in artifacts — skipping checksum"
+          } else {
+            Get-FileHash $files -Algorithm SHA256 | ForEach-Object {
+              "$($_.Hash.ToLower())  $($_.Path | Split-Path -Leaf)"
+            } | Out-File -Encoding ascii "SHA256SUMS-${{ matrix.target }}.txt"
+          }
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-${{ matrix.target }}
+          path: artifacts/
+
+  nightly-gate:
+    name: Nightly Gate (all platforms must pass)
+    needs: [check-for-changes, build-nightly]
+    if: needs.check-for-changes.outputs.should_build == 'true' && always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check all builds succeeded
+        run: |
+          if [ "${{ needs.build-nightly.result }}" != "success" ]; then
+            echo "One or more platform builds failed. Blocking nightly publish."
+            echo "Build result: ${{ needs.build-nightly.result }}"
+            exit 1
+          fi
+          echo "All platform builds passed. Proceeding to publish nightly."
+
+  publish-nightly:
+    name: Publish Nightly Release
+    needs: [check-for-changes, nightly-gate]
+    if: needs.check-for-changes.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Merge checksums
+        run: |
+          cd artifacts
+          cat SHA256SUMS-*.txt > SHA256SUMS.txt
+          rm -f SHA256SUMS-*.txt
+
+      - name: Write last-sha.txt
+        env:
+          HEAD_SHA: ${{ needs.check-for-changes.outputs.head_sha }}
+        run: echo -n "${HEAD_SHA}" > artifacts/last-sha.txt
+
+      - name: Build nightly release body
+        id: build_body
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_SHA: ${{ needs.check-for-changes.outputs.head_sha }}
+          HEAD_SHA_SHORT: ${{ needs.check-for-changes.outputs.head_sha_short }}
+          TRIGGER_TYPE: ${{ needs.check-for-changes.outputs.trigger_type }}
+          REPO: ${{ github.repository }}
+        run: |
+          BUILD_DATE=$(date -u +"%Y-%m-%d")
+          BUILD_TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          # Asset URL base for this nightly release
+          ASSET_BASE="https://github.com/${REPO}/releases/download/nightly"
+
+          # New row for the history table
+          NEW_ROW="| ${BUILD_DATE} | [${HEAD_SHA_SHORT}](https://github.com/${REPO}/commit/${HEAD_SHA}) | ${TRIGGER_TYPE} | [Linux x86](${ASSET_BASE}/ta-nightly-x86_64-unknown-linux-musl.tar.gz) [Linux ARM](${ASSET_BASE}/ta-nightly-aarch64-unknown-linux-musl.tar.gz) [macOS Intel](${ASSET_BASE}/ta-nightly-x86_64-apple-darwin.tar.gz) [macOS ARM](${ASSET_BASE}/ta-nightly-aarch64-apple-darwin.tar.gz) [Windows MSI](${ASSET_BASE}/ta-nightly-x86_64-pc-windows-msvc.msi) [Windows zip](${ASSET_BASE}/ta-nightly-x86_64-pc-windows-msvc.zip) |"
+
+          # Fetch existing release body to extract and update the history table.
+          # On first run, start fresh.
+          EXISTING_BODY=""
+          if gh release view nightly --json body 2>/dev/null | grep -q '"body"'; then
+            EXISTING_BODY=$(gh release view nightly --json body --jq '.body')
+          fi
+
+          # Extract existing history rows (lines starting with "| 20") from the body.
+          HISTORY_ROWS=""
+          if [ -n "$EXISTING_BODY" ]; then
+            HISTORY_ROWS=$(echo "$EXISTING_BODY" | grep -E '^\| 20[0-9]{2}-' || true)
+          fi
+
+          # Prepend the new row, keep up to NIGHTLY_HISTORY_LIMIT rows.
+          ALL_ROWS="${NEW_ROW}"
+          if [ -n "$HISTORY_ROWS" ]; then
+            ALL_ROWS="${NEW_ROW}
+${HISTORY_ROWS}"
+          fi
+          # Trim to limit
+          ALL_ROWS=$(echo "$ALL_ROWS" | head -n "${NIGHTLY_HISTORY_LIMIT}")
+
+          # Build the full release body
+          cat > nightly-body.md << BODYEOF
+## Nightly Build — ${BUILD_DATE}
+
+**Commit**: [${HEAD_SHA_SHORT}](https://github.com/${REPO}/commit/${HEAD_SHA})
+**Built**: ${BUILD_TIMESTAMP} (${TRIGGER_TYPE})
+**Branch**: main
+
+> This is an automated nightly pre-release built from the latest commit on \`main\`.
+> For stable releases, see the [latest release](https://github.com/${REPO}/releases/latest).
+
+### Download
+
+| Platform | Archive | Installer |
+|----------|---------|-----------|
+| Linux x86_64 | [tar.gz](${ASSET_BASE}/ta-nightly-x86_64-unknown-linux-musl.tar.gz) | — |
+| Linux ARM64 | [tar.gz](${ASSET_BASE}/ta-nightly-aarch64-unknown-linux-musl.tar.gz) | — |
+| macOS Intel | [tar.gz](${ASSET_BASE}/ta-nightly-x86_64-apple-darwin.tar.gz) | — |
+| macOS ARM (M1/M2) | [tar.gz](${ASSET_BASE}/ta-nightly-aarch64-apple-darwin.tar.gz) | — |
+| Windows x86_64 | [zip](${ASSET_BASE}/ta-nightly-x86_64-pc-windows-msvc.zip) | [msi](${ASSET_BASE}/ta-nightly-x86_64-pc-windows-msvc.msi) |
+
+[SHA256SUMS.txt](${ASSET_BASE}/SHA256SUMS.txt)
+
+---
+
+## Nightly History {#nightly-history}
+
+| Date | Commit | Trigger | Downloads |
+|------|--------|---------|-----------|
+${ALL_ROWS}
+
+BODYEOF
+
+          echo "body_file=nightly-body.md" >> $GITHUB_OUTPUT
+
+      - name: Force-push nightly tag to HEAD
+        env:
+          HEAD_SHA: ${{ needs.check-for-changes.outputs.head_sha }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -f nightly "${HEAD_SHA}"
+          git push origin nightly --force
+
+      - name: Validate artifacts before publish
+        run: |
+          REQUIRED=(
+            "ta-nightly-aarch64-apple-darwin.tar.gz"
+            "ta-nightly-x86_64-apple-darwin.tar.gz"
+            "ta-nightly-x86_64-unknown-linux-musl.tar.gz"
+            "ta-nightly-aarch64-unknown-linux-musl.tar.gz"
+            "ta-nightly-x86_64-pc-windows-msvc.zip"
+            "ta-nightly-x86_64-pc-windows-msvc.msi"
+            "SHA256SUMS.txt"
+            "last-sha.txt"
+          )
+          MISSING=()
+          for f in "${REQUIRED[@]}"; do
+            if [ ! -f "artifacts/$f" ]; then
+              MISSING+=("$f")
+            fi
+          done
+          if [ ${#MISSING[@]} -gt 0 ]; then
+            echo "ERROR: Missing nightly artifacts:"
+            for m in "${MISSING[@]}"; do echo "  - $m"; done
+            exit 1
+          fi
+          echo "All ${#REQUIRED[@]} required nightly artifacts present."
+
+      - name: Create or update nightly GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_SHA_SHORT: ${{ needs.check-for-changes.outputs.head_sha_short }}
+          BUILD_DATE: ${{ env.BUILD_DATE }}
+        run: |
+          BUILD_DATE=$(date -u +"%Y-%m-%d")
+          RELEASE_TITLE="Nightly ${BUILD_DATE} (${HEAD_SHA_SHORT})"
+
+          # Check if the nightly release already exists
+          if gh release view nightly 2>/dev/null; then
+            echo "Updating existing nightly release..."
+            gh release edit nightly \
+              --title "$RELEASE_TITLE" \
+              --notes-file nightly-body.md \
+              --prerelease \
+              --draft=false
+            # Replace all assets (clobber existing ones)
+            gh release upload nightly artifacts/* --clobber
+          else
+            echo "Creating first nightly release..."
+            gh release create nightly \
+              --title "$RELEASE_TITLE" \
+              --notes-file nightly-body.md \
+              --prerelease \
+              --draft=false
+            gh release upload nightly artifacts/* --clobber
+          fi
+
+          echo ""
+          echo "Nightly release published:"
+          echo "  Title: ${RELEASE_TITLE}"
+          echo "  SHA: ${{ needs.check-for-changes.outputs.head_sha }}"
+          echo "  URL: https://github.com/${{ github.repository }}/releases/tag/nightly"
