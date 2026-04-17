@@ -11127,91 +11127,131 @@ acknowledged_omissions = [".ta/review/"]  # user intentionally removed; suppress
 
 ---
 
-### v0.15.19 — Governed Interactive Session (`--gate agent`)
+### v0.15.19 — Governed Interactive Session (Advisor Agent)
 <!-- status: pending -->
-**Goal**: Make `ta session run` fully conversational. Replace the binary `[A]pply/[S]kip/[Q]uit` terminal gate with an orchestrator agent that presents changes in plain English, answers questions, spawns follow-up goals when the human requests modifications, and calls `ta_draft apply` when satisfied. The human never sees a raw diff unless they ask for one. All writes stay in staging; all changes flow through the standard draft/review path. Works from `ta shell`, TA Studio chat pane, and workflow build runs.
+**Goal**: Make `ta session run` fully conversational. Replace the binary `[A]pply/[S]kip/[Q]uit` terminal gate with an **advisor agent** — an agent that is explicitly on the human's side. It presents changes in plain English, proactively surfaces risks and concerns, answers questions, flags when something looks wrong, spawns follow-up goals when the human requests modifications, and calls `ta_draft apply` when the human is satisfied. The human never sees a raw diff unless they ask for one. All writes stay in staging; all changes flow through the standard draft/review path. Works from `ta shell`, TA Studio chat pane, and workflow build runs.
 
-**Why this phase exists**: The `--gate prompt` gate is a binary checkpoint — it stops execution and demands a keypress. It doesn't explain what changed or why, can't accept natural language feedback ("also add rate limiting"), and has no memory of earlier items in the session. The orchestrator agent pattern already exists (`CallerMode::Orchestrator`, `ta_ask_human`, `ta_goal_start`, `ta_draft` MCP tools) — this phase wires it in as the gate mechanism, enabling multi-turn governed conversations without leaving the airgap.
+**Why "advisor" not "gate"**: The advisor's job is not to be a neutral checkpoint — it actively looks out for the human's interests. It explains what changed and why, flags risks, asks clarifying questions, and advocates against applying a draft that looks wrong. At multi-phase milestones, it presents a structured summary of all phases completed before asking for final approval.
 
-**Depends on**: v0.14.11 (ta session run, GateMode, AwaitHuman), v0.14.5 (agent session API, `ta_ask_human`), v0.15.6.1 (embedded patches — gives gate agent readable diff without staging)
+**Depends on**: v0.14.11 (ta session run, GateMode, AwaitHuman), v0.14.5 (agent session API, `ta_ask_human`), v0.15.6.1 (embedded patches — gives advisor readable diff without staging)
 
-**Key insight**: The existing `ta_ask_human` + orchestrator CallerMode already provides the multi-turn conversation loop. The gate agent is not a new concept — it's the same orchestrator agent used in `ta dev`, scoped to one session item's draft and given the right context.
+**Key insight**: The existing `ta_ask_human` + orchestrator CallerMode already provides the multi-turn conversation loop. The advisor agent is not a new concept — it's the same orchestrator agent used in `ta dev`, scoped to one session item's draft and given the right context and framing.
 
 ---
 
-#### Design: `GateMode::Agent`
+#### Design: `GateMode::Agent` (Advisor)
 
 ```toml
 # .ta/workflow.toml
 [session]
 gate = "agent"                    # "auto" | "prompt" | "always" | "agent"
-gate_persona = "qa-reviewer"      # optional: .ta/personas/qa-reviewer.toml
+gate_persona = "advisor"          # optional: .ta/personas/advisor.toml
 gate_auto_merge_on = "approved"   # "approved" | "always" (requires constitution consent)
+advisor_security = "read_only"    # "read_only" | "suggest" | "auto"
 ```
 
 ```bash
 ta session run --gate agent
-ta session run --gate agent --persona qa-reviewer
-ta session run --gate agent --auto-approve   # skips gate for auto-approved items
+ta session run --gate agent --persona advisor
+ta session run --gate agent --auto-approve   # skips advisor for auto-approved items
 ```
 
-**Gate agent lifecycle per session item:**
+**Advisor security levels** (configured per-project in `workflow.toml`):
+- `read_only` (default): advisor can only answer questions and present diffs — never starts a goal or applies a draft autonomously. Human copies any `ta run "..."` command shown.
+- `suggest`: advisor presents the exact `ta run "..."` command for the human to copy-paste. Makes it easy to follow a recommendation without typos.
+- `auto`: at ≥80% intent confidence (structured tool call returning `{ intent: GoalRun | Question | Clarify, confidence: f32 }`), advisor fires `ta run` directly without prompting for confirmation.
+
+**Advisor agent lifecycle per session item:**
 
 ```
 draft built
   │
-  └─ spawn gate agent (CallerMode::Orchestrator, persona applied)
+  └─ spawn advisor agent (CallerMode::Orchestrator, persona applied)
        context injected:
          - goal title + plan phase
          - draft summary (agent decision log, file list, why)
          - embedded patches (readable diff, no staging needed)
          - session memory: what earlier items produced
-         - available tools: ta_ask_human, ta_fs_diff, ta_fs_read,
-                            ta_goal_start(follow_up=true), ta_draft(approve+apply|deny)
+         - available tools (by security level):
+             read_only:  ta_ask_human, ta_fs_diff, ta_fs_read, ta_draft_view, ta_plan_status
+             suggest:    + ta_goal_start(suggest_only=true) → prints command, doesn't run
+             auto:       + ta_goal_start, ta_draft(approve+apply|deny)
 
-       gate agent loop:
-         1. ta_ask_human("Here's what changed: [summary]. Apply, modify, or skip?")
-         2. human responds in natural language
-         3. gate agent interprets:
-            - "apply" → ta_draft approve → ta_draft apply → exit(Complete)
-            - "skip" → ta_draft deny("skipped at gate") → exit(Skipped)
+       advisor loop:
+         1. advisor presents: what changed, key decisions, risks flagged, questions asked
+         2. ta_ask_human("Here's what changed: [summary]. Any concerns before I apply?")
+         3. human responds in natural language
+         4. advisor interprets:
+            - "apply" / "looks good" → ta_draft approve → ta_draft apply → exit(Complete)
+            - "skip" / "don't apply" → ta_draft deny("skipped by human") → exit(Skipped)
             - "also add X" → ta_goal_start(follow_up=true, prompt="add X")
                              → wait for follow-up draft
-                             → ta_ask_human("Added X. Now: [accumulated summary]. Apply?")
+                             → ta_ask_human("Added X. Accumulated changes: [summary]. Apply?")
             - "why did you use approach Y?" → answers from decision log + ta_fs_read
                                             → loops back to step 1
-         4. gate exits when apply or deny is called (session detects via draft status)
+            - ambiguous request (auto mode) → classify_intent() → if ≥80%, fire autonomously
+         5. exits when apply or deny is called (session detects via draft status)
 ```
 
+**Structured phase summary at milestone** (required output, not optional):
+
+When a multi-phase goal run completes (or a milestone is reached), the advisor must present a structured summary before asking for final approval:
+
+```
+--- Phase Run Summary ---
+Phases completed: v0.15.14 → v0.15.14.1 → v0.15.14.2
+
+Phase v0.15.14: Hierarchical Workflows                 [▶ expand diff]
+  Decisions: fan-out uses tokio::spawn, milestone draft on phase boundary
+  Files changed: 4 (workflow_manager.rs, session.rs, ...)
+
+Phase v0.15.14.1: Human Review Items schema            [▶ expand diff]
+  Decisions: HumanReviewItem stored in plan.md TOML block
+  Files changed: 2
+
+Phase v0.15.14.2: Velocity token cost tracking        [▶ expand diff]
+  Decisions: cost_usd from API response, EWC-migration for old entries
+  Files changed: 6
+
+Apply all? (y/skip/ask about a phase)
+---
+```
+
+The diff is nested and expandable per phase. The advisor presents this context object before requesting final human sign-off.
+
 **Session item states** (extension of existing `WorkflowSessionItem`):
-- `AtGate` → `AgentGating { gate_goal_id: Uuid }` (gate agent running)
-- `AgentGating` → `Complete` (gate called apply) or `Skipped` (gate called deny) or `Modified { follow_up_ids }` (gate spawned follow-up, then Complete)
+- `AtGate` → `AdvisorActive { advisor_goal_id: Uuid }` (advisor running)
+- `AdvisorActive` → `Complete` (advisor applied) or `Skipped` (human declined) or `Modified { follow_up_ids }` (advisor spawned follow-up, then Complete)
 
 ---
 
 #### Items
 
-1. [ ] **`GateMode::Agent` variant** (`crates/ta-session/src/session.rs`): Add `Agent { persona: Option<String> }` to the `GateMode` enum. Add `from_str` support: `"agent"` → `GateMode::Agent { persona: None }`. Update `WorkflowSessionItem.state` with `AgentGating { gate_goal_id }` variant. Add `gate_agent_persona` field to `WorkflowSession`.
+1. [ ] **`GateMode::Agent` variant** (`crates/ta-session/src/session.rs`): Add `Agent { persona: Option<String>, security: AdvisorSecurity }` to the `GateMode` enum. Add `AdvisorSecurity` enum (`ReadOnly | Suggest | Auto`). Add `from_str` support: `"agent"` → `GateMode::Agent { persona: None, security: ReadOnly }`. Update `WorkflowSessionItem.state` with `AdvisorActive { advisor_goal_id }` variant.
 
-2. [ ] **`ta session run --gate agent`** (`apps/ta-cli/src/commands/session.rs`): When `GateMode::Agent`, replace the `[A]pply/[S]kip/[Q]uit` terminal loop with `spawn_gate_agent(draft_id, session_item, persona)`. Wait for draft status to change to `Applied` or `Denied` (poll `/api/draft/{id}/status` or watch `.ta/store/` directly). Update item state on transition.
+2. [ ] **`ta session run --gate agent`** (`apps/ta-cli/src/commands/session.rs`): When `GateMode::Agent`, replace the `[A]pply/[S]kip/[Q]uit` terminal loop with `spawn_advisor_agent(draft_id, session_item, persona, security)`. Wait for draft status to change to `Applied` or `Denied`. Update item state on transition.
 
-3. [ ] **`spawn_gate_agent()`** (`crates/ta-session/src/gate_agent.rs`): Build the gate agent context — serialize draft summary, embedded patches digest, session memory snapshot, available tools list. Launch a short-lived `ta run --headless` subprocess with `CallerMode::Orchestrator`, injected gate system prompt, and the draft context. Return the `gate_goal_id`. Timeout: 30 min (configurable in `[session] gate_timeout_mins`).
+3. [ ] **`spawn_advisor_agent()`** (`crates/ta-session/src/advisor_agent.rs`): Build the advisor context — serialize draft summary, embedded patches digest, session memory snapshot, available tools (filtered by security level), phase summary if milestone. Launch a short-lived `ta run --headless` subprocess with `CallerMode::Orchestrator`, injected advisor system prompt, and the draft context. Return the `advisor_goal_id`. Timeout: 30 min (configurable in `[session] advisor_timeout_mins`).
 
-4. [ ] **Gate agent system prompt** (`templates/gate-agent-prompt.md`): "You are the QA gate for session item `{title}`. Your job: present changes clearly, answer questions, and iterate until the human is satisfied. Use `ta_ask_human` to converse. Use `ta_goal_start` with `follow_up=true` to incorporate requested changes. When the human approves, call `ta_draft approve` then `ta_draft apply`. If the human wants to skip, call `ta_draft deny`. Do not apply without explicit human approval unless `auto_approve = true`." Includes the embedded patch digest and session memory.
+4. [ ] **Advisor system prompt** (`templates/advisor-prompt.md`): "You are the advisor for session item `{title}`. You are explicitly on the human's side — your job is to look out for their interests. Present what changed clearly. Proactively flag risks, ask for missing context, and advocate against applying a draft that looks wrong. Use `ta_ask_human` to converse. In `auto` mode at ≥80% intent confidence, use `classify_intent()` and fire directly. When the human approves, call `ta_draft approve` then `ta_draft apply`. If skipped, call `ta_draft deny`. Never apply without explicit human approval unless `advisor_security = auto` and confidence ≥ 80%." Includes embedded patch digest and session memory.
 
-5. [ ] **`ta_goal_start` follow-up from gate** (`crates/ta-mcp-gateway/src/tools/goal.rs`): When called by `CallerMode::Orchestrator` with `follow_up=true`, inherit the parent draft's staging dir. Gate agent waits for the follow-up's draft to reach `PendingReview`, then presents the accumulated diff (original + follow-up changes) to the human.
+5. [ ] **Intent classifier** (`crates/ta-session/src/intent.rs`): Structured tool call returning `{ intent: GoalRun | Question | Clarify, confidence: f32 }`. Used by advisor in `auto` mode to decide whether to fire a goal directly. Threshold: 0.80.
 
-6. [ ] **`ta shell` gate integration**: When a `ta session` is active and `gate = "agent"`, route shell input to the active gate agent's `ta_ask_human` channel rather than the normal shell. The user types in the shell, the gate agent receives it, responds via the shell output pane. No mode switching required — it feels like one conversation.
+6. [ ] **Milestone phase summary builder** (`crates/ta-session/src/phase_summary.rs`): At multi-phase milestone boundary, collect completed phases from decision log + embedded patches. Build `PhaseSummary { phases: Vec<PhaseRecord> }` where each `PhaseRecord` has: phase title, decisions list, files changed count, embedded diff. Serialized into advisor context. The advisor presents this as the structured summary before final approval.
 
-7. [ ] **TA Studio gate pane**: When a gate agent is active for a session item, the Studio "Goals" tab shows the current item's gate conversation in a chat-style pane: gate agent messages + human replies + a "Type your response" input. Responses are sent via `POST /api/session/{id}/gate-input { message }`. This routes to the active `ta_ask_human` request.
+7. [ ] **`ta_goal_start` follow-up from advisor** (`crates/ta-mcp-gateway/src/tools/goal.rs`): When called by `CallerMode::Orchestrator` with `follow_up=true`, inherit the parent draft's staging dir. Advisor waits for the follow-up's draft to reach `PendingReview`, then presents the accumulated diff to the human.
 
-8. [ ] **Constitution gate for auto-apply**: Gate agent must not call `ta_draft apply` without `ta_ask_human` receiving explicit human approval, unless `gate_auto_approve = true` is in the project constitution. `ConstitutionChecker::check_gate_auto_approve()` enforces this. Error: "Gate auto-approve requires explicit consent in `.ta/constitution.toml`: `gate_auto_approve = true`."
+8. [ ] **`ta shell` advisor integration**: When a `ta session` is active and `gate = "agent"`, route shell input to the active advisor agent's `ta_ask_human` channel rather than the normal shell. Feels like one conversation — no mode switching.
 
-9. [ ] **Reviewer goal noise filter in gate context**: When the gate agent is active, `ta status` must not surface failed system-reviewer goals as URGENT interruptions to the gate conversation. ~~Do not auto-close reviewer goals~~ — the real fix is in v0.15.6.3 (embedded patch injection + `staging_required = false` so reviewer goals don't fail on GC'd staging). This item is the gate-specific filter: if a reviewer goal's parent draft is the one currently at the gate, suppress its `URGENT` banner from `ta status` output during the gate session. Reviewer goals that complete with a verdict are surfaced normally through the gate agent's context.
+9. [ ] **TA Studio advisor pane**: When an advisor is active for a session item, the Studio "Goals" tab shows the advisor conversation in a chat-style pane labeled "Advisor" (not "Gate"). Responses sent via `POST /api/session/{id}/advisor-input { message }`. At milestone, renders the structured phase summary with per-phase expandable diff sections.
 
-10. [ ] **Tests**: `GateMode::from_str("agent")` parses correctly. `spawn_gate_agent` builds correct context from draft + session memory. Gate agent receives apply signal → session item transitions to Complete. Gate agent receives deny signal → item transitions to Skipped. Follow-up spawned from gate → accumulated diff presented. Constitution gate blocks auto-apply without consent. Reviewer goal marked Closed when parent draft is Applied. `ta shell` routes input to gate channel when session gate is active.
+10. [ ] **Constitution guard for auto-apply**: Advisor must not call `ta_draft apply` without `ta_ask_human` receiving explicit human approval, unless `advisor_security = "auto"` in the project constitution. `ConstitutionChecker::check_advisor_auto_approve()` enforces this.
 
-11. [ ] **USAGE.md "Interactive Governed Session"** section: Full walkthrough — `ta session run --gate agent`, what the gate agent presents, how to ask questions, how to request modifications, how Studio shows the conversation, how to configure gate persona and timeout.
+11. [ ] **Reviewer goal noise filter**: When advisor is active, suppress failed system-reviewer goal `URGENT` banners from `ta status` during the advisor session (real fix is in v0.15.6.3; this is the session-scoped filter).
+
+12. [ ] **Tests**: `GateMode::from_str("agent")` parses. `spawn_advisor_agent` builds correct context. Advisor applies → session item `Complete`. Advisor denies → `Skipped`. Follow-up → accumulated diff presented. Intent classifier returns ≥80% confidence on clear goal request. Phase summary builder emits correct structure. Constitution guard blocks auto-apply without consent. `ta shell` routes to advisor channel when session is active.
+
+13. [ ] **USAGE.md "Advisor Agent"** section: Full walkthrough — `ta session run --gate agent`, what the advisor presents, how security levels work, how to request modifications, how Studio shows the advisor conversation, how to configure advisor persona and timeout. Use "advisor" throughout — not "gate agent" or "QA gate".
 
 #### Version: `0.15.19-alpha`
 
@@ -11274,6 +11314,48 @@ The planner agent runs with read-only tools (Read, Grep, Glob) — it cannot wri
 8. [ ] **Tests**: `PlanWork` stage spawns read-only agent and writes `work-plan.json`; fails cleanly when no plan written; `WorkPlan::validate()` rejects empty decisions; bridge loads plan decisions into agent_decision_log; draft view shows plan section when present; implementor context injection includes plan when preceding `PlanWork` stage exists.
 
 #### Version: `0.15.20-alpha`
+
+---
+
+### v0.15.21 — Studio Advisor Agent (QA Agent Upgrade)
+<!-- status: pending -->
+**Goal**: Replace the Studio QA agent with the advisor agent pattern from v0.15.19. The QA agent currently answers ad-hoc questions and runs context-scoped searches. The advisor is explicitly on the human's side: it interprets intent, explains what is happening, proactively flags concerns, and can execute TA commands depending on the configured security level.
+
+**Why this phase exists**: The QA agent is neutral and passive — it answers what it's asked. The advisor is active and opinionated: it looks out for the human, raises concerns unprompted, and reduces friction for common actions (clear goal requests, obvious approvals) while maintaining strong protection for risky or ambiguous actions. This is the right framing for an always-on Studio assistant.
+
+**Depends on**: v0.15.19 (advisor agent, intent classifier, security levels, structured phase summary)
+
+#### Design
+
+**Security levels** (configured in Studio settings or `workflow.toml`):
+- `read_only` (default): advisor answers questions, never starts a goal or applies a draft. Shows `ta run "..."` command for the human to copy.
+- `suggest`: advisor presents the exact `ta run "..."` command as a clickable button in Studio. Human clicks to confirm.
+- `auto`: at ≥80% intent confidence from `classify_intent()`, advisor fires `ta run` directly.
+
+**Advisor framing** (Studio UI and system prompt):
+- Label: "Advisor" (not "QA Agent" or "Chat")
+- System prompt direction: explicitly on the human's side — proactively surfaces concerns, asks for missing context, and advocates against applying a draft that looks wrong.
+- At multi-phase milestone completion: presents structured phase summary (all phases, decisions per phase, expandable diff per phase) before asking for final approval.
+
+#### Items
+
+1. [ ] **Rename QA agent → advisor in Studio** (`apps/ta-studio/`): Update all UI labels, button text, and panel titles from "QA Agent" / "Assistant" to "Advisor". Update the Studio chat pane header. This is terminology only — no functional change in this item.
+
+2. [ ] **Advisor system prompt for Studio** (`templates/studio-advisor-prompt.md`): Replaces the QA agent prompt. Explicitly frames the advisor as on the human's side. Includes: project context (CLAUDE.md, plan phase, recent goals), TA command reference, current session state (active goals, pending drafts), and security level instructions. Prompt instructs the advisor to proactively raise concerns rather than waiting to be asked.
+
+3. [ ] **Intent classifier integration** (`apps/ta-studio/src/advisor.rs`): Studio advisor uses `classify_intent()` on each human message. In `read_only` mode: present the `ta run "..."` command as copyable text. In `suggest` mode: render as a clickable "Run this" button in the chat pane. In `auto` mode: fire directly when confidence ≥ 80%, otherwise ask for clarification.
+
+4. [ ] **Structured phase summary in advisor chat** (`apps/ta-studio/src/advisor.rs`): When a multi-phase goal run completes or a milestone is reached, the advisor automatically presents the phase summary (per v0.15.19 spec) in the Studio chat pane. Per-phase diffs are expandable inline sections. Human can ask about any phase before approving.
+
+5. [ ] **TA tools for advisor** (by security level): In `auto` or `suggest` mode, advisor has access to: `ta_goal_start`, `ta_draft_list`, `ta_draft_view`, `ta_plan_status`. In `read_only`, only read-only tools (`ta_draft_view`, `ta_plan_status`, `ta_fs_read`). Tool availability injected into advisor context at session start.
+
+6. [ ] **Studio settings panel**: Add "Advisor Security Level" setting (read_only / suggest / auto) with description and warning for `auto` mode. Persisted in Studio user preferences (not `workflow.toml` — this is a per-user setting, not per-project).
+
+7. [ ] **Tests**: Intent classifier returns GoalRun with ≥80% for unambiguous goal requests. `read_only` mode never fires `ta_goal_start`. `suggest` mode renders clickable button. `auto` mode fires when confidence ≥ 80%. Phase summary renders in chat pane on milestone. Advisor prompt framing passes constitution review (no neutral-gate language).
+
+8. [ ] **USAGE.md "Studio Advisor"** section: How the advisor differs from the old QA agent, how security levels work, example interactions (asking questions, starting a goal via advisor, milestone phase summary walkthrough).
+
+#### Version: `0.15.21-alpha`
 
 ---
 
