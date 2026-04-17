@@ -770,11 +770,7 @@ fn context_size_report(
     } else {
         format!("{}", budget)
     };
-    let pct = if budget > 0 {
-        (total * 100) / budget
-    } else {
-        0
-    };
+    let pct = (total * 100).checked_div(budget).unwrap_or(0);
 
     println!();
     println!("Context Budget Report");
@@ -795,11 +791,7 @@ fn context_size_report(
     ];
 
     for (name, chars) in sections {
-        let section_pct = if budget > 0 {
-            (chars * 100) / budget
-        } else {
-            0
-        };
+        let section_pct = (chars * 100).checked_div(budget).unwrap_or(0);
         if verbose || *chars > 0 {
             println!(
                 "  {:<30} {:>8}  {:>5}%",
