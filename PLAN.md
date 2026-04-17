@@ -10808,7 +10808,54 @@ No files are written. Staging is intact — user can `ta draft deny`, fix in sta
 
 ---
 
-### v0.15.15.5 — Nightly Build Pipeline
+### v0.15.15.5 — Batch Build Loop: `build` Sub-Workflow, Auto-Approve & Post-Sync Build Step
+<!-- status: pending -->
+
+**Goal**: Make `plan-build-loop.yaml` and `plan-build-phases.yaml` runnable end-to-end by supplying the missing `build` sub-workflow, add a simple auto-approve config so trusted local runs skip the interactive `human_gate`, and add a generic post-sync build step with a TA-specific `install_local.sh` implementation committed to the repo. Together these let you invoke `ta workflow run plan-build-loop` and have TA iterate through all pending plan phases unattended (with policy guardrails), rebuilding and installing after each phase merges.
+
+**Depends on**: v0.15.14 (phase-loop engine, `plan_next`, `goto`, `apply_draft_branch` all implemented)
+
+**Items**:
+
+1. [ ] **`templates/workflows/build.yaml`** — per-phase sub-workflow that `plan-build-loop` and `plan-build-phases` delegate to. Stages: `run_goal` → `review_draft` → `human_gate` → `apply_draft` → `pr_sync`. This is the template that was always referenced but never committed. Project-local `.ta/workflows/build.yaml` overrides it for custom per-phase policies.
+
+2. [ ] **Auto-approve config** (`[workflow.auto_approve]` in `.ta/workflow.toml` or the workflow YAML `config:` block): simple rule set for skipping the interactive `human_gate` on trusted local runs.
+
+   ```toml
+   # .ta/workflow.toml — project-local override
+   [workflow.auto_approve]
+   enabled = true
+   # All conditions must be true to auto-approve without prompting.
+   # "reviewer_approved"  — reviewer agent returned approved verdict
+   # "no_flags"           — reviewer raised no flag items
+   # "severity_below"     — no Critical corrective actions pending
+   conditions = ["reviewer_approved", "no_flags"]
+   ```
+
+   When `auto_approve.enabled = true` and all listed conditions are satisfied, `human_gate` logs `"[auto-approve] conditions met — applying without prompt"` and proceeds. Any unsatisfied condition falls back to the interactive prompt. This is intentionally simple — no regex/scope matching — so it is safe to commit and easy to audit.
+
+3. [ ] **Post-sync build step** (generic engine + TA implementation):
+
+   *Engine* (`governed_workflow.rs`): After `pr_sync` completes (and after `apply_draft` in milestone mode), check `[workflow.post_sync_build]` config. If `command` is set, run it in the workspace root with a 10-minute timeout, streaming output. Failure halts the loop with an actionable error: `"Post-sync build failed — fix the build before continuing. Re-run with ta workflow resume <id>."`. Success logs the exit code and continues to `plan_next`.
+
+   ```toml
+   # Generic form in workflow.toml or workflow YAML config:
+   [workflow.post_sync_build]
+   enabled = true
+   command = "bash install_local.sh"   # any shell command
+   timeout_secs = 600
+   on_failure = "halt"   # or "warn" to continue anyway
+   ```
+
+   *TA implementation* (`workflow.toml` at repo root or `.ta/workflow.toml`): Committed entry that runs `install_local.sh` so every batch-build loop ends with a freshly installed binary before the next phase starts. This is the only TA-specific file; the engine and config schema are fully generic.
+
+4. [ ] **Tests**: `build.yaml` resolves as sub-workflow and runs to completion in dry-run mode; auto-approve fires when conditions met and skips prompt; auto-approve falls back to prompt when any condition fails; post-sync build command runs after `pr_sync`; post-sync failure halts with resume instructions; `on_failure = "warn"` continues; timeout fires and reports the hung command.
+
+#### Version: `0.15.15-alpha.5`
+
+---
+
+### v0.15.15.6 — Nightly Build Pipeline
 <!-- status: pending -->
 
 **Goal**: Add a scheduled nightly CI workflow that builds all 5 platforms at 2am PT and publishes a rolling pre-release only when main has new commits since the last nightly. Latest nightly appears alongside latest stable on the GitHub releases page. Historical nightly builds are accessible via a separate link, not interleaved with the stable release list.
@@ -10843,7 +10890,7 @@ Stable and nightly use different tag prefixes (`v*` vs `nightly`), so GitHub's d
 
 9. [ ] **Tests / validation**: Manual `workflow_dispatch` run confirms: skip fires on re-run with no new commit; history table updates on new commit; `nightly` tag moves to HEAD; `last-sha.txt` asset is replaced. Document the manual test steps in the PR.
 
-#### Version: `0.15.15-alpha.5`
+#### Version: `0.15.15-alpha.6`
 
 ---
 
