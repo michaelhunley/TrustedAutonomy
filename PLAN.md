@@ -10697,7 +10697,7 @@ condition = "consensus.proceed"
 ---
 
 ### v0.15.15.3.1 — Config File Format Cleanup
-<!-- status: pending -->
+<!-- status: done -->
 
 **Goal**: Normalize the inconsistent mix of TOML and YAML across `agents/` and `templates/workflows/`. Document the format rules in the constitution to keep them aligned going forward.
 
