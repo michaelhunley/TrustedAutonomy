@@ -10897,10 +10897,10 @@ Stable and nightly use different tag prefixes (`v*` vs `nightly`), so GitHub's d
 
 
 ### v0.15.15.6.2 — Review draft 6cbcb978 for governed workflow
-<!-- status: in_progress -->
+<!-- status: done -->
 *Inserted goal — not in original plan.*
 ### v0.15.15.6.1 — Review draft 1d52066e for governed workflow
-<!-- status: in_progress -->
+<!-- status: done -->
 *Inserted goal — not in original plan.*
 ### v0.15.15.7 — Apply UX: Dirty VCS Check + Staging Version Bump Fix
 <!-- status: done -->
