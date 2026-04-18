@@ -10956,7 +10956,33 @@ Secrets required (GitHub Actions repository secrets):
 
 **Items**:
 
-1. [ ] **Certificate procurement (manual, human step — PENDING)**: Purchase EV code signing certificate from a Microsoft-trusted CA (DigiCert recommended). Store as `WINDOWS_SIGNING_CERT_BASE64` and `WINDOWS_SIGNING_PASSWORD` in GitHub Actions repository secrets. Document the renewal process in `docs/release-ops.md`. *CI signing step is wired and ready; will activate automatically once secrets are added.*
+1. [ ] **Certificate procurement (manual, human step — IN PROGRESS)**: Obtain an EV code signing certificate. *Currently applying for a free OSS cert — see notes below.*
+
+   **Free / OSS certificate options (check these first):**
+   - **Microsoft Trusted Root Program for OSS** — no longer offers free certs directly, but some CAs participate in OSS discount programs.
+   - **Certum Open Source Code Signing** (certum.eu) — offers free OV code signing certificates for open-source projects. OV will not bypass SmartScreen on day 1 but builds reputation over time. Apply at: `https://www.certum.eu/en/cert_offer_code_signing_open_source/`
+   - **SignPath Foundation** (signpath.io) — free code signing for OSS projects via their foundation program. Provides EV-equivalent trust via their policy. Apply at: `https://signpath.org/`. Integrates with GitHub Actions via the SignPath GitHub Action.
+   - **SSL.com EV** (~$195/yr) — cheapest commercial EV option if OSS programs don't qualify.
+
+   **If using SignPath Foundation (recommended for OSS EV-equivalent):**
+   1. Apply at `https://signpath.org/` — requires public GitHub repo and OSS license.
+   2. Once approved, install the SignPath GitHub Action and configure a signing policy.
+   3. Replace `sign-windows.ps1` call in `release.yml` with the SignPath action — no PFX secret needed.
+   4. SignPath uses a cloud HSM; SmartScreen reputation builds via their shared trusted publisher.
+
+   **If using a commercial EV cert (PFX-based):**
+   1. Purchase from DigiCert, Sectigo, or SSL.com. Requires registered legal entity (LLC/Corp) and 2-5 day identity verification.
+   2. Export PFX and set GitHub secrets:
+      ```bash
+      # Encode PFX to base64 (no line breaks)
+      base64 -i mycert.pfx | tr -d '\n'
+      # Paste output as: Settings → Secrets → Actions → WINDOWS_SIGNING_CERT_BASE64
+      # Also add: WINDOWS_SIGNING_PASSWORD = pfx password
+      ```
+   3. CI activates automatically — `sign-windows.ps1` and `release.yml` signing step are already wired.
+   4. **Cloud HSM requirement**: Some CAs now require the private key on a hardware token. For GitHub Actions, choose a CA offering "cloud signing" (SSL.com CloudSigning, DigiCert KeyLocker) rather than a USB token — USB tokens cannot be used in CI.
+
+   Store as `WINDOWS_SIGNING_CERT_BASE64` and `WINDOWS_SIGNING_PASSWORD` in GitHub Actions repository secrets. Document the renewal process in `docs/release-ops.md`.
 
 2. [x] **`sign-windows.ps1` helper script** (`scripts/sign-windows.ps1`): Decode the base64 cert, write to a temp PFX, sign all `.exe` and `.msi` files passed as arguments with `signtool.exe` (SHA-256 digest, RFC 3161 timestamp via DigiCert's TSA), verify each signature, delete the temp PFX in a `try/finally` block. Idempotent and safe to re-run.
 
@@ -11335,6 +11361,55 @@ The diff is nested and expandable per phase. The advisor presents this context o
 
 ---
 
+### v0.15.19.1 — Workflow Event Bus & Subscription Core
+<!-- status: done -->
+
+**Goal**: Introduce a typed event system (`ta-events` crate) so TA components can publish structured lifecycle events and external tools can subscribe to them. Provides the foundation for notification rules (v0.15.19.2), email admin assistant, and future Virtual Office integrations.
+
+**Depends on**: v0.15.19 (governed session, TaEvent enum seeds)
+
+**Ships in**: PR #397, merged 2026-04-18.
+
+#### Items
+
+1. [x] **`ta-events` crate** (`crates/ta-events/`): New workspace crate. `Cargo.toml` with `uuid`, `serde`, `chrono`, `thiserror` dependencies. Registered in workspace `Cargo.toml`.
+
+2. [x] **`TaEvent` enum** (`crates/ta-events/src/lib.rs`): Typed event variants covering the full TA lifecycle:
+   - `GoalStarted { goal_id, title, agent_id, plan_phase }`
+   - `GoalPrReady { goal_id, title, draft_id }`
+   - `GoalApplied { goal_id, title, plan_phase }`
+   - `GoalFailed { goal_id, title, error }`
+   - `DraftBuilt { draft_id, goal_id, artifact_count }`
+   - `DraftApplied { draft_id, goal_id }`
+   - `WorkflowStarted { workflow_id, name }`
+   - `WorkflowPhaseEntered { workflow_id, phase_name }`
+   - `WorkflowCompleted { workflow_id, name }`
+   - `WorkflowFailed { workflow_id, name, error }`
+   - `SessionItemReady { session_id, item_id, draft_id }`
+   Each variant derives `Serialize/Deserialize`. `EventEnvelope { id: Uuid, event_type: String, payload: serde_json::Value, occurred_at: DateTime<Utc> }` wraps all events for transport.
+
+3. [x] **`EventPattern` matching** (`crates/ta-events/src/lib.rs`): `EventPattern { event_type: Option<String>, goal_id: Option<Uuid> }` with `matches(&EventEnvelope) -> bool`. Supports wildcard (`*`) event type. Used by subscriptions to filter delivery.
+
+4. [x] **`ChannelDelivery` trait** (`crates/ta-events/src/channel.rs`): `async fn deliver(&self, event: &EventEnvelope) -> DeliveryResult`. `DeliveryResult { success: bool, delivery_id: Option<String>, error: Option<String> }`. Default impl returns graceful not-implemented error.
+
+5. [x] **`EventDispatcher`** (`crates/ta-events/src/channel.rs`): `emit(event: TaEvent)` serializes to `EventEnvelope`, evaluates registered subscriptions, calls `deliver()` on matched channel adapters. Thread-safe via `Arc<RwLock<>>`.
+
+6. [x] **`ta notify` CLI** (`apps/ta-cli/src/commands/events.rs`): New subcommand with:
+   - `ta notify subscribe <event-type> [--channel <name>] [--goal <id>]` — registers a subscription, prints subscription ID
+   - `ta notify list` — shows active subscriptions with event type, channel, last-fired timestamp
+   - `ta notify cancel <id>` — removes a subscription
+   - `ta notify test <event-type>` — fires a synthetic event to verify delivery pipeline end-to-end
+
+7. [x] **Error types** (`crates/ta-events/src/error.rs`): `EventError` enum covering `SerializationError`, `DeliveryError { channel, reason }`, `SubscriptionNotFound { id }`.
+
+8. [x] **Tests**: `TaEvent` serializes and deserializes correctly for all variants. `EventPattern` matches exact type, wildcard, and goal-scoped subscriptions. `EventDispatcher::emit` routes to correct adapters. `ta notify test` fires and returns `DeliveryResult`. 24 tests across `lib.rs`, `channel.rs`, `error.rs`.
+
+9. [x] **USAGE.md**: "Workflow Events & Notifications" section added — covers `ta notify subscribe/list/cancel/test`, event type reference, and example subscription patterns.
+
+#### Version: `0.15.19-alpha.1`
+
+---
+
 ### v0.15.19.2 — Notification Rules Engine + Delivery Channels
 <!-- status: done -->
 **Goal**: Add a rule-driven notification system that pushes one-way event notifications (goal failures, policy violations, draft denials, etc.) to external channels (Slack, email, external plugins) based on configurable rules loaded from `.ta/notification-rules.toml`.
@@ -11430,6 +11505,73 @@ period_secs = 3600
 14. [x] **`ta-events/src/lib.rs`**: Exported `NotificationRule`, `NotificationRulesConfig`, `NotificationRulesEngine`, `NotificationSeverity`, `NotificationTemplate`, `RateLimit`, `RuleCondition`, `ChannelNotification`.
 
 #### Version: `0.15.19-alpha.2`
+
+---
+
+### v0.15.19.3 — Draft Pre-Apply Plan Review Agent
+<!-- status: pending -->
+
+**Goal**: Before `ta draft apply` executes, run a parallel "plan review" agent that audits the draft against PLAN.md and the live codebase, resolves PLAN.md merge conflicts, verifies that all plan items claimed in the phase are actually implemented, and presents the user with a repair-or-deny decision. This closes the tracking gap where agents mark phases done without completing all items, and where staging base drift causes PLAN.md status regressions.
+
+**Depends on**: v0.15.19.1 (EventDispatcher for review-complete events), v0.15.15.7 (dirty-VCS check baseline)
+
+**Background**: Recurring problems in the build loop:
+1. Agents change `<!-- status: in_progress -->` → `<!-- status: pending -->` (regression) because their staging copy predates the status update on main.
+2. Items left unchecked (`[ ]`) in phases marked `<!-- status: done -->` — agents implement code but forget to check the box, or the box was in a different file version.
+3. PLAN.md merge conflicts on apply — staging PLAN.md and source PLAN.md have diverged (different phases completed, different status markers). `ta draft apply` blindly copies staging PLAN.md over source, losing main's updates.
+4. No enforcement gate — the build loop proceeds even when the above violations exist, requiring manual audits (as seen in v0.15.15.6–v0.15.17).
+
+**Design**: A lightweight headless review agent (`ta-review-agent`) runs in parallel with or immediately after `ta draft build`, before the user is prompted to apply. It receives the draft package and the live source tree (not staging). It produces a `ReviewReport` that gates or repairs the apply step.
+
+```
+ta draft build --latest
+    ↓
+ta review-agent run <draft-id>         ← NEW: parallel review
+    ├── Plan audit: compare staging PLAN.md vs source PLAN.md
+    │   ├── Detect status regressions (in_progress → pending)
+    │   ├── Detect unchecked items in done phases
+    │   └── Produce minimal patch to reconcile
+    ├── Item coverage check: for each [ ] item in the phase, grep
+    │   the draft artifacts for evidence of implementation
+    │   (function names, struct names, test names from spec)
+    └── ReviewReport { regressions, unchecked_items, coverage_gaps, plan_patch }
+    ↓
+ta draft view <draft-id>               ← shows ReviewReport inline
+    ↓ (user chooses)
+[A]pply with auto-repair               ← applies plan_patch before copy
+[R]epair interactively                 ← opens editor on PLAN.md patch
+[D]eny                                 ← blocks apply, records reason
+```
+
+**Key design constraints**:
+- Review agent must never modify the draft package or staging directory — it outputs a `plan_patch` (unified diff against source PLAN.md) that `ta draft apply` optionally applies before copying.
+- Review is non-blocking by default — user sees the report and chooses. `--auto-repair` flag applies the patch without prompting (for the build loop).
+- The review agent is a second Claude invocation, not the same session as the implementor agent. It receives only the draft diffs and PLAN.md, not the full staging copy — keeps context small.
+- Conflict resolution strategy: source PLAN.md is authoritative for status markers; staging PLAN.md is authoritative for newly checked items (`[ ]` → `[x]`) added by the agent. Merge: take source status markers + take staging checkboxes.
+
+**Items**:
+
+1. [ ] **`ReviewReport` type** (`crates/ta-changeset/src/review_report.rs`): `ReviewReport { draft_id: Uuid, generated_at: DateTime<Utc>, regressions: Vec<StatusRegression>, unchecked_items: Vec<UncheckedItem>, coverage_gaps: Vec<CoverageGap>, plan_patch: Option<String> }`. `StatusRegression { phase_id, from_status, to_status }` — e.g., `in_progress → pending`. `UncheckedItem { phase_id, item_number, text_excerpt }`. `CoverageGap { phase_id, item_number, text_excerpt, evidence_searched: Vec<String> }` — items with no code evidence in the draft.
+
+2. [ ] **PLAN.md merge logic** (`crates/ta-changeset/src/plan_merge.rs`): `merge_plan_md(source: &str, staging: &str) -> MergeResult`. Rules: (a) for each `<!-- status: X -->` marker, always take source's value unless staging's phase was `pending` and is now `done` (newly completed phase — take staging). (b) for each `- [ ]` / `- [x]` item, take `[x]` if either source or staging has it checked. (c) preserve source ordering of phases. Returns `MergeResult { merged: String, regressions_fixed: usize, items_recovered: usize, conflicts: Vec<MergeConflict> }`.
+
+3. [ ] **Item coverage checker** (`crates/ta-changeset/src/coverage.rs`): For each unchecked `[ ]` item in the phase being applied, extract 2-4 significant tokens from the item text (function names, struct names, file paths, command names). Grep the draft artifact diffs for those tokens. If ≥1 token found in any artifact diff: mark as likely implemented (emit as `[x]` in plan_patch). If 0 tokens found: add to `coverage_gaps`. Heuristic — not exhaustive, reduces noise.
+
+4. [ ] **`ta review-agent run <draft-id>`** (`apps/ta-cli/src/commands/review_agent.rs`): CLI entry point. Loads draft package, diffs staging PLAN.md against source PLAN.md, runs merge logic, runs coverage checker on the active phase's items. Writes `ReviewReport` to `.ta/review/<draft-id>/report.json`. Prints summary to stdout. Exits 0 if no regressions/gaps, exits 1 if issues found. Supports `--auto-repair` flag (applies plan_patch to the draft's PLAN.md artifact without user prompt).
+
+5. [ ] **`ta draft view` integration**: When a `ReviewReport` exists for a draft, render it in the view output above the artifact list: regressions in red, unchecked items in yellow, coverage gaps in yellow, plan_patch preview in blue. If no issues: `[review] Plan audit clean — no regressions or gaps.` in green.
+
+6. [ ] **`ta draft apply` integration**: Before copying artifacts to source, check for a `ReviewReport` with `plan_patch`. If `plan_patch` is non-null and `--auto-repair` is set (or user chose [A]pply with auto-repair): apply the patch to the PLAN.md artifact in the draft package before copy. Log: `[apply] Plan patch applied: {N} status regressions fixed, {M} items recovered.`
+
+7. [ ] **Build loop integration** (`templates/workflows/plan-build-loop.yaml`): After `ta draft build`, add a `review` stage: `ta review-agent run --latest --auto-repair`. If exit 1 (coverage gaps remain after auto-repair): continue to apply anyway but record gaps in the commit message. Do not block the loop on coverage gaps — only block on regressions.
+
+8. [ ] **Event emission**: Emit `TaEvent::ReviewCompleted { draft_id, regressions_fixed, items_recovered, coverage_gaps_remaining }` via `EventDispatcher` so notification rules can alert on persistent coverage gaps.
+
+9. [ ] **Tests**: `merge_plan_md` with regression (in_progress→pending): source value wins. `merge_plan_md` with newly done phase (pending→done in staging): staging value wins. Item checked in staging but not source: merged as `[x]`. Item checked in source but not staging: merged as `[x]`. Coverage checker finds function name in diff: marks likely-implemented. Coverage checker finds nothing: adds to gaps. `ta review-agent run` exits 0 on clean draft. Exits 1 with report when regressions present. `--auto-repair` writes patched PLAN.md artifact. `ta draft view` renders report.
+
+10. [ ] **USAGE.md**: "Draft Pre-Apply Review" section — how the review agent works, what auto-repair does, how to interpret coverage gaps vs regressions, and how to use `--auto-repair` in CI vs interactive use.
+
+#### Version: `0.15.19-alpha.3`
 
 ---
 
