@@ -811,6 +811,7 @@ fn to_draft_command(cmd: &PrCommands) -> draft::DraftCommands {
             force_apply: false,
             validate_version: false,
             status: false,
+            auto_repair: false,
         },
         // Checks and Fix are handled before reaching this function.
         PrCommands::Checks { .. } | PrCommands::Fix { .. } => {

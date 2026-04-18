@@ -261,6 +261,16 @@ pub enum TaEvent {
         auto_applied: bool,
         timestamp: DateTime<Utc>,
     },
+
+    /// PLAN.md pre-apply review completed for a draft (v0.15.19.3).
+    ReviewCompleted {
+        draft_id: Uuid,
+        silent_fixes: usize,
+        agent_additions: usize,
+        conflicts: usize,
+        coverage_gaps: usize,
+        timestamp: DateTime<Utc>,
+    },
 }
 
 impl TaEvent {
@@ -295,6 +305,7 @@ impl TaEvent {
             TaEvent::WorkflowFailed { .. } => "workflow_failed",
             TaEvent::WorkflowAwaitingHuman { .. } => "workflow_awaiting_human",
             TaEvent::DraftAutoApproved { .. } => "draft_auto_approved",
+            TaEvent::ReviewCompleted { .. } => "review_completed",
         }
     }
 

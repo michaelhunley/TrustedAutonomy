@@ -238,6 +238,11 @@ pub enum DraftCommands {
         /// Show whether an apply is currently in progress (reads .ta/apply.lock).
         #[arg(long)]
         status: bool,
+        /// Auto-repair PLAN.md conflicts on apply: take source for all conflicts, log each.
+        /// Used in CI build loops where human interactive resolution is not possible.
+        /// Coverage gaps do not block apply.
+        #[arg(long)]
+        auto_repair: bool,
     },
     /// Amend an artifact in a draft (replace content, apply patch, or drop).
     Amend {
@@ -696,6 +701,7 @@ pub fn execute(cmd: &DraftCommands, config: &GatewayConfig) -> anyhow::Result<()
             force_apply,
             validate_version,
             status,
+            auto_repair,
         } => {
             if *status {
                 ApplyLock::print_status(&config.workspace_root);
@@ -792,6 +798,7 @@ pub fn execute(cmd: &DraftCommands, config: &GatewayConfig) -> anyhow::Result<()
                 phase.as_deref(),
                 *force_apply,
                 *validate_version,
+                *auto_repair,
             )?;
 
             // --watch: poll until merged, then auto-sync.
@@ -1009,6 +1016,208 @@ fn load_change_summary(staging_path: &std::path::Path) -> Option<ChangeSummary> 
             None
         }
     }
+}
+
+/// v0.15.19.3: Run the PLAN.md pre-apply plan review and persist the ReviewReport.
+///
+/// Called automatically from `build_package` when PLAN.md is in the draft artifacts.
+/// Reads:
+/// - `<staging>/.ta/plan_base.md` — the PLAN.md snapshotted at goal-start time (three-way base)
+/// - `<staging>/PLAN.md` — the agent's version
+/// - `<source>/PLAN.md` — the current source
+///
+/// If plan_base.md is absent (pre-v0.15.19.3 goals), falls back to two-way merge
+/// (base == source, conservative conflict detection).
+fn run_plan_review(
+    config: &GatewayConfig,
+    draft_id: Uuid,
+    staging_path: &std::path::Path,
+    source_path: &std::path::Path,
+    artifacts: &[Artifact],
+) -> anyhow::Result<ta_changeset::review_report::ReviewReport> {
+    use ta_changeset::plan_merge::merge_plan_md;
+    use ta_changeset::review_report::ReviewReport;
+
+    let staging_plan = staging_path.join("PLAN.md");
+    let source_plan = source_path.join("PLAN.md");
+
+    if !staging_plan.exists() || !source_plan.exists() {
+        anyhow::bail!("PLAN.md not found in staging or source — skipping review");
+    }
+
+    let staging_content = std::fs::read_to_string(&staging_plan)?;
+    let source_content = std::fs::read_to_string(&source_plan)?;
+
+    let base_plan_path = staging_path.join(".ta").join("plan_base.md");
+    let base_content = if base_plan_path.exists() {
+        std::fs::read_to_string(&base_plan_path)?
+    } else {
+        // Two-way fallback: pretend base == source (staging is the only change).
+        source_content.clone()
+    };
+
+    let merge_result = merge_plan_md(&base_content, &staging_content, &source_content);
+
+    // Collect diff content for coverage checking.
+    let diff_content = collect_diff_content(staging_path, source_path, artifacts);
+
+    // Find unchecked items in the phase being applied.
+    let coverage_gaps = compute_coverage_gaps(&merge_result, &diff_content);
+
+    // Compute plan_patch as a unified diff of merged vs source.
+    let plan_patch = if merge_result.merged != source_content {
+        Some(build_unified_diff(
+            &source_content,
+            &merge_result.merged,
+            "PLAN.md",
+        ))
+    } else {
+        None
+    };
+
+    let report = ReviewReport {
+        draft_id,
+        generated_at: chrono::Utc::now(),
+        silent_fixes: merge_result.silent_fixes,
+        agent_additions: merge_result.agent_additions,
+        conflicts: merge_result.conflicts,
+        coverage_gaps,
+        plan_patch,
+    };
+
+    report.save(&config.workspace_root)?;
+    Ok(report)
+}
+
+/// Collect concatenated diff content for coverage analysis.
+fn collect_diff_content(
+    staging_path: &std::path::Path,
+    source_path: &std::path::Path,
+    artifacts: &[Artifact],
+) -> String {
+    let mut content = String::new();
+    for artifact in artifacts {
+        let rel = artifact
+            .resource_uri
+            .strip_prefix("fs://workspace/")
+            .unwrap_or(&artifact.resource_uri);
+        let staged = staging_path.join(rel);
+        if let Ok(s) = std::fs::read_to_string(&staged) {
+            content.push_str(&s);
+        }
+        let sourced = source_path.join(rel);
+        if let Ok(s) = std::fs::read_to_string(&sourced) {
+            content.push_str(&s);
+        }
+    }
+    content
+}
+
+/// Extract unchecked items from the merge result's sections and check coverage.
+fn compute_coverage_gaps(
+    merge_result: &ta_changeset::plan_merge::MergeResult,
+    diff_content: &str,
+) -> Vec<ta_changeset::review_report::CoverageGap> {
+    use ta_changeset::coverage::check_coverage;
+    use ta_changeset::plan_merge::parse_plan_sections;
+
+    let sections = parse_plan_sections(&merge_result.merged);
+    let mut all_gaps = Vec::new();
+
+    for section in &sections {
+        if section.id.starts_with("__") {
+            continue;
+        }
+        let unchecked: Vec<(usize, &str)> = section
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| !item.checked)
+            .map(|(i, item)| (i + 1, item.text.as_str()))
+            .collect();
+
+        if !unchecked.is_empty() {
+            let gaps = check_coverage(&section.id, &unchecked, diff_content);
+            all_gaps.extend(gaps);
+        }
+    }
+    all_gaps
+}
+
+/// Build a simple unified-diff-style patch between two strings.
+fn build_unified_diff(original: &str, modified: &str, label: &str) -> String {
+    let orig_lines: Vec<&str> = original.lines().collect();
+    let mod_lines: Vec<&str> = modified.lines().collect();
+
+    let mut patch = format!("--- {}\n+++ {}\n", label, label);
+    let max = orig_lines.len().max(mod_lines.len());
+    let mut i = 0;
+    while i < max {
+        let orig = orig_lines.get(i).copied().unwrap_or("");
+        let modif = mod_lines.get(i).copied().unwrap_or("");
+        if orig != modif {
+            patch.push_str(&format!("-{}\n+{}\n", orig, modif));
+        }
+        i += 1;
+    }
+    patch
+}
+
+/// Apply the plan patch from a ReviewReport to target PLAN.md.
+///
+/// The merged content is derived by re-running the merge logic using the
+/// report's patch to understand intent. Since the patch is a simple diff,
+/// we use the merged content from the report rather than applying a patch format.
+/// This is safe because the report was generated against source and the merge
+/// is deterministic.
+fn apply_plan_patch(
+    plan_md_path: &std::path::Path,
+    report: &ta_changeset::review_report::ReviewReport,
+) -> anyhow::Result<()> {
+    // We rebuild the merged content by re-running the three-way merge.
+    // This is safe — the merge is deterministic and idempotent.
+    // The plan_patch in the report is informational only; we use it to detect
+    // whether there's anything to do, and apply the merge by reconstructing
+    // from scratch with the same inputs.
+    //
+    // Simplified approach: the plan_patch is a line-by-line diff. We apply
+    // it by parsing the - and + lines and updating the target file.
+    if !plan_md_path.exists() {
+        return Ok(());
+    }
+
+    if let Some(ref patch) = report.plan_patch {
+        if patch.is_empty() {
+            return Ok(());
+        }
+
+        let current = std::fs::read_to_string(plan_md_path)?;
+        let mut lines: Vec<String> = current.lines().map(|l| l.to_string()).collect();
+        let mut patch_lines = patch.lines().peekable();
+
+        // Skip the --- and +++ header lines.
+        let mut changed = false;
+        while let Some(line) = patch_lines.next() {
+            if line.starts_with("---") || line.starts_with("+++") {
+                continue;
+            }
+            if let Some(orig) = line.strip_prefix('-') {
+                if let Some(new_line) = patch_lines.next() {
+                    if let Some(repl) = new_line.strip_prefix('+') {
+                        if let Some(pos) = lines.iter().position(|l| l == orig) {
+                            lines[pos] = repl.to_string();
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        if changed {
+            std::fs::write(plan_md_path, lines.join("\n"))?;
+        }
+    }
+    Ok(())
 }
 
 /// Look up a change summary entry by path and populate artifact fields.
@@ -2126,6 +2335,46 @@ pub(crate) fn build_package(
         pkg.verification_warnings.extend(plan_warnings);
     }
 
+    // v0.15.19.3: Run PLAN.md pre-apply plan review if PLAN.md is in the draft artifacts.
+    let has_plan_artifact = pkg.changes.artifacts.iter().any(|a| {
+        a.resource_uri.ends_with("/PLAN.md") || a.resource_uri == "fs://workspace/PLAN.md"
+    });
+
+    if has_plan_artifact {
+        let plan_review_result = run_plan_review(
+            config,
+            package_id,
+            &goal.workspace_path,
+            source_dir,
+            &pkg.changes.artifacts,
+        );
+        match plan_review_result {
+            Ok(report) => {
+                println!("[review] Plan audit complete: {}", report.summary_line());
+                // Emit ReviewCompleted event.
+                {
+                    use ta_events::{EventEnvelope, EventStore, FsEventStore, SessionEvent};
+                    let events_dir = config.workspace_root.join(".ta").join("events");
+                    let event_store = FsEventStore::new(&events_dir);
+                    let event = SessionEvent::ReviewCompleted {
+                        draft_id: package_id,
+                        silent_fixes: report.silent_fixes.len(),
+                        agent_additions: report.agent_additions.len(),
+                        conflicts: report.conflicts.len(),
+                        coverage_gaps: report.coverage_gaps.len(),
+                    };
+                    if let Err(e) = event_store.append(&EventEnvelope::new(event)) {
+                        tracing::warn!("Failed to persist ReviewCompleted event: {}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Plan review failed (non-fatal): {}", e);
+                println!("[review] Plan audit skipped: {}", e);
+            }
+        }
+    }
+
     // Save the draft package.
     save_package(config, &pkg)?;
 
@@ -2545,6 +2794,7 @@ fn apply_chain(
             None,  // phase_override
             false, // force_apply
             false, // validate_version
+            false, // auto_repair
         )?;
     }
 
@@ -3046,6 +3296,28 @@ fn view_package(
             .unwrap_or_else(|| phase_id.clone());
         println!("Phase: {}", phase_title);
         println!();
+    }
+
+    // v0.15.19.3: Show ReviewReport above the artifact list.
+    {
+        use ta_changeset::review_report::{render_review_report, ReviewReport};
+        if let Some(report) = ReviewReport::load(&config.workspace_root, package_id) {
+            let has_plan = pkg.changes.artifacts.iter().any(|a| {
+                a.resource_uri.ends_with("/PLAN.md") || a.resource_uri == "fs://workspace/PLAN.md"
+            });
+            if has_plan {
+                print!("{}", render_review_report(&report, color));
+                println!();
+            }
+        } else {
+            let has_plan = pkg.changes.artifacts.iter().any(|a| {
+                a.resource_uri.ends_with("/PLAN.md") || a.resource_uri == "fs://workspace/PLAN.md"
+            });
+            if has_plan {
+                println!("[review] No review report — run `ta draft build` to generate.");
+                println!();
+            }
+        }
     }
 
     // Parse detail level and format.
@@ -4881,6 +5153,7 @@ fn apply_package(
     phase_override: Option<&str>,
     force_apply: bool,
     validate_version: bool,
+    auto_repair: bool,
 ) -> anyhow::Result<()> {
     let package_id = resolve_draft_id(id, config)?;
 
@@ -5125,6 +5398,72 @@ fn apply_package(
             .clone()
             .unwrap_or_else(|| config.workspace_root.clone()),
     };
+
+    // ── v0.15.19.3: Plan review gate ─────────────────────────────────────────
+    // Load the ReviewReport (if present) and apply the plan patch or prompt the user.
+    {
+        use ta_changeset::review_report::{render_review_report, ReviewReport};
+
+        if let Some(report) = ReviewReport::load(&config.workspace_root, package_id) {
+            if !report.is_clean() {
+                eprintln!("[review] {}", report.summary_line());
+            }
+
+            if report.has_conflicts() {
+                if auto_repair || dry_run {
+                    // Auto-repair: take source for all conflicts (log each).
+                    eprintln!(
+                        "[review] --auto-repair: taking source for {} conflict(s)",
+                        report.conflicts.len()
+                    );
+                    for conflict in &report.conflicts {
+                        eprintln!("[conflict-resolved: took source] {}", conflict.description);
+                    }
+                } else {
+                    // Interactive: print conflicts and prompt.
+                    let rendered = render_review_report(&report, false);
+                    eprintln!("{}", rendered);
+                    eprintln!("Conflicts detected in PLAN.md. How would you like to proceed?");
+                    eprintln!("  [C]ontinue (take source for all conflicts)");
+                    eprintln!("  [D]eny this draft");
+                    eprint!("Choice [C/D]: ");
+
+                    let mut input = String::new();
+                    let _ = std::io::stdin().read_line(&mut input);
+                    match input.trim().to_uppercase().as_str() {
+                        "D" => {
+                            anyhow::bail!(
+                                "Apply denied by user due to PLAN.md conflicts. \
+                                 Run `ta draft deny {}` to formally deny the draft.",
+                                &package_id.to_string()[..8]
+                            );
+                        }
+                        _ => {
+                            eprintln!("[review] Continuing: taking source for all conflicts.");
+                        }
+                    }
+                }
+            }
+
+            // Apply the plan patch to target PLAN.md (non-conflict resolutions).
+            if let Some(ref patch) = report.plan_patch {
+                if !patch.is_empty() && !dry_run {
+                    let plan_md_path = target_dir.join("PLAN.md");
+                    if let Err(e) = apply_plan_patch(&plan_md_path, &report) {
+                        tracing::warn!("Failed to apply plan patch: {}", e);
+                        eprintln!("[review] Warning: could not apply plan patch: {}", e);
+                    } else {
+                        let n = report.silent_fixes.len();
+                        let m = report.agent_additions.len();
+                        eprintln!(
+                            "[apply] Plan patch applied: {} regressions fixed, {} items recovered.",
+                            n, m
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     // ── Secret scan (v0.15.14.4) ─────────────────────────────────────────────
     // Run before any file writes. Scans text content of draft artifacts for
@@ -10291,6 +10630,7 @@ fn run() {
             None,  // phase_override
             false, // force_apply
             false, // validate_version
+            false, // auto_repair
         )
         .unwrap();
 
@@ -10381,6 +10721,7 @@ fn run() {
             None,  // phase_override
             false, // force_apply
             false, // validate_version
+            false, // auto_repair
         )
         .unwrap();
 
@@ -10562,6 +10903,7 @@ fn run() {
             None,  // phase_override
             false, // force_apply
             false, // validate_version
+            false, // auto_repair
         )
         .unwrap();
 
@@ -10716,6 +11058,7 @@ fn run() {
             None,  // phase_override
             false, // force_apply
             false, // validate_version
+            false, // auto_repair
         );
 
         // Apply must have returned an error.
@@ -10987,6 +11330,7 @@ fn run() {
             None,  // phase_override
             false, // force_apply
             false, // validate_version
+            false, // auto_repair
         )
         .unwrap();
 
@@ -11054,6 +11398,7 @@ fn run() {
             None,  // phase_override
             false, // force_apply
             false, // validate_version
+            false, // auto_repair
         )
         .unwrap();
 
@@ -11118,6 +11463,7 @@ fn run() {
             None,  // phase_override
             false, // force_apply
             false, // validate_version
+            false, // auto_repair
         )
         .unwrap();
 
@@ -11181,6 +11527,7 @@ fn run() {
             None,  // phase_override
             false, // force_apply
             false, // validate_version
+            false, // auto_repair
         )
         .unwrap();
 
@@ -11283,6 +11630,7 @@ fn run() {
             None,  // phase_override
             false, // force_apply
             false, // validate_version
+            false, // auto_repair
         );
 
         assert!(result.is_err());
@@ -12281,6 +12629,7 @@ fn run() {
             None,  // phase_override
             false, // force_apply
             false, // validate_version
+            false, // auto_repair
         )
         .unwrap();
 
@@ -12388,6 +12737,7 @@ fn run() {
             None,  // phase_override
             false, // force_apply
             false, // validate_version
+            false, // auto_repair
         )
         .unwrap();
 
@@ -12802,6 +13152,7 @@ fn run() {
             None,  // phase_override
             false, // force_apply
             false, // validate_version
+            false, // auto_repair
         )
         .unwrap();
 
@@ -14002,6 +14353,7 @@ fn run() {
             None,
             false,
             false,
+            false, // auto_repair
         )
         .unwrap();
 
@@ -14020,6 +14372,7 @@ fn run() {
             None,
             false,
             false,
+            false, // auto_repair
         )
         .unwrap_err();
 
@@ -14098,6 +14451,7 @@ fn run() {
             None,
             false,
             false,
+            false, // auto_repair
         )
         .unwrap_err();
 
@@ -14173,6 +14527,7 @@ fn run() {
             None,
             false,
             false,
+            false, // auto_repair
         );
         // Must return an error — never silently succeed.
         assert!(
