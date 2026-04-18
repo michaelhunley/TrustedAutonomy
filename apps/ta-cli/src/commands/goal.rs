@@ -603,9 +603,24 @@ fn start_goal(
         // Update goal with actual paths.
         goal.workspace_path = overlay.staging_dir().to_path_buf();
         goal.store_path = config.store_dir.join(&goal_id);
-        goal.source_dir = Some(source_dir);
+        goal.source_dir = Some(source_dir.clone());
         goal.plan_phase = phase.map(|p| p.to_string());
         goal.source_snapshot = snapshot_json;
+
+        // v0.15.19.3: Snapshot source PLAN.md as three-way merge base.
+        // Stored at <staging>/.ta/plan_base.md for use during `ta draft build`.
+        let source_plan_md = source_dir.join("PLAN.md");
+        if source_plan_md.exists() {
+            let staging_ta_dir = overlay.staging_dir().join(".ta");
+            if let Err(e) = std::fs::create_dir_all(&staging_ta_dir) {
+                tracing::warn!("Could not create .ta dir for plan_base.md: {}", e);
+            } else {
+                match std::fs::copy(&source_plan_md, staging_ta_dir.join("plan_base.md")) {
+                    Ok(_) => tracing::debug!("Snapshotted PLAN.md as plan_base.md in staging"),
+                    Err(e) => tracing::warn!("Could not snapshot plan_base.md: {}", e),
+                }
+            }
+        }
 
         // Transition: Created → Configured → Running.
         goal.transition(GoalRunState::Configured)?;

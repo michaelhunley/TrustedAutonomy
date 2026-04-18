@@ -420,6 +420,15 @@ pub enum SessionEvent {
         /// PR title (for display in notifications).
         title: String,
     },
+
+    /// PLAN.md pre-apply review completed for a draft (v0.15.19.3).
+    ReviewCompleted {
+        draft_id: Uuid,
+        silent_fixes: usize,
+        agent_additions: usize,
+        conflicts: usize,
+        coverage_gaps: usize,
+    },
 }
 
 /// A single issue found during a watchdog health check (v0.11.2.4).
@@ -475,6 +484,7 @@ impl SessionEvent {
             Self::VcsBranchPushed { .. } => "vcs.branch_pushed",
             Self::VcsChangelistSubmitted { .. } => "vcs.changelist_submitted",
             Self::PrCheckFailed { .. } => "pr_check_failed",
+            Self::ReviewCompleted { .. } => "review_completed",
         }
     }
 

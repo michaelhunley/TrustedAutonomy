@@ -2351,6 +2351,45 @@ ta draft fix <draft-id> src/draft.rs --guidance "Consolidate the duplicate"
 ta run "Rework auth to use JWT per review feedback" --follow-up
 ```
 
+### Draft Plan Review
+
+When `ta draft build` runs and PLAN.md is among the changed files, TA automatically audits the three-way diff between:
+- **base** — the PLAN.md snapshotted when the goal was started
+- **staging** — the agent's version
+- **source** — the current source tree
+
+The result is stored as a `ReviewReport` and surfaced in `ta draft view` above the artifact list.
+
+#### What the report shows
+
+| Category | Display | Meaning |
+|----------|---------|---------|
+| `[fix]` | grey | Source had a newer status; staging reverted it. Fixed silently. |
+| `[+]` | green | Agent completed items, advanced phase status, or added a new sub-phase. |
+| `[gap]` | yellow | Unchecked item with no matching token in the diff. Informational only. |
+| `[CONFLICT]` | red | Both source and staging changed the same section differently. Human decision required. |
+
+A clean audit produces: `[review] Plan audit clean.`
+
+#### Conflict resolution on apply
+
+When conflicts are present, `ta draft apply` shows the conflicts and prompts:
+
+```
+[C]ontinue (take source for all conflicts)
+[D]eny this draft
+```
+
+For CI and build loops, use `--auto-repair` to take source for all conflicts silently:
+
+```bash
+ta draft apply <id> --auto-repair
+```
+
+Coverage gaps never block apply — they are informational reminders that a plan item may not yet be implemented.
+
+**Note**: this review is not `ta doctor`. `ta doctor` validates your runtime environment (auth, daemon health, agent binary). The plan review is a draft-lifecycle gate that runs automatically — you do not need to invoke it manually.
+
 ### Draft Lifecycle Hygiene
 
 ```bash

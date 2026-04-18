@@ -11509,7 +11509,7 @@ period_secs = 3600
 ---
 
 ### v0.15.19.3 — Draft Pre-Apply Plan Review Agent
-<!-- status: pending -->
+<!-- status: done -->
 
 **Goal**: Before `ta draft apply` executes, automatically reconcile PLAN.md and present the user with a repair-or-deny decision. The review step detects three categories: (1) agent-driven changes to bring forward (newly completed phase items, new sub-phases inserted by the agent); (2) source-wins regressions to fix silently (status markers that went backwards due to staging base drift); (3) real conflicts where both source and staging changed the same section in incompatible ways — these are surfaced to the user and block auto-repair. This closes the tracking gap where staging base drift corrupts PLAN.md on apply and agents leave done phases with unchecked items.
 
@@ -11563,33 +11563,33 @@ ta draft apply <id> --auto-repair   ← build loop: silent repair, take
 
 **Items**:
 
-1. [ ] **`PlanMergeBase` tracking** (`crates/ta-changeset/src/plan_merge.rs`): When `ta goal start` creates staging, snapshot the source PLAN.md to `.ta/staging/<goal_id>/plan_base.md`. This is the three-way merge base. If absent (pre-v0.15.19.3 goals), fall back to two-way (source vs staging) with conservative conflict detection.
+1. [x] **`PlanMergeBase` tracking** (`crates/ta-changeset/src/plan_merge.rs`): When `ta goal start` creates staging, snapshot the source PLAN.md to `.ta/staging/<goal_id>/plan_base.md`. This is the three-way merge base. If absent (pre-v0.15.19.3 goals), fall back to two-way (source vs staging) with conservative conflict detection.
 
-2. [ ] **`PlanSection` parser** (`crates/ta-changeset/src/plan_merge.rs`): Parse PLAN.md into `Vec<PlanSection>` where each section is identified by its `### v0.x.y` header. Each section contains: `status_marker: Option<String>`, `items: Vec<PlanItem>` (with `checked: bool`, `text: String`), `raw_body: String`. Sections without a version header (preamble, appendices) are treated as opaque blobs — never modified.
+2. [x] **`PlanSection` parser** (`crates/ta-changeset/src/plan_merge.rs`): Parse PLAN.md into `Vec<PlanSection>` where each section is identified by its `### v0.x.y` header. Each section contains: `status_marker: Option<String>`, `items: Vec<PlanItem>` (with `checked: bool`, `text: String`), `raw_body: String`. Sections without a version header (preamble, appendices) are treated as opaque blobs — never modified.
 
-3. [ ] **`merge_plan_md(base, staging, source) -> MergeResult`** (`crates/ta-changeset/src/plan_merge.rs`): Three-way merge implementing the rules table above. Returns `MergeResult { merged: String, silent_fixes: Vec<String>, agent_additions: Vec<String>, conflicts: Vec<PlanConflict> }`. `PlanConflict { section_id, conflict_type: StatusConflict|ItemTextConflict|SectionBodyConflict, base_text, staging_text, source_text }`. A conflict means both source and staging diverged from base in incompatible ways — the merge cannot resolve it automatically.
+3. [x] **`merge_plan_md(base, staging, source) -> MergeResult`** (`crates/ta-changeset/src/plan_merge.rs`): Three-way merge implementing the rules table above. Returns `MergeResult { merged: String, silent_fixes: Vec<String>, agent_additions: Vec<String>, conflicts: Vec<PlanConflict> }`. `PlanConflict { section_id, conflict_type: StatusConflict|ItemTextConflict|SectionBodyConflict, base_text, staging_text, source_text }`. A conflict means both source and staging diverged from base in incompatible ways — the merge cannot resolve it automatically.
 
-4. [ ] **`ReviewReport` type** (`crates/ta-changeset/src/review_report.rs`): `ReviewReport { draft_id: Uuid, generated_at: DateTime<Utc>, silent_fixes: Vec<String>, agent_additions: Vec<String>, conflicts: Vec<PlanConflict>, coverage_gaps: Vec<CoverageGap>, plan_patch: Option<String> }`. `CoverageGap { phase_id, item_number, text_excerpt }`. `plan_patch` is a unified diff against source PLAN.md incorporating all non-conflict resolutions. If `conflicts` is non-empty, `plan_patch` is partial (conflicts excluded).
+4. [x] **`ReviewReport` type** (`crates/ta-changeset/src/review_report.rs`): `ReviewReport { draft_id: Uuid, generated_at: DateTime<Utc>, silent_fixes: Vec<String>, agent_additions: Vec<String>, conflicts: Vec<PlanConflict>, coverage_gaps: Vec<CoverageGap>, plan_patch: Option<String> }`. `CoverageGap { phase_id, item_number, text_excerpt }`. `plan_patch` is a unified diff against source PLAN.md incorporating all non-conflict resolutions. If `conflicts` is non-empty, `plan_patch` is partial (conflicts excluded).
 
-5. [ ] **Item coverage checker** (`crates/ta-changeset/src/coverage.rs`): For each `[ ]` item in the phase being applied, extract 2-4 significant tokens (function/struct/file/command names). Grep the draft artifact diffs for those tokens. Found ≥1 token: mark likely-implemented, include as `[x]` in plan_patch. Found 0: add to `coverage_gaps`. Heuristic only — never fails the apply, just informs the report.
+5. [x] **Item coverage checker** (`crates/ta-changeset/src/coverage.rs`): For each `[ ]` item in the phase being applied, extract 2-4 significant tokens (function/struct/file/command names). Grep the draft artifact diffs for those tokens. Found ≥1 token: mark likely-implemented, include as `[x]` in plan_patch. Found 0: add to `coverage_gaps`. Heuristic only — never fails the apply, just informs the report.
 
-6. [ ] **Review trigger in `ta draft build`** (`apps/ta-cli/src/commands/draft.rs`): After building the draft package, automatically run `plan_review(draft_id, base_path, staging_path, source_path)` and store `ReviewReport` at `.ta/review/<draft_id>/report.json`. If PLAN.md is not in the draft artifacts, skip review (no-op). Log: `[review] Plan audit complete: {N} fixes, {M} additions, {K} conflicts.`
+6. [x] **Review trigger in `ta draft build`** (`apps/ta-cli/src/commands/draft.rs`): After building the draft package, automatically run `plan_review(draft_id, base_path, staging_path, source_path)` and store `ReviewReport` at `.ta/review/<draft_id>/report.json`. If PLAN.md is not in the draft artifacts, skip review (no-op). Log: `[review] Plan audit complete: {N} fixes, {M} additions, {K} conflicts.`
 
-7. [ ] **`ta draft view` integration**: Render `ReviewReport` above the artifact list. Silent fixes: grey. Agent additions (new sub-phases, checked items): green. Coverage gaps: yellow. Conflicts: red with full source/staging text shown. If report absent: `[review] No review report — run ta draft build to generate.` If clean: `[review] Plan audit clean.`
+7. [x] **`ta draft view` integration**: Render `ReviewReport` above the artifact list. Silent fixes: grey. Agent additions (new sub-phases, checked items): green. Coverage gaps: yellow. Conflicts: red with full source/staging text shown. If report absent: `[review] No review report — run ta draft build to generate.` If clean: `[review] Plan audit clean.`
 
-8. [ ] **`ta draft apply` gate** (`apps/ta-cli/src/commands/draft.rs`): Before copying artifacts:
+8. [x] **`ta draft apply` gate** (`apps/ta-cli/src/commands/draft.rs`): Before copying artifacts:
    - Load report. If no conflicts: apply `plan_patch` silently, log fixes.
    - If conflicts present and `--auto-repair`: take source for all conflicts, apply partial patch, log each conflict as `[conflict-resolved: took source]` in commit message.
    - If conflicts present and interactive: show conflict list, prompt `[C]ontinue (take source) / [E]dit / [D]eny`. `[E]dit` writes conflict markers to a temp file and opens `$EDITOR`. User saves, re-validates, then apply proceeds.
    - Log to stdout: `[apply] Plan patch applied: {N} regressions fixed, {M} items recovered, {K} new sections inserted, {J} conflicts resolved.`
 
-9. [ ] **Build loop integration** (`templates/workflows/plan-build-loop.yaml`): `ta draft apply --auto-repair` is the existing call. With this phase, `--auto-repair` now also implies plan repair. Coverage gaps do not block. Conflicts are resolved by taking source (logged). No new step needed in the loop YAML — the flag is sufficient.
+9. [x] **Build loop integration** (`templates/workflows/plan-build-loop.yaml`): `ta draft apply --auto-repair` is the existing call. With this phase, `--auto-repair` now also implies plan repair. Coverage gaps do not block. Conflicts are resolved by taking source (logged). No new step needed in the loop YAML — the flag is sufficient.
 
-10. [ ] **Event emission**: `TaEvent::ReviewCompleted { draft_id, silent_fixes: usize, agent_additions: usize, conflicts: usize, coverage_gaps: usize }`.
+10. [x] **Event emission**: `TaEvent::ReviewCompleted { draft_id, silent_fixes: usize, agent_additions: usize, conflicts: usize, coverage_gaps: usize }`.
 
-11. [ ] **Tests**: Three-way merge: source updated status, staging didn't → take source. Agent completed phase → take staging. Both changed same status → conflict reported. Agent inserted sub-phase absent from base+source → inserted in merged output. Checkbox union: either side `[x]` → merged `[x]`. Item text conflict → conflict reported. Coverage checker: token found → likely-implemented. Token absent → gap. `ta draft view` renders all report categories. `ta draft apply --auto-repair` with conflicts: takes source, logs. Interactive apply with conflicts: prompts correctly. No PLAN.md in draft: review no-ops.
+11. [x] **Tests**: Three-way merge: source updated status, staging didn't → take source. Agent completed phase → take staging. Both changed same status → conflict reported. Agent inserted sub-phase absent from base+source → inserted in merged output. Checkbox union: either side `[x]` → merged `[x]`. Item text conflict → conflict reported. Coverage checker: token found → likely-implemented. Token absent → gap. `ta draft view` renders all report categories. `ta draft apply --auto-repair` with conflicts: takes source, logs. Interactive apply with conflicts: prompts correctly. No PLAN.md in draft: review no-ops.
 
-12. [ ] **USAGE.md**: "Draft Plan Review" section — explains automatic review on build, what each report category means (silent fix vs agent addition vs conflict vs gap), conflict resolution options (continue/edit/deny), and `--auto-repair` for CI. Include a note: the review is not `ta doctor` (which checks runtime health); it is a draft-lifecycle gate.
+12. [x] **USAGE.md**: "Draft Plan Review" section — explains automatic review on build, what each report category means (silent fix vs agent addition vs conflict vs gap), conflict resolution options (continue/edit/deny), and `--auto-repair` for CI. Include a note: the review is not `ta doctor` (which checks runtime health); it is a draft-lifecycle gate.
 
 #### Version: `0.15.19-alpha.3`
 
