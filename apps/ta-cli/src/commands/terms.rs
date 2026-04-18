@@ -196,6 +196,10 @@ pub fn view_terms() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    // Serialize tests that mutate the HOME env var to prevent races under --test-threads > 1.
+    static HOME_MUTEX: Mutex<()> = Mutex::new(());
 
     #[test]
     fn terms_hash_is_stable() {
@@ -236,6 +240,7 @@ mod tests {
 
     #[test]
     fn check_accepted_returns_err_when_no_file() {
+        let _lock = HOME_MUTEX.lock().unwrap();
         // Point HOME at an empty temp dir so no accepted_terms file exists.
         let dir = tempfile::tempdir().unwrap();
         let orig_home = std::env::var_os("HOME");
@@ -257,6 +262,7 @@ mod tests {
 
     #[test]
     fn check_accepted_returns_err_on_stale_hash() {
+        let _lock = HOME_MUTEX.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let config_dir = dir.path().join(".config").join("ta");
         std::fs::create_dir_all(&config_dir).unwrap();
@@ -291,6 +297,7 @@ mod tests {
 
     #[test]
     fn check_accepted_returns_ok_with_valid_acceptance() {
+        let _lock = HOME_MUTEX.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let config_dir = dir.path().join(".config").join("ta");
         std::fs::create_dir_all(&config_dir).unwrap();
@@ -318,6 +325,7 @@ mod tests {
 
     #[test]
     fn record_acceptance_writes_correct_file() {
+        let _lock = HOME_MUTEX.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let orig_home = std::env::var_os("HOME");
         std::env::set_var("HOME", dir.path());
