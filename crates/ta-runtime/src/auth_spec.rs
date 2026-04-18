@@ -563,6 +563,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))] // raw-TCP mock server is unreliable on Windows CI
     fn local_service_reachable_service_auth_optional_missing_warns() {
         use std::io::Write;
         use std::net::TcpListener;
@@ -610,6 +611,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))] // raw-TCP mock server is unreliable on Windows CI
     fn local_service_reachable_upstream_auth_set_passes() {
         use std::io::Write;
         use std::net::TcpListener;
