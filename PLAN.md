@@ -11635,6 +11635,40 @@ ta draft apply <id> --auto-repair   ← build loop: silent repair, take
 
 ---
 
+### v0.15.19.4.1 — Version-Check Fix: Integration Tests, USAGE.md, and Supervisor Guidance
+<!-- status: pending -->
+
+**Goal**: Complete the two unchecked items from v0.15.19.4 (integration tests and USAGE.md) and improve the plan-review supervisor verdict to emit actionable next steps — not just findings. The plan review agent currently lists what's wrong but leaves the user to reason about what to do; it should recommend a specific course of action with concrete commands.
+
+**Context**: v0.15.19.4 correctly fixed the two root-cause bugs. The plan-review agent flagged items 5 and 6 as incomplete and left the PLAN.md status as `pending` (correct). However, its verdict said "two items remain incomplete" without telling the user *what to do next*. The user had to ask Claude Code to interpret the verdict and recommend `ta run ... --follow-up`. That reasoning should come from the supervisor itself.
+
+**Items:**
+
+1. [ ] **Integration test: `version_check_suppressed_when_cargo_in_artifacts_and_pr_created`** (`apps/ta-cli/src/commands/draft.rs`): Build a minimal mock scenario — artifact list contains `fs://workspace/Cargo.toml`, `pr_url` is `Some("https://github.com/org/repo/pull/42")`, source version is old. Assert: no `VERSION MISMATCH` box printed to stderr; info message `[version] Bump … is in PR` is printed; function returns without error.
+
+2. [ ] **Integration test: `version_check_fires_when_cargo_not_in_artifacts`**: Same setup but artifact list does NOT contain Cargo.toml. Assert: `VERSION MISMATCH` box is printed (existing warning behavior preserved for genuine omissions).
+
+3. [ ] **Integration test: `staging_was_present_captured_before_autoclean`**: Create a temp staging dir with a `Cargo.toml`, capture `staging_was_present = path.join("Cargo.toml").exists()` before deletion, delete the dir, then assert `staging_was_present == true` and `path.join("Cargo.toml").exists() == false`. Confirms the capture-before-delete pattern is correct.
+
+4. [ ] **USAGE.md — apply section**: Add a note explaining the `[version] Bump (A → B) is in PR #N — will land on merge. ✓` info message. Sample text: "When a draft includes a version bump, `ta draft apply` prints an info line rather than a warning — the bump is committed to the PR branch and will land on main when the PR merges. No manual action required."
+
+5. [ ] **Supervisor verdict — actionable guidance** (`crates/ta-changeset/src/review_report.rs` or wherever `ReviewReport` verdict is formatted): When the verdict is `Warn` and there are unchecked plan items, append a **Recommended action** block:
+   - If unchecked items are tests/docs only (non-functional): recommend `ta draft apply <id>` then `ta run "<goal-title>" --follow-up --phase <phase>` with the specific phase ID filled in.
+   - If unchecked items include functional code: recommend `ta draft deny <id> --reason "incomplete: <item summary>"` then `ta run "<goal-title>" --follow-up`.
+   - If verdict is `Pass` with all items checked: print `Ready to apply: ta draft apply <id>`.
+   - Classify items as tests/docs vs functional by checking item text for keywords: `test`, `USAGE`, `docs`, `README`, `comment`, `doc` (case-insensitive). All others are functional.
+
+6. [ ] **Supervisor verdict — phase ID in header**: Include the phase ID in the verdict header so the user can construct the follow-up command without looking it up: `Verdict for v0.15.19.4: [WARN]` instead of just `Verdict: [WARN]`.
+
+7. [ ] **Tests for supervisor guidance** (`crates/ta-changeset/src/review_report.rs` tests):
+   - `verdict_warn_tests_docs_only_recommends_apply_then_followup`: unchecked items all contain "test"/"USAGE" → recommended action includes `ta draft apply` and `ta run --follow-up`.
+   - `verdict_warn_functional_recommends_deny`: unchecked item is "implement X feature" → recommended action includes `ta draft deny`.
+   - `verdict_pass_recommends_apply`: all items checked → output includes `Ready to apply`.
+
+#### Version: `0.15.19-alpha.4.1`
+
+---
+
 ### v0.15.20 — Orchestrated Workflow: Work Planner + Implementor Split
 <!-- status: pending -->
 **Goal**: Refactor the implementation node in orchestrated workflows (governed-goal, plan-build-phases, plan-implement-review) so that the single "implement" stage is split into two sequential nodes: a **Work Planner** that reasons about what needs to change and records explicit decisions, followed by an **Implementor** that takes the planner's output as authoritative context and writes the code. This makes the decision record structural rather than voluntary — the planner's output IS the decision log. The implementor is constrained to execute the plan, not re-derive it.
