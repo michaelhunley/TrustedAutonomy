@@ -8,14 +8,13 @@
 
 pub mod bus;
 pub mod channel;
-pub mod dispatcher;
 pub mod error;
 pub mod hooks;
+pub mod notification;
 pub mod router;
 pub mod schema;
 pub mod store;
 pub mod strategies;
-pub mod subscription;
 pub mod tokens;
 
 /// Sentinel printed to stderr by `ta run --headless` when a goal is created.
@@ -30,10 +29,15 @@ pub mod tokens;
 pub const GOAL_STARTED_SENTINEL: &str = "[goal started]";
 
 pub use bus::{EventBus, EventFilter};
-pub use channel::{ChannelDelivery, ChannelQuestion, ChannelRouting, DeliveryResult};
-pub use dispatcher::{format_dispatch_summary, DispatchRecord, SubscriptionDispatcher};
+pub use channel::{
+    ChannelDelivery, ChannelNotification, ChannelQuestion, ChannelRouting, DeliveryResult,
+};
 pub use error::EventError;
 pub use hooks::{HookConfig, HookRunner};
+pub use notification::{
+    NotificationRule, NotificationRulesConfig, NotificationRulesEngine, NotificationSeverity,
+    NotificationTemplate, RateLimit, RuleCondition,
+};
 pub use router::{
     EventRouter, EventRoutingFilter, Responder, ResponseStrategy, RoutingConfig, RoutingDecision,
     RoutingDefaults,
@@ -42,5 +46,4 @@ pub use schema::{EventAction, EventEnvelope, SessionEvent};
 pub use store::{EventStore, FsEventStore};
 pub use strategies::agent::AgentResponseContext;
 pub use strategies::workflow::WorkflowResponseContext;
-pub use subscription::{Subscription, SubscriptionAction, SubscriptionFilter, SubscriptionStore};
 pub use tokens::{ApprovalToken, TokenStore};
