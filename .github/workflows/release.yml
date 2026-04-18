@@ -232,6 +232,40 @@ jobs:
             -o "artifacts\${{ env.BINARY_NAME }}-$env:TAG-x86_64-pc-windows-msvc.msi"
           Write-Host "MSI created: artifacts\${{ env.BINARY_NAME }}-$env:TAG-x86_64-pc-windows-msvc.msi"
 
+      # ── Windows code signing (v0.15.16) ──────────────────────────────────────
+      # Signs ta.exe, ta-daemon.exe, and the MSI with an EV code signing certificate.
+      # EV certs bypass SmartScreen reputation-building — no "Windows protected your
+      # PC" warning on first install. Skipped when the signing secret is absent so
+      # non-release builds (forks, PRs) still succeed without the secret.
+      - name: Sign Windows artifacts
+        if: matrix.target == 'x86_64-pc-windows-msvc' && secrets.WINDOWS_SIGNING_CERT_BASE64 != ''
+        shell: pwsh
+        env:
+          TAG: ${{ steps.get_version.outputs.version }}
+          WINDOWS_SIGNING_CERT_BASE64: ${{ secrets.WINDOWS_SIGNING_CERT_BASE64 }}
+          WINDOWS_SIGNING_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PASSWORD }}
+        run: |
+          $releaseDir = "target\x86_64-pc-windows-msvc\release"
+          $msiPath    = "artifacts\${{ env.BINARY_NAME }}-$env:TAG-x86_64-pc-windows-msvc.msi"
+
+          # Sign the two binaries and the MSI.
+          .\scripts\sign-windows.ps1 `
+            "$releaseDir\ta.exe" `
+            "$releaseDir\ta-daemon.exe" `
+            $msiPath
+
+          # Final verification — fail the build if any artifact is unsigned.
+          Write-Host "Final signature verification..."
+          foreach ($f in @("$releaseDir\ta.exe", "$releaseDir\ta-daemon.exe", $msiPath)) {
+            if (-not (Test-Path $f)) { continue }
+            & signtool verify /pa /v $f
+            if ($LASTEXITCODE -ne 0) {
+              Write-Error "Signature verification failed: $f"
+              exit 1
+            }
+          }
+          Write-Host "All Windows artifacts signed and verified."
+
       # ── macOS pkg + DMG (v0.13.11) ───────────────────────────────────────────
       # Build on ARM runner (aarch64-apple-darwin) — one DMG covers both arches.
       - name: Build macOS pkg and DMG

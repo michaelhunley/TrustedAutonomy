@@ -10926,7 +10926,7 @@ Stable and nightly use different tag prefixes (`v*` vs `nightly`), so GitHub's d
 ---
 
 ### v0.15.16 — Windows Code Signing (EV Certificate + CI Integration)
-<!-- status: pending -->
+<!-- status: done -->
 **Goal**: Eliminate the Microsoft SmartScreen "Windows protected your PC" warning on the TA Windows MSI installer by signing all Windows binaries and the MSI with an Extended Validation (EV) code signing certificate. EV certs bypass SmartScreen's reputation-building period — signed EV binaries show no warning on first install regardless of download count. Ships with a fully automated signing step in the release CI workflow.
 
 **Depends on**: v0.13.11 (platform installers — WiX MSI build in release.yml)
