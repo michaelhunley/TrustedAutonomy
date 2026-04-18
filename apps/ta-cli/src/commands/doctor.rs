@@ -712,19 +712,21 @@ mod tests {
         // doctor() should not panic or error for a minimal project dir.
         let dir = TempDir::new().unwrap();
         let config = test_config(&dir);
-        // Returns Err only when fail_count > 0. In a bare dir there should be no
-        // FAIL-level issues (some warnings are expected).
         let checks = run_all_checks(&config);
-        let failures: Vec<_> = checks
+        // Auth and agent-binary checks legitimately fail in CI (no API key, no
+        // claude binary on PATH). Only assert that no *other* checks are Fail.
+        let unexpected_failures: Vec<_> = checks
             .iter()
-            .filter(|c| c.status == CheckStatus::Fail)
+            .filter(|c| {
+                c.status == CheckStatus::Fail
+                    && !c.name.starts_with("Auth")
+                    && !c.name.starts_with("Agent binary")
+            })
             .collect();
-        // The only possible fail for an empty dir is version consistency if no
-        // Cargo.toml exists — that path returns warn, not fail.
         assert!(
-            failures.is_empty(),
+            unexpected_failures.is_empty(),
             "unexpected failures for empty project: {:?}",
-            failures
+            unexpected_failures
         );
     }
 
