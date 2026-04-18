@@ -7,7 +7,8 @@
 //! `POST /api/interactions/:id/respond` on the TA daemon.
 
 use serde::{Deserialize, Serialize};
-use ta_events::channel::{ChannelDelivery, ChannelQuestion, DeliveryResult};
+use ta_events::channel::{ChannelDelivery, ChannelNotification, ChannelQuestion, DeliveryResult};
+use ta_events::notification::NotificationSeverity;
 
 /// Slack adapter configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -233,6 +234,107 @@ impl ChannelDelivery for SlackAdapter {
         }
     }
 
+    async fn deliver_notification(&self, notification: &ChannelNotification) -> DeliveryResult {
+        let emoji = match notification.severity {
+            NotificationSeverity::Critical => "🚨",
+            NotificationSeverity::Error => "❌",
+            NotificationSeverity::Warning => "⚠️",
+            NotificationSeverity::Info => "ℹ️",
+        };
+
+        let text = format!("{} *{}*\n{}", emoji, notification.title, notification.body);
+        let body = serde_json::json!({
+            "channel": self.config.channel_id,
+            "text": text,
+            "blocks": [
+                {
+                    "type": "section",
+                    "text": { "type": "mrkdwn", "text": text }
+                }
+            ]
+        });
+
+        match self
+            .client
+            .post("https://slack.com/api/chat.postMessage")
+            .bearer_auth(&self.config.bot_token)
+            .json(&body)
+            .send()
+            .await
+        {
+            Ok(resp) => match resp.json::<serde_json::Value>().await {
+                Ok(json) if json.get("ok").and_then(|v| v.as_bool()) == Some(true) => {
+                    let ts = json
+                        .get("ts")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    tracing::info!(
+                        channel = "slack",
+                        event_type = %notification.event_type,
+                        severity = %notification.severity_str(),
+                        ts = %ts,
+                        "Notification delivered to Slack"
+                    );
+                    DeliveryResult {
+                        channel: "slack".into(),
+                        delivery_id: ts,
+                        success: true,
+                        error: None,
+                    }
+                }
+                Ok(json) => {
+                    let err = json
+                        .get("error")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown_error")
+                        .to_string();
+                    tracing::warn!(
+                        channel = "slack",
+                        event_type = %notification.event_type,
+                        error = %err,
+                        "Slack API error delivering notification"
+                    );
+                    DeliveryResult {
+                        channel: "slack".into(),
+                        delivery_id: String::new(),
+                        success: false,
+                        error: Some(format!(
+                            "Slack API error '{}' delivering notification '{}' to channel {}",
+                            err, notification.event_type, self.config.channel_id
+                        )),
+                    }
+                }
+                Err(e) => DeliveryResult {
+                    channel: "slack".into(),
+                    delivery_id: String::new(),
+                    success: false,
+                    error: Some(format!(
+                        "Failed to parse Slack API response for notification '{}': {}",
+                        notification.event_type, e
+                    )),
+                },
+            },
+            Err(e) => {
+                tracing::error!(
+                    channel = "slack",
+                    event_type = %notification.event_type,
+                    error = %e,
+                    "HTTP request to Slack API failed for notification"
+                );
+                DeliveryResult {
+                    channel: "slack".into(),
+                    delivery_id: String::new(),
+                    success: false,
+                    error: Some(format!(
+                        "HTTP request to Slack API failed delivering notification '{}': {}",
+                        notification.event_type, e
+                    )),
+                }
+            }
+        }
+    }
+
     async fn validate(&self) -> Result<(), String> {
         if self.config.bot_token.is_empty() {
             return Err(
@@ -359,5 +461,32 @@ mod tests {
     fn adapter_name() {
         let adapter = SlackAdapter::new(test_config());
         assert_eq!(adapter.name(), "slack");
+    }
+
+    #[test]
+    fn notification_severity_emoji_mapping() {
+        // Verify severity variants are distinct and cover all cases.
+        assert_eq!(NotificationSeverity::Critical.as_str(), "critical");
+        assert_eq!(NotificationSeverity::Error.as_str(), "error");
+        assert_eq!(NotificationSeverity::Warning.as_str(), "warning");
+        assert_eq!(NotificationSeverity::Info.as_str(), "info");
+    }
+
+    #[test]
+    fn channel_notification_build() {
+        use std::collections::HashMap;
+        use ta_events::channel::ChannelNotification;
+
+        let n = ChannelNotification {
+            event_id: "e1".into(),
+            event_type: "goal_failed".into(),
+            title: "[TA] Goal failed".into(),
+            body: "The goal 'Fix bug' failed.".into(),
+            severity: NotificationSeverity::Error,
+            goal_id: Some(uuid::Uuid::new_v4()),
+            metadata: HashMap::new(),
+        };
+        assert_eq!(n.severity_str(), "error");
+        assert!(n.goal_id.is_some());
     }
 }

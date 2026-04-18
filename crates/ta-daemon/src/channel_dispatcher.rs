@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use ta_events::channel::{ChannelDelivery, ChannelQuestion, DeliveryResult};
+use ta_events::channel::{ChannelDelivery, ChannelNotification, ChannelQuestion, DeliveryResult};
 use uuid::Uuid;
 
 use crate::config::ChannelsConfig;
@@ -250,6 +250,63 @@ impl ChannelDispatcher {
         results
     }
 
+    /// Dispatch a one-way notification to a specific list of channels.
+    ///
+    /// Unlike `dispatch()` (which handles interactive questions), this method
+    /// calls `deliver_notification()` on each adapter.  Adapters that don't
+    /// implement notifications return a failure result — the caller can inspect
+    /// and log these but should not treat them as fatal.
+    pub async fn dispatch_notification(
+        &self,
+        notification: &ChannelNotification,
+        channel_names: &[String],
+    ) -> Vec<DeliveryResult> {
+        if channel_names.is_empty() {
+            tracing::debug!(
+                event_type = %notification.event_type,
+                "dispatch_notification called with empty channel list; no delivery attempted"
+            );
+            return vec![];
+        }
+
+        let mut results = Vec::new();
+
+        for channel_name in channel_names {
+            match self.adapters.get(channel_name) {
+                Some(adapter) => {
+                    let result = adapter.deliver_notification(notification).await;
+                    results.push(result);
+                }
+                None => {
+                    tracing::warn!(
+                        channel = %channel_name,
+                        event_type = %notification.event_type,
+                        registered = ?self.registered_channels(),
+                        "Notification channel '{}' is not registered. \
+                         Configure it in .ta/daemon.toml under [channels.{}].",
+                        channel_name,
+                        channel_name
+                    );
+                    results.push(DeliveryResult {
+                        channel: channel_name.clone(),
+                        delivery_id: String::new(),
+                        success: false,
+                        error: Some(format!(
+                            "Channel '{}' is not registered for notifications. \
+                             Registered channels: {:?}. \
+                             Configure it in .ta/daemon.toml under [channels.{}].",
+                            channel_name,
+                            self.registered_channels(),
+                            channel_name
+                        )),
+                    });
+                }
+            }
+        }
+
+        results
+    }
+
     /// Build a ChannelQuestion from event data.
     #[allow(clippy::too_many_arguments)]
     pub fn build_question(
@@ -315,6 +372,15 @@ mod tests {
             DeliveryResult {
                 channel: self.name.clone(),
                 delivery_id: format!("mock-{}", question.interaction_id),
+                success: true,
+                error: None,
+            }
+        }
+
+        async fn deliver_notification(&self, notification: &ChannelNotification) -> DeliveryResult {
+            DeliveryResult {
+                channel: self.name.clone(),
+                delivery_id: format!("notif-{}", notification.event_id),
                 success: true,
                 error: None,
             }
@@ -484,5 +550,73 @@ mod tests {
         assert_eq!(channels.len(), 2);
         assert!(channels.contains(&"slack".to_string()));
         assert!(channels.contains(&"discord".to_string()));
+    }
+
+    fn test_notification() -> ChannelNotification {
+        use std::collections::HashMap;
+        use ta_events::notification::NotificationSeverity;
+
+        ChannelNotification {
+            event_id: "evt-001".into(),
+            event_type: "goal_failed".into(),
+            title: "[TA] Goal failed".into(),
+            body: "The goal failed.".into(),
+            severity: NotificationSeverity::Error,
+            goal_id: Some(Uuid::new_v4()),
+            metadata: HashMap::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatch_notification_to_registered_channel() {
+        let mut dispatcher = ChannelDispatcher::new(vec![]);
+        dispatcher.register(Arc::new(MockAdapter {
+            name: "slack".into(),
+        }));
+        let n = test_notification();
+        let results = dispatcher
+            .dispatch_notification(&n, &["slack".to_string()])
+            .await;
+        assert_eq!(results.len(), 1);
+        assert!(results[0].success);
+        assert_eq!(results[0].channel, "slack");
+        assert!(results[0].delivery_id.starts_with("notif-"));
+    }
+
+    #[tokio::test]
+    async fn dispatch_notification_unknown_channel() {
+        let dispatcher = ChannelDispatcher::new(vec![]);
+        let n = test_notification();
+        let results = dispatcher
+            .dispatch_notification(&n, &["unknown".to_string()])
+            .await;
+        assert_eq!(results.len(), 1);
+        assert!(!results[0].success);
+        assert!(results[0]
+            .error
+            .as_ref()
+            .unwrap()
+            .contains("not registered"));
+    }
+
+    #[tokio::test]
+    async fn dispatch_notification_empty_channels() {
+        let dispatcher = ChannelDispatcher::new(vec![]);
+        let n = test_notification();
+        let results = dispatcher.dispatch_notification(&n, &[]).await;
+        assert!(results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn dispatch_notification_multiple_channels() {
+        let mut dispatcher = ChannelDispatcher::new(vec![]);
+        dispatcher.register(Arc::new(MockAdapter { name: "a".into() }));
+        dispatcher.register(Arc::new(MockAdapter { name: "b".into() }));
+        let n = test_notification();
+        let results = dispatcher
+            .dispatch_notification(&n, &["a".to_string(), "b".to_string()])
+            .await;
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().all(|r| r.success));
     }
 }

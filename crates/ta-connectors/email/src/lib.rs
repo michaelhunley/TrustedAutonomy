@@ -7,7 +7,7 @@
 //! parses reply emails and calls `POST /api/interactions/:id/respond`.
 
 use serde::{Deserialize, Serialize};
-use ta_events::channel::{ChannelDelivery, ChannelQuestion, DeliveryResult};
+use ta_events::channel::{ChannelDelivery, ChannelNotification, ChannelQuestion, DeliveryResult};
 
 /// Email adapter configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -246,6 +246,132 @@ impl ChannelDelivery for EmailAdapter {
         }
     }
 
+    async fn deliver_notification(&self, notification: &ChannelNotification) -> DeliveryResult {
+        let subject = format!(
+            "[TA] [{}] {}",
+            notification.severity_str().to_uppercase(),
+            notification.title
+        );
+        let body_text = format!(
+            "Trusted Autonomy Notification\n\
+             Event: {}\n\
+             Severity: {}\n\n\
+             {}\n\n\
+             --\n\
+             Event ID: {}",
+            notification.event_type,
+            notification.severity_str(),
+            notification.body,
+            notification.event_id
+        );
+        let body_html = format!(
+            "<html><body>\
+             <h2 style=\"color:{};\">{}</h2>\
+             <p><strong>Event:</strong> {}</p>\
+             <p>{}</p>\
+             <hr/><small>Event ID: {}</small>\
+             </body></html>",
+            match notification.severity_str() {
+                "critical" => "#b91c1c",
+                "error" => "#dc2626",
+                "warning" => "#d97706",
+                _ => "#2563eb",
+            },
+            notification.title,
+            notification.event_type,
+            notification.body,
+            notification.event_id,
+        );
+
+        let mut headers = serde_json::json!({
+            "X-TA-Event-Type": notification.event_type,
+            "X-TA-Severity": notification.severity_str(),
+        });
+        if let Some(gid) = notification.goal_id {
+            headers["X-TA-Goal-ID"] = serde_json::Value::String(gid.to_string());
+        }
+
+        let payload = serde_json::json!({
+            "from": self.config.from_address,
+            "to": self.config.to_address,
+            "subject": subject,
+            "body_text": body_text,
+            "body_html": body_html,
+            "headers": headers,
+        });
+
+        match self
+            .client
+            .post(&self.config.send_endpoint)
+            .bearer_auth(&self.config.api_key)
+            .json(&payload)
+            .send()
+            .await
+        {
+            Ok(resp) => {
+                let status = resp.status();
+                if status.is_success() {
+                    let delivery_id = match resp.json::<serde_json::Value>().await {
+                        Ok(json) => json
+                            .get("id")
+                            .or_else(|| json.get("message_id"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        Err(_) => String::new(),
+                    };
+                    tracing::info!(
+                        channel = "email",
+                        event_type = %notification.event_type,
+                        severity = %notification.severity_str(),
+                        to = %self.config.to_address,
+                        "Notification delivered via email"
+                    );
+                    DeliveryResult {
+                        channel: "email".into(),
+                        delivery_id,
+                        success: true,
+                        error: None,
+                    }
+                } else {
+                    let err_body = resp.text().await.unwrap_or_default();
+                    tracing::warn!(
+                        channel = "email",
+                        event_type = %notification.event_type,
+                        status = %status,
+                        "Email send endpoint returned error for notification"
+                    );
+                    DeliveryResult {
+                        channel: "email".into(),
+                        delivery_id: String::new(),
+                        success: false,
+                        error: Some(format!(
+                            "Email send endpoint returned HTTP {} for notification '{}': {}",
+                            status, notification.event_type, err_body
+                        )),
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::error!(
+                    channel = "email",
+                    event_type = %notification.event_type,
+                    error = %e,
+                    "HTTP request to email send endpoint failed for notification"
+                );
+                DeliveryResult {
+                    channel: "email".into(),
+                    delivery_id: String::new(),
+                    success: false,
+                    error: Some(format!(
+                        "HTTP request to email send endpoint failed for notification '{}': {}",
+                        notification.event_type, e
+                    )),
+                }
+            }
+        }
+    }
+
     async fn validate(&self) -> Result<(), String> {
         if self.config.send_endpoint.is_empty() {
             return Err(
@@ -395,5 +521,28 @@ mod tests {
     fn adapter_name() {
         let adapter = EmailAdapter::new(test_config());
         assert_eq!(adapter.name(), "email");
+    }
+
+    #[test]
+    fn notification_subject_includes_severity_and_title() {
+        use std::collections::HashMap;
+        use ta_events::channel::ChannelNotification;
+        use ta_events::notification::NotificationSeverity;
+
+        let n = ChannelNotification {
+            event_id: "e1".into(),
+            event_type: "goal_failed".into(),
+            title: "Goal failed".into(),
+            body: "The goal 'Fix bug' failed with exit code 1.".into(),
+            severity: NotificationSeverity::Error,
+            goal_id: None,
+            metadata: HashMap::new(),
+        };
+        // The subject format is "[TA] [ERROR] {title}".
+        let expected_subject = "[TA] [ERROR] Goal failed";
+        assert_eq!(
+            format!("[TA] [{}] {}", n.severity_str().to_uppercase(), n.title),
+            expected_subject
+        );
     }
 }

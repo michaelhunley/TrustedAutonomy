@@ -13,7 +13,7 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use ta_changeset::plugin::{PluginManifest, PluginProtocol};
-use ta_events::channel::{ChannelDelivery, ChannelQuestion, DeliveryResult};
+use ta_events::channel::{ChannelDelivery, ChannelNotification, ChannelQuestion, DeliveryResult};
 
 /// External channel adapter that delegates delivery to an out-of-process plugin.
 ///
@@ -46,6 +46,264 @@ impl ExternalChannelAdapter {
             manifest,
             auth_token,
             http_client,
+        }
+    }
+
+    /// Send an arbitrary JSON envelope via the stdio subprocess protocol.
+    ///
+    /// Used by both `deliver_question` (wrapping ChannelQuestion) and
+    /// `deliver_notification` (wrapping ChannelNotification).
+    async fn deliver_envelope_stdio(&self, envelope: &serde_json::Value) -> DeliveryResult {
+        let command = match &self.manifest.command {
+            Some(cmd) => cmd,
+            None => {
+                return DeliveryResult {
+                    channel: self.manifest.name.clone(),
+                    delivery_id: String::new(),
+                    success: false,
+                    error: Some(format!(
+                        "Plugin '{}' has no command configured for json-stdio protocol. \
+                         Set 'command' in channel.toml.",
+                        self.manifest.name
+                    )),
+                };
+            }
+        };
+
+        let payload_json = match serde_json::to_string(envelope) {
+            Ok(json) => json,
+            Err(e) => {
+                return DeliveryResult {
+                    channel: self.manifest.name.clone(),
+                    delivery_id: String::new(),
+                    success: false,
+                    error: Some(format!(
+                        "Failed to serialize payload for plugin '{}': {}",
+                        self.manifest.name, e
+                    )),
+                };
+            }
+        };
+
+        let mut parts = command.split_whitespace();
+        let program = match parts.next() {
+            Some(p) => p,
+            None => {
+                return DeliveryResult {
+                    channel: self.manifest.name.clone(),
+                    delivery_id: String::new(),
+                    success: false,
+                    error: Some(format!(
+                        "Plugin '{}' has empty command.",
+                        self.manifest.name
+                    )),
+                };
+            }
+        };
+
+        let mut cmd = tokio::process::Command::new(program);
+        for arg in parts {
+            cmd.arg(arg);
+        }
+        for arg in &self.manifest.args {
+            cmd.arg(arg);
+        }
+        cmd.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        let timeout = Duration::from_secs(self.manifest.timeout_secs);
+
+        let mut child = match cmd.spawn() {
+            Ok(child) => child,
+            Err(e) => {
+                return DeliveryResult {
+                    channel: self.manifest.name.clone(),
+                    delivery_id: String::new(),
+                    success: false,
+                    error: Some(format!(
+                        "Failed to spawn plugin '{}' (command: '{}'): {}",
+                        self.manifest.name, command, e
+                    )),
+                };
+            }
+        };
+
+        if let Some(mut stdin) = child.stdin.take() {
+            use tokio::io::AsyncWriteExt;
+            let write_result = tokio::time::timeout(timeout, async {
+                stdin.write_all(payload_json.as_bytes()).await?;
+                stdin.write_all(b"\n").await?;
+                drop(stdin);
+                Ok::<(), std::io::Error>(())
+            })
+            .await;
+
+            match write_result {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    let _ = child.kill().await;
+                    return DeliveryResult {
+                        channel: self.manifest.name.clone(),
+                        delivery_id: String::new(),
+                        success: false,
+                        error: Some(format!(
+                            "Failed to write to plugin '{}' stdin: {}",
+                            self.manifest.name, e
+                        )),
+                    };
+                }
+                Err(_) => {
+                    let _ = child.kill().await;
+                    return DeliveryResult {
+                        channel: self.manifest.name.clone(),
+                        delivery_id: String::new(),
+                        success: false,
+                        error: Some(format!(
+                            "Timeout writing to plugin '{}' stdin after {}s.",
+                            self.manifest.name, self.manifest.timeout_secs
+                        )),
+                    };
+                }
+            }
+        }
+
+        let output = match tokio::time::timeout(timeout, child.wait_with_output()).await {
+            Ok(Ok(output)) => output,
+            Ok(Err(e)) => {
+                return DeliveryResult {
+                    channel: self.manifest.name.clone(),
+                    delivery_id: String::new(),
+                    success: false,
+                    error: Some(format!(
+                        "Plugin '{}' process error: {}",
+                        self.manifest.name, e
+                    )),
+                };
+            }
+            Err(_) => {
+                return DeliveryResult {
+                    channel: self.manifest.name.clone(),
+                    delivery_id: String::new(),
+                    success: false,
+                    error: Some(format!(
+                        "Plugin '{}' timed out after {}s.",
+                        self.manifest.name, self.manifest.timeout_secs
+                    )),
+                };
+            }
+        };
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return DeliveryResult {
+                channel: self.manifest.name.clone(),
+                delivery_id: String::new(),
+                success: false,
+                error: Some(format!(
+                    "Plugin '{}' exited with status {}. stderr: {}",
+                    self.manifest.name,
+                    output.status,
+                    stderr.trim()
+                )),
+            };
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let first_line = stdout.lines().next().unwrap_or("").trim();
+
+        if first_line.is_empty() {
+            return DeliveryResult {
+                channel: self.manifest.name.clone(),
+                delivery_id: String::new(),
+                success: false,
+                error: Some(format!(
+                    "Plugin '{}' produced no output on stdout. \
+                     Expected a JSON line with DeliveryResult.",
+                    self.manifest.name
+                )),
+            };
+        }
+
+        match serde_json::from_str::<DeliveryResult>(first_line) {
+            Ok(result) => result,
+            Err(e) => DeliveryResult {
+                channel: self.manifest.name.clone(),
+                delivery_id: String::new(),
+                success: false,
+                error: Some(format!(
+                    "Plugin '{}' produced invalid JSON: {}. Got: '{}'",
+                    self.manifest.name,
+                    e,
+                    if first_line.len() > 200 {
+                        &first_line[..200]
+                    } else {
+                        first_line
+                    }
+                )),
+            },
+        }
+    }
+
+    /// Send an arbitrary JSON envelope via the HTTP callback protocol.
+    async fn deliver_envelope_http(&self, envelope: &serde_json::Value) -> DeliveryResult {
+        let url = match &self.manifest.deliver_url {
+            Some(url) => url,
+            None => {
+                return DeliveryResult {
+                    channel: self.manifest.name.clone(),
+                    delivery_id: String::new(),
+                    success: false,
+                    error: Some(format!(
+                        "Plugin '{}' has no deliver_url configured for http protocol.",
+                        self.manifest.name
+                    )),
+                };
+            }
+        };
+
+        let mut req = self.http_client.post(url).json(envelope);
+        if let Some(ref token) = self.auth_token {
+            req = req.bearer_auth(token);
+        }
+
+        match req.send().await {
+            Ok(resp) => {
+                let status = resp.status();
+                if status.is_success() {
+                    match resp.json::<DeliveryResult>().await {
+                        Ok(result) => result,
+                        Err(_) => DeliveryResult {
+                            channel: self.manifest.name.clone(),
+                            delivery_id: String::new(),
+                            success: true,
+                            error: None,
+                        },
+                    }
+                } else {
+                    let body = resp.text().await.unwrap_or_default();
+                    DeliveryResult {
+                        channel: self.manifest.name.clone(),
+                        delivery_id: String::new(),
+                        success: false,
+                        error: Some(format!(
+                            "Plugin '{}' HTTP endpoint returned {}: {}",
+                            self.manifest.name,
+                            status,
+                            body.trim()
+                        )),
+                    }
+                }
+            }
+            Err(e) => DeliveryResult {
+                channel: self.manifest.name.clone(),
+                delivery_id: String::new(),
+                success: false,
+                error: Some(format!(
+                    "HTTP request to plugin '{}' failed: {}",
+                    self.manifest.name, e
+                )),
+            },
         }
     }
 
@@ -362,6 +620,28 @@ impl ChannelDelivery for ExternalChannelAdapter {
         match self.manifest.protocol {
             PluginProtocol::JsonStdio => self.deliver_stdio(question).await,
             PluginProtocol::Http => self.deliver_http(question).await,
+        }
+    }
+
+    async fn deliver_notification(&self, notification: &ChannelNotification) -> DeliveryResult {
+        tracing::info!(
+            plugin = %self.manifest.name,
+            protocol = %self.manifest.protocol,
+            event_type = %notification.event_type,
+            severity = %notification.severity_str(),
+            "Delivering notification via external channel plugin"
+        );
+
+        // Plugins receive a typed envelope so they can distinguish questions from
+        // notifications without inspecting payload shape.
+        let envelope = serde_json::json!({
+            "type": "notification",
+            "payload": notification,
+        });
+
+        match self.manifest.protocol {
+            PluginProtocol::JsonStdio => self.deliver_envelope_stdio(&envelope).await,
+            PluginProtocol::Http => self.deliver_envelope_http(&envelope).await,
         }
     }
 

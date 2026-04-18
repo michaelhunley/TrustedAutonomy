@@ -11334,35 +11334,101 @@ The diff is nested and expandable per phase. The advisor presents this context o
 
 ---
 
-### v0.15.19.1 — Workflow Event Bus & Subscription Core
+### v0.15.19.2 — Notification Rules Engine + Delivery Channels
 <!-- status: done -->
-**Goal**: Add persistent named subscriptions to the event system so that long-running automations can react to TA events without polling. A subscription is a durable binding between an event filter and an action (log, workflow, notify, webhook). Subscriptions survive daemon restarts by tracking a cursor (last-processed event timestamp) and replaying from that point on startup.
+**Goal**: Add a rule-driven notification system that pushes one-way event notifications (goal failures, policy violations, draft denials, etc.) to external channels (Slack, email, external plugins) based on configurable rules loaded from `.ta/notification-rules.toml`.
 
-**Depends on**: v0.15.19 (stable SessionEvent schema, FsEventStore, in-process EventBus)
+**Why this phase exists**: The existing `ChannelDispatcher` only handles interactive questions (`deliver_question`). There was no mechanism to push non-interactive lifecycle events to channels — users had to poll `ta goal status` or the web UI to learn about failures. This phase wires lifecycle events to channels through a declarative rules engine with rate limiting and dedup.
 
-**Why subscriptions over routing**: The existing `event-routing.yaml` is a static, project-wide config that applies to all daemons. Subscriptions are dynamic (created via CLI), named (removable by name), and durable (cursor-based replay). Both coexist: routing handles synchronous, one-shot reactions; subscriptions handle long-running integrations.
+**Depends on**: v0.15.9 (MessagingAdapter / email), v0.10.3 (Slack), v0.10.4 (email channel plugin)
+
+---
+
+#### Architecture
+
+```
+EventEnvelope (from daemon event loop)
+  │
+  └─ NotificationDispatcher.dispatch_event(event)
+       │
+       ├─ NotificationRulesEngine.matching_rules(event)
+       │    Evaluates conditions: EventType, EventTypeIn, SeverityGte,
+       │    TimeWindow, PayloadField
+       │
+       ├─ check_and_record(rule, event)   ← rate limit + dedup
+       │
+       └─ ChannelDispatcher.dispatch_notification(notification, channels)
+            │
+            ├─ SlackAdapter.deliver_notification()   ← Block Kit message
+            ├─ EmailAdapter.deliver_notification()   ← HTML/text email
+            └─ ExternalChannelAdapter.deliver_notification()  ← typed envelope
+```
+
+**Config file**: `.ta/notification-rules.toml`
+```toml
+global_channels = ["slack"]
+suppress_duplicates_secs = 300
+
+[[rules]]
+id = "alert-on-failure"
+name = "Alert on goal failure"
+channels = ["slack", "email"]
+
+[[rules.conditions]]
+type = "event_type"
+value = "goal_failed"
+
+[rules.template]
+title = "[TA] Goal failed"
+body = "Goal `{title}` failed. Check `ta goal status {goal_id}`."
+
+[rules.rate_limit]
+max_per_period = 3
+period_secs = 3600
+```
+
+**`RuleCondition` variants**:
+- `event_type` — exact event type string match
+- `event_type_in` — match any of a list
+- `severity_gte` — match `info | warning | error | critical`
+- `time_window` — only during `start_hour..end_hour` (local time, handles midnight wrap)
+- `payload_field` — match a specific JSON field in the payload
+
+**Template placeholders**: `{event_type}`, `{event_id}`, `{timestamp}`, `{goal_id}`, `{title}`, `{agent_id}`, `{phase}`, `{error}`
 
 ---
 
 #### Items
 
-1. [x] **`SubscriptionFilter` and `SubscriptionAction` types** (`crates/ta-events/src/subscription.rs`): `SubscriptionFilter` variants: `All`, `ByTypes { types }`, `ByGoal { goal_id }`, `ByPhase { phase }`, `And { filters }`. `SubscriptionAction` variants: `Log`, `RunWorkflow { workflow, params }`, `Notify { channels, template }`, `Webhook { url, headers, secret }`. All serialise to tagged JSON (`kind` discriminant).
+1. [x] **`NotificationSeverity` enum** (`crates/ta-events/src/notification.rs`): `Info | Warning | Error | Critical` with `for_event_type(str)` mapping and `as_str()`. Derives `PartialOrd/Ord` for `SeverityGte` comparisons.
 
-2. [x] **`Subscription` struct** (`crates/ta-events/src/subscription.rs`): `id` (Uuid), `name` (unique), `description`, `filter`, `action`, `cursor` (last processed event timestamp), `created_at`, `enabled`. `matches()` method gates on `enabled` + filter evaluation.
+2. [x] **`RuleCondition` enum** (`crates/ta-events/src/notification.rs`): `EventType | EventTypeIn | SeverityGte | TimeWindow | PayloadField` variants. Each implements `matches(&EventEnvelope) -> bool`. `TimeWindow` uses `chrono::Local::now()` for local-hour checks with midnight-wrap support.
 
-3. [x] **`SubscriptionStore`** (`crates/ta-events/src/subscription.rs`): Persists to `.ta/subscriptions.json` (atomic write via temp file). CRUD: `add()` (rejects duplicate names), `remove(id)`, `get(id)`, `get_by_name(name)`, `update_cursor(id, ts)`, `set_enabled(id, enabled)`, `list()`. 10 tests.
+3. [x] **`NotificationRule` + `NotificationRulesConfig`** (`crates/ta-events/src/notification.rs`): `NotificationRule` with `id`, `name`, `enabled`, `priority`, `conditions`, `channels`, `template`, `rate_limit`. `NotificationRulesConfig` with `rules`, `suppress_duplicates_secs`, `global_channels`. TOML round-trip tested.
 
-4. [x] **`SubscriptionDispatcher`** (`crates/ta-events/src/dispatcher.rs`): `dispatch(envelope)` evaluates all enabled subscriptions against a single event and returns `Vec<DispatchRecord>`. `dispatch_replay(event_store)` replays all events after each subscription's cursor. `advance_cursor(id, ts)` updates the cursor post-dispatch. `format_dispatch_summary(records)` for CLI output. 9 tests.
+4. [x] **`NotificationRulesEngine`** (`crates/ta-events/src/notification.rs`): Stateful engine with `Mutex<HashMap<String, Vec<Instant>>>` dedup cache. `load(path)` returns empty engine if file absent. `matching_rules(event)` returns sorted-by-priority matches. `check_and_record(rule, event)` enforces global dedup window + per-rule rate limit. `build_template_vars(event)` extracts `goal_id`, `title`, `agent_id`, `phase`, `error` from payload JSON. 18 unit tests.
 
-5. [x] **`DispatchRecord`** (`crates/ta-events/src/dispatcher.rs`): `subscription_id`, `subscription_name`, `action`, `event_id`, `event_type`, `event_timestamp`, `envelope`. Callers own execution — the dispatcher only evaluates and returns; it never fires workflows or webhooks directly.
+5. [x] **`ChannelNotification` struct** (`crates/ta-events/src/channel.rs`): `event_id`, `event_type`, `title`, `body`, `severity: NotificationSeverity`, `goal_id: Option<Uuid>`, `metadata: HashMap<String, String>`. Added to `ChannelDelivery` exports.
 
-6. [x] **Updated `ta-events` public API** (`crates/ta-events/src/lib.rs`): Re-exports `Subscription`, `SubscriptionAction`, `SubscriptionFilter`, `SubscriptionStore`, `SubscriptionDispatcher`, `DispatchRecord`, `format_dispatch_summary`. New error variants `SubscriptionNotFound(Uuid)` and `SubscriptionAlreadyExists(String)` in `EventError`.
+6. [x] **`ChannelDelivery::deliver_notification()` default** (`crates/ta-events/src/channel.rs`): Default impl returns `success: false` with actionable error — channels that haven't implemented it fail gracefully without requiring a blanket impl. Added 2 tests.
 
-7. [x] **`ta events subscriptions` CLI** (`apps/ta-cli/src/commands/events.rs`): `add --name <n> [--type <t>...] [--phase <p>] [--action log|workflow:<n>|notify:<c>|webhook:<u>] [--description <d>]`, `list`, `remove <name-or-id>`, `enable <name-or-id> [--disable]`, `replay <name-or-id> [--dry-run]`. Action format parsed from `--action` string. Filter built from `--type` + `--phase` args (single filter or `And` composition).
+7. [x] **`SlackAdapter::deliver_notification()`** (`crates/ta-connectors/slack/src/lib.rs`): Posts Block Kit message with severity emoji (🚨/❌/⚠️/ℹ️) and title/body. Returns `delivery_id = ts`. Added tests.
 
-#### Tests: 28 new tests (subscription.rs: 10, dispatcher.rs: 9, existing bus/store/hook tests unchanged). Total ta-events: 110 tests.
+8. [x] **`EmailAdapter::deliver_notification()`** (`crates/ta-connectors/email/src/lib.rs`): Sends HTML+text email with `[TA] [SEVERITY] {title}` subject, severity-coloured HTML heading, and event metadata headers (`X-TA-Event-Type`, `X-TA-Severity`, `X-TA-Goal-ID`). Added test.
 
-#### Version: `0.15.19-alpha` (sub-phase, no version bump)
+9. [x] **`ExternalChannelAdapter::deliver_notification()`** (`crates/ta-daemon/src/external_channel.rs`): Sends typed JSON envelope `{ "type": "notification", "payload": ChannelNotification }` via stdio or HTTP. Added `deliver_envelope_stdio()` and `deliver_envelope_http()` private helpers shared with the question path.
+
+10. [x] **`ChannelDispatcher::dispatch_notification()`** (`crates/ta-daemon/src/channel_dispatcher.rs`): Calls `adapter.deliver_notification()` for each named channel; warns on unregistered channels; returns `Vec<DeliveryResult>`. 4 new tests.
+
+11. [x] **`NotificationDispatcher`** (`crates/ta-daemon/src/notification_dispatcher.rs`): Holds `NotificationRulesEngine` + `Arc<ChannelDispatcher>`. `dispatch_event(event)` evaluates rules, applies dedup/rate-limit, builds `ChannelNotification` from template vars, calls `dispatch_notification`. Built-in default templates for common events (`goal_failed`, `goal_completed`, `policy_violation`, etc.). 8 tests.
+
+12. [x] **Module registration** (`crates/ta-daemon/src/main.rs`): Added `pub mod notification_dispatcher` to daemon module list.
+
+13. [x] **`ta-events/Cargo.toml`**: Added `toml = { workspace = true }` for parsing `notification-rules.toml`.
+
+14. [x] **`ta-events/src/lib.rs`**: Exported `NotificationRule`, `NotificationRulesConfig`, `NotificationRulesEngine`, `NotificationSeverity`, `NotificationTemplate`, `RateLimit`, `RuleCondition`, `ChannelNotification`.
+
+#### Version: `0.15.19-alpha.2`
 
 ---
 

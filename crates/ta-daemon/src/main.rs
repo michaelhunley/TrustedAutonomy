@@ -37,6 +37,7 @@ pub mod channel_listener_manager;
 mod config;
 pub mod config_watcher;
 pub mod external_channel;
+pub mod notification_dispatcher;
 pub mod office;
 pub mod power_manager;
 pub mod project_context;
