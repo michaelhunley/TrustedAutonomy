@@ -1628,7 +1628,7 @@ This pattern extends beyond VCS to any adapter type:
       Phase 5: Audit Logging
         Change log (who/what/when/why), export JSON/CSV,
         tamper-evident chain (reuse ta-audit)
-      ```
+---
       Phase 6: Web Dashboard
         Record browser, change history, pending approvals,
         served by embedded HTTP server
@@ -2096,7 +2096,7 @@ Each `ProjectContext` holds:
 ### v0.10.0 — Gateway Channel Wiring & Multi-Channel Routing
 ---
 ---
-      ```
+
 ---
 ---
 - ✅ **Multi-channel routing**: `review` and `escalation` now accept either a single channel object or an array of channels (backward-compatible via `#[serde(untagged)]`). `notify` already supported arrays. Schema supports `strategy: first_response | quorum`.
@@ -2323,7 +2323,7 @@ ta plugin build discord,slack,email
 ta plugin build --all
 ---
 ---
-#### Deferred items moved
+---
 ---
 2. Run `cargo build --release` in each plugin directory
 3. Copy the compiled binary + `channel.toml` to `.ta/plugins/channels/<name>/`
@@ -2359,7 +2359,7 @@ ta plugin build --all
 5. ✅ **Actionable error messages**: Missing token, missing channel ID, Slack API errors with permission hints
 6. ✅ **`allowed_users` env var**: `TA_SLACK_ALLOWED_USERS` documented for access control integration
 ---
-#### Deferred items moved
+---
 - Slack Socket Mode + deny modal + HTTP mode → v0.11.0 (Event-Driven Agent Routing — interactive channel responses)
 ---
 #### Deferred items moved
@@ -2438,7 +2438,7 @@ protocol = "json-stdio"
 ---
 ---
 ---
-
+---
 ta workflow add security-review --from registry:trustedautonomy/workflows
 ta workflow add deploy-pipeline --from gh:myorg/ta-workflows
 ---
@@ -2478,9 +2478,9 @@ ta release run --press-release
 ---
 ---
 ---
-```rust
+---
 The agent reads the changelog/release notes, follows the style and tone of the sample document, and produces a draft press release that goes through the normal TA review process (draft → approve → apply).
-```rust
+---
 ##### 4. Workflow authoring and publishing
 ---
 ---
@@ -2603,10 +2603,10 @@ commands = [
     "cargo test --workspace",
     "cargo clippy --workspace --all-targets -- -D warnings",
     "cargo fmt --all -- --check",
-
 ---
 ---
-#### Deferred items resolved
+---
+---
 ---
 ---
 timeout = 300
@@ -2634,7 +2634,7 @@ timeout = 300
 #### Deferred items moved
 - Agent mode re-launch with failure context → v0.11.0 (Event-Driven Agent Routing)
 ---
-
+---
 - 7 new config tests: defaults, TOML parsing for all modes, display formatting
 - 5 new verification tests: empty commands pass, passing/failing commands, mixed commands, output capture, timeout handling
 ---
@@ -2721,7 +2721,7 @@ After `./install_local.sh` rebuilds and installs new `ta` and `ta-daemon` binari
 ---
 ---
 #### Version: `0.10.10-alpha`
-```yaml
+---
 ---
 ---
 ---
@@ -2739,7 +2739,7 @@ After `./install_local.sh` rebuilds and installs new `ta` and `ta-daemon` binari
 ---
 ---
 1. ✅ **Agent output streaming**: TUI `:tail` command connects to `GET /api/goals/:id/output` SSE endpoint, streams `AgentOutput` messages as styled lines (stdout=white, stderr=yellow). Interleaves with TA events in unified output pane.
-#### Deferred items resolved
+
 3. ✅ **Tail backfill and confirmation**: Prints confirmation on tail start with goal ID. Visual separator `─── live output ───` between backfill and live output. Configurable `shell.tail_backfill_lines` (default 5).
 4. ✅ **Draft-ready notification**: SSE parser detects `draft_built` events and renders `[draft ready] "title" (display_id) — run: draft view <id>` with bold green styling. Status bar shows tailing indicator.
 ---
@@ -2751,7 +2751,7 @@ After `./install_local.sh` rebuilds and installs new `ta` and `ta-daemon` binari
 #### Tests
 - Classic shell pager → dropped (TUI scrollable output supersedes this)
 - Progressive disclosure for draft view → backlog (TUI enhancement, no target phase)
-
+---
 #### Tests
 - 14 new tests in `shell_tui.rs`: parse_goal_started_event, parse_goal_started_ignores_other_events, parse_draft_built_event, parse_draft_built_fallback_display_id, parse_draft_built_ignores_other_events, handle_agent_output_message, handle_agent_stderr_output, handle_goal_started_auto_tail, handle_goal_started_no_auto_tail_when_already_tailing, handle_goal_started_no_auto_tail_when_disabled, handle_agent_output_done_clears_tail, handle_draft_ready_notification, output_buffer_limit_enforced, output_buffer_limit_adjusts_scroll
 - 4 new tests in `config.rs`: shell_config_defaults, workflow_config_default_has_shell_section, parse_toml_with_shell_section, parse_toml_without_shell_section_uses_default
@@ -2782,7 +2782,7 @@ When the user asks a question in `ta shell`, the daemon spawned `claude --print`
 ---
 ---
 ---
-      }
+---
 ---
 ---
 ```rust
@@ -2846,7 +2846,7 @@ Agent: Added v0.10.14 — Agent Model Discovery & Status Display
 - 6 new tests in `shell_tui.rs` for `parse_tail_args`
 ---
 - 5 new tests in `shell_tui.rs` for model extraction/humanization
-
+---
 - 2 new tests in `release.rs` for auto-approve and TUI interaction
 #### Deferred items moved
 #### Version: `0.10.14-alpha`
@@ -2877,7 +2877,7 @@ Agent: Added v0.10.14 — Agent Model Discovery & Status Display
 ---
 ---
 ---
-   ```json
+---
 1. [x] **Full scrollback history**: Changed `scroll_offset` from `u16` to `usize` to prevent overflow at 65,535 visual lines. Increased default `output_buffer_limit` from 10,000 to 50,000 lines.
 2. [x] **Immediate command dispatch ack**: Added immediate "Dispatching: ..." info line before async daemon send so users see activity before the daemon responds.
 ---
@@ -2901,7 +2901,7 @@ Agent: Added v0.10.14 — Agent Model Discovery & Status Display
 - ✅ **Channel access control** (item 12): `ChannelAccessControl` struct with `allowed_users`, `denied_users`, `allowed_roles`, `denied_roles` and `permits(user_id, roles)` method. Deny takes precedence. Added to `ChannelsConfig` (global) and `ExternalChannelEntry` (per-plugin). 6 tests.
 - ✅ **Agent tool access control** (item 13): `AgentToolAccess` struct with `allowed_tools`/`denied_tools` and `as_filter()` → `AccessFilter`. Added to `AgentConfig`. 2 tests.
 - ✅ **Plugin version checking** (item 14): `min_daemon_version` and `source_url` fields on `PluginManifest`. `ta plugin check` compares installed vs source versions and validates min_daemon_version. `ta plugin upgrade` rebuilds from source. `version_less_than()` semver comparison. 4 tests.
-#### Completed
+---
 #### Deferred items moved
 - MSI installer → backlog (Windows distribution, no target phase)
 - Slack Socket Mode + deny modal → v0.11.0 (Event-Driven Agent Routing)
@@ -2909,7 +2909,7 @@ Agent: Added v0.10.14 — Agent Model Discovery & Status Display
 - Email IMAP reply polling → v0.11.0
 - Slack/Discord/Email webhooks → v0.11.0
 - Plugin marketplace → backlog (no target phase)
-#### Completed
+---
 #### Tests: 16 new tests (12 in config.rs, 4 in plugin.rs)
 #### Version: `0.10.16-alpha`
 ---
@@ -2921,7 +2921,7 @@ Agent: Added v0.10.14 — Agent Model Discovery & Status Display
 ---
 See v0.9.9 design section above for the full architecture and user flow.
 ---
-#### Completed
+---
 1. [x] **`ta new` CLI command** (`apps/ta-cli/src/commands/new.rs`): Entry point for conversational project bootstrapping with `run`, `templates`, and `version-schemas` subcommands
 ---
 3. [x] **Project scaffold generation**: Language-specific scaffolds (Rust CLI/lib, TypeScript API/app, Python CLI/API, Go service, generic) with directory structure, config files, and .gitignore
@@ -2938,14 +2938,14 @@ See v0.9.9 design section above for the full architecture and user flow.
 - v0.10.13 (`ta plan add` — shares planner agent infrastructure)
 ---
 ---
-
+---
 ---
 ---
 ---
 ---
 ---
 **Goal**: Fix three reliability issues in the TUI shell: auto-tail race condition (still failing despite retries), draft view scrollback not rendering full output, and `draft apply` timing out due to pre-commit verification.
-
+---
 ---
 1. [x] **Auto-tail client-side prefix resolution**: `resolve_via_active_output()` queries `/api/goals/active-output` and does client-side prefix matching when UUID lookup fails. Eliminates dependency on stderr alias registration timing.
 2. [x] **`draft apply` as long-running command**: Added `ta draft apply *` and `draft apply *` to daemon's `long_running` patterns. Streams output in background instead of 120s timeout.
@@ -2959,7 +2959,7 @@ See v0.9.9 design section above for the full architecture and user flow.
 ---
 ---
 ---
-#### Completed
+---
 - [x] **Verify gaps**: Reviewed code to verify incomplete items and best integration points
 - [x] **Goal chaining context propagation** (from v0.9.8.2): `context_from: Vec<Uuid>` on GoalRun, gateway resolves prior goal metadata and injects "Prior Goal Context" markdown into new goals
 ---
@@ -2969,11 +2969,11 @@ See v0.9.9 design section above for the full architecture and user flow.
 - [x] **Config hot-reload** (from v0.9.10): `ConfigWatcher` using `notify` crate, watches `.ta/daemon.toml` and `.ta/office.yaml`, `ConfigEvent` enum, background thread with mpsc channel, 3 tests
 - [x] **Wire `ta sync` and `ta build` as pre-release steps** (from v0.10.6): CI workflow scaffold with graceful degradation when commands unavailable (requires v0.11.1+/v0.11.2+)
 ---
-#### Completed
 ---
 ---
 ---
-#### Completed
+---
+---
 ---
 **Goal**: Fix the root cause of PRs shipping with lint/test failures by moving verification to goal completion time. Add desktop notifications and fix shell scrollback rendering.
 ---
@@ -2983,7 +2983,7 @@ See v0.9.9 design section above for the full architecture and user flow.
 3. [x] **Shell scrollback rendering fix**: Verified pre-slicing approach handles >65535 visual lines correctly. Added 2 new tests: `scroll_offset_handles_large_line_count` (70K lines, scroll 60K up/30K down) and `scroll_offset_max_clamp` (scroll past end clamps correctly). The `Paragraph::scroll((residual_scroll, 0))` pattern keeps residual in u16 range.
 4. [x] **Verification output detail**: Block mode now shows full command output (first 20 + last 20 lines for long output, with omission indicator). Shows exit code prominently in `--- command (exit code: N) ---` format. Agent mode re-check failure also shows detailed output (20 lines per command). Draft apply verification shows exit code per command and suggests `--skip-verify` flag.
 ---
-#### Completed
+---
 - 4 items completed, 4 new tests across 2 files (notify.rs, shell_tui.rs)
 ---
 ---
@@ -2994,11 +2994,11 @@ See v0.9.9 design section above for the full architecture and user flow.
 ---
 #### Deferred items resolved
 **Goal**: Fix the fundamental visibility problem in `ta shell` where command output that exceeds the terminal window height is lost — the user cannot scroll back to see earlier output lines.
-#### Completed
-#### Completed
+---
+---
 When an agent or command produces output longer than the visible terminal area in `ta shell`, lines that scroll past the top of the window are gone. There is no way to scroll up to review them. This makes `ta shell` unusable for any command with substantial output (build logs, test results, long diffs). The user reported this as a recurring blocker.
 ---
-#### Completed
+---
 ---
 2. [x] **Keyboard scroll navigation**: Shift+Up/Down scroll output 1 line, PgUp/PgDn scroll 10 lines, Shift+Home/End scroll to top/bottom. Status bar shows "line N of M" scroll position indicator when scrolled up. "New output" badge with down-arrow appears when new content arrives while scrolled up. Auto-scroll follows new content when at bottom; holds position when scrolled up. Visual scrollbar in right margin already present from prior work.
 3. [x] **Test: scrollback preserves and retrieves past output**: `scrollback_preserves_and_retrieves_past_output` — pushes 600 lines, verifies all retained, verifies first/last line content, scrolls to top, verifies first line accessible, scrolls to bottom, verifies latest line.
@@ -3014,10 +3014,10 @@ When an agent or command produces output longer than the visible terminal area i
 ---
 **Goal**: Replace the silent, fire-and-forget verification model with streaming output, explicit progress heartbeats, and per-command configurable timeouts so the user always knows what is happening and never hits an opaque timeout.
 #### Deferred items resolved
-
+---
 `run_single_command()` in `verify.rs` uses synchronous `try_wait()` polling with no output streaming. The user sees nothing until the command finishes or the 600s global timeout fires. `cargo test --workspace` legitimately exceeds 600s on this project, causing every `ta draft apply --git-commit` to fail with an opaque "Command timed out after 600s" error. There is no way to distinguish a hung process from a slow-but-progressing test suite.
 ---
-#### Completed
+---
 ---
 2. ✅ **Heartbeat for TA-internal verification commands**: Emits progress heartbeat every N seconds (configurable via `heartbeat_interval_secs`, default 30): `[label] still running... (Ns elapsed, M lines captured)`. Heartbeat interval configurable in `.ta/workflow.toml`.
 3. ✅ **Per-command configurable timeout**: `VerifyConfig` now supports structured `[[verify.commands]]` with per-command `timeout_secs`. `default_timeout_secs` overrides legacy `timeout`. Old flat string list format remains backward compatible via custom serde deserializer.
@@ -3044,7 +3044,7 @@ When an agent or command produces output longer than the visible terminal area i
 ---
 ---
 **Goal**: Fix the silent agent output problem in `ta shell` and stop silently accepting agent terms on the user's behalf.
-```yaml
+---
 ---
 When `ta shell` dispatches a goal via the daemon, the daemon spawns `ta run` with `Stdio::piped()` but does not pass `--headless`. `ta run` then calls `launch_agent()` which inherits the piped fds. Claude Code detects no TTY and runs in non-interactive mode with minimal/no streaming output. The user sees "Tailing..." then silence until the agent finishes.
 ---
@@ -3053,7 +3053,7 @@ The daemon-side capture pipeline works (cmd.rs reads stdout/stderr line-by-line 
 #### Problem 2: Silent Terms Acceptance
 The daemon passes `--accept-terms` when spawning `ta run` (cmd.rs line 123), silently agreeing to agent terms (e.g., Claude Code's terms of service) without user knowledge or consent. Terms acceptance should be an explicit, informed user action — not something TA does automatically behind the scenes.
 ---
-#### Completed
+---
 1. [x] **Daemon injects `--headless` for background goals**: `cmd.rs` now detects `run`/`dev` subcommands and injects `--headless` after the subcommand arg.
 2. [x] **Agent config: `--output-format stream-json` for headless mode**: Added `headless_args` field to `AgentLaunchConfig`. Claude Code's built-in config sets `["--output-format", "stream-json"]`. `launch_agent_headless()` appends these args.
 ---
@@ -3067,7 +3067,7 @@ The daemon passes `--accept-terms` when spawning `ta run` (cmd.rs line 123), sil
 11. [x] **Background command completion bookend**: Daemon emits `✓ <cmd> completed` on success, `✗ <cmd> failed (exit N)` + last 10 stderr lines on failure, as final `OutputLine` before channel cleanup.
 12. [x] **Test: background command emits completion bookend**: Bookend emission is structural (always runs in match arms). Consent roundtrip and path tests also in `consent.rs`.
 ---
-
+---
 - `cmd.rs`: `stream_json_text_content`, `stream_json_content_block_delta`, `stream_json_tool_use`, `stream_json_content_block_start_tool`, `stream_json_result`, `stream_json_internal_events_skipped`, `stream_json_non_json_passthrough`, `stream_json_malformed_json_passthrough`, `stream_json_content_array` (9 tests)
 - `consent.rs`: `consent_roundtrip`, `consent_gate_blocks_without_consent`, `consent_path_resolves_correctly` (3 tests)
 ---
@@ -3079,22 +3079,22 @@ The daemon passes `--accept-terms` when spawning `ta run` (cmd.rs line 123), sil
 ---
 ---
 ---
-
-#### Completed
+---
+---
 ---
 TA already has `ta_ask_human` for MCP-aware agents to request human input — but that only works for agents that explicitly call the MCP tool. Launch-time stdin prompts from the agent binary itself (before MCP is even connected) are completely unhandled. This affects Claude Flow, potentially Codex, LangChain agents with setup steps, and any future agent with interactive configuration.
-
+---
 ---
 ---
 Three layers, from simplest to most general:
-
+---
 ---
 2. **Auto-answer map** (agent config) — pre-configured responses to known prompt patterns
 3. **Live stdin relay** (daemon + shell) — full interactive prompt forwarding through SSE
 ---
 Layer 1 handles most cases. Layer 3 is the general solution for unknown/new agents.
 ---
-
+---
 1. [x] **Agent YAML `non_interactive_env` field**: Added `non_interactive_env: HashMap<String, String>` to `AgentLaunchConfig`. In `launch_agent_headless()`, these are merged into the child process env. Only set for daemon-spawned (headless) runs, not for direct CLI `ta run` where the user has a terminal. Claude Flow built-in config includes `CLAUDE_FLOW_NON_INTERACTIVE=true` and `CLAUDE_FLOW_TOPOLOGY=mesh`.
 ---
 2. [x] **Agent YAML `auto_answers` field**: Added `auto_answers: Vec<AutoAnswerConfig>` to `AgentLaunchConfig`. Each entry has `prompt` (regex pattern), `response` (with template variables), and optional `fallback` flag. Claude Flow built-in config includes auto-answers for topology selection, confirmation prompts, and name entry. Template variables (`{goal_title}`, `{goal_id}`, `{project_name}`) supported.
@@ -3108,70 +3108,70 @@ Layer 1 handles most cases. Layer 3 is the general solution for unknown/new agen
 ---
 ---
 ---
-#### Completed
+---
 8. [x] **Test: non_interactive_env applied in headless mode** (`run.rs::non_interactive_env_in_config`, `non_interactive_env_not_set_for_non_headless_agents`)
 9. [x] **Test: auto_answers responds to matching prompt** (`run.rs::auto_answers_in_config`, `auto_answer_config_deserialize`)
 10. [x] **Test: live stdin relay delivers user response** (`cmd.rs::goal_input_manager_lifecycle`, `goal_input_manager_alias`)
 11. [x] **Test: unmatched prompt forwarded to shell** (`cmd.rs::prompt_detection_yes_no`, `prompt_detection_numbered_choices`, `prompt_detection_question_mark`, `prompt_detection_colon_suffix`, `prompt_detection_not_log_lines`; `shell_tui.rs::handle_stdin_prompt_sets_pending`, `handle_stdin_auto_answered`, `prompt_str_for_stdin_prompt`, `ctrl_c_cancels_stdin_prompt`)
-
-#### Version: `0.10.18-alpha.5`
-#### Completed
 ---
-
+#### Version: `0.10.18-alpha.5`
+---
+---
+---
 ### v0.10.18.6 — `ta daemon` Subcommand
 ---
-**Goal**: Expose daemon lifecycle management as a first-class CLI subcommand so users don't need wrapper scripts or knowledge of the `ta-daemon` binary.
-
 ---
 ---
 ---
-
+---
+---
+---
 Extract `auto_start_daemon()` from `shell.rs` into a shared `commands/daemon.rs` module. Add `ta daemon` as a subcommand with lifecycle verbs. `ta shell` and any future entry points call `daemon::ensure_running()` instead of their own spawn logic.
 ---
-
+---
 1. [x] **`commands/daemon.rs` module**: Extract `auto_start_daemon()` logic from `shell.rs` into `daemon::start()`. Add `daemon::stop()` (POST to `/api/shutdown`), `daemon::status()` (GET `/api/status` + PID file check), `daemon::ensure_running()` (idempotent start-if-needed).
 2. [x] **`ta daemon start`**: Spawn `ta-daemon --api --project-root <path>` in background. Write PID to `.ta/daemon.pid`, log to `.ta/daemon.log`. Print PID, port, and log path. `--foreground` flag runs in the current process (for debugging/containers). `--port` override.
 ---
-4. [x] **`ta daemon restart`**: Stop + start. Handles version mismatch (replaces `version_guard::restart_daemon()`).
+---
 5. [x] **`ta daemon status`**: Show PID, port, version, uptime, project root, active goals count. If not running, say so with `ta daemon start` hint.
 ---
-7. [x] **Refactor `shell.rs`**: Replace `auto_start_daemon()` with call to `daemon::ensure_running()`. Remove duplicated daemon spawn logic. `resolve_daemon_url()` now delegates to `daemon::resolve_daemon_url()`.
+---
 8. [x] **Refactor `version_guard.rs`**: Replace `restart_daemon()` with `daemon::restart()`. Removed ~110 lines of duplicated daemon spawn/restart logic.
-#### Completed
+---
 10. [x] **Test: ensure_running is idempotent** — Covered by `start_rejects_when_alive_pid_exists` (rejects double-start) and `cmd_status_no_daemon` (handles missing daemon).
 11. [x] **Update USAGE.md**: Add `ta daemon` section with start/stop/status/restart/log usage examples
 ---
-#### Version: `0.10.18-alpha.6`
 ---
 ---
-
-### v0.10.18.7 — Per-Platform Icon Packaging
-
+---
+---
 --- Phase Run Summary ---
 ---
-#### Problem
+--- Phase Run Summary ---
 ---
 ---
 ---
-Each platform has a different mechanism for icon embedding:
-- **macOS**: `.app` bundle with `Info.plist` → `CFBundleIconFile` pointing to `.icns`
+---
+---
+---
+---
 - **Windows**: `build.rs` using `winres` crate to embed `.ico` into the PE binary
 - **Linux**: `.desktop` file referencing icon PNGs in XDG icon dirs
 - **Favicon**: For future web UI (`ta-daemon --web-port`)
-
-#### Completed
+---
+---
 1. [x] **Generate Windows `.ico`**: Added `imagemagick` to Nix flake devShell. `.ico` already checked in at `images/icons/ta.ico`.
 2. [x] **macOS `.app` bundle recipe**: `just package-macos` creates `TrustedAutonomy.app/` with generated `Info.plist`, binary copy, and `.icns` in `Resources/`. No code signing (deferred).
 3. [x] **Windows icon embedding**: Added `winres` as a build dependency for `ta-cli` (cfg windows only). `build.rs` embeds `ta.ico` into the binary with graceful fallback if icon missing.
 4. [x] **Linux `.desktop` file**: Added `ta.desktop` at project root with `Icon=ta` entry. `just package-linux` copies icon PNGs to XDG `hicolor/{size}x{size}/apps/ta.png` and installs the `.desktop` file.
 5. [x] **Favicon for web UI**: Embedded `favicon.ico`, `icon-192.png`, and `icon-512.png` in `ta-daemon` assets. Added `/favicon.ico`, `/icon-192.png`, `/icon-512.png` routes in `web.rs`. Updated `index.html` with `<link>` tags.
-#### Completed
+---
 7. [x] **`just icons` recipe**: Single command regenerates all PNG sizes, `.ico`, and `.icns` (macOS only) from master 1024px PNG. Uses `magick` (ImageMagick) and `iconutil`.
-
+---
 9. [x] **Test: web favicon routes** — 3 tests in `crates/ta-daemon/src/web.rs` verify `/favicon.ico`, `/icon-192.png`, `/icon-512.png` serve correct content types and valid PNG data.
 ---
 #### Tests added (10 new)
-- `apps/ta-cli/tests/packaging.rs::icon_source_files_exist` — all 9 icon files present
+---
 - `apps/ta-cli/tests/packaging.rs::windows_ico_path_valid` — build.rs ico path resolves
 - `apps/ta-cli/tests/packaging.rs::linux_desktop_file_valid` — .desktop has required XDG fields
 - `apps/ta-cli/tests/packaging.rs::macos_icns_valid_format` — icns magic bytes check
@@ -3179,34 +3179,34 @@ Each platform has a different mechanism for icon embedding:
 - `apps/ta-cli/tests/packaging.rs::index_html_has_favicon_links` — HTML references favicon
 - `crates/ta-daemon/src/web.rs::favicon_serves_icon` — /favicon.ico returns image/x-icon
 - `crates/ta-daemon/src/web.rs::icon_192_serves_png` — /icon-192.png returns valid PNG
-#### Completed
+---
 ---
 #### Version: `0.10.18-alpha.7`
 --- Phase Run Summary ---
 ---
-
-### v0.11.0 — Event-Driven Agent Routing
 ---
 ---
 ---
-#### Problem
+---
+---
+---
 ---
 ---
 Users could wire this manually (watch SSE stream → parse events → call `ta run`), but that's fragile scripted automation. TA should support this natively with agent-grade intelligence.
 ---
 ---
 ---
-**Event responders** are the core primitive. Each responder binds an event type to a response strategy:
 ---
-```yaml
+---
+---
 # .ta/event-routing.yaml
-responders:
+---
   - event: build_failed
-    strategy: agent
-    agent: claude-code
+---
+---
     prompt: |
       A build failed. Diagnose the error from the build output and
-
+---
       apply it directly. If it requires design decisions, ask the
       human via ta_ask_human.
     escalate_after: 2           # human notified after 2 failed attempts
@@ -3214,7 +3214,7 @@ responders:
 ---
   - event: draft_denied
     strategy: notify             # default: just tell the human
-    channels: [shell, slack]
+    strategy: agent
 ---
   - event: goal_failed
     strategy: agent
@@ -3223,15 +3223,15 @@ responders:
 ---
       retry with modified parameters, break into smaller goals,
       or escalate to the human.
-    require_approval: true       # agent proposes, human approves
+---
 ---
   - event: policy_violation
     strategy: block              # always block, never auto-handle
 ---
 ---
 **Response strategies:**
-
-| Strategy | Behavior |
+      }
+---
 |----------|----------|
 | `notify` | Deliver event to configured channels (default for most events) |
 | `block` | Halt the pipeline, require human intervention |
@@ -3240,23 +3240,23 @@ responders:
 | `ignore` | Suppress the event (no notification, no action) |
 ---
 **TA-managed defaults**: Every event has a sensible default response (mostly `notify`). Users override specific events. TA ships a default `event-routing.yaml` that users can customize per-project.
-#### Problem
-**Key distinction from scripted hooks**: The agent receives full event context (what failed, the build output, the goal history, the draft diff) and makes intelligent decisions. It can call `ta_ask_human` for interactive clarification. It produces governed output (drafts, not direct changes). This is agent routing, not `if/then/else`.
+---
+---
 ---
 **Key distinction from n8n/Zapier**: No visual flow builder, no webhook chaining, no action-to-action piping. One event → one agent (or workflow) with full context. The agent handles the complexity, not a workflow graph.
-#### Design
-#### Completed
+---
+---
 ---
 - [x] **`EventRouter`** (`crates/ta-events/src/router.rs`): Loads `event-routing.yaml` config, matches incoming events to responders (exact type match + optional filters), dispatches to strategy handler (notify, block, agent, workflow, ignore), tracks attempt counts for `escalate_after` and `max_attempts`. Includes `RoutingConfig`, `Responder`, `ResponseStrategy`, `EventRoutingFilter`, `RoutingDecision` types with YAML serialization. 19 tests.
 - [x] **Agent response strategy** (`crates/ta-events/src/strategies/agent.rs`): Builds `AgentResponseContext` with agent name, prompt, event payload JSON, goal/phase info, attempt tracking, and `require_approval` flag. The daemon uses this to launch governed goals from events. 4 tests.
-- [x] **Workflow response strategy** (`crates/ta-events/src/strategies/workflow.rs`): Builds `WorkflowResponseContext` with workflow name and extracted input variables (goal_id, error, phase, command, reason, full event JSON) for template expansion in workflow stages. 5 tests.
+---
 - [x] **Default event-routing config** (`templates/event-routing.yaml`): Sensible defaults for 16 event types. Most events: `notify`. `policy_violation`: `block`. `memory_stored`/`session_paused`/`session_resumed`: `ignore`. Commented examples showing how to upgrade to `agent` strategy.
 - [x] **Event filters** — `EventRoutingFilter` with optional `phase` (trailing `*` wildcard glob), `agent_id` (exact match), and `severity` fields. Filters are AND-combined. Events without the filtered field do not match.
 - [x] **`ta events routing`** CLI commands: `ta events routing list` (shows all responders in a table with strategy and filter columns), `ta events routing test <event-type>` (dry-run showing matched responder and decision details), `ta events routing set <event-type> <strategy>` (quick override with validation and YAML write-back).
 ---
-#### Problem
+---
 #### Tests: 28 new tests
-- `crates/ta-events/src/router.rs`: 19 tests (config loading, exact/filter matching, phase glob, agent_id filter, attempt tracking per-goal, escalation, max_attempts override, protected events, YAML round-trip, dry-run, strategy display/parse, glob matching, notify channels)
+```rust
 - `crates/ta-events/src/strategies/agent.rs`: 4 tests (context building, event JSON inclusion, attempt propagation, missing agent error)
 - `crates/ta-events/src/strategies/workflow.rs`: 5 tests (basic context, variable extraction, full JSON, missing workflow error, command_failed variables)
 ```rust
@@ -3264,34 +3264,34 @@ responders:
 Event routing handles *reactive* responses to things that already happened. It does not handle *proactive* scheduling (cron, triggers) — that belongs in the Virtual Office Runtime project on top.
 ---
 #### Version: `0.11.0-alpha`
-on_failure = "block"
+---
 ---
 ---
 ### v0.11.0.1 — Draft Apply Defaults & CLI Flag Cleanup
-
-**Goal**: Make `ta draft apply` do the right thing by default when VCS is configured. Today the full submit workflow (commit + push + PR) only runs if the user passes `--git-commit` or has `auto_commit = true` in `workflow.toml`. Users shouldn't need to remember flags or configure workflow.toml to get basic VCS integration.
+---
+---
 #### Completed
-#### Problem
+#### Completed
 - `--git-commit`, `--git-push`, and `--submit` leak git-specific terminology into what should be a VCS-agnostic workflow. The abstract operations are "stage changes", "submit to remote", and "request review" — these map differently per VCS.
-   ```
+---
 - The `workflow.toml` `auto_commit`/`auto_push`/`auto_review` settings are workarounds for bad defaults and use git-specific naming.
-#### Design
-#### Design
+---
+---
 The submit workflow has three abstract stages, each mapped by the adapter:
-```bash
+---
 | Abstract Stage | Git | Perforce | SVN |
 ---
 | **Stage** | create branch + commit | create changelist + add files | working copy (implicit) |
 | **Submit** | push to remote | shelve (or submit to depot) | svn commit |
-| **Review** | open PR via `gh` | request review on shelved CL | email / external tool |
+#### Deferred items moved
 ---
 CLI flags use the abstract names. The adapter translates. Users configure their VCS and review workflow in `workflow.toml`:
 #### Deferred items moved
 ---
 ---
-```bash
-auto_submit = true        # default: true when adapter != "none"
-auto_review = true        # default: true when adapter supports review
+---
+---
+---
 ---
 [submit.git]
 branch_prefix = "ta/"
@@ -3300,11 +3300,11 @@ remote = "origin"
 ---
 [submit.perforce]
 workspace = "my-workspace"
-shelve_by_default = true  # shelve instead of submit
 ---
-#### Architecture
-[verify]
-1. [x] **VCS-agnostic CLI flags**: Replace `--git-commit`/`--git-push` with `--submit`/`--no-submit` and `--review`/`--no-review`. `--submit` means "run the full stage+submit workflow for the configured adapter." `--no-submit` copies files only. Backward compat aliases for `--git-commit` and `--git-push`.
+---
+---
+
+---
 2. [x] **Default to `--submit` when adapter is configured**: If `[submit].adapter` is anything other than `"none"`, default to running the full submit workflow. `--no-submit` overrides. Plain `ta draft apply <id>` does the right thing.
 3. [x] **Rename workflow.toml settings**: `auto_commit`/`auto_push` → `auto_submit`. `auto_review` stays (now `Option<bool>`). Deprecate old names with backward compat.
 4. [x] **Adapter-specific config sections**: Each adapter reads its own `[submit.<adapter>]` section. Git reads `[submit.git]`, Perforce reads `[submit.perforce]`, SVN reads `[submit.svn]`. Common settings stay in `[submit]`.
@@ -3314,14 +3314,14 @@ shelve_by_default = true  # shelve instead of submit
 ---
 #### Tests added (12 total)
 - `config::tests::effective_auto_submit_defaults_true_when_adapter_set`
-- `config::tests::effective_auto_submit_defaults_false_when_no_adapter`
+---
 - `config::tests::effective_auto_submit_explicit_override`
 - `config::tests::effective_auto_submit_backward_compat_both_auto`
 - `config::tests::effective_auto_submit_backward_compat_commit_only`
 ---
 - `config::tests::effective_auto_review_defaults_false_when_no_adapter`
 - `config::tests::effective_auto_review_explicit_override`
-- `config::tests::parse_toml_with_auto_submit`
+---
 - `config::tests::parse_toml_with_adapter_specific_sections`
 - `commands::draft::tests::apply_default_submit_when_vcs_detected`
 - `commands::draft::tests::apply_no_submit_copies_files_only`
@@ -3329,26 +3329,26 @@ shelve_by_default = true  # shelve instead of submit
 #### Version: `0.11.0-alpha.1`
 ---
 ---
-#### Design
-### v0.11.1 — `SourceAdapter` Unification & `ta sync`
-   ```
+---
+---
+---
 **Goal**: Merge the current `SubmitAdapter` trait with sync operations into a unified `SourceAdapter` trait. Add `ta sync` command. The trait defines abstract VCS operations; provider-specific mechanics (rebase, fast-forward, shelving) live in each implementation.
 ---
 See `docs/MISSION-AND-SCOPE.md` for the full `SourceAdapter` trait design and per-provider operation mapping.
-
+---
 #### Completed
 ---
 1. [x] **`SourceAdapter` trait** (`crates/ta-submit/src/adapter.rs`): Renamed `SubmitAdapter` → `SourceAdapter` with backward-compatible type alias. Added `sync_upstream(&self) -> Result<SyncResult>` with default no-op implementation. Added `SyncResult` struct with `updated`, `conflicts`, `new_commits`, `message`, and `metadata` fields. Added `SyncError` and `SyncConflict` variants to `SubmitError`. Added `SourceConfig` and `SyncConfig` to workflow config (`[source.sync]` section with `auto_sync`, `strategy`, `remote`, `branch`).
 2. [x] **Git implementation** (`crates/ta-submit/src/git.rs`): `sync_upstream()` runs `git fetch` + merge/rebase/ff-only per `source.sync.strategy` config. Counts new commits via `rev-list --count`. Conflict detection via `git diff --name-only --diff-filter=U`. Returns structured `SyncResult` with conflict file list. Added `with_full_config()` constructor accepting `SyncConfig`.
-3. [x] **SVN implementation** (`crates/ta-submit/src/svn.rs`): `sync_upstream()` runs `svn update`, parses output for conflicts ("C " lines) and updates ("U ", "A ", "D " lines).
+---
 ---
 5. [x] **`ta sync` CLI command** (`apps/ta-cli/src/commands/sync.rs`): Calls `SourceAdapter::sync_upstream()`, emits `sync_completed` or `sync_conflict` events via `FsEventStore`, warns about active staging workspaces, shows troubleshooting on failure.
 6. [x] **`ta shell` integration**: Added `sync` and `verify` to daemon's `ta_subcommands` list so `ta> sync` routes automatically as `ta sync`.
-7. [x] **Wire into `ta draft apply`**: Optional `auto_sync = true` in `[source.sync]` config. After apply + commit + push + review, auto-syncs upstream with conflict warning if needed.
+---
 8. [x] **Events**: Added `SyncCompleted { adapter, new_commits, message }` and `SyncConflict { adapter, conflicts, message }` variants to `SessionEvent`.
 9. [x] **Registry**: Added `select_adapter_with_sync()` for passing `SyncConfig` to adapters. Updated all registry and consumer code to use `SourceAdapter`.
 10. [x] **Backward compatibility**: `SubmitAdapter` remains as a type alias for `SourceAdapter`. All existing imports continue to work.
-#### Design
+   ```json
 #### Tests: 9 new tests
 - `sync_result_is_clean_when_no_conflicts` (adapter.rs)
 - `sync_result_is_not_clean_with_conflicts` (adapter.rs)
@@ -3356,116 +3356,116 @@ See `docs/MISSION-AND-SCOPE.md` for the full `SourceAdapter` trait design and pe
 ---
 - `test_git_adapter_sync_upstream_with_local_remote` (git.rs)
 - `sync_config_defaults` (config.rs)
-- `parse_toml_with_source_sync_section` (config.rs)
+---
 - `parse_toml_without_source_section_uses_default` (config.rs)
 - `none_adapter_sync_returns_not_updated` (sync.rs)
-
+---
 #### Version: `0.11.1-alpha`
 ---
 ---
-#### Design
-### v0.11.2 — `BuildAdapter` & `ta build`
-
+---
+---
+---
 **Goal**: Add `ta build` as a governed event wrapper around project build tools. The build result flows through TA's event system so workflows, channels, event-routing agents, and audit logs all see it.
 ---
 ---
 ---
 #### Completed
 ---
-1. ✅ **`BuildAdapter` trait** (`crates/ta-build/src/adapter.rs` — new crate): `fn build(&self) -> Result<BuildResult>`, `fn test(&self) -> Result<BuildResult>`, `fn name(&self) -> &str`, `fn detect(project_root: &Path) -> bool`. `BuildResult` struct with `success`, `exit_code`, `stdout`, `stderr`, `duration_secs`. `BuildError` enum with NotConfigured, CommandFailed, IoError, ConfigError, Timeout, WebhookError variants.
 ---
-2. ✅ **Built-in adapters**: `CargoAdapter` (Cargo.toml auto-detection, `cargo build/test --workspace`), `NpmAdapter` (package.json auto-detection, `npm run build`/`npm test`), `ScriptAdapter` (arbitrary shell commands, Makefile auto-detection), `WebhookAdapter` (stub — returns descriptive "not yet implemented" error with guidance).
 ---
-3. ✅ **`ta build` CLI command** (`apps/ta-cli/src/commands/build.rs`): Loads `[build]` from `.ta/workflow.toml`, selects adapter via auto-detection or explicit config, runs `build()` and optionally `test()` via `--test` flag. Emits `build_completed` / `build_failed` events. Exit code reflects build result. Long stderr output collapsed (first 20 + last 20 lines).
 ---
-   ```
-
-5. ✅ **Event types** (`crates/ta-events/src/schema.rs`): `BuildCompleted` (adapter, operation, duration_secs, message) and `BuildFailed` (adapter, operation, exit_code, duration_secs, message). `BuildFailed` has retry action suggesting `ta build` / `ta build --test`.
-
+---
+---
+---
+---
+---
+---
+--- Phase Run Summary ---
 6. ✅ **Registry** (`crates/ta-build/src/registry.rs`): `detect_build_adapter()` (Cargo→npm→Make→None), `select_build_adapter()` (named + auto-detect fallback), `known_build_adapters()`. Command overrides applied when using "auto" with custom commands.
-
+---
 7. ✅ **Wire into `ta release run`**: Already scaffolded in v0.10.18 release script with graceful degradation (`ta build` step runs if available, skips with message if not).
 ---
 8. ✅ **`ta shell` integration**: `build` and `test` added to shell help text as shortcuts, dispatched to daemon like other commands.
 ---
-#### Problem
+---
 - `crates/ta-build/src/adapter.rs`: 3 tests (success/failure constructors, serialization roundtrip)
-- `crates/ta-build/src/cargo.rs`: 6 tests (detect, name, custom commands, output capture, failure capture)
+---
 - `crates/ta-build/src/npm.rs`: 4 tests (detect, name, custom commands)
 - `crates/ta-build/src/script.rs`: 5 tests (detect, name, custom command, failure, make constructor)
 - `crates/ta-build/src/webhook.rs`: 4 tests (name, build/test not-implemented, never auto-detected)
 ---
 - `crates/ta-submit/src/config.rs`: 4 new tests (build_config_defaults, parse with adapter, parse script adapter, on_fail display)
 - `crates/ta-events/src/schema.rs`: 2 new events added to all_event_types test (count 21→23)
-- `apps/ta-cli/src/commands/build.rs`: 5 tests (select cargo/npm/empty, script build/test)
-#### Problem
+---
+#### Completed
 #### Version: `0.11.2-alpha`
 ---
 ---
 ---
-#### Tests added
-
-**Goal**: Fix three immediate shell usability issues: (1) agent Q&A sessions fail when `default_agent` is not `claude-code`, (2) TUI mouse capture prevents text selection/copy, and (3) agent errors are silently swallowed.
-
+---
+---
+---
+---
 #### Problem 1: Agent Q&A routing broken for non-claude-code agents
 When `default_agent = "claude-flow"` in `daemon.toml`, natural language questions in `ta shell` hit the generic fallback in `resolve_agent_command()` (`agent.rs:384`): `claude-flow "prompt"`. Claude-flow is a framework/MCP server — it doesn't accept bare prompts as CLI arguments. The process exits immediately with no useful output, showing "agent output ended" in the shell.
 ---
 ---
 - **Goal execution** (`ta run`): which agent framework to spawn for goals — claude-flow is correct here
-- **Shell Q&A** (`ask_agent`): which LLM to answer ad-hoc questions — needs a prompt-capable agent (claude-code)
+---
 ---
 Ultimately each workflow should be able to specify which agent framework to use, with per-agent override options. The workflow and agent might have a recommendation but it should be stored at the project level.
 ---
-#### Problem 2: TUI mouse capture blocks text selection/copy
+---
 The shell TUI (`shell_tui.rs`) calls `EnableMouseCapture` to support scroll-via-mouse (`MouseEventKind::ScrollUp/Down`). This steals the mouse from the terminal emulator, blocking native text selection. Claude Code's terminal handles this correctly — scroll and text selection both work because it doesn't capture the mouse. We already have keyboard scrolling (Shift+Up/Down, PageUp/PageDown) so mouse capture adds no value. Remove it.
 ---
 #### Problem 3: Agent errors silently swallowed
 When the agent process fails to start, crashes, or exits with an error, the output may be lost — especially if the stream-json parser doesn't recognize the output format. The shell should always surface what the agent said, even if it's an error or unrecognized format. Never silently ignore agent output.
-
+---
 ---
 1. [x] **Per-workflow agent config at project level**: Add `[agent.workflows]` in `daemon.toml` (or `project.toml`) mapping workflow types to agents:
-|---|---|
-   [agent]
+---
+---
    default_agent = "claude-flow"   # fallback for goal execution
 ---
 ---
    [agent.workflows]
-   goal = "claude-flow"            # ta run
-   qa = "claude-code"              # shell natural language
+---
+---
    diagnostic = "claude-code"      # daemon-spawned diagnostics (v0.12.2)
    dev = "claude-code"             # ta dev
    # Per-agent overrides possible per workflow
-   ```
+#### Completed
    `ask_agent()` uses `qa_agent`; `ta run` uses `goal` workflow agent. Each is independently configurable with project-level storage. **Done (basic)**: `qa_agent` field added to `AgentConfig`, `input.rs` routes Q&A to `qa_agent`, session lookup filters by agent type. Full `[agent.workflows]` table deferred.
 2. [x] **Add `claude-flow` match arm to `resolve_agent_command()`**: `resolve_agent_command()` now returns `Result`, rejecting framework agents (claude-flow) with an actionable error directing users to configure `qa_agent`. Adds 4 tests.
 3. [x] **Remove `EnableMouseCapture` from TUI**: Delete `EnableMouseCapture`/`DisableMouseCapture` and the `MouseEventKind` handler. Terminal-native mouse scroll and text selection both work. Keyboard scrolling (Shift+Up/Down, PageUp/PageDown) remains.
 4. [x] **Surface all agent output on error**: When the agent process exits with non-zero status, send diagnostic message to shell output stream with exit code and agent name. Includes non-zero exit, process wait error, and timeout cases.
 5. [x] **Agent launch failure surfacing**: If `resolve_agent_command()` produces a binary that doesn't exist or fails to spawn, error is sent to shell output stream with binary name and spawn error — not just daemon logs.
 6. [x] **Fix `--verbose` flag for stream-json**: Claude CLI now requires `--verbose` with `--output-format=stream-json` and `--print`. Added to `resolve_agent_command()`.
-#### Design
+#### Completed
 ---
 #### Version: `0.11.2-alpha.1`
 ---
 ---
 ---
-### v0.11.2.2 — Agent Output Schema Engine
 ---
-**Goal**: Replace hardcoded stream-json parsers with a schema-driven extraction engine. Each agent defines its output format in a YAML schema file. The parser loads schemas at runtime, so format changes don't require recompilation.
+---
+---
 ---
 #### Completed
 1. [x] **Schema format definition**: YAML schema with `agent`, `schema_version`, `format`, and `extractors` sections. Extractors define `type_match` → `paths[]` mappings for text content, tool use, model name, progress indicators, and suppressed event types. See `crates/ta-output-schema/src/schema.rs`.
-2. [x] **Schema files for built-in agents**: `agents/output-schemas/claude-code.yaml` (current nested format), `claude-code-v1.yaml` (legacy top-level format), `codex.yaml`. Schemas ship embedded via `include_str!` and can be overridden from filesystem.
+#### Completed
 3. [x] **Runtime schema loader**: `SchemaLoader` tries project-local `.ta/agents/output-schemas/` first, then `~/.config/ta/agents/output-schemas/`, then embedded defaults, then passthrough fallback. Version negotiation via `schema_version` field.
-
+---
 5. [x] **Replace hardcoded parsers**: Replaced `parse_stream_json_text()` in `shell_tui.rs` and `parse_stream_json_line()` in `cmd.rs` with `ta_output_schema::parse_line()`. Passthrough for non-JSON, suppress for internal events.
-
+---
 7. [x] **User-extensible schemas**: Users add `.yaml` files to `.ta/agents/output-schemas/` (project-local) or `~/.config/ta/agents/output-schemas/` (global). Documented in USAGE.md.
 8. [x] **Build SHA version guard**: Version guard compares `TA_GIT_HASH` instead of semver string. Daemon reports `build_sha` in `/api/status`. Both shells auto-restart on SHA mismatch. (PR #162.)
 9. [x] **Fix false-positive stdin prompt detection**: `--print` mode no longer switches to stdin mode. Auto-reverts to `ta>` prompt when goal exits.
 10. [x] **Draft apply branch safety**: `ta draft apply` verifies base branch before creating feature branch, refusing with actionable error on mismatch.
 11. [x] **Multi-line paste protection**: TUI detects multi-line paste events and confirms before dispatching.
 12. [x] **QA agent project context injection**: Daemon-spawned QA agent receives project memory, CLAUDE.md context, and plan phase via `build_memory_context_section_for_inject()`.
-
+---
 #### Tests (33 new in ta-output-schema + updated tests in shell_tui.rs and cmd.rs)
 - `extractor::tests::simple_field` — basic field extraction
 - `extractor::tests::nested_field` — dotted path navigation
@@ -3488,7 +3488,7 @@ When the agent process fails to start, crashes, or exits with an error, the outp
 - `loader::tests::unknown_agent_returns_passthrough` — graceful fallback
 - `loader::tests::project_local_schema_takes_priority` — filesystem override
 - `loader::tests::cached_schemas_are_reused` — cache correctness
-<!-- status: done -->
+---
 - `loader::tests::invalid_yaml_returns_parse_error` — malformed YAML handling
 - `loader::tests::invalid_schema_returns_validation_error` — bad schema handling
 - `tests::parse_non_json_returns_not_json` — non-JSON passthrough
@@ -3501,42 +3501,42 @@ When the agent process fails to start, crashes, or exits with an error, the outp
 - `tests::codex_schema_parses_output` — Codex schema integration
 - `shell_tui: schema_parse_*` — 9 schema-driven tests replacing hardcoded parser tests
 - `cmd: schema_parse_*` — 8 schema-driven tests replacing hardcoded parser tests
-<!-- status: done -->
+---
 #### Version: `0.11.2-alpha.2`
 ---
 ---
-<!-- status: done -->
-### v0.11.2.3 — Goal & Draft Unified UX
-<!-- status: done -->
+---
+---
+---
 **Goal**: Make goals and drafts feel like one thing to the human. Today they have separate UUIDs, separate `list` commands, disconnected status, and no VCS tracking after apply. The human shouldn't have to cross-reference IDs or hunt through 40 drafts to find the one that matters.
-<!-- status: done -->
-#### Problem
+---
+---
 1. **Goals and drafts have separate UUIDs** — `goal_run_id` (UUID) and `package_id` (UUID) are unrelated strings. The human sees `511e0465-...` in one place and `34b31e89-...` in another and has to mentally link them.
 2. **Goal status doesn't reflect draft lifecycle** — `ta goal list` shows `applied` but doesn't indicate whether the PR was merged, still open, or failed CI. The human has to check GitHub manually.
 3. **Draft list default filter misses "in progress" drafts** — After `ta draft apply --git-commit --push --review`, the draft transitions to `Applied` status, but the PR is still open. `ta draft list` (compact mode) hides it because `Applied` is terminal. The human is told "no active drafts, use --all" and then has to scan 40+ entries.
 4. **No human-friendly names** — Everything is UUIDs or UUID prefixes. Hard to say "check on the shell-routing goal" — you have to find the UUID first.
-<!-- status: done -->
-<!-- status: done -->
+---
+---
 #### Design: Unified Goal Tag
 ---
 A **goal tag** is the single human-friendly identifier for a unit of work:
-<!-- status: done -->
-#### Architecture
+---
+---
 format: <slug>-<seq>
 example: shell-routing-01, fix-auth-03, v0.11.2.1-01
-   ```
+---
 ---
 - **slug**: Auto-derived from goal title (lowercase, hyphens, max 30 chars). Overridable: `ta run "title" --tag fix-auth`.
 - **seq**: Auto-incrementing per slug (handles multiple goals with similar names).
-- The tag is the **primary display ID everywhere**: goal list, draft list, shell status bar, events, audit log.
+---
 - Goals and their draft(s) share the tag. A follow-up draft becomes `shell-routing-01.2` (iteration suffix).
 - UUIDs remain the internal key. Tags are stored on both `GoalRun.tag` and `DraftPackage.tag` and are resolvable in all commands: `ta goal status shell-routing-01`, `ta draft view shell-routing-01`.
-<!-- status: done -->
+---
 #### Completed
 ---
 1. [x] **`GoalRun.tag` field**: Added `tag: Option<String>` to GoalRun with `slugify_title()` auto-generation, `display_tag()` fallback, and `GoalRunStore::save_with_tag()` for auto-sequencing. `GoalRunStore::resolve_tag()` and `resolve_tag_or_id()` for lookup.
 2. [x] **`DraftPackage.tag` field**: Added `tag: Option<String>` to DraftPackage. Inherited from parent goal on `ta draft build`. Displayed in draft list alongside display_id.
-3. [x] **Tag resolution in all commands**: `ta goal status <tag>`, `ta draft view <tag>`, `ta draft apply <tag>`, `ta draft approve <tag>`. Falls back to UUID prefix match if tag doesn't match. Both `goal.rs` and `draft.rs` resolve functions updated.
+---
 4. [x] **`ta goal list` shows draft/VCS status**: New TAG, DRAFT, VCS columns in goal list output with inline draft state and PR status.
 5. [x] **`ta draft list` "recently applied" filter**: Default compact view includes `Applied` drafts younger than 7 days and drafts with open PRs regardless of age.
 6. [x] **VCS status tracking on DraftPackage**: Added `vcs_status: Option<VcsTrackingInfo>` with branch, review_url, review_id, review_state, commit_sha, last_checked. Populated during `ta draft apply --git-commit --push --review`.
@@ -3547,11 +3547,11 @@ example: shell-routing-01, fix-auth-03, v0.11.2.1-01
 11. [x] **Backward compatibility**: Goals without tags get auto-derived display_tag() from title + UUID prefix. UUID prefix resolution continues to work. All fields use `serde(default)` for transparent migration.
 12. [x] **`ta status` summary includes VCS tracking**: AgentInfo in `/api/status` now includes `tag` and `vcs_state` fields.
 13. [x] **Git adapter `auto_merge` config**: Added `auto_merge: bool` to `GitConfig` (default: false). After `gh pr create`, runs `gh pr merge --auto --<strategy>`.
-
+---
 ---
 #### Tests (17 new)
 - `slugify_title_basic` — basic slug generation (ta-goal)
-- `slugify_title_special_chars` — special character handling (ta-goal)
+#### Completed
 - `slugify_title_truncates_long_names` — 30-char limit (ta-goal)
 - `display_tag_with_explicit_tag` — explicit tag passthrough (ta-goal)
 - `display_tag_auto_generated` — auto-derived tag fallback (ta-goal)
@@ -3562,7 +3562,7 @@ example: shell-routing-01, fix-auth-03, v0.11.2.1-01
 - `resolve_tag_finds_exact_match` — tag resolution (ta-goal store)
 - `resolve_tag_returns_none_for_unknown` — miss returns None (ta-goal store)
 - `resolve_tag_or_id_works_with_tag` — tag-or-id resolution (ta-goal store)
-#### Problem
+---
 - `vcs_tracking_info_serialization_round_trip` — VcsTrackingInfo serde (ta-changeset)
 - `draft_package_tag_backward_compat` — backward compat (ta-changeset)
 - `draft_package_with_tag_and_vcs` — full tag+VCS serde (ta-changeset)
@@ -3572,24 +3572,24 @@ example: shell-routing-01, fix-auth-03, v0.11.2.1-01
 #### Version: `0.11.2-alpha.3`
 ---
 ---
-<!-- status: done -->
-### v0.11.2.4 — Daemon Watchdog & Process Liveness
-<!-- status: done -->
+---
+      ```
+---
 **Goal**: The daemon already sees every process spawn, every state transition, every exit. Make it act on that knowledge. Add a lightweight watchdog loop that monitors goal process health and surfaces problems proactively — no user action required to discover that something is stuck or dead.
       ```
 This pulls forward the zero-dependency items from v0.12.2 (Autonomous Operations) and v0.12.0 (Template Projects item 22). The full corrective action framework, agent-assisted diagnosis, and runbooks remain in v0.12.2 — they need the observability and governance layers built first. This phase gives us the monitoring foundation those later phases build on.
-#### Problem
-#### Problem
+---
+---
 1. **Zombie goals**: When an agent process crashes, exits unexpectedly, or never starts, the goal stays in `running` forever. `ta goal list` shows `running` with no way to distinguish "actively working" from "dead process." The human has to manually check with `ps aux` or notice the silence.
 2. **No daemon heartbeat for silent operations**: Long-running daemon-dispatched commands (draft apply, run, dev) can go silent for extended periods during git operations, network calls, or agent init. The shell shows nothing — the human doesn't know if it's working or hung.
 3. **No process health in goal status**: `ta goal list` and `ta goal status` show lifecycle state but not process health. A goal in `running` state whose process exited 30 minutes ago looks identical to one actively producing output.
-   ```toml
+---
 ---
 #### Completed
 ---
-- [x] **Daemon watchdog loop**: Background tokio task in `crates/ta-daemon/src/watchdog.rs`, spawned at daemon startup in both API and MCP modes. Runs every 30s (configurable via `[operations].watchdog_interval_secs`). Each cycle checks goal process liveness and stale questions. Emits `health.check` event only when issues are found.
+---
 - [x] **Goal process liveness check**: For each `running` goal with an `agent_pid`, uses `libc::kill(pid, 0)` on Unix to check process existence. Dead processes beyond the `zombie_transition_delay_secs` window are transitioned to `failed` with `GoalProcessExited` event. Legacy goals without PID are flagged as `unknown`.
-- [x] **Store agent PID on GoalRun**: Added `agent_pid: Option<u32>` to `GoalRun`. Populated immediately after `spawn()` in all `ta run` launch modes (headless, simple, Windows fallback) via a PID callback. Cleared after agent exit. Backward-compatible with existing goal JSON files.
+---
 - [x] **Goal process health in status output**: `ta goal list` gains a HEALTH column showing `alive`, `dead`, `unknown`, or `—` per goal. Uses platform-specific process liveness check.
 - [x] **Goal process health in `/api/status`**: Added `process_health: Option<String>` and `agent_pid: Option<u32>` to `AgentInfo` in the status endpoint.
 - [x] **Stale question detection**: Watchdog checks `awaiting_input` goals where `updated_at` exceeds `stale_question_threshold_secs` (default 1h). Emits `question.stale` event with goal ID, interaction ID, and question preview.
@@ -3598,9 +3598,9 @@ This pulls forward the zero-dependency items from v0.12.2 (Autonomous Operations
 ---
 #### Tests added
 - `watchdog::tests::truncate_preview_short` — short string passthrough
-- `watchdog::tests::truncate_preview_exact` — exact-length passthrough
+---
 - `watchdog::tests::truncate_preview_long` — truncation with ellipsis
-<!-- status: done -->
+---
 - `watchdog::tests::process_health_label_running_no_pid` — "unknown" when no PID
 - `watchdog::tests::process_health_label_running_with_current_pid` — "alive" for live PID
 - `watchdog::tests::process_health_label_running_with_dead_pid` — "dead" for dead PID
@@ -3614,48 +3614,48 @@ This pulls forward the zero-dependency items from v0.12.2 (Autonomous Operations
 - `watchdog::tests::watchdog_cycle_detects_stale_question` — stale question event
 - `goal_run::tests::agent_pid_backward_compat_deserialization` — backward compat
 - `goal_run::tests::agent_pid_serialization_round_trip` — PID field roundtrip
-   ```
-   ```toml
+---
+---
 - **Shell surfaces watchdog findings** (item 9) → v0.11.3: Requires shell TUI renderer changes to handle new SSE event types. The events are emitted and available via SSE; rendering is a UI concern.
 - **`ta goal gc` integrates with watchdog** (item 10) → v0.11.3: GC already handles failed goals; integration with watchdog findings is an optimization.
 - **Cross-reference v0.12.2** (item 11) → Done inline: v0.12.2 items 1-2 already reference "Foundation built in v0.11.2.4" in the plan text.
 - **Fix false positive plan-phase warning** (item 12) → v0.11.3: Unrelated to watchdog; moved to self-service operations phase where plan intelligence is the focus.
 ---
 #### Version: `0.11.2-alpha.4`
-   ```
+---
 ---
    ```json
 ### v0.11.2.5 — Prompt Detection Hardening & Version Housekeeping
-<!-- status: done -->
+---
 **Goal**: Fix false-positive stdin prompt detection that makes `ta shell` unusable during goal runs, and update stale version tracking.
-<!-- status: done -->
-#### Problem
+---
+
 1. **False stdin prompts**: `is_interactive_prompt()` in `cmd.rs:955` matches any line under 120 chars ending with `:` or `?`. Agent output like `**API** (crates/ta-daemon/src/api/status.rs):` triggers a `━━━ Agent Stdin Prompt ━━━` that never gets dismissed, locking the shell into `stdin>` mode.
-#### Design
+---
 3. **`version.json` stale**: Still reads `0.10.12-alpha` from March 10. Workspace `Cargo.toml` is `0.11.2-alpha.4`. `ta status` and shell status bar may show wrong version depending on which source they read.
-<!-- status: done -->
+---
 #### Prompt Detection Hardening
-#### Design
-   ```
-]
+---
+---
+---
 **Layer 1 — Heuristic rejection (synchronous, in `is_interactive_prompt()`)**:
 4. [x] **Reject lines containing code/markdown patterns**: Lines with `**`, backtick pairs, path separators (`/src/`, `.rs`, `.ts`), or bracket-prefixed output (`[agent]`, `[apply]`, `[info]`) are not prompts. These are agent progress output.
 5. [x] **Require positive signal**: Only match `:` endings if the line looks conversational — no parentheses, no code formatting, not prefixed with `[`. Keep `?`, `[y/N]`, `[Y/n]`, numbered choice patterns as strong positive signals.
 6. [x] **Add test cases**: Test that `**API** (path/to/file.rs):`, `[agent] Config loaded:`, and `Building crate ta-daemon:` are NOT detected as prompts. Test that `Do you want to continue? [y/N]`, `Enter your name:`, and `Choose [1] or [2]:` ARE detected.
-   ```
+---
 **Layer 2 — Continuation cancellation (async, in shell output handler)**:
 7. [x] **Auto-dismiss on continued output**: When `pending_stdin_prompt` is set and the shell receives additional agent output lines (non-prompt) within a configurable window, automatically dismiss the prompt: clear `pending_stdin_prompt`, append a `[info] Prompt dismissed — agent continued output` line, return to `ta>` mode. The agent wasn't waiting. Window duration configurable in `daemon.toml`: `[operations].prompt_dismiss_after_output_secs` (default 5s — intentionally generous to avoid dismissing real prompts where the agent emits a trailing blank line or status update before truly waiting).
 8. [x] **Clear prompt on stream end**: When the goal/output stream ends (SSE connection closes, goal state transitions to terminal), clear `pending_stdin_prompt` and return to `ta>` mode. A completed goal cannot be waiting for input.
-<!-- status: done -->
+---
 **Layer 3 — Q&A agent second opinion (async, parallel to user prompt)**:
 9. [x] **Agent-verified prompt detection**: When `is_interactive_prompt()` triggers and sets `pending_stdin_prompt`, simultaneously dispatch the suspected prompt line (plus the last ~5 lines of context) to the Q&A agent (`/api/agent/ask`) with a system prompt: "Is this agent output a prompt waiting for user input, or is it just informational output? Respond with only 'prompt' or 'not_prompt'." Fire-and-forget — if the agent responds `not_prompt` before the user types anything, auto-dismiss the stdin prompt and return to `ta>` mode.
 10. [x] **Q&A agent timeout**: If the Q&A agent doesn't respond within the configured timeout, keep the prompt visible (fail-open — assume it might be real). The user can always Ctrl-C to dismiss. Timeout configurable in `daemon.toml`: `[operations].prompt_verify_timeout_secs` (default 10s — Q&A agent latency varies with model and load; too short = never verifies).
 11. [x] **Confidence display**: While the Q&A verification is in flight, show a subtle indicator: `stdin> (verifying...)`. If dismissed by the agent, show `[info] Not a prompt — resumed normal mode`.
 ---
 #### Version Housekeeping
-
-13. [x] **Verify version sources**: `ta status` and the shell status bar read `CARGO_PKG_VERSION` (compile-time from workspace `Cargo.toml`). The daemon API (`/api/status`) also reads `CARGO_PKG_VERSION`. `version.json` is only used by the release script. All sources are now consistent at `0.11.2-alpha.5`.
-<!-- status: done -->
+---
+---
+---
 #### Tests added
 - `prompt_detection_rejects_markdown_bold` — `**API** (path):` NOT detected
 - `prompt_detection_rejects_code_backticks` — backtick-quoted code NOT detected
@@ -3675,12 +3675,12 @@ This pulls forward the zero-dependency items from v0.12.2 (Autonomous Operations
 #### Version: `0.11.2-alpha.5`
 ---
 ---
-
+---
 ### v0.11.3 — Self-Service Operations, Draft Amend & Plan Intelligence
-<!-- status: done -->
-**Goal**: Make `ta shell` (and Discord after v0.12.1) the 99% interface for TA work. Today, deep inspection of goals, drafts, git PRs, and zombie processes requires an external agent with filesystem access. This phase moves that capability into TA itself, adds lightweight draft amendment for PR iteration, and gives the agent read-only introspection tools so it can diagnose issues and recommend actions — with the daemon mediating all writes through user approval.
-   ```
-#### Problem
+---
+---
+
+---
 1. **Draft iteration is heavyweight**: After `ta draft apply`, iterating on the PR (fixing CI, addressing review comments) requires either a full new goal with staging copy or dropping out of TA entirely to work in raw git. There's no lightweight path to amend an existing draft/PR from within TA.
 2. **Operational inspection requires external agent**: Checking why a goal is stuck, whether a process is alive, what state a draft is in, or viewing daemon logs currently requires `ps aux`, `cat .ta/goals/...`, or asking an AI agent to read filesystem state. The TA shell and agent should be able to do this via daemon API.
 3. **Plan editing is manual**: Adding items, moving items between phases, creating new phases, and cross-referencing plan items requires manual file editing of PLAN.md. An agent-mediated flow would let users describe what they want and have the agent recommend placement, with explicit approval before writing.
@@ -3692,8 +3692,8 @@ This pulls forward the zero-dependency items from v0.12.2 (Autonomous Operations
 4. [x] **Draft metadata update**: The original draft package is updated with amendment details (what changed, why, timestamp) rather than creating a new draft. History of amendments preserved.
 5. [x] **`ta draft follow-up --ci-failure`**: Auto-fetch the latest CI failure log from the PR (via `gh`) and inject as context. Agent sees exactly what broke.
 6. [x] **`ta draft follow-up --review-comments`**: Auto-fetch PR review comments and inject as context. Agent addresses each comment.
-7. [x] **Branch safety**: Amend refuses to operate if the feature branch has been modified outside of TA (e.g., manual commits). Detects by comparing branch HEAD to the commit recorded in the draft package.
-   ```
+---
+---
 #### Daemon Observability (agent-accessible via MCP/API)
 8. [x] **`ta goal inspect <id>`**: Detailed goal status including PID, process health, elapsed time, last event, staging path, draft state, agent log tail. Available via daemon API so agents and shell can query it.
 9. [x] **`ta draft inspect <id>`**: Detailed draft status via `ta draft pr-status` — shows PR state, CI status, review status. Deep draft inspection through existing `ta draft view --detail full`.
@@ -3704,27 +3704,27 @@ This pulls forward the zero-dependency items from v0.12.2 (Autonomous Operations
 #### Goal Diagnostics
 13. [x] **`ta goal post-mortem <id>`**: Analyze a failed/stuck goal — show timeline of events, last agent output, state transitions, errors, duration, and suggest likely cause of failure.
 14. [x] **`ta goal pre-flight <title>`**: Before starting a goal, check prerequisites — disk space, daemon running, agent binary available, VCS configured, required env vars set. Report issues before wasting time.
-15. [x] **`ta doctor`**: System-wide health check — Nix toolchain, cargo, agent binaries, daemon, plugins, .ta directory integrity, git status, disk space. Reports issues with fix suggestions.
-<!-- status: done -->
+---
+---
 #### Plan Intelligence (agent-mediated, daemon-approved)
 16. [x] **`ta plan add-item --phase <id> "description"`**: Direct item addition with logical placement. Parses existing items in the phase, inserts at the correct position, auto-numbers.
 17. [x] **`ta plan move-item <item> --from <phase> --to <phase>`**: Move an item between phases with automatic placement after the last existing item in the destination.
 18. [x] **`ta plan discuss <topic>`**: Reads the full plan, searches for keyword-relevant phases, and recommends placement — which phase to add to or where to create a new phase.
 19. [x] **`ta plan create-phase <id> "title"`**: Create a new plan phase with configurable placement (--after) and auto-generated markdown structure.
 20. [x] **`ta plan status --check-constitution`**: Validate plan items against `TA-CONSTITUTION.md` — flag items that would violate constitutional rules if implemented as described.
-     ```
+---
 #### Plugin Lifecycle
 21. [x] **`ta plugin build <name|all>`**: Build channel/submit plugins from the main workspace. Re-sign on macOS. (Already existed.)
 22. [x] **`ta plugin status`**: Show installed plugins, versions, health status, last used.
 23. [x] **`ta plugin logs <name>`**: View plugin stderr logs from daemon.
-     ```
+---
 #### Git/PR Lifecycle (agent-accessible)
 24. [x] **`ta draft pr-status <draft-id>`**: Show PR state (open/merged/closed), CI status, review status, comments. Links draft to its PR.
 ---
 26. [x] **Goal→PR linkage**: Store PR URL in goal metadata when `ta draft apply` creates a PR. `ta goal status` shows the PR link.
-#### Architecture
+---
 #### Staging & Disk Management
-27. [x] **Auto-clean staging on apply**: When `ta draft apply` succeeds, automatically remove the staging directory (configurable in `workflow.toml`: `staging.auto_clean = true`, default: true).
+---
 28. [x] **Disk space pre-flight**: Before creating staging copies, check available disk space. Warn if below threshold (configurable, default: 2GB).
 29. [x] **`ta gc` unified**: Single `ta gc` command that cleans zombie goals, stale staging, old drafts, and expired audit entries. `--dry-run` shows what would be removed.
 ---
@@ -3739,8 +3739,8 @@ This pulls forward the zero-dependency items from v0.12.2 (Autonomous Operations
 ---
 #### Tests added
 - `goal_inspect_json` — JSON output for goal inspection
-- `goal_inspect_missing_goal` — error on nonexistent goal
-- `goal_post_mortem_shows_failure` — displays failure reason
+---
+---
 - `goal_pre_flight_checks` — runs all pre-flight checks
 - `doctor_runs_checks` — system-wide health check
 - `daemon_health_no_daemon` — health check without daemon
@@ -3761,75 +3761,75 @@ This pulls forward the zero-dependency items from v0.12.2 (Autonomous Operations
 - `pr_url_serialization_round_trip` — pr_url field round-trip
 ---
 #### Version: `0.11.3-alpha`
-<!-- status: done -->
+#### Problem
 ---
 ---
 ### v0.11.3.1 — Shell Scroll & Help
-<!-- status: done -->
-**Goal**: Fix trackpad/mouse wheel scrolling in `ta shell` and improve command discoverability.
-<!-- status: done -->
+---
+---
+#### Completed
 1. [x] **Mouse scroll capture**: Enable `EnableMouseCapture` so trackpad two-finger scroll and mouse wheel events are handled by the TUI instead of scrolling the terminal's main buffer. Scroll events move 3 lines per tick.
 2. [x] **Full-page PageUp/PageDown**: PageUp/PageDown now scroll `terminal_height - 4` lines (with 4-line overlap) instead of the previous fixed 10 lines.
 3. [x] **Text selection via Shift+click-drag**: With mouse capture enabled, native click-drag is captured. Users can select text with Shift+click-drag (standard behavior in terminals with mouse capture).
 4. [x] **`help` shows CLI commands**: The shell `help` command now shows both shell-specific help and a summary of all `ta` CLI commands, so users can discover available commands without leaving the shell.
 5. [x] **Help text updated**: Scroll instructions updated to reflect trackpad scroll, full-page PageUp/PageDown, and Shift+click-drag for text selection.
-<!-- status: done -->
 ---
-<!-- status: done -->
+---
+[verify]
 ### v0.11.4 — Plugin Registry & Project Manifest
-<!-- status: done -->
-   ```
-<!-- status: done -->
+---
+---
+---
 #### Design Principles
-   ```toml
+---
 1. **No language runtime required** — plugins are standalone executables. `ta setup` downloads pre-built binaries. No npm, pip, conda, or nix needed for the default path.
 2. **Terraform provider model** — flat tarball + manifest, platform detection, registry is a JSON index. This pattern is proven and familiar.
 3. **Reproducibility optional** — projects can include a `flake.nix` for pinned environments, but it's not required.
 4. **Version control from day one** — semver with `min_version` enforcement now, full range constraints later.
-<!-- status: done -->
+---
 #### Plugin Version Control
-<!-- status: done -->
+---
 Version control for plugins uses semver with escalating strictness:
 ---
 **Phase 1 (v0.12.0)**: `min_version` enforcement
-|---|---|---|---|
-[plugins.discord]
-version = ">=0.1.0"     # minimum version required
 ---
-<!-- status: done -->
+[plugins.discord]
+---
+---
+---
 `ta setup` downloads the latest version that satisfies the constraint. `ta plugin check` warns when installed versions are below the minimum. `ta-daemon` refuses to start if a required plugin is below `min_version`.
 ---
-**Phase 2 (future)**: Full semver range constraints
-<!-- status: done -->
+---
+---
 [plugins.discord]
-version = ">=0.1.0, <1.0.0"   # compatible range
-
-
+---
+---
+---
 **Phase 3 (future)**: Lockfile (`project.lock`) for reproducible installs
-
+#### Completed
 ---
 [plugins.discord]
 version = "0.1.3"
-   ```
-resolved_url = "https://..."
+
 ---
-
+---
+#### Deferred items resolved
 For v0.12.0, implement Phase 1 only. Design the manifest schema to support Phases 2 and 3 without breaking changes.
-
-#### Registry Design
+---
+---
 ---
 The registry is a static JSON index hosted on GitHub Pages (or any HTTP server):
-
+#### Problem
 ---
-https://registry.trustedautonomy.dev/v1/index.json
-
-#### Architecture
+---
+---
+---
 
 ---
   "schema_version": 1,
   "plugins": {
     "ta-channel-discord": {
-      "type": "channel",
+---
       "description": "Discord channel plugin",
       "versions": {
         "0.1.0": {
@@ -3837,24 +3837,24 @@ https://registry.trustedautonomy.dev/v1/index.json
           "min_ta_version": "0.11.0",
           "platforms": {
             "aarch64-apple-darwin": {
-<!-- status: done -->
+#### Problem
               "sha256": "abc123..."
             },
             "x86_64-unknown-linux-musl": { "url": "...", "sha256": "..." },
-
+---
           }
         }
       }
-
+---
   }
-}
-
-<!-- status: done -->
+---
+---
+---
 Alternative sources (no registry needed):
 - `source = "github:Trusted-Autonomy/ta-channel-discord"` — download from GitHub releases
 - `source = "path:./plugins/discord"` — local source, build with detected toolchain
 - `source = "url:https://example.com/plugin.tar.gz"` — direct URL
-
+---
 #### Completed
 1. [x] **`.ta/project.toml` schema**: `ProjectManifest` with `ProjectMeta`, `PluginRequirement`, and `SourceScheme` types. Serde parser with validation (version constraint format, source scheme parsing). Clear error messages for malformed manifests. 16 tests in `project_manifest.rs`.
 2. [x] **Platform detection**: `detect_platform()` maps `std::env::consts::{OS, ARCH}` to registry keys: `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`, `x86_64-pc-windows-msvc`. Exposed in `ta status --deep` and `ta setup show`.
@@ -3862,31 +3862,31 @@ Alternative sources (no registry needed):
 4. [x] **Registry client**: `RegistryClient` with fetch, cache (`~/.cache/ta/registry/` with configurable TTL), and `resolve()` for finding best version match. Supports `registry:`, `github:`, `path:`, `url:` source schemes. 10 tests in `registry_client.rs`.
 5. [x] **Source build fallback**: `build_from_source()` detects Cargo.toml (Rust), go.mod (Go), Makefile, or `build_command` from channel.toml. Builds and installs to plugin directory. 1 test in `plugin_resolver.rs`.
 6. [x] **Version enforcement**: `ta-daemon` checks all required plugins on startup via `check_requirements()`. Refuses to start if missing/below `min_version` with clear error and `ta setup resolve` suggestion. 3 tests in `plugin_resolver.rs`.
-7. [x] **`ta setup resolve` env var check**: Checks `env_vars` declared by plugins. Prints missing variables with plugin attribution. Non-blocking in interactive mode, hard fail in `--ci` mode.
+---
 8. [x] **Auto-setup on first daemon start**: Daemon attempts `resolve_all()` when `project.toml` exists but plugins aren't satisfied. Falls through to hard error if auto-resolve fails.
 9. [x] **CI integration**: `ta setup resolve --ci` mode — non-interactive, fails hard on missing plugins or env vars.
 10. [x] **Plugin binary hosting CI job**: `.github/workflows/plugin-release.yml` — triggered by `plugin-*-v*` tags, builds for all 4 platforms, uploads tarballs + SHA-256 to GitHub releases.
 11. [x] **Test: full resolve cycle**: Tests in `plugin_resolver.rs` — `check_requirements_all_installed`, `resolve_report_methods`, `resolve_report_all_ok`. Tests in `setup.rs` — `resolve_with_already_installed_plugin`.
 12. [x] **Test: source build fallback**: `build_from_source_no_toolchain` test verifies error when no build system detected.
 13. [x] **Test: version enforcement blocks daemon**: `check_requirements_missing_plugin` and `check_requirements_version_too_low` tests verify enforcement logic.
-<!-- status: done -->
+---
 #### New tests (33 total across 4 files)
 - `crates/ta-changeset/src/project_manifest.rs`: 16 tests (manifest parsing, validation, source schemes, version comparison)
 - `crates/ta-changeset/src/registry_client.rs`: 10 tests (platform detection, index parsing, version resolution, caching)
-
+#### Completed
 - `apps/ta-cli/src/commands/setup.rs`: 6 new tests (resolve with/without manifest, CI mode, plugins display)
-
+---
 #### Version: `0.11.4-alpha`
-
+---
 ---
 
 ### v0.11.4.1 — Shell Reliability: Command Output, Text Selection & Heartbeat
-<!-- status: done -->
+#### Problem
 **Goal**: Make `ta shell` command output reliable and complete. Today, commands like `draft apply` produce no visible output in the shell — the daemon runs them, returns output, but it never appears. This blocks the release workflow. Also fix text selection (broken by mouse capture) and polish heartbeat display.
-   ```
+---
 #### Critical: Command Output Reliability
 The output pipeline is: user types command → `send_input()` POST to daemon `/api/input` → `route_input()` decides Command vs Agent → `execute_command()` runs `ta` subprocess → collects stdout/stderr → returns JSON `{stdout, stderr, exit_code}` → shell extracts `stdout` → renders as `CommandResponse`.
-```json
+---
 #### Completed
 1. [x] **Routing misclassification**: Verified — `draft`, `approve`, `deny`, `view`, `apply` all route correctly to Command path via `ta_subcommands` and shortcuts in `ShellConfig`. Added 6 routing tests in `input.rs`.
 2. [x] **Empty stdout on success**: Fixed `send_input()` in `shell.rs` to use stderr as primary output when stdout field is empty. Also handles case where `stdout` key is absent but `stderr` is present.
@@ -3895,7 +3895,7 @@ The output pipeline is: user types command → `send_input()` POST to daemon `/a
 5. [x] **`CommandResponse` rendering**: Verified `push_lines()` correctly splits multi-line text and renders each line. Added test `command_response_multiline_renders_all_lines`.
 6. [x] **End-to-end test**: Added 6 routing integration tests covering `draft apply`, `draft view`, `draft approve`, `draft deny`, `apply` shortcut, and `view` shortcut — all verify the full route → Command path.
 7. [x] **Completion confirmation**: The CLI's own `draft apply` output already includes file count, target directory, and status. The stderr-as-primary fix (item 2) ensures this output is now forwarded to the shell.
-<!-- status: done -->
+#### Design
 9. [x] **In-place heartbeat updates**: Added `is_heartbeat` flag to `OutputLine` and `push_heartbeat()` method on `App`. Heartbeat lines update the last output line in-place if it's already a heartbeat. Added `OutputLine::heartbeat()` constructor.
 10. [x] **Heartbeat coalescing**: Heartbeat detection in `AgentOutput` handler intercepts `[heartbeat]` lines before general processing. Non-heartbeat output naturally pushes heartbeats down. Works in both single-pane and split-pane modes. 4 heartbeat tests added.
 ---
@@ -3903,7 +3903,7 @@ The output pipeline is: user types command → `send_input()` POST to daemon `/a
 - `command_response_multiline_renders_all_lines` — multi-line CommandResponse rendering
 - `heartbeat_updates_in_place` — in-place heartbeat update
 - `heartbeat_pushed_after_real_output` — heartbeat after non-heartbeat output
-- `heartbeat_coalesced_in_agent_output` — heartbeat coalescing through AgentOutput handler
+---
 - `mouse_capture_toggle_state` — initial mouse capture state
 - `draft_apply_routes_to_command` — routing test (input.rs)
 - `draft_view_routes_to_command` — routing test (input.rs)
@@ -3911,155 +3911,155 @@ The output pipeline is: user types command → `send_input()` POST to daemon `/a
 - `draft_deny_routes_to_command` — routing test (input.rs)
 - `apply_shortcut_routes_to_command` — routing test (input.rs)
 - `view_shortcut_routes_to_command` — routing test (input.rs)
-}
-```
+
+#### Completed
    [agent]
 ---
-
+---
 ### v0.11.4.2 — Shell Mouse & Agent Session Fix
-<!-- status: done -->
+---
 **Goal**: Fix two critical `ta shell` usability issues: (1) mouse scroll and text selection must both work simultaneously (like Claude Code), and (2) agent Q&A must reuse a persistent session instead of spawning a new subprocess per question.
-```
-#### 1. Mouse: Scroll + Text Selection (both active, no toggle)
-<!-- status: done -->
+#### Completed
+
+
 **Problem**: Crossterm's `EnableMouseCapture` enables ALL mouse modes (`?1000h` normal tracking, `?1002h` button-event, `?1003h` any-event, `?1006h` SGR). This captures clicks/drags and breaks native text selection. The current Ctrl+M toggle is a workaround, not a fix.
-<!-- status: done -->
+---
 **Root cause**: `?1003h` (any-event tracking) and `?1000h` (normal tracking) capture button-down/up/drag events. Scroll-wheel events are reported through normal tracking (`?1000h`). There is no ANSI mode that captures only scroll.
-```
+---
 **Solution**: Use raw ANSI escape sequences instead of crossterm's all-or-nothing `EnableMouseCapture`:
 
-<!-- status: done -->
+---
 2. [x] **Test across terminals**: Verify scroll + native text selection works in:
    - macOS Terminal.app
    - iTerm2
-<!-- status: done -->
+---
    - Linux xterm / GNOME Terminal (via CI or manual test notes)
    - Windows Terminal (crossterm handles Windows separately — may need platform-specific path)
 3. [x] **Remove Ctrl+M toggle**: No longer needed since both behaviors coexist. Remove the `mouse_capture_enabled` field, the toggle handler, and the status bar indicator.
 4. [x] **Fallback**: If a terminal doesn't report scroll via `?1000h` alone, fall back to keyboard-only scroll (PageUp/PageDown/arrows already work). Detect via `$TERM` or first scroll event.
 5. [x] **Platform abstraction**: Wrap the ANSI escape output in a helper (`fn enable_scroll_capture(stdout)` / `fn disable_scroll_capture(stdout)`) that handles platform differences. On Windows, delegate to crossterm's native API if raw ANSI doesn't work.
-   ```
+---
 **Key insight**: Claude Code's terminal (which works correctly) likely uses `?1000h` + `?1006h` without `?1002h`/`?1003h`. Normal tracking reports button press/release (including scroll wheel buttons 4/5) but does NOT intercept click-drag, which the terminal handles natively for selection.
-```
+
 **Files**: `apps/ta-cli/src/commands/shell_tui.rs` (mouse setup, event loop, cleanup)
-```
-```
-
+---
+---
+#### Design
 **Problem**: Every question typed in `ta shell` spawns a new `claude-code` subprocess (`ask_agent()` → `tokio::process::Command::new(binary)` in `agent.rs:269`). Each cold start takes seconds. Users see "Starting claude-code agent..." and experience long delays + laggy keyboard input during startup.
-
+---
 **Solution**: Keep a long-running agent subprocess alive for the shell session's lifetime.
-
+#### Problem
 ---
 7. [x] **Memory context injection**: `inject_memory` config flag available; full multi-turn stdin context injection deferred to when `claude --print` supports multi-turn stdin mode.
 8. [x] **Configuration**: Add `[shell.qa_agent]` section to `daemon.toml`:
-   ```toml
+}
    [shell.qa_agent]
    auto_start = true          # Start agent on shell launch (default: true)
-   agent = "claude-code"      # Which agent binary to use
+---
    idle_timeout_secs = 300    # Kill after 5min idle, restart on next question
    inject_memory = true       # Inject project memory context on start
-   ```
+---
    Users can set `auto_start = false` to disable the persistent agent.
 9. [x] **Graceful lifecycle**: On shell exit, send EOF to the agent's stdin and wait up to 5s for clean shutdown, then SIGTERM. On agent crash, show error in shell and auto-restart on next question. Track restart count to avoid crash loops (max 3 restarts per session).
 10. [x] **Session reuse in daemon**: `ask_agent` handler now routes through `PersistentQaAgent::ask()` instead of spawning new subprocesses. The daemon tracks the long-running process and manages its lifecycle.
-
+---
 **Files**: `crates/ta-daemon/src/api/agent.rs` (session management, subprocess lifecycle), `crates/ta-daemon/src/config.rs` (config struct), `apps/ta-cli/src/commands/shell_tui.rs` (startup trigger)
-
+---
 #### 3. Non-Blocking Keyboard Input
-
-```json
-
+---
+---
+---
 11. [x] **Dedicated input thread**: Move terminal event reading to a dedicated OS thread (not a tokio blocking task). Use `std::thread::spawn` with a `tokio::sync::mpsc` channel to send `Event` values to the async event loop. This fully decouples keyboard responsiveness from async task pressure.
 12. [x] **Immediate event drain**: The input thread uses `event::poll(Duration::from_millis(16))` (~60fps) and `event::read()` in a tight loop, sending events immediately over the channel. The main async loop receives from this channel via `tokio::select!` alongside background messages, with batch drain for queued events.
 13. [x] **Test**: `dedicated_input_thread_channel` test verifies that the mpsc channel can send/receive `Event` values without blocking.
-   ```
+
 **Files**: `apps/ta-cli/src/commands/shell_tui.rs` (event loop refactor)
-
+---
 #### Tests added (7 new)
-
+---
 - `selective_scroll_capture_helpers` — verifies App no longer has mouse_capture_enabled field; input_rx starts None
 - `dedicated_input_thread_channel` — verifies mpsc channel can send/receive crossterm Event values
-
+---
 - `persistent_qa_agent_lifecycle` — verifies PersistentQaAgent starts with 0 restarts and healthy
 - `persistent_qa_agent_shutdown_noop_when_not_started` — shutdown before start is a no-op
 - `shell_qa_config_defaults` — verifies ShellQaConfig default values
 - `shell_qa_config_roundtrip` — verifies full TOML serialization/deserialization
 - `shell_qa_config_partial_override` — verifies partial config fills defaults for missing fields
-<!-- status: done -->
-#### Version: `0.11.4-alpha.2`
-   ```
 ---
-<!-- status: done -->
+#### Version: `0.11.4-alpha.2`
+
+---
+---
 ### v0.11.4.3 — Smart Input Routing & Intent Disambiguation
-<!-- status: done -->
+---
 **Goal**: Stop mis-routing natural language as commands when the first word happens to match a keyword. Add intent-aware disambiguation so the shell either routes correctly or presents "Did you mean..." options.
-```
+#### Design
 
-```
+---
 1. [x] **Known sub-subcommands map**: `ShellConfig.sub_subcommands` HashMap with defaults for 18 subcommands (draft, goal, plan, agent, session, audit, plugin, release, workflow, adapter, office, config, policy, sync, verify, dev, gc, status). Loaded from `shell.toml` or defaults.
-```
+---
 2. [x] **Edit distance function**: Levenshtein distance using single-row DP (~25 lines). Detects typos within distance 2 for candidates ≥ 3 chars.
-
+#### Completed
 3. [x] **Natural language detection heuristic**: `looks_like_natural_language()` checks 4 signals — stopword as first rest-word (30+ stopwords), question mark ending, question word after keyword (20+ question words), and >4 words without flags or ID-like tokens.
 ---
 4. [x] **`RouteDecision::Ambiguous` variant**: New enum variant with `original: String`, `suggestions: Vec<RouteSuggestion>`. Each suggestion has `description`, `command`, and `is_agent` flag.
-
+---
 5. [x] **Disambiguation in `handle_input()`**: Returns `routed_to: "ambiguous"`, `ambiguous: true`, `message`, and `options` array with index/description/command/is_agent per option. No command executed.
 ---
 6. [x] **TUI "Did you mean..." UI**: `PendingDisambiguation` state with numbered options. User enters a number to choose or Escape/Ctrl-C to cancel. Choice re-dispatches via `send_input` with the selected command or agent prompt.
 ---
 7. [x] **Shortcut disambiguation**: `expand_shortcut_smart()` applies NL guard before shortcut expansion. "apply the constitution" → falls through to agent.
-
-8. [x] **Tests**: 20 new tests covering all 7 PLAN scenarios plus edge cases (36 total in input.rs).
-   - `"draft apply abc123"` → Command (valid syntax)
-   - `"draft list"` → Command (valid syntax)
-   - `"run the tests please"` → Agent (NL after keyword)
-   - `"run v0.11.5 — Some Title"` → Command (valid `ta run` syntax)
-```
-**Files**: `crates/ta-daemon/src/api/input.rs` (routing logic), `crates/ta-daemon/src/config.rs` (sub-subcommands map), `apps/ta-cli/src/commands/shell_tui.rs` (disambiguation UI)
-
-#### Version: `0.11.4-alpha.3`
-
 ---
-```
+8. [x] **Tests**: 20 new tests covering all 7 PLAN scenarios plus edge cases (36 total in input.rs).
+
+   - `"draft list"` → Command (valid syntax)
+---
+   - `"run v0.11.5 — Some Title"` → Command (valid `ta run` syntax)
+---
+**Files**: `crates/ta-daemon/src/api/input.rs` (routing logic), `crates/ta-daemon/src/config.rs` (sub-subcommands map), `apps/ta-cli/src/commands/shell_tui.rs` (disambiguation UI)
+---
+#### Version: `0.11.4-alpha.3`
+---
+---
+---
 ### v0.11.4.4 — Constitution Compliance Remediation
-<!-- status: done -->
+---
 **Goal**: Fix all violations found by the 7-agent constitution compliance audit against `docs/TA-CONSTITUTION.md`. Prioritize High-severity items (data loss on error paths) before Medium-severity (stale injection on follow-up).
-
-**Audit source**: Constitution review run via `ta shell` QA agent (2026-03-16). Sections §2, §3, §9 passed. Violations in §4 fixed. Full §5–§14 audit → v0.11.6.
-
+```yaml
+---
+on_failure = "block"
 #### §4 — CLAUDE.md Injection & Cleanup (4 violations — all fixed, PR #183)
-    }
+#### Design
 1. [x] **`inject_claude_settings()` backup-restore on follow-up**: Restore from backup before re-injecting on `--follow-up`. Prevents stale/nested settings accumulation. **§4.1**
 ---
 2. [x] **`inject_mcp_server_config()` same backup-restore issue**: Same pattern as item 1. **§4.2**
-```
+#### Design
 3. [x] **Pre-launch command failure cleanup**: Cleanup CLAUDE.md + settings + MCP config in both `Ok(non-zero)` and `Err` arms. **§4.3**
-
+#### Problem
 4. [x] **General launch error cleanup**: All non-NotFound launch errors now clean up injected files. **§4.4**
 
 5. [x] **Fix-session relaunch Err paths**: Both interactive Block-mode and Agent-mode fix-session relaunch `Err` paths restore re-injected CLAUDE.md before returning. **§4.5, §4.6**
 ---
+#### Problem
 
-```
 6. → v0.11.6 Full §5–§14 audit, fixes, regression tests, sign-off, and release pipeline checklist gate. See v0.11.6 for details.
 ---
 **Files**: `apps/ta-cli/src/commands/run.rs` (injection/cleanup).
-   ```
+
 #### Version: `0.11.4-alpha.4`
-```
+#### Design
 ---
-
-### v0.11.4.5 — Shell Large-Paste Compaction
-<!-- status: done -->
+---
+   ```
+---
 **Goal**: When pasting large blocks of text into `ta shell`, compact the display instead of filling the input buffer with hundreds of lines.
-```
+
 **Problem**: Pasting a large document (e.g., an audit report) into the shell input embeds all the text directly in the input buffer, making it unreadable and hard to edit. Claude Code CLI handles this by compacting large pastes into a summary/link.
-
-
-```
-
-
+---
+---
+#### Design
+---
+```json
 2. [x] **Compacted display**: Show a compact representation in the input area:
    ```
    ta> [Pasted 2,847 chars / 47 lines — Tab to preview, Esc to cancel]
@@ -4067,243 +4067,243 @@ The output pipeline is: user types command → `send_input()` POST to daemon `/a
    The full text is stored in `App::pending_paste`; `app.input` holds only any typed prefix.
 --- Phase Run Summary ---
 3. [x] **Send full content on Enter**: `submit()` combines any typed prefix with the full paste content. The compact indicator text is never sent — only the actual paste.
-
+#### Deferred items resolved
 4. [x] **Preview on demand**: Tab toggles an inline preview of the first 5 lines (with "N more lines" footer). Tab again collapses. Esc and Ctrl-C cancel the paste entirely.
 ---
 5. [x] **Cross-platform**: Handled at the `Event::Paste` level (bracketed paste), which is cross-platform. 8 new unit tests.
-
-**Files**: `apps/ta-cli/src/commands/shell_tui.rs` (paste handler, App struct, input rendering)
+---
+---
 ---
 #### Version: `0.11.4-alpha.5`
-
 ---
-
+---
+---
 ### v0.11.5 — Web Shell UX, Agent Transparency & Parallel Sessions
-<!-- status: done -->
+---
 **Goal**: Make goal/agent output clearly visible in the web shell, surface intermediate agent progress in real time, and support parallel agent conversations.
-
+---
 **Problem 1 — No goal feedback**: The web shell shows zero feedback when goals make progress or complete. Users discover completion through external editor notifications or polling `ta goal list`. Events like `goal_started`, `goal_completed`, `draft_built` must be surfaced clearly.
-
-**Problem 2 — Broken `:tail`**: The daemon outputs "Stream output with: :tail <id>" but the web shell has no `:tail` handler — the command is sent to the QA agent as a prompt.
-
+   ```
+---
+---
 **Problem 3 — `.git/` in draft diffs**: The overlay copies `.git/` into staging because `goal.rs` only loads `ExcludePatterns::load()` (build artifacts) but never merges `adapter.exclude_patterns()` (which returns `[".git/"]`). When staging's git state is modified (e.g., creating a branch in staging or any git op), the diff captures `.git/index`, `.git/HEAD`, etc. as changed artifacts. When `ta draft apply --git-commit` runs, it copies those `.git/` files back, overwriting the real repo's git state — resetting HEAD to main and deleting local branches.
 
 **Problem 4 — Silent processing**: Claude Code writes tool-use progress to stderr but the web shell doesn't surface it.
 
 **Problem 5 — Single conversation**: No way to fork parallel agent sessions.
-
+---
 #### Critical Bug Fix — `.git/` in Overlay Diff
-
+---
 1. [x] **Merge adapter excludes into overlay**: `load_excludes_with_adapter()` helper in `draft.rs` merges `adapter.exclude_patterns()` (e.g. `".git/"` for Git) into `ExcludePatterns` before creating/opening the overlay. Applied in `goal.rs` (create), `draft.rs` build (open), `draft.rs` apply (open), and snapshot rebase. Regression test added to `ta-workspace`: verifies `.git/` is not copied into staging and does not appear in `diff_all()` even if created in staging.
 ---
 #### Goal Progress & Tail UX
-
-
-
+#### Completed
+---
+---
 3. [x] **Goal completion notification**: When a goal finishes (agent exits), show a clear "[goal completed]" banner with elapsed time, draft ID if built, and next action. Currently the user gets no signal in the web shell.
 
-
-
+---
+   ```
 5. [x] **Status bar tail indicator**: Show "tailing <label>" in the status bar when actively following goal/agent output. (PR #184)
 ---
 6. [x] **Clear auto-tail messaging**: When auto-tailing starts, shows "auto-tailing goal output..." and "agent working — tailing output (id)..." instead of bare "processing...". (PR #184)
-
+---
 7. [x] **Daemon `:tail` output fix**: Updated to "Tail output: :tail <id>" in `cmd.rs`. (PR #184)
-
+     ```
 #### Constitution Compliance Scan at Draft Build
-
+---
 8. [x] **Draft-time constitution pattern scan**: When `ta draft build` runs, scan changed files for known §4 violation patterns (injection functions without cleanup on early-return paths, error arms that `return` without a preceding `restore_*` call). Emit findings as warnings in the draft summary — non-blocking by default, so review flow is unaffected. The scan is static/grep-based (no agent), runs in <1s. Example output: `[constitution] 2 potential §4 violations in run.rs — review before approving`. Configurable: `warn` (default), `block`, `off`.
-
+---
 #### Agent Transparency (streaming intermediate output)
-
+]
 9. [x] **Surface agent stderr as progress**: Ensure all stderr lines from the agent subprocess appear in the web shell as dimmed progress indicators.
-
+---
 10. [x] **Structured progress parsing**: Parse stderr for known patterns (`Reading `, `Searching `, `Running `, `Writing `) and render them as distinct "thinking" lines with a spinner or activity indicator.
-
+---
 11. [x] **Web shell thinking indicator**: When a request is pending and no stdout has arrived yet, show an animated indicator ("Agent is working...") that updates with the latest stderr progress line.
 
 12. [x] **Collapse progress on completion**: When the agent's stdout response arrives, collapse/dim the intermediate progress lines so the final answer is prominent.
-
+---
 #### Parallel Agent Sessions
 
 13. [x] **`/parallel` shell command**: New web shell command that spawns an independent agent conversation (no `--continue`). Returns a session tag the user can address follow-ups to.
-
+---
 14. [x] **`POST /api/agent/ask` with `parallel: true`**: API flag that skips conversation chaining and creates a fresh agent subprocess.
-
-
-
+---
+#### Completed
+---
 16. [x] **Session lifecycle**: Parallel sessions auto-close after idle timeout. User can `/close <tag>` to end a session explicitly. Max concurrent sessions configurable in `daemon.toml`.
-
+   ```
 #### Version: `0.11.5-alpha`
 
 ---
 
 ### v0.11.6 — Constitution Audit Completion (§5–§14)
-<!-- status: done -->
-**Goal**: Complete the constitution compliance audit that was cut short in v0.11.4.4. That phase fixed all §4 violations. This phase runs the full 14-section audit, fixes any remaining violations, adds regression tests, and gets a clean sign-off.
 
+**Goal**: Complete the constitution compliance audit that was cut short in v0.11.4.4. That phase fixed all §4 violations. This phase runs the full 14-section audit, fixes any remaining violations, adds regression tests, and gets a clean sign-off.
+---
 **Context**: The initial audit (2026-03-16) confirmed §2, §3, §9 pass and fixed §4. Sections §5–§14 were not reached before the audit was cut short.
 
-
-
 <!-- status: done -->
-
+#### Problem
+<!-- status: done -->
+   ```
 2. [x] **Fix all identified violations**:
    - §7: Added `check_policy`/`enforce_policy` call in `ta-mcp-gateway/src/tools/fs.rs` before file diff access
    - §8: Added `DraftApproved`, `DraftDenied`, `DraftApplied` event emission in `draft.rs` with §8 citation comments
-
-3. [x] **Constitution regression tests**: 8 new tests — 3 draft event serialization tests in `ta-events/src/schema.rs`, 5 policy enforcement tests in `ta-mcp-gateway/src/validation.rs`.
-
-4. [x] **Audit sign-off**: All tests pass (517 passed, 7 ignored). Clean audit pass documented in commit `084d4ea`.
-
-5. [x] **Release pipeline checklist gate**: Added `requires_approval: true` constitution compliance step to `DEFAULT_PIPELINE_YAML` in `release.rs`. Validated by `default_pipeline_has_constitution_checklist_gate` test.
-
-
-
-
-**Files**: TBD by audit findings. Likely `crates/ta-goal/src/goal_run.rs` (§5), `apps/ta-cli/src/commands/draft.rs` (§6), `crates/ta-policy/` (§7), audit logging (§8), `apps/ta-cli/src/commands/release.rs` (pipeline step).
-
-#### Version: `0.11.6-alpha`
-
 ---
-
+3. [x] **Constitution regression tests**: 8 new tests — 3 draft event serialization tests in `ta-events/src/schema.rs`, 5 policy enforcement tests in `ta-mcp-gateway/src/validation.rs`.
+<!-- status: done -->
+4. [x] **Audit sign-off**: All tests pass (517 passed, 7 ignored). Clean audit pass documented in commit `084d4ea`.
+---
+5. [x] **Release pipeline checklist gate**: Added `requires_approval: true` constitution compliance step to `DEFAULT_PIPELINE_YAML` in `release.rs`. Validated by `default_pipeline_has_constitution_checklist_gate` test.
+   ```
+<!-- status: done -->
+<!-- status: done -->
+<!-- status: done -->
+**Files**: TBD by audit findings. Likely `crates/ta-goal/src/goal_run.rs` (§5), `apps/ta-cli/src/commands/draft.rs` (§6), `crates/ta-policy/` (§7), audit logging (§8), `apps/ta-cli/src/commands/release.rs` (pipeline step).
+#### Problem
+#### Version: `0.11.6-alpha`
+---
+---
+---
 ### v0.11.7 — Web Shell Stream UX Polish
 <!-- status: done -->
 **Goal**: Clean up the tail/stream output UX in the web shell so live goal output is comfortable to read and the connection state is always clear.
-
-#### Items
-
+   ```
+#### Completed
+---
 1. [x] **Heartbeat into working indicator**: Move `[heartbeat] still running... Xs elapsed` out of the stream. Instead, update the existing "Agent is working…" line in-place: `Agent is working ⠿ (380s elapsed)` — animated spinner character cycles on each heartbeat, elapsed time updates. No separate status bar; no duplicate elapsed display.
-
-2. [x] **No-heartbeat alert**: If no heartbeat arrives within a configurable window (default 30 s), change the working indicator to a red alert: `Agent is working ⚠ (410s elapsed — no heartbeat)`. Clears back to spinner automatically when the next heartbeat arrives.
-
-
-
+<!-- status: done -->
+---
+   ```
+<!-- status: done -->
+<!-- status: done -->
 4. [x] **Tail stream close on completion** *(bug)*: The tail SSE stream is not closed when the background command finishes. The shell keeps tailing indefinitely, accumulating ghost tail subscriptions. When a second background command starts, the shell shows 2 active tails. Fix: daemon sends an explicit `event: done` (or closes the SSE connection) when the output channel is exhausted; client untails and stops tracking that key on receipt.
-
+---
 5. [x] **Process completion/failure/cancellation states**: When a tailed background process ends, replace the "Agent is working…" indicator with a final status line and clear the working indicator:
    - Completed: `✓ <command> completed`
    - Failed: `✗ <command> failed (exit <code>)`
    - Canceled: `⊘ <command> canceled`
    The working indicator (`Agent is working…`) is removed entirely after any terminal state.
-
+---
 6. [x] **Input cursor style** — configurable in `daemon.toml` `[shell]` section:
    - Default: larger, white block cursor (replaces the current medium-blue hard-to-read cursor)
-
+<!-- status: done -->
    - Applied via CSS on the shell input element; read from `/api/status` alongside other shell config.
-
+---
 <!-- status: done -->
 
 8. [x] **`--submit` default on when VCS configured**: `ta draft apply` should default to `--submit` (git commit + push + PR creation) whenever a VCS submit adapter is configured. Add `--no-submit` to explicitly opt out. The current default (no submit unless `--submit` is passed) is surprising — users expect apply to go all the way through.
-
+---
 9. [x] **`SourceAdapter` trait — `verify_not_on_protected_target()`**: Add two methods with default no-op implementations (no breaking change):
    - `fn protected_submit_targets(&self) -> Vec<String>` — adapter declares its protected refs. Default: `vec![]`.
    - `fn verify_not_on_protected_target(&self) -> Result<()>` — asserts post-`prepare()` invariant. Default impl: if `protected_submit_targets()` is non-empty, query the adapter's current position and return `Err` if it matches. Adapters may override.
-
+#### Architecture
 10. [x] **Git adapter**: Implement `protected_submit_targets()` returning configured protected branches (defaulting to `["main", "master", "trunk", "dev"]`) and `verify_not_on_protected_target()` via `git rev-parse --abbrev-ref HEAD`.
-
+---
 11. [x] **Perforce adapter (built-in)**: Implement `protected_submit_targets()` (configured depot paths, default `["//depot/main/..."]`) and `verify_not_on_protected_target()` checking the current CL's target stream. No Perforce installation required for the check to compile — gate behind a `p4` CLI call that degrades gracefully if not present.
-
+<!-- status: done -->
 12. [x] **SVN adapter (built-in)**: Implement `protected_submit_targets()` (configured protected paths, default `["/trunk"]`) and `verify_not_on_protected_target()` via `svn info --show-item url`. SVN's `prepare()` is currently a no-op (no branching) — this at minimum blocks committing to a protected path until proper branch/copy support is added.
-
-
-
+---
+---
+     ```
 14. [x] **Constitution §15 — VCS Submit Invariant**: Add to `docs/TA-CONSTITUTION.md`:
     > **§15 VCS Submit Invariant**: All VCS adapters MUST route agent-produced changes through an isolation mechanism (branch, shelved CL, patch queue) before any commit. `prepare()` is the mandatory enforcement point — failure is always a hard abort. After `prepare()`, the adapter MUST NOT be positioned to commit directly to a protected target. Adapters MUST declare protected targets via `protected_submit_targets()`. This invariant applies to all current and plugin-supplied adapters.
-
+<!-- status: done -->
 **Files**: `crates/ta-daemon/assets/shell.html`, `crates/ta-daemon/src/config.rs`, `crates/ta-daemon/src/api/status.rs`, `apps/ta-cli/src/commands/draft.rs`, `crates/ta-submit/src/adapter.rs`, `crates/ta-submit/src/git.rs`, `crates/ta-submit/src/perforce.rs`, `crates/ta-submit/src/svn.rs`, `docs/TA-CONSTITUTION.md`
 
 #### Version: `0.11.7-alpha`
-
+   ```toml
 ---
-
+---
 ### v0.12.0 — Template Projects & Bootstrap Flow
 <!-- status: done -->
 **Goal**: `ta new` generates projects with `project.toml` plugin declarations so downstream users get a complete, working setup from `ta setup` alone. Template projects in the Trusted-Autonomy org serve as reference implementations. Also: replace the quick-fix Discord command listener with a proper slash-command-based bidirectional integration.
-
-#### Items
+<!-- status: done -->
+---
 <!-- status: done -->
 2. [x] **`ta new --vcs` flag + interactive VCS prompt**: Set the VCS adapter explicitly via `--vcs git|svn|perforce|none`. When `--vcs` is omitted in interactive mode, `ta new` asks "Do you want version control?" with options derived from available adapters/plugins (e.g., `[git, svn, perforce, none]`). The selected adapter is written into `.ta/workflow.toml` `[submit].adapter`, and for Git, runs `git init` + initial commit automatically. `--vcs perforce` also adds `ta-submit-perforce` to the plugin requirements in `project.toml`.
 3. [x] **Template project generator**: `ta new` produces a project with `project.toml`, `README.md` with setup instructions, `.ta/` config pre-wired for the declared plugins, and a `setup.sh` fallback for users without TA installed.
 4. [x] **`setup.sh` bootstrap**: Standalone shell script (committed to the template repo) that installs TA if missing, runs `ta setup`, and prints next steps. Works on macOS/Linux. PowerShell equivalent for Windows.
-5. [-] **Reference template: ta-discord-template**: External repo — moved to v0.12.1.
+<!-- status: done -->
 6. [-] **Reference template: ta-perforce-template**: External repo — moved to v0.13.6 Community Hub.
 7. [x] **Template listing**: `ta new --list-templates` shows available templates from both built-in and registry sources.
 8. [x] **Test: end-to-end bootstrap flow**: Test that `ta new --plugins discord --vcs git` → `ta setup` → `ta-daemon` starts with the Discord plugin loaded and VCS configured.
 
 #### Discord command listener tech debt (from quick-fix in v0.10.18)
 The current `--listen` mode on `ta-channel-discord` is a quick integration that works but has several limitations. These should be addressed here alongside the Discord template project:
-
+---
 9. [x] **Discord slash commands**: Register `/ta` slash command via Discord Application Commands API instead of message-prefix matching. Benefits: auto-complete, built-in help, no MESSAGE_CONTENT intent required, works in servers with strict permissions. *(moved to v0.12.1)*
 10. [x] **Interaction callback handler**: Handle button clicks from `deliver_question` embeds. Currently button `custom_id` values (e.g., `ta_{interaction_id}_yes`) are sent to Discord but no handler receives them. Add an HTTP endpoint or Gateway handler that receives interaction callbacks and POSTs answers to the daemon's `/api/interactions/:id/respond`. *(moved to v0.12.1)*
 11. [x] **Gateway reconnect with resume**: Current listener reconnects from scratch on disconnect. Implement Discord's resume protocol (session_id + last sequence number) for seamless reconnection without missed events. *(moved to v0.12.1)*
-
+   ```
 13. [x] **Rate limiting**: Add rate limiting on command forwarding to prevent Discord abuse from flooding the daemon API. *(moved to v0.12.1)*
 14. [x] **Response threading**: Post command responses as thread replies to the original message instead of top-level messages, to keep the channel clean. *(moved to v0.12.1)*
-
+<!-- status: done -->
 16. [x] **Remove `--listen` flag**: Once the daemon manages the listener lifecycle (item 12), the standalone `--listen` mode becomes internal. The user-facing entry point is `ta daemon start` with Discord configured in `daemon.toml`. *(moved to v0.12.1)*
 17. [x] **Goal progress streaming**: Subscribe to daemon SSE events for active goals and post progress updates to the Discord channel (stage transitions, key milestones). Avoids flooding by batching/throttling updates. *(moved to v0.12.1)*
 18. [x] **Draft summary on completion**: When a goal finishes and produces a draft, post the AI summary + artifact list to Discord. Include approve/deny buttons that call the daemon API. *(moved to v0.12.1)*
 19. [x] **`ta plugin build <name|all>`**: Build channel/submit plugins from the main workspace. `ta plugin build discord` builds `plugins/ta-channel-discord`, `ta plugin build all` builds all plugins. Re-signs binaries on macOS after copy. *(moved to v0.12.1)*
 20. [x] **PID guard for listener**: (done in v0.10.18) Prevent duplicate listener instances via `.ta/discord-listener.pid`. Verify guard works correctly when daemon manages listener lifecycle.
 21. [x] **`ta run --quiet`**: Suppress streaming agent output but still print completion/failure summary. Default for daemon-dispatched and channel-dispatched goals. Inverse: `ta run --verbose` (current default behavior when run interactively). Completion and failure messages always print regardless of verbosity.
-
+#### Design
 #### Goal process monitoring & diagnostics
 Known issue from v0.10.18: Discord-dispatched `ta run` created a goal record (state: `running`) but the agent process never actually started. The goal became a zombie — no agent log, no draft, no error, no timeout. Root causes:
 - The daemon's `POST /api/cmd` spawns `ta run` as a detached child with piped stdio. If the child fails to launch (e.g., binary not found, macOS code signature block, missing env vars), the error is captured in stderr but the goal state is never updated to `failed`.
 - No heartbeat or liveness check: once a goal enters `running`, nothing verifies the agent process is still alive. A crashed or never-started agent leaves the goal stuck forever.
 - `ta goal list` shows `running` with no way to distinguish "actively working" from "zombie".
-
+<!-- status: done -->
 22. [x] **Goal process liveness monitor**: *(Moved to v0.11.2.4 items 1-3)* Daemon periodically checks that the agent PID for each `running` goal is still alive. If the process has exited, transition the goal to `completed` (exit 0) or `failed` (non-zero/missing) and emit the appropriate event. Check interval: configurable, default 30s. *(completed in v0.11.2.4)*
 23. [x] **Goal launch failure capture**: If `ta run` fails to start (spawn error, immediate crash, missing binary), update the goal state to `failed` with the error message before returning the HTTP response. The Discord listener (or any caller) should see the failure in the command output. *(completed in v0.11.2.4)*
 24. [x] **`ta goal status` shows process health**: Include PID, whether the process is alive, elapsed time, last agent log line, and last event timestamp. Flag goals where the process is dead but state is still `running`. *(completed in v0.11.2.4)*
-
+<!-- status: done -->
 26. [x] **Goal timeout**: Configurable maximum goal duration (default: none for interactive, 4h for daemon-dispatched). Goal transitions to `timed_out` if exceeded. Daemon kills the agent process if still alive.
 27. [x] **macOS code signing in plugin install**: When copying plugin binaries to `.ta/plugins/`, re-sign with `codesign --force --sign -` on macOS to prevent AppleSystemPolicy from blocking execution. This caused the v0.10.18 Discord listener to be SIGKILL'd immediately on launch from `.ta/plugins/`.
 28. [x] **Escape special characters in VCS commit/branch messages**: Goal titles containing backticks, single quotes, or other shell-special characters get truncated or mangled when passed to VCS commands (e.g., `` `ta sync` `` in a title becomes `&` in the git commit message). The submit adapter must properly escape or sanitize goal titles and draft summaries before passing them to shell commands. Use direct argument passing (not shell interpolation) where possible.
-
-29. [x] **§16.6 — Remove TA-specific scanner from generic draft pipeline** *(constitution §16.6 compliance, pulled forward from v0.14.1 item 1)*: Extract `scan_s4_violations()` from `draft.rs` into a project-specific constitution checker invoked via the `draft-build-post` hook. The generic pipeline gets only the hook point (no-op by default). The TA repo itself activates the hook via `.ta/workflow.toml`. This ensures external projects — Python, C++, content drafts — never receive TA-internal Rust-pattern checks.
-
-30. [x] **`ta constitution init` (simple)**  *(pulled forward from v0.14.1)*: `ta constitution init` asks the QA agent to draft a `.ta/constitution.md` from the project's `PLAN.md`, `CLAUDE.md`, and stated objectives. No guided UI — a single agent prompt produces the first draft for human review. Gives new projects an immediate behavioral contract without requiring the full v0.14.1 constitution framework.
-
-#### Version: `0.12.0-alpha`
-
 ---
-
+29. [x] **§16.6 — Remove TA-specific scanner from generic draft pipeline** *(constitution §16.6 compliance, pulled forward from v0.14.1 item 1)*: Extract `scan_s4_violations()` from `draft.rs` into a project-specific constitution checker invoked via the `draft-build-post` hook. The generic pipeline gets only the hook point (no-op by default). The TA repo itself activates the hook via `.ta/workflow.toml`. This ensures external projects — Python, C++, content drafts — never receive TA-internal Rust-pattern checks.
+   ```
+30. [x] **`ta constitution init` (simple)**  *(pulled forward from v0.14.1)*: `ta constitution init` asks the QA agent to draft a `.ta/constitution.md` from the project's `PLAN.md`, `CLAUDE.md`, and stated objectives. No guided UI — a single agent prompt produces the first draft for human review. Gives new projects an immediate behavioral contract without requiring the full v0.14.1 constitution framework.
+<!-- status: done -->
+#### Version: `0.12.0-alpha`
+}
+---
+---
 ### v0.12.0.1 — PR Merge & Main Sync Completion
 <!-- status: done -->
 **Goal**: Complete the post-apply workflow so that after `ta draft apply --submit` creates a PR, the user can merge it and sync their main branch without leaving TA. This is the final step in the "run → draft → apply → merge → next phase" loop that makes TA a smooth development substrate.
-
+<!-- status: done -->
 **Current state**: `auto_merge = true` in `workflow.toml` already calls `gh pr merge --auto` when a Git PR is created (v0.11.2.3). `ta sync` already pulls main (v0.11.1). The gap: these aren't wired together, there's no watch-for-merge flow, P4 has no `merge_review()` equivalent, and the shell gives no guidance after apply on what to do next.
-
-#### Items
-
+---
+<!-- status: done -->
+---
 1. [x] **`SourceAdapter::merge_review()`**: New optional trait method (default: no-op with guidance message). Git: calls `gh pr merge` (or GitHub API) to merge the PR immediately. P4: calls `p4 submit -c <CL>` to submit the shelved changelist. SVN: no-op (SVN commits directly). Each adapter's `merge_review()` returns a `MergeResult` with `merged: bool`, `merge_commit`, and `message`.
-
-2. [x] **`ta draft merge <id>`**: CLI command that calls `adapter.merge_review()` for the draft's PR, then calls `adapter.sync_upstream()` to pull main. Handles both auto-merge (CI must pass first) and immediate merge modes. Outputs: merge status, new main HEAD, and suggested next step.
-
+   ```toml
+<!-- status: done -->
+---
 3. [x] **Shell guidance after apply**: After `ta draft apply --submit` completes, print actionable next steps: PR URL, whether auto-merge is enabled, and the exact command to run when ready (`ta draft merge <id>` or `ta sync`). No silent exits.
 
 4. [x] **`ta draft watch <id>`**: Polls PR/review status until merged, closed, or failed CI. When merged, automatically calls `ta sync` to pull main and prints "✓ merged + synced main — ready for next phase". Interval: configurable, default 30s. Useful for `auto_merge = true` flows where CI runs before merge.
-
+<!-- status: done -->
 5. [x] **`--watch` flag on `ta draft apply`**: `ta draft apply --submit --watch` chains apply → create PR → watch → merge → sync into a single command. The user starts it and walks away; it completes when main is synced.
-
+   ```
 ---
 
 7. [x] **P4 shelved CL workflow**: `ta draft apply --submit` for P4 shelves the CL and opens it for review. `ta draft merge <id>` submits it (`p4 submit -c <CL>`). `ta draft watch <id>` polls CL state via `p4 change -o`.
 
 8. [x] **`ta plan next`**: Already implemented in v0.11.3. No changes needed.
-
-
-
+<!-- status: done -->
+```bash
+---
 10. [x] **Short goal tags**: `ta goal start` and all goal creation paths now call `save_with_tag()` to auto-generate `<slug>-<seq>` tags (e.g., `fix-build-01`). Tags shown on goal start output. `:attach`, `:tail`, and all goal commands already support tag resolution via `resolve_tag()`.
-
+---
 **Files**: `crates/ta-submit/src/adapter.rs`, `crates/ta-submit/src/git.rs`, `crates/ta-submit/src/perforce.rs`, `apps/ta-cli/src/commands/draft.rs`, `apps/ta-cli/src/commands/sync.rs`, `crates/ta-goal/src/goal_run.rs` (new state), `docs/USAGE.md`
 
-#### Version: `0.12.0.1-alpha`
-
+<!-- status: done -->
 ---
-
+---
+<!-- status: done -->
 ### v0.12.0.2 — VCS Adapter Externalization
 <!-- status: done -->
 **Goal**: Migrate VCS adapters from built-in compiled code to external plugins using the same JSON-over-stdio protocol as channel plugins. Git remains built-in as the zero-dependency fallback. Perforce, SVN, and any future VCS adapters become external plugins that users install when needed.
@@ -4312,12 +4312,12 @@ Known issue from v0.10.18: Discord-dispatched `ta run` created a goal record (st
 Today git, perforce, and svn adapters are compiled into the `ta` binary. This means:
 - Every user ships code for VCS systems they don't use
 - Adding a new VCS (Plastic SCM, Fossil, Mercurial) requires modifying TA core
-
+---
 - The SubmitAdapter trait (v0.9.8.4) already abstracts VCS operations — the wire protocol just needs to cross a process boundary
 
-
-
-#### Items
+<!-- status: done -->
+   ```
+<!-- status: done -->
 1. [x] **`ta-submit-*` plugin protocol**: Define the JSON-over-stdio protocol for VCS plugins. Messages: `detect` (auto-detect from project), `exclude_patterns`, `save_state`, `restore_state`, `commit`, `push`, `open_review`, `revision_id`. Same request/response structure as channel plugins. → `crates/ta-submit/src/vcs_plugin_protocol.rs`
 2. [x] **Plugin discovery for VCS adapters**: When `submit.adapter = "perforce"`, TA checks built-in adapters first, then looks for `ta-submit-perforce` in `.ta/plugins/vcs/`, `~/.config/ta/plugins/vcs/`, and `$PATH`. → `crates/ta-submit/src/vcs_plugin_manifest.rs` + updated `registry.rs`
 3. [x] **Extract PerforceAdapter to external plugin**: Move `crates/ta-submit/src/perforce.rs` logic into `plugins/ta-submit-perforce/` as a standalone Rust binary. Communicates via JSON-over-stdio. Include `plugin.toml` manifest. → `plugins/ta-submit-perforce/`
@@ -4329,28 +4329,28 @@ Today git, perforce, and svn adapters are compiled into the `ta` binary. This me
 9. [x] **§15 compliance — carry forward to plugins**: The built-in Perforce and SVN adapters implement `protected_submit_targets()` and `verify_not_on_protected_target()` (added in v0.11.7). Ported to plugin binaries as `protected_targets` and `verify_target` messages.
 
 
-
+---
 <!-- previously v0.13.5; renumbered to reflect logical implementation order -->
 
 ---
-
-> **⬇ PUBLIC ALPHA** — With v0.12.0.2 (VCS Externalization) complete, TA is ready for external users: new project setup, plan + workflow generation, goals run via `ta shell` + Discord/Slack, drafts applied, PRs merged, main synced — in Git or Perforce.
-
 ---
-
+> **⬇ PUBLIC ALPHA** — With v0.12.0.2 (VCS Externalization) complete, TA is ready for external users: new project setup, plan + workflow generation, goals run via `ta shell` + Discord/Slack, drafts applied, PRs merged, main synced — in Git or Perforce.
+---
+---
+#### Architecture
 ### v0.12.1 — Discord Channel Polish
 <!-- status: done -->
 **Goal**: Complete the Discord channel integration started in v0.10.18. Replace the quick-fix message-prefix listener with a proper slash-command integration, give the daemon full control over listener lifecycle, and add user-facing features (progress streaming, draft notifications, response threading) that make Discord a first-class TA interaction surface.
-
+---
 **Depends on**: v0.12.0 (Discord template context), v0.10.2.1 (Discord external plugin architecture)
-
-#### Items
-
-1. [x] **Discord slash commands**: Register `/ta` slash command via Discord Application Commands API instead of message-prefix matching. Benefits: auto-complete, built-in help, no MESSAGE_CONTENT intent required, works in servers with strict permissions. (`--register-commands` flag + `INTERACTION_CREATE` handler in listener.rs)
-
-
+---
+   ```
+---
+```json
+---
+---
 4. [x] **Daemon auto-launches listener**: `[channels.discord_listener] enabled = true` in `daemon.toml` makes the daemon spawn `ta-channel-discord --listen` and restart on crash. (`channel_listener_manager.rs`, `DiscordListenerConfig` in config.rs)
-5. [x] **Rate limiting**: Per-user token bucket (10 cmds / 60s, configurable as constants). Excess commands get a polite Discord reply. (listener.rs `RateLimiter`)
+
 6. [x] **Response threading**: All command responses posted as `message_reference` replies to the original message, keeping the main channel clean. (listener.rs `post_thread_reply`)
 7. [x] **Long-running command status**: Posts `:hourglass_flowing_sand: Working…` placeholder immediately, then edits it with the final result. (listener.rs `execute_command_with_status`)
 8. [x] **Remove `--listen` flag**: Flag remains but is now "internal" — daemon manages the lifecycle. Users configure `[channels.discord_listener]` in `daemon.toml` instead of running `--listen` manually. Help text updated accordingly.
@@ -4358,85 +4358,85 @@ Today git, perforce, and svn adapters are compiled into the `ta` binary. This me
 10. [x] **Draft summary on completion**: `progress.rs` handles `draft.ready` events, posts summary embed with artifact count + approve/deny buttons. (progress.rs `handle_draft_ready`)
 11. [x] **`ta plugin build <name|all>`**: Extended to discover and build VCS plugins (plugin.toml with `type = "vcs"`) in addition to channel plugins. Install path is `.ta/plugins/vcs/<name>/`. macOS ad-hoc re-signing via `codesign -s -` after binary copy. (plugin.rs `resign_binary_macos`, VCS discovery)
 12. [x] **Reference template: ta-discord-template**: Published to `Trusted-Autonomy/ta-discord-template`. *(external repo — deferred: requires GitHub repo creation outside this codebase)*
-
+---
 
 
 - Item 12 (ta-discord-template reference repo) → deferred to future work, requires creating an external GitHub repository.
 
 #### Version: `0.12.1-alpha`
-
+---
 ---
 
 ### v0.12.2 — Shell Paste-at-End UX
 <!-- status: done -->
 **Goal**: Fix the `ta shell` paste behavior so that pasting (⌘V / Ctrl+V / middle-click) always appends at the end of the current `ta>` prompt text, regardless of where the visual cursor is positioned. Users naturally click or scroll around while reading output and forget where the cursor is — paste should always go to the input buffer end, not a random insertion point.
-
-#### Items
-
+<!-- status: done -->
+---
+---
 1. [x] **Intercept paste event in TUI**: Detect paste sequences (OSC 52, bracketed paste `\e[200~`, or large clipboard burst) in the TUI shell input handler.
 2. [x] **Force cursor to end before paste**: When a paste event is detected, move the cursor to `input_buffer.len()` before inserting characters.
 3. [x] **Web shell**: Added `paste` event listener to `shell.html` that forces insertion at end; standard `<input>` pastes at cursor, so the listener moves cursor to end before inserting.
 4. [x] **Bracketed paste mode**: Enable terminal bracketed paste mode (`\e[?2004h`) so multi-line pastes arrive as a unit. Strip leading/trailing newlines to avoid accidental submission.
 5. [x] **Manual test**: Paste with cursor at start, middle, and end of input; verify text always appears at end. Test in Terminal.app, iTerm2, and the web shell.
-
+```bash
 #### Version: `0.12.2-alpha`
 
 ---
-
+      ```
 <!-- status: done -->
 <!-- status: done -->
 **Goal**: Fix the architectural gap where follow-up (child) drafts only capture their own staged writes rather than computing a cumulative diff against the original source. Users see "2 files changed" on a follow-up when the real answer is "parent: 5 + child: 2 = 7 files changed", and `ta draft apply` reports "Applied 0 file(s)" because the rebase compares child-staging against current source (which already has the parent applied) and finds nothing new.
 
 **Root cause**: `draft build` snapshots only the delta since *this goal* started, not since the *root ancestor* of a follow-up chain. When the parent is applied to source before the child, the child's staging matches source and the diff is empty.
-
+<!-- status: done -->
 1. [x] **Track parent draft ID on follow-up goals**: When `ta run --follow-up <draft-id>` starts, record `parent_draft_id` on the `GoalRun`. Propagate through `DraftPackage` metadata.
 2. [x] **Composited diff for child drafts**: In `draft build`, if `parent_draft_id` is set and the parent is Applied, compute the diff as `child-staging vs original-source-snapshot` (the snapshot taken *before* the parent was applied), not vs current source. This captures the full incremental change set.
 3. [x] **`ta draft view` shows chain summary**: When viewing a child draft, show "Follow-up to `<parent-id>` — combined impact: N files". When viewing a parent with known children, list them.
 4. [x] **`ta draft apply` merges chains**: Add `ta draft apply --chain <child-id>` which applies parent + all unapplied children in order, with a single merged commit message summarizing the chain. Detect cycles and warn.
 5. [x] **`ta draft list` chain column**: Show `→ <parent-short-id>` in a new "Parent" column when a draft is a follow-up, so chains are visible at a glance.
+---
+<!-- status: done -->
 
 
-*Deferred item moved to v0.12.2.2: transactional rollback on validation failure.*
-
-
-
+---
+---
 ---
 
 ### v0.12.2.2 — Draft Apply: Transactional Rollback on Validation Failure
 <!-- status: done -->
 **Goal**: Make `ta draft apply` safe to run on `main`. If pre-submit verification fails (fmt, clippy, tests), all files written to the working tree must be restored to their pre-apply state. Currently the apply is not atomic — files land on disk but the commit never happens, leaving the working tree dirty and requiring manual `git checkout HEAD -- <files>` to recover.
-
+---
 **Found during**: v0.12.2.1 apply failed due to a corrupted Nix store entry (`glib-2.86.3-dev` reference invalid), leaving 11 files modified in working tree on `main`.
 
 1. [x] **Snapshot working tree before copy**: Before writing any files, record the set of paths that will be modified. `ApplyRollbackGuard` reads each file's current content (or None if it doesn't exist yet) before the overlay apply call.
 2. [x] **Rollback on verification failure**: If any verification step exits non-zero, anyhow::bail! propagates, the guard drops uncommitted, restoring all files. Prints `[rollback] Restored N file(s) to pre-apply state.`
 
-
+--- Phase Run Summary ---
 5. [x] **Distinguish env failures from code failures**: Heuristic patterns (`/nix/store`, `glib-`, `hash mismatch`, etc.) trigger an additional eprintln! noting the failure may be a build-environment issue with guidance to re-run after fixing the environment.
 
 
 
 ---
-
+```
 ### v0.12.2.3 — Follow-Up Draft Completeness & Injection Cleanup
 <!-- status: done -->
 **Goal**: Fix two follow-up bugs exposed by v0.12.2.2: (1) follow-up drafts only capture per-session writes rather than the full staging-vs-source delta, silently dropping parent-session changes (version bumps, etc.) from the child PR; (2) a crashed/frozen session leaves CLAUDE.md with the TA injection still prepended, which then leaks into the diff and ends up in the GitHub PR.
 
 **Found during**: v0.12.2.2 — computer froze before agent exited, `restore_claude_md` never ran, injected CLAUDE.md appeared in PR 197. Follow-up PR 198 was missing `Cargo.toml`, `Cargo.lock`, `CLAUDE.md` version bumps because the follow-up session didn't re-write those files.
-
+```
 1. [x] **Follow-up draft uses full staging-vs-source diff**: When `ta draft build` runs for a follow-up goal that reuses the parent's staging directory, diff the full staging tree against the source (same as a non-follow-up build), not just the files written in the child session. This ensures all parent-session changes (version bumps, etc.) are included in the child draft. The child draft already supersedes the parent, so including all changes is correct.
 2. [x] **`ta draft build` strips injected CLAUDE.md header**: Before capturing the staging diff, check if `CLAUDE.md` in staging starts with `# Trusted Autonomy — Mediated Goal`. If so, strip everything up to and including the `---` separator that precedes the real project instructions, and write the cleaned content back to staging before diffing. This protects against crash/freeze leaving the injection in place.
 3. [x] **Auto-close parent GitHub PR on supersession (at build time)**: When `build_package` marks a parent draft as `DraftStatus::Superseded`, look up the parent's `vcs_info.review_url`. If it is a GitHub PR URL, run `gh pr close <url> --comment "Superseded by <child-pr-url>"`. This prevents the orphaned open-PR problem without waiting until the child is applied.
 4. [x] **Test**: Add a regression test that builds a follow-up draft on a staging dir with parent-session changes in files the child session didn't touch — assert all parent-session files appear in the child draft's artifacts.
+---
 
-
-
+```
 ---
 
 ### v0.12.3 — Shell Multi-Agent UX & Resilience
 <!-- status: done -->
 **Goal**: Close the remaining UX and reliability gaps found during v0.12.1 testing. Users need to send messages to running agents, distinguish streams from multiple agents, understand auth failures, and have clean process cleanup when agents exit.
-
+---
 1. [x] **`>tag message` inline prefix for two-way agent communication**: In ta shell, if input starts with `>` followed by an optional goal tag and a space, route the message to the matching running agent (or the sole active agent if no tag given) rather than the normal routing table. No mode switch required — works alongside any other command.
 2. [x] **Prompt and status bar reflect connected agent**: When a `>tag` message is sent, the shell prompt briefly shows `[→tag]` and the status bar indicates the active target agent for that burst of messages.
 3. [x] **Stream output includes short tag when multiple agents active**: Each line of agent stream output is prefixed with `[tag]` (e.g., `[v0.12.3]`) when more than one agent is streaming concurrently. Single-agent sessions remain untagged to reduce noise.
@@ -4444,17 +4444,17 @@ Today git, perforce, and svn adapters are compiled into the `ta` binary. This me
 5. [x] **Heartbeat / tail stream cleanup when agent exits**: After the agent process exits, the `tail` stream and heartbeat timers are torn down immediately. Shell prints a clean `[agent exited]` line rather than silently hanging or orphaning the tail task.
 6. [x] **Auto-scroll to bottom during agent stream output**: When the user is at (or near) the bottom of the output pane and new agent output arrives, the shell automatically scrolls to keep the latest line visible — matching a `tail -f` experience. If the user has manually scrolled up to read history, auto-scroll is suspended. Once they scroll back to the bottom, auto-scroll resumes. Prevents output from running below the prompt bar and requiring manual scroll to catch up.
 7. [x] **Clear "Agent is working" indicator on goal completion**: When a goal finishes, the `AgentOutputDone` handler replaces the last heartbeat line with `[agent exited <id>]` in dark gray and removes the goal from `active_tailing_goals`. The "Agent is working ⚠" line no longer persists after completion.
+```
 
-
-
+    }
 ---
 
 
 <!-- status: done -->
 ```
-
+---
 **Dependency**: `ta-channel-discord` plugin (fully implemented in v0.12.1). No new code in this repo required — work is external repo creation + USAGE.md/PLUGIN-AUTHORING.md doc updates.
-
+---
 #### Discord template (ready to publish)
 1. [x] **Create `Trusted-Autonomy/ta-channel-discord` GitHub repo**: Repo created at https://github.com/Trusted-Autonomy/ta-channel-discord. Plugin source pushed as repo root with `.github/workflows/release.yml` and `.gitignore`.
 2. [x] **Tag v0.1.0 and publish GitHub release binaries**: `v0.1.0` tagged and pushed; release CI triggered (run 23279178646). Binaries built for `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-musl`, `x86_64-pc-windows-msvc`.
@@ -4462,23 +4462,23 @@ Today git, perforce, and svn adapters are compiled into the `ta` binary. This me
 4. [x] **Update `PLUGIN-AUTHORING.md`**: Added links to published repos and a "Publishing your plugin" section covering the GitHub releases tarball format and release workflow.
 5. [x] **Update `USAGE.md` Discord setup**: `ta setup resolve` is now the primary install path; manual build kept as fallback. Same update applied to the Slack section.
 
-
+```
 6. [x] **Create `Trusted-Autonomy/ta-channel-slack` GitHub repo**: Repo created at https://github.com/Trusted-Autonomy/ta-channel-slack. Plugin source pushed as repo root with release workflow and `.gitignore`.
 
-8. [x] **Verify `ta setup resolve` works end-to-end (both plugins)**: Fixed URL construction bug in `resolve_from_registry` fallback — was using plugin key ("discord") instead of registry name ("ta-channel-discord") for tarball filename. Both `discord` and `slack` now install via `ta setup resolve` from `registry:` source.
+---
 
-
+---
 - **Slack inbound listener** (slash commands, button callbacks, Socket Mode) — Slack plugin lacks `listener.rs` and `progress.rs`. Implement in v0.13.x once beta starts. *(Slack is send-only for public alpha.)*
 - **`registry.trustedautonomy.dev` index** — the registry CDN. For now, `ta setup resolve` falls back to GitHub releases directly. A proper registry index (with search, versions, metadata) is a beta-era infrastructure item.
 
 #### Version: `0.12.4-alpha`
 
 ---
-
+|---|---|
 ### v0.12.4.1 — Shell: Clear Working Indicator & Auto-Scroll Fix + Channel Goal Input
 <!-- status: done -->
 **Goal**: Fix two shell regressions confirmed in the v0.12.3 build: (1) "Agent is working ⚠" persists after `ta run` completes; (2) the output pane does not stay scrolled to the latest line when new agent output arrives. Also wire Discord (and Slack) to the existing `POST /api/goals/{id}/input` endpoint so users can inject mid-run corrections from a channel.
-
+|---|---|---|---|
 **Root causes identified** (from `shell_tui.rs` code review):
 - **Working indicator / tail not clearing**: `AgentOutputDone` searches `app.output` for a `is_heartbeat` line to replace. In split-pane mode (Ctrl-W), agent output goes to `app.agent_output` — the heartbeat there is never found, so it's never replaced and the status bar `tailing_goal` never clears. Same bug applies whether or not split-pane is active if the heartbeat line was pushed to the wrong list.
 
@@ -4498,7 +4498,7 @@ The daemon already exposes `POST /api/goals/{id}/input` which writes directly to
 - `>message text here` — shorthand: routes to the most recently started goal (daemon resolves `latest`)
 
 **Implementation**:
-
+---
 
 8. [-] **Slack plugin** (`ta-channel-slack`): Deferred — Slack plugin is in an external repo (`Trusted-Autonomy/ta-channel-slack`) and Slack is send-only for public alpha. → v0.13.x
 9. [x] **Daemon**: `latest` is now a valid alias in `resolve_goal_id()` — resolves to the most recently started still-running goal via `GoalOutputManager.latest_goal()` backed by a `creation_order` Vec.
@@ -4508,14 +4508,14 @@ The daemon already exposes `POST /api/goals/{id}/input` which writes directly to
 #### Version: `0.12.4-alpha.1`
 
 ---
-
+   ```
 ### v0.12.5 — Semantic Memory: RuVector Backing Store & Context Injection
 <!-- status: done -->
 **Goal**: Make memory useful across runs. Today the daemon uses `FsMemoryStore` (exact-match only) and nothing writes the project constitution or plan completions to memory, so agents start each goal with no accumulated context. This phase wires up `RuVectorStore` as the primary backend (with `FsMemoryStore` as a read fallback for legacy entries), expands what gets written, and injects semantically-retrieved context at goal start.
 
-#### Items
 
 
+```
 1. [x] **Daemon initialises `RuVectorStore`** (`.ta/memory.rvf/`) with `FsMemoryStore` (`.ta/memory/`) as a read-through fallback for entries not yet migrated. Auto-migration on first open is already implemented in `ruvector_store.rs`.
 2. [x] **`ta memory backend`** CLI sub-command: shows which backend is active, entry count, index size, and last migration date.
 
@@ -4527,7 +4527,7 @@ The daemon already exposes `POST /api/goals/{id}/input` which writes directly to
 
 **Context injection at goal start**
 
-8. [x] **Inject retrieved entries into CLAUDE.md**: The existing `build_memory_context_section_for_inject()` already inserts a "Memory Context" section — extend it to include constitution rules and plan-completion entries alongside the existing history entries.
+
 9. [x] **Non-Claude agents** (Codex, Ollama): Add a `context_file` field to `AgentLaunchConfig` pointing to a generic markdown file (e.g., `.ta/agent_context.md`) that TA writes the same sections into, separate from CLAUDE.md. Each agent YAML opts in via `injects_context_file: true` + `context_file: .ta/agent_context.md`. *(Full per-model injection targeting deferred to v0.13.3 RuntimeAdapter.)*
 
 
@@ -4542,7 +4542,7 @@ The daemon already exposes `POST /api/goals/{id}/input` which writes directly to
 <!-- status: done -->
 **Goal**: Two related gaps that surfaced during v0.12.5 operations: (1) the daemon and CLI emit almost no structured logs for goal lifecycle — making it impossible to diagnose stuck agents, missed state transitions, or slow draft builds from logs alone; (2) the Discord/Slack SSE progress streamers replay all historical events on every reconnect, flooding channels with old notifications and missing new ones if a reconnect races with an event.
 
-#### Items
+
 
 **Goal lifecycle observability (daemon + CLI)**
 1. [x] **`cmd.rs` sentinel detection log**: `tracing::info!` when `GOAL_STARTED_SENTINEL` is found — include goal UUID, agent PID.
@@ -4587,7 +4587,7 @@ Audit all `push_output`, `push_heartbeat`, and `agent_output.push` call sites to
 2. [x] **Verify clearance for all terminal goal states**: `working_indicator_pushed_as_heartbeat` and `agent_output_done_clears_working_indicator` tests cover the full cycle; `AgentOutputDone` logic was already terminal-state-agnostic (searches by `is_heartbeat` flag).
 3. [x] **Fix intermittent scroll-to-bottom**: Root cause identified — heartbeat handling paths returned early without calling `auto_scroll_if_near_bottom()`. Fixed: non-split heartbeat now calls `auto_scroll_if_near_bottom()` after `push_heartbeat`; split-pane in-place update and push both reset `agent_scroll_offset` when within `AGENT_NEAR_BOTTOM_LINES`. 3 new tests.
 4. [x] **Regression test**: `scroll_stays_bottom_through_burst_of_output` — delivers 100 `AgentOutput` messages, asserts `scroll_offset` stays 0.
-5. [x] Update CLAUDE.md version to `0.12.7-alpha`
+
 
 #### Completed
 - 6 new tests in `apps/ta-cli/src/commands/shell_tui.rs` covering all items above.
@@ -4617,7 +4617,7 @@ Audit all `push_output`, `push_heartbeat`, and `agent_output.push` call sites to
 
 #### Bug 2 — `ta draft list` / `ta draft apply` CLI disconnect
 
-**Root cause**: `load_all_packages()` in `draft.rs` uses `if let Ok(pkg) = serde_json::from_str(...)` to silently skip files that fail to deserialise. If any draft file fails (e.g., due to a format mismatch between daemon-written JSON and the compiled `DraftPackage` struct), the package disappears from all CLI operations (`list`, `apply`, `approve`). There is no error surface — the user sees "No active drafts" with no explanation.
+
 
 **Fix items:**
 
@@ -4644,7 +4644,7 @@ Audit all `push_output`, `push_heartbeat`, and `agent_output.push` call sites to
 
 #### Completed
 
-- [x] **Filesystem probe at creation time** — `detect_strategy(staging_dir)` probes with a tiny temp file clone at workspace creation. No configuration needed; strategy chosen automatically (`copy_strategy.rs`).
+
 - [x] **APFS clone via `clonefile(2)` (macOS)** — Direct syscall via `extern "C"` (libSystem.B.dylib, always linked). Zero data I/O; pages shared until modified. No extra crate dependency.
 - [x] **Btrfs reflink via `FICLONE` ioctl (Linux)** — `libc::ioctl(dst_fd, FICLONE, src_fd)`. Zero data I/O on Btrfs and XFS (Linux 4.5+). `libc` added as linux-only target dep.
 - [x] **Fallback full copy** — Transparent fallback when COW not supported (ext4, network FS, cross-device). Same behavior as before.
@@ -4654,7 +4654,7 @@ Audit all `push_output`, `push_heartbeat`, and `agent_output.push` call sites to
 
 #### Deferred items
 
-- **FUSE overlay** (item 5) — Cross-platform COW via user-space FUSE requires a separate crate (fuse-overlayfs) and kernel FUSE module availability, with significant complexity for limited benefit given APFS/Btrfs coverage. Deferred to a future enhancement phase.
+<!-- status: done -->
 
 #### Version: `0.13.0-alpha`
 
@@ -4699,7 +4699,7 @@ The trust model stays the same: daemon detects and diagnoses, agent proposes cor
 
 #### Corrective Action Framework
 
-7. [-] **Action approval flow**: Corrective actions surfaced via UI — deferred. Currently surface via `ta operations log`. → future phase
+
 8. [x] **Auto-heal policy**: `[operations.auto_heal]` config section added to `daemon.toml` via `AutoHealConfig` struct. `enabled` (default: false) and `allowed` list fields. Config parses and roundtrips correctly.
 9. [x] **Corrective action audit trail**: Watchdog writes corrective actions to `.ta/operations.jsonl` (JSONL, append-only). Each entry has `id`, `created_at`, `severity`, `diagnosis`, `proposed_action`, `action_key`, `auto_healable`, `status`.
 10. [x] **`ta operations log`**: New `ta operations log` command in `apps/ta-cli/src/commands/operations.rs`. Shows corrective actions with `--limit`, `--all`, `--severity` filters. Actionable empty-state messages point to `ta daemon start`.
@@ -4729,7 +4729,7 @@ These items integrate with the per-project validation commands defined in `const
 24. [-] **Validation failure event**: Deferred — `on_failure` mode field exists in `constitution.toml` schema but `ValidationFailed` daemon event not implemented. → future phase (unscheduled)
 25. [-] **Auto-follow-up proposal**: Deferred — not implemented in v0.13.1. → future phase (unscheduled)
 26. [-] **Follow-up consent model** in `constitution.toml`: `on_failure` mode field added to constitution schema (see `constitution.rs`). Full event-driven flow deferred. → future phase (unscheduled)
-27. [-] **Follow-up goal bootstrapping**: Deferred — not implemented in v0.13.1. → future phase (unscheduled)
+
 28. [-] **Cycle guard**: Deferred — not implemented in v0.13.1. → future phase (unscheduled)
 29. [-] **`ta operations log` extension** for validation events: Deferred — not implemented in v0.13.1. → future phase (unscheduled)
 
@@ -4742,9 +4742,9 @@ These items integrate with the per-project validation commands defined in `const
 32. [x] **Compaction never touches the ledger**: `ta gc --compact` only removes staging directories and draft package JSON files. The `goal-history.jsonl` ledger is append-only and never subject to compaction. History entries are written on each compaction for audit traceability.
 33. [x] **`ta gc --compact`**: Added `--compact` flag and `--compact-after-days` (default: 30) to `ta gc`. Dry-run shows what would be discarded. Non-dry-run removes staging dirs and draft packages for applied/completed goals older than the threshold. Writes history entries and reports bytes reclaimed.
 34. [-] **External action compaction (stub for v0.13.4+)**: `discard_external_actions_after_days` field reserved for when v0.13.4/v0.13.5 land. Not implemented yet. → v0.13.4+
-35. [-] **Compaction audit trail**: Audit event per compaction pass deferred. Currently `ta gc --compact` prints per-goal summary to stdout. Structured audit events → future phase.
 
-#### Deferred items moved/resolved
+
+
 
 - Items 15, 19–20 (Intelligent Surface): Moved to v0.13.1.6 and completed there.
 
@@ -4798,7 +4798,7 @@ On Windows, `find_daemon_binary()` additionally has two bugs: `dir.join("ta-daem
 #### Items (remaining for this phase)
 
 2. [x] **Package `ta-daemon` in all archives**: `ta-daemon` (Unix) / `ta-daemon.exe` (Windows) alongside `ta`
-3. [x] **Fix `find_daemon_binary()` for Windows**: `EXE_SUFFIX` for sibling path; `where` on Windows PATH fallback
+
 4. [x] **Fix Bug B — PR failure must not silently succeed**: When `open_review` fails and `do_review=true`, emit a clear error with the branch name and the manual `gh pr create` command. Do not exit 0. Store the branch even when review fails so `ta pr status` can show recovery steps.
 5. [x] **Capture branch unconditionally after push**: Store the branch from push result regardless of review outcome. Fall back to the goal's `branch_prefix + slug` if metadata doesn't include it. Derived via same slug algorithm as `GitAdapter::branch_name()` when metadata `"branch"` key is absent.
 6. [x] **`ta draft reopen-review <id>`**: For applied drafts with a branch but no PR URL, attempt to create the PR. Useful recovery command without needing to re-apply. New `DraftCommands::ReopenReview` variant + `draft_reopen_review()` function.
@@ -4839,7 +4839,7 @@ On Windows, `find_daemon_binary()` additionally has two bugs: `dir.join("ta-daem
 |---|---|---|
 | **BMAD** | Structured planning — PRD, architecture, story decomposition, role-based review | `git clone` to `~/.bmad/` (machine-local, not in project) |
 | **Claude Flow** | Parallel implementation — swarm coordination across module boundaries | `npm install -g @ruvnet/claude-flow` |
-| **TA** | Governance — staging isolation, draft review, audit trail, policy | `ta` binary (already installed) |
+
 
 **Prerequisite note for users**: Claude Code (`claude` CLI), Claude Flow, and BMAD must be installed on the machine before running the discovery goal. TA does not install these — it configures the project to use them. See USAGE.md "Game Engine Projects" for per-platform setup.
 
@@ -4884,7 +4884,7 @@ On Windows, `find_daemon_binary()` additionally has two bugs: `dir.join("ta-daem
 
 #### Completed: 5 new tests, all workspace tests pass (578 ta-cli tests, 0 failures).
 
-#### Version: `0.13.1-alpha.5`
+#### Items
 
 ---
 
@@ -4917,7 +4917,7 @@ On Windows, `find_daemon_binary()` additionally has two bugs: `dir.join("ta-daem
 
 ### v0.13.1.7 — Apply Pipeline Reliability & Failure Observability
 <!-- status: done -->
-**Goal**: Fix the `ta draft apply` plan-update ordering bug (Bug D) and make the full apply pipeline surface clear failure summaries with actionable next steps when any stage fails mid-way.
+   ```toml
 
 #### Items
 
@@ -4945,7 +4945,7 @@ On Windows, `find_daemon_binary()` additionally has two bugs: `dir.join("ta-daem
 
 1. [x] `TransportLayer` trait: `Stdio`, `UnixSocket`, `Tcp` variants — `TransportMode` enum in `ta-daemon/src/config.rs`; `transport::serve()` in `ta-daemon/src/transport.rs`
 2. [x] TCP transport: MCP server listens on configurable port, agent connects over network — `serve_tcp()` in `transport.rs`
-3. [x] Unix socket transport: MCP server creates socket file, agent connects locally (faster than TCP, works across container boundaries via mount) — `serve_unix()` in `transport.rs`
+
 4. [x] Transport selection in agent config: `transport = "stdio" | "unix" | "tcp"` — `transport` field in `agents/generic.yaml`; `[transport]` section in `daemon.toml` via `TransportConfig`
 5. [x] TLS support for TCP transport (optional, for remote agents) — `serve_tcp_tls()` with `tokio-rustls`; configured via `[transport.tls]` cert_path/key_path
 6. [x] Connection authentication: bearer token exchange on connect — `authenticate_connection()` reads `Bearer <token>\n` header; configured via `[transport].auth_token`
@@ -4966,7 +4966,7 @@ On Windows, `find_daemon_binary()` additionally has two bugs: `dir.join("ta-daem
 #### Items
 
 1. [x] **Detect uncommitted working tree changes**: When `diff_all()` returns empty, check `git status --porcelain` on the source directory. If uncommitted changes exist, explain that the overlay mirrors the working tree so the diff is empty — and show the exact `git checkout -b / git add / git commit / gh pr create` sequence to fix it.
-2. [x] **Generic empty-diff guidance**: When no uncommitted changes exist either, list the three most common causes (already implemented, agent exited early, agent only produced text) and show `cd <staging> && ta draft build <id>` for manual recovery.
+
 3. [x] **`count_working_tree_changes()` helper**: Runs `git status --porcelain` in the source dir; returns 0 on non-git dirs or git errors (safe degradation).
 
 #### Version: `0.13.2.1` → semver `0.13.2-alpha.1`
@@ -5033,7 +5033,7 @@ policy = "review"          # require human approval before sending
 rate_limit = 10            # max 10 per goal
 
 [actions.social_post]
-policy = "review"
+
 
 
 [actions.api_call]
@@ -5081,7 +5081,7 @@ This is conceptually a **git staging area for DB mutations**: the overlay is the
 #### Items
 
 1. [x] `ta-db-overlay` crate: `DraftOverlay` struct with `put()`, `get()`, `put_blob()`, `list_mutations()`, `delete()`, `put_ddl()`, `mutation_count()` — persisted to JSONL with SHA-256 blob storage
-2. [x] `DbProxyPlugin` trait in `ta-db-proxy` crate: `wire_protocol()`, `classify_query()`, `start()`, `apply_mutation()` — plus `ProxyConfig`, `ProxyHandle`, `QueryClass`, `MutationKind`
+
 3. [x] Proxy lifecycle: `ProxyHandle` trait with `start()`/`stop()` — TA calls before/after agent
 4. [x] Query classification: `QueryClass` enum (Read/Write/Ddl/Admin/Unknown) with `MutationKind` (Insert/Update/Delete/Upsert)
 5. [x] Mutation capture: all write operations staged through `DraftOverlay` — provides read-your-writes + JSONL audit trail
@@ -5098,7 +5098,7 @@ This is conceptually a **git staging area for DB mutations**: the overlay is the
 ### v0.13.6 — Community Knowledge Hub Plugin (Context Hub Integration)
 <!-- status: done -->
 <!-- priority: deferred — post-launch community feature; not required for public alpha -->
-#### Deferred items moved/resolved
+
 
 **Design philosophy**: Community knowledge is a *connector*, not a monolith. Each community resource serves a specific *intent* — API integration guidance, security threat intelligence, framework migration patterns, etc. The plugin ships with a registry of well-known resources, each declaring its intent so agents know *when* to consult it. Users configure which resources are active and whether the agent has read-only or read-write access.
 
@@ -5128,7 +5128,7 @@ This is conceptually a **git staging area for DB mutations**: the overlay is the
    content_path = "content/"
    access = "read-write"        # "read-only" | "read-write" | "disabled"
    auto_query = true             # Agent auto-consults before API calls
-   languages = ["python", "javascript", "rust"]
+
 
    [[resources]]
    name = "security-threats"
@@ -5270,7 +5270,7 @@ steps:
   - type: goal-run          # run agent in staging
     gate: build-and-test    # must pass before next step
   - type: follow-up         # reuse staging, next phase
-    gate: build-and-test
+
   - type: draft-build       # single PR for all phases
     gate: human-review
 ```
@@ -5511,7 +5511,7 @@ on_violation = "warn"   # "warn" | "block" | "off"
 [release]
 # Whether to include a constitution compliance gate in the release pipeline
 checklist_gate = true
-# Whether to run parallel agent constitution review during release
+
 agent_review = false   # opt-in — spins up a lighter concurrent review agent
 
 [agent_review]
@@ -5600,7 +5600,7 @@ This data exists ephemerally in goal JSON and draft packages, but is never aggre
   "schema_version": "1.0",
   "project": "TrustedAutonomy",
   "entries": [
-    {
+
       "goal_id": "226dea99-...",
       "title": "Implement v0.12.8...",
       "workflow": "code",
@@ -5611,9 +5611,9 @@ This data exists ephemerally in goal JSON and draft packages, but is never aggre
       "pr_ready_at": "2026-03-19T22:30:00Z",
       "applied_at":  "2026-03-19T22:45:00Z",
       "build_seconds": 1200,          // start → pr_ready
-      "review_seconds": 900,          // pr_ready → applied/denied
+
       "total_seconds": 2100,
-      "amended": false,               // human amended any artifact before apply
+#### Deferred items moved
       "follow_up_count": 0,           // number of follow-up goals spawned from this one
       "rework_seconds": 0,            // sum of follow-up goal build_seconds
       "denial_reason": null,
@@ -5704,7 +5704,7 @@ Current releases ship archives containing a bare binary and docs. Users must man
 10. [-] **Homebrew tap** → v0.14.x
 11. [x] **System requirements in USAGE.md**: Added "System Requirements" section with platform table and agent framework requirements table
 
-    **USAGE.md section** (under Installation):
+
     ```
     ## System Requirements
 
@@ -5781,7 +5781,7 @@ Current releases ship archives containing a bare binary and docs. Users must man
 
 8. → **v0.14.1** **Browser tools off by default; enable per agent-capability profile**: Deferred — requires MCP tool filter in daemon and agent capability profile schema. Design: `capabilities = ["browser"]` in `.ta/agents/research.toml`; daemon filters `browser_*` tool calls. Assigned to v0.14.1 (Sandboxing & Attestation) as a capability scoping feature.
 
-#### Windows Performance & Diagnostics
+
 
 9w. [x] **Windows startup profiling**: `ta` commands feel slow on Windows compared to macOS. Add startup-time diagnostics (`ta --startup-profile` or always-on tracing at `RUST_LOG=ta=debug`) that report wall-clock time for each startup phase: binary load, config parse, daemon socket connect, command dispatch. Identify bottlenecks: likely candidates are (a) `which::which()` PATH scan on every command, (b) daemon IPC handshake latency, (c) missing Windows file-open shortcuts compared to macOS `O_CLOEXEC`/TCC caches. Fix the slowest path; add a CI benchmark asserting `ta --version` cold-start < 500ms on Windows runners.
 
@@ -5975,7 +5975,7 @@ When goal state is wrong (e.g., `failed` but draft was created, `running` with d
 
 #### 6. Constitution Completion (from v0.13.9 items 4, 5, 7, 9, 10)
 
-13. [x] **Release pipeline reads `checklist_gate`**: `release.rs` `load_pipeline()` loads `constitution.toml` and strips constitution gate steps when `checklist_gate = false`. Substring match on step name (`contains("constitution")`).
+
 14. [-] **Parallel agent review during release**: Deferred → v0.13.16. Requires async pipeline fan-out; current release pipeline is sequential. Constitution reviewer agent output append requires agent lifecycle wiring not in scope.
 
 16. [x] **`ta constitution init-toml --template <lang>`**: `init_toml()` accepts `Option<&str>` template parameter. `detect_constitution_language()` auto-detects from filesystem signals. `constitution_template_for_language()` generates language-specific configs with `extends = "ta-default"` and appropriate scan patterns.
@@ -6094,9 +6094,9 @@ All items implemented except items 5 and 13 (deferred). New tests: 5 (main.rs) +
 19. [-] **`ta-community-hub` MCP server registration**: → Implemented in v0.13.17.1 (item 10).
 20. [-] **Agent observation write-back**: → Implemented in v0.13.17.1 (item 11). Deferred write-back to external systems → v0.14.3.5.
 
-#### 7. E2E Pre-Release Test Suite
 
-21. [-] **`tests/e2e/` directory** (stubs): → Implemented in v0.13.17.1 (item 17).
+
+
 22. [-] **`test_dependency_graph_e2e`**: → Stub implemented in v0.13.17.1 (item 18).
 23. [-] **`test_ollama_agent_mock_e2e`**: → Stub implemented in v0.13.17.1 (item 19).
 24. [-] **`test_draft_validation_log_e2e`**: → Implemented in v0.13.17.1 (item 20).
@@ -6157,7 +6157,7 @@ All items implemented except items 5 and 13 (deferred). New tests: 5 (main.rs) +
 - Item 16 (release bundle): Moved to v0.13.18 — release pipeline bundling work fits naturally there.
 - Full E2E harness (`tests/e2e/mod.rs` with real daemon): Deferred to v0.14.x — requires daemon lifecycle management in tests. Stubs added with `#[ignore]` as placeholders.
 
-#### Version: `0.13.17.1-alpha`
+
 
 ---
 
@@ -6525,7 +6525,7 @@ api_key_env = "OPENAI_API_KEY"   # checked but not required — binary handles i
 
 > **⬇ PUBLIC BETA** — v0.13.x complete: runtime flexibility (local models, containers), enterprise governance (audit ledger, action governance, compliance), community ecosystem, and goal workflow automation. TA is ready for team and enterprise deployments.
 
-### Public Release: `public-alpha-v0.13.17.7`
+#### Items
 
 **Trigger**: After all v0.13.17.x phases (through v0.13.17.7) are `<!-- status: done -->`.
 
@@ -6576,7 +6576,7 @@ api_key_env = "OPENAI_API_KEY"   # checked but not required — binary handles i
 
 ### v0.14.1 — Hardware Attestation & Verifiable Audit Trails
 <!-- status: done -->
-**Goal**: Bind audit log entries to the hardware that produced them via TPM attestation or Apple Secure Enclave signing. Enables cryptographic proof that audit records were produced on the declared machine and not retroactively fabricated.
+
 
 
 
@@ -6648,11 +6648,11 @@ api_key_env = "OPENAI_API_KEY"   # checked but not required — binary handles i
 | TA header + goal + change-summary instructions | ~3k | — |
 
 | Memory context + solutions | 5–15k (up to 15 solutions, unbounded entries) | `take(15)` only |
-| Community section (`build_community_context_section`) | 0–10k (v0.13.17.7 redesign reduces this) | None |
+
 | Parent/follow-up context | 2–5k | None |
 | Original `CLAUDE.md` | ~10k for this repo | None |
 
-**Total**: 30–63k before the repo CLAUDE.md is even appended. After appending, 40–76k+.
+---
 
 The biggest single win is the plan checklist: all 200+ phase titles are emitted even though the agent only needs to know about the phases near the current one.
 
@@ -6670,7 +6670,7 @@ The biggest single win is the plan checklist: all 200+ phase titles are emitted 
 **Plan checklist windowing** (item 1 — biggest win):
 ```
 ---
-[x] v0.13.17 — Draft Evidence, Perforce Plugin
+
 [x] v0.13.17.1 — Complete v0.13.17 Implementation
 ...
 [x] v0.13.17.6 — Supervisor Agent Auth           ← last 5 done phases shown individually
@@ -6690,7 +6690,7 @@ Rule: show last `N_DONE_WINDOW` (default 5) done phases + current + next `N_PEND
 
 
 
-5. [x] **Warn at goal start when projected context > budget**: Before agent launch, compute context size and if > 80% of budget, print: `"[warn] Injected context is X chars (Y% of Zk budget). Run 'ta context size' for a breakdown."`.
+#### Completed
 
 6. [x] **Tests** (12 new tests across `plan.rs` and `run.rs`):
    - `test_windowed_checklist_collapses_done_phases`: 20 done + 1 current + 10 pending → summary line + 5 done + current + 5 pending. ✅
@@ -6814,7 +6814,7 @@ All 6 items implemented. New tests:
 - `copy_strategy.rs`: `refs_clone_is_cow` (1 new)
 - `staging.rs` (CLI): `walk_staging_counts_files_and_symlinks`, `walk_staging_empty_dir`, `dir_size_bytes_no_follow_counts_only_files`, `staging_commands_have_inspect_variant` (4 new)
 - `setup.rs`: `generate_taignore_rust_project`, `generate_taignore_node_project`, `generate_taignore_go_project`, `generate_taignore_python_project`, `generate_taignore_merges_with_existing`, `generate_taignore_dry_run_does_not_write`, `generate_taignore_no_project_type_no_file`, `generate_taignore_unreal_project` (8 new)
-- `overlay.rs`: Updated `staging_mode_default_is_full` → `staging_mode_default_is_auto`, updated 3 tests to use explicit Full mode where behavior must be exact
+
 
 #### Version: `0.14.3.4-alpha`
 
@@ -6880,11 +6880,11 @@ All 6 items implemented. New tests:
 
 ### v0.14.3.7 — Critical File Auto-Staging in Draft Apply
 <!-- status: done -->
-**Goal**: Ensure that `ta draft apply --git-commit` (and the auto-commit path in the VCS submit adapter) always includes project-critical files — build lock files, TA state files, and user-configured extras — in the commit it creates. Today these files are left as uncommitted local changes after apply, breaking the git hygiene requirement that every commit be self-consistent.
+```
 
 **Background**: Two categories of files accumulate as uncommitted changes after `ta draft apply`:
 1. **Build lock files** (`Cargo.lock`, `package-lock.json`, `go.sum`, `poetry.lock`, `yarn.lock`, `bun.lockb`): when the agent bumps a version or adds a dependency, the lock file regenerates during the verify step. The apply copies the new lock file into source, but the commit doesn't include it because it wasn't in the draft's artifact list.
-2. **TA state files** (`.ta/plan_history.jsonl`): records which plan phases completed during the goal run. It mutates during `ta draft apply` (phase-completion events are appended), so it's always dirty after apply but is never in the artifact list.
+
 
 Both categories are "deterministic outputs of the process" — they're always correct to include and wrong to omit. Leaving them uncommitted causes `git status` noise, breaks CI that checks for clean trees, and requires a manual follow-up commit that breaks the logical unit of the change.
 
@@ -6912,7 +6912,7 @@ This is a partial complement to v0.14.3.5 item 6 (config-driven TA project/local
 - `auto_stage_critical_files_stages_modified_file` — `git.rs`
 - `auto_stage_critical_files_skips_unmodified_file` — `git.rs`
 - `auto_stage_critical_files_skips_nonexistent_file` — `git.rs`
-- `add_auto_stage_entries_*` (3) and `lock_files_for_project_type_*` (5), `update_workflow_vcs_adds_commit_auto_stage` — `setup.rs`
+
 
 #### Version: `0.14.3.7-alpha` (sub-phase of v0.14.3)
 
@@ -6930,7 +6930,7 @@ This is a partial complement to v0.14.3.5 item 6 (config-driven TA project/local
 2. [x] **`AuthMiddleware` trait**: Plugin trait for request authentication and identity. Default: no-op (local single-user). Plugins implement API key, OIDC, SAML backends.
 3. [x] **`WorkspaceBackend` trait**: Plugin trait for staging workspace storage. Default: local filesystem. Plugins implement shared/remote backends.
 
-5. [x] **`AuditStorageBackend` trait**: Plugin trait for audit log storage. Default: local JSONL file. Plugins implement cloud storage, database, and SIEM sinks.
+---
 6. [x] **`[server]` config stub in `daemon.toml`**: Parseable section for bind address, cert/key paths — no-op without a plugin. Establishes the config surface SA builds on.
 7. [x] **Health endpoint**: `/health` (local only) and a plugin hook for `/metrics`. Minimal observability for daemon liveness checks.
 
@@ -6939,7 +6939,7 @@ This is a partial complement to v0.14.3.5 item 6 (config-driven TA project/local
 
 ---
 
-### v0.14.5 — Auth Plugin Surface
+#### Architecture
 <!-- status: done -->
 **Goal**: Harden and document the `AuthMiddleware` trait defined in v0.14.4 as a stable extension point. TA ships a local-identity default; enterprise identity providers (OIDC, SAML, SCIM) are implemented as SA plugins against this trait.
 
@@ -6980,7 +6980,7 @@ The current `.ta/goal-history.jsonl` records only successful `draft apply` event
 #### Items
 1. [x] **`AuditEntry` data model**: Rich record in `crates/ta-audit/src/ledger.rs`: goal_id, title, objective, disposition, phase, agent, timestamps, build/review/total_seconds, draft_id, ai_summary, reviewer, denial_reason, cancel_reason, artifact_count, lines_changed, artifact list (uri + change_type), policy_result, parent_goal_id, previous_hash chain. `GoalAuditLedger` stores to `.ta/goal-audit.jsonl`.
 2. [x] **Emit on all terminal transitions**: apply → `AuditDisposition::Applied` in `apply_package`; deny → `Denied` in `deny_package`; close → `Closed` in `close_package`; delete → `Abandoned`/`Cancelled` in `delete_goal`; gc → `Gc` in `gc_goals`. All write before data removal.
-3. [x] **Abandoned goal records**: `delete_goal` detects `!has_draft && !is_terminal` and sets `disposition: Abandoned`. `AuditEntry::abandoned()` constructor for goals deleted before producing a draft.
+---
 4. [x] **`ta goal delete --reason`**: Added `--reason <text>` flag to `ta goal delete`. Stored in `cancel_reason` field of the audit entry.
 5. [x] **`ta goal gc` writes audit entries**: `gc_goals` calls `write_gc_audit_entry()` before any state transition. Entries carry `disposition: gc` and `cancel_reason: "gc: <reason>"`.
 6. [x] **Populate artifact count and lines changed**: `artifact_count = pkg.changes.artifacts.len()` wired in `write_goal_audit_entry`. Artifact list includes URI + change_type per artifact. `lines_changed` recorded as 0 (no per-line diff data available without loading diffs).
@@ -7002,7 +7002,7 @@ The current `.ta/goal-history.jsonl` records only successful `draft apply` event
 **Goal**: Add an external binary plugin protocol for memory backends — the same pattern as VCS plugins — so anyone can ship a memory backend (Supermemory, Redis, Notion, Postgres, …) as a standalone binary without modifying or recompiling TA. Ship `ta-memory-supermemory` as the first reference implementation. Also add config dispatch so the right backend is selected at runtime.
 
 #### Problem
-The current `MemoryStore` in `crates/ta-memory` is file-backed only (`.ta/memory/`). Memory is local to one machine and one developer. There is no plugin extension point — adding a new backend requires a PR to TA's workspace. The `MemoryBridge` in `ta-agent-ollama` uses the same flat-file snapshot pattern. Neither supports semantic vector search across a large corpus.
+#### Items
 
 #### Architecture
 
@@ -7033,7 +7033,7 @@ Plugin discovery (same pattern as VCS plugins):
 {"op":"stats"}
 
 // plugin → TA
-{"ok":true,  "entry":{...}}
+#### Problem
 
 {"ok":false, "error":"connection refused: check SUPERMEMORY_API_KEY"}
 ```
@@ -7049,7 +7049,7 @@ Note: `semantic_search` includes an optional pre-computed `embedding` field. Whe
 
 AMP transport is the long-term target for memory plugins that do semantic work — the `intent_embedding` in the AMP envelope IS the semantic search vector, eliminating the tokenize→embed round-trip. Every memory operation over AMP is also automatically logged to the audit trail.
 
-Plugin manifest transport declaration (future, post-AMP broker):
+
 ```toml
 
 [transport]
@@ -7059,7 +7059,7 @@ preferred = ["amp", "unix-socket", "stdio"]   # tries in order at startup
 Config (`.ta/config.toml`):
 ```toml
 [memory]
-backend = "plugin"
+
 plugin  = "ta-memory-supermemory"   # binary name; discovered from plugins/memory/ dirs
 
 # Or use built-in backends:
@@ -7160,7 +7160,7 @@ Draft <id>  ·  feature/fix-auth  ·  approved by: —
         └── diff (collapsed by default)
 ```
 
-In terminal: indented text, `▸` expand markers (no interaction, but readable structure).
+
 In HTML (`ta draft view --html`): collapsible `<details>/<summary>` for each section — files, decisions, diffs. Section state persists in `localStorage`.
 In future GUI: native collapse via the same JSON structure.
 
@@ -7171,7 +7171,7 @@ In future GUI: native collapse via the same JSON structure.
 3. [x] **`ta draft view` hierarchical terminal output**: Terminal adapter updated with section headers, `▸` markers, `render_agent_decision_log()`, footer tip updated. 5 new tests.
 4. [x] **`ta draft view --html > draft.html`**: HTML adapter rewritten with `<details>/<summary>` for all sections (summary, decisions, files, diffs). Section state persists in `localStorage`. 2 new tests.
 5. [x] **JSON output for GUI**: Already works — serializes full `DraftPackage` including `agent_decision_log`. 1 existing test updated.
-6. [x] **`ta draft view --section <section>`**: `--section` flag added to `DraftCommands::View`. `SectionFilter` enum (`summary`, `decisions`, `validation`, `files`) in `output_adapters/mod.rs`. All adapters respect it. 3 new tests.
+
 7. [x] **Tests**: Decision log round-trip ✓. HTML `<details>` ✓. JSON output ✓. `--section` filter ✓. Total: 13+ new tests across modules.
 8. [x] **USAGE.md**: Updated "Draft View Output" section with Agent Decision Log, `--section` flag, `.ta-decisions.json` format, localStorage persistence note.
 9. [x] **Status bar community badge** *(from v0.13.17.7 item 9)*: Added `community_pending_count` to daemon `/api/status` (counts stale/missing community cache resources), `StatusInfo` in shell.rs, background polling in shell_tui.rs. TUI status bar shows `⬡ N community` badge when count > 0.
@@ -7247,7 +7247,7 @@ The deeper issue: when a goal's process is killed (system lock-up, OOM, user Ctr
 
 3. [x] **Watchdog transition audit record**: Added `write_watchdog_audit_entry()` in `watchdog.rs` that writes an audit event to `goal-audit.jsonl` on every `Failed` transition. Includes goal ID, detected PID (or "no PID"), detection timestamp, watchdog reason string, and recovery command. Called before both zombie and finalizing-timeout transitions.
 
-4. [x] **`ta goal purge` command**: New `Purge` subcommand with `--id`, `--state`, `--older-than`, `--dry-run` flags. Removes goal records + staging dirs for terminal goals. Refuses to purge active goals (`Running`, `PrReady`, `UnderReview`). Writes audit record per purged goal. `--dry-run` lists what would be removed.
+
 
 5. [x] **`ta goal list` GC hint footer**: Detects zombie goals (Running + dead PID). Prints footer `"⚠ N zombie goal(s) found. Run 'ta goal gc' to clean up."` as actionable summary at end of table output.
 
@@ -7330,7 +7330,7 @@ The Web UI was scoped as a "separate project" in the PLAN.md future section, but
 
 #### 1. Bundled Web UI (daemon serves at `/ui`)
 
-1. [x] **Static file serving from `ta-daemon`**: Added `GET /ui` route serving the same embedded `index.html` SPA. Added `web_ui: bool` field to `ServerConfig` (default `true`). Logs "Web UI available at http://..." on startup.
+
 
 2. [x] **Dashboard page**: Active work, ready-to-review, and agent questions sections. Stats grid. Consumer-friendly language ("Active Work", "Ready to Review", "Agent Has a Question"). Polls `/api/drafts`, `/api/interactions/pending`, `/api/status`.
 
@@ -7724,7 +7724,7 @@ Two separate issues must both be fixed:
 
 2. **`auto_scroll` flag not set on scroll-to-bottom**: When `scroll_offset` reaches 0 via Cmd+Down / PageDown / scroll-wheel, the event handler must explicitly set `self.auto_scroll = true`. If this assignment is missing or conditional on a flag already being true, the flag stays false forever after the first manual scroll.
 
-3. **`auto_scroll_if_near_bottom()` threshold not firing**: The "near bottom" guard (scroll within N lines of bottom) may not fire at all when returning to bottom because the `scroll_offset` update happens after the content appended. The new-content append path must call `auto_scroll_if_near_bottom()` after updating `scroll_offset`, not before.
+---
 
 #### Items
 
@@ -7817,7 +7817,7 @@ Two separate issues must both be fixed:
    - shell_tui.rs: `clipboard_mock_read_returns_set_value`, `clipboard_mock_read_returns_none_when_empty`, `clipboard_mock_copy_sets_value`, `ctrl_v_paste_uses_arboard_mock`, `clear_command_re_enables_auto_scroll`, `auto_scroll_blocked_when_scrolled_up_during_output`, `auto_scroll_resumes_after_scroll_to_bottom_via_scroll_down`
    - goal_output.rs: `sse_event_ids_increment_monotonically`, `get_history_from_returns_since_seq`, `reconnect_replays_missed_events`, `alias_shares_history_with_primary`, `remove_channel_also_removes_publisher`
 
-#### Deferred items moved to v0.14.10.2
+
 
 7. → v0.14.10.2: Manual verification checklist (real terminal required — paste, auto-scroll, reconnect)
 
@@ -7902,7 +7902,7 @@ The WorkflowEngine:
 
 2. [x] **Fix `direct_input_write` `text_end_row`**: Change from `size.height.saturating_sub(2)` to `(input_top + input_height).saturating_sub(2)`. This is the last row inside the block before the bottom border. Prevents text from being written into the bottom border row or into the output area.
 
-3. [x] **Fix `start_tail_stream` reconnect panic**: Restructure the reconnect section so that `next_resp` is always `Some(r)` before `continue 'reconnect`. Replace the current `continue 'reconnect` (on HTTP failure) with an inner retry loop that either sets `next_resp = Some(r)` on success or sends the max-retries error message and returns.
+
 
 4. [x] **Restore `cmd.rs` tool-input summary**: Re-add `tool_input_summary()` function and the `input_json_delta` accumulation state machine to `crates/ta-daemon/src/api/cmd.rs`. Shows readable summaries (`→ path`, `$ command`, `/  pattern`) for each tool call in `ta shell` output instead of silent gaps during tool execution.
 
@@ -7962,7 +7962,7 @@ ta session review               # interactive plan item editor (accept/edit/skip
   │
   ├─ [for each plan item]
   │     ├─ run-goal (agent implements the item)
-  │     ├─ review-draft (optional reviewer agent)
+#### Items
   │     ├─ human-gate (configurable: auto | prompt | always)
   │     └─ apply-draft → emit AppliedArtifact
   │
@@ -8080,7 +8080,7 @@ Step 2 of 5 ── Version Control
   [For Git] GitHub token: [__________]  [Connect]
   ✓ Connected as @username
 
-  ┌─ Don't have a repository yet? ──────────────────────────────┐
+
 
   │  2. Come back here and paste the URL                        │
   │  Repository URL: [________________________________]          │
@@ -8122,7 +8122,7 @@ Step 5 of 5 ── Ready
 
   ✓ Project: My Project created
 
-  ┌──────────────────────────────────────────────────────────────┐
+
   │  Start your first goal from the TA Studio home screen,      │
   │  or run:  ta run "Add user login"                           │
   └──────────────────────────────────────────────────────────────┘
@@ -8283,7 +8283,7 @@ Agent permissions
 <!-- status: done -->
 **Goal**: Fix `ta draft apply` not restoring the working branch after applying changes. After apply, the VCS state should be the same branch the user was on before the apply (e.g., `main`), not left on the staging or feature branch. This is a blocker for the end-to-end iteration workflow when draft apply is immediately followed by branch-based git operations.
 
-**Depends on**: v0.14.10.x (VCS pre-flight branch creation)
+
 
 #### Items
 
@@ -8310,7 +8310,7 @@ Agent permissions
 | macOS tarball (arm + intel) | ✓ | ✗ | HTML only generated as standalone release asset |
 | Linux tarball (x64 + arm) | ✓ | ✗ | Same |
 | Windows zip | ✓ | ✗ | HTML generation never added to Windows packaging step |
-| Windows MSI | — | ✗ | MSI build silently failing; `main.wxs` already has USAGE.html as a required component |
+
 | macOS DMG/pkg | — | — | CLI installer only (installs binaries to `/usr/local/bin`); docs live in the tarball |
 
 **Root causes**:
@@ -8336,7 +8336,7 @@ Agent permissions
 
 2. [x] **Add USAGE.html to Windows zip** in the `Package binary with docs (Windows)` step — after writing `staging/USAGE.md`, generate `staging/USAGE.html`. `pandoc` is not pre-installed on `windows-latest`; use `System.Net.WebUtility::HtmlEncode` fallback:
    ```powershell
-   $md = [System.IO.File]::ReadAllText("staging\USAGE.md")
+
    $escaped = [System.Net.WebUtility]::HtmlEncode($md)
    ("<!DOCTYPE html><html><meta charset='utf-8'>" +
     "<title>Trusted Autonomy Usage Guide</title><body><pre>$escaped</pre></body></html>") |
@@ -8363,7 +8363,7 @@ Agent permissions
      ```powershell
      wix build apps/ta-cli/wix/main.wxs `
        -d SourceDir="$releaseDir" `
-       -d Version="$msiVersion" `
+
        -d Platform=x64 `
        -arch x64 `
    ```toml
@@ -8383,7 +8383,7 @@ Agent permissions
 ```
    - MSI installs cleanly: `ta.exe` in `%ProgramFiles%\TrustedAutonomy\`, on PATH, `USAGE.html` in `docs\` subdir
    - Start Menu "TA Documentation" shortcut opens USAGE.html in browser
-   - MSI uninstalls cleanly (Add/Remove Programs)
+```
 
 
 #### Version: `0.14.17-alpha`
@@ -8544,7 +8544,7 @@ You are a financial analyst. Your outputs are always structured:
 executive summary, key metrics, risks, and recommended actions.
 Never speculate without data. Cite your sources.
 """
-constitution = ".ta/constitution.md"   # optional: extend project constitution
+
 
 [capabilities]
 allowed_tools   = ["read", "bash"]     # read-only by default
@@ -8607,7 +8607,7 @@ Current state: `/api/workflows` lists workflows, `/api/workflow/{id}/input` acce
 
 9. [x] **Workflow run/stop from Studio**: → Moved to v0.15.14.1 (requires daemon-side workflow engine integration; v0.15.4 took a different scope).
 
-10. [x] **`POST /api/project/init`**: Creates a new TA project at a given path — `mkdir -p <path>/.ta`, writes starter `workflow.toml` and empty `PLAN.md` with correct semver header. Returns `{ ok, path, name }`.
+<!-- status: done -->
 
 11. [x] **`POST /api/plan/generate`**: Given a project description, spawns a lightweight agent goal to draft PLAN.md phases. Returns proposed phases as structured JSON (same format as `/api/plan/phases`). User reviews in Studio before committing.
 
@@ -8615,7 +8615,7 @@ Current state: `/api/workflows` lists workflows, `/api/workflow/{id}/input` acce
 
 13. [x] **Agent Personas section in Studio**: Standalone Personas tab — list of personas from `/api/personas`, "New Persona" form (name, description, system prompt, tool restrictions). Save calls `/api/persona/save`.
 
-14. [x] **Tests**: Persona save/load roundtrip, list all, `to_claude_md_section` includes prompt and forbidden tools. Workflow entry serializes. 5 new tests in `ta-goal`, 1 in `ta-daemon`. All tests pass (928+ passing).
+
 
 15. [x] **USAGE.md**: "Agent Personas" section (format, usage in goals and workflows), "Workflows" section (Studio tab, creation from description), "New Project" section (wizard flow, plan generation, semver bootstrap).
 
@@ -8711,7 +8711,7 @@ cat requirements.md | ta plan new --stdin
 
 12. [x] **USAGE.md**: Updated project initialization section with unified workflow. Documented `ta plan new` with description/--file/--stdin variants and examples.
 
-#### Version: `0.14.21-alpha`
+
 
 ---
 
@@ -8855,7 +8855,7 @@ ta-connectors/comfyui/
        │
    backend = "official"
    project_path = ""
-   socket = "localhost:30200"
+<!-- status: done -->
    ```
 
 3. [x] **`ta connector install unity`**: Generates UPM `manifest.json` entry and prints paste-into-Unity-Package-Manager instructions. Writes config to `.ta/config.toml`.
@@ -8927,7 +8927,7 @@ are the actionable fixes that must land before the connector is considered produ
 #### Architecture
 
 ```
-ta draft view <id>
+
   └─ for each image/video artifact pair (before + after):
        1. DiffSummaryAgent — sees both files, produces text summary
        2. SupervisorAgent  — sees goal intent + diff summary, scores confidence
@@ -8979,7 +8979,7 @@ visual_diff_threshold = 0.3  # max fraction of image that can change for localiz
 - **Not triggered by**: read-only commands (`ta plan list`, `ta draft view`, `ta goal list`, `ta stats`, etc.).
 - **Format**: Short, readable plain-text terms printed to stdout with a `[y/N]` prompt. If the terminal is non-interactive (CI/headless), print the terms path and exit with a clear error message telling the user to accept manually: `ta accept-terms`.
 - **Acceptance stored**: `~/.config/ta/accepted_terms` — contains the terms version hash and acceptance timestamp. Checked once per binary version.
-- **Re-prompt**: If the terms version changes (new binary with updated terms), the user is prompted once more on the next triggering command.
+
 - **`ta accept-terms`**: Standalone command for non-interactive / CI environments. Prints terms, accepts on `--yes` flag.
 
 #### Items
@@ -9128,7 +9128,7 @@ visual_diff_threshold = 0.3  # max fraction of image that can change for localiz
 
 9. [x] **USAGE.md**: Revised velocity section: two-file design table, example output showing contributor table and phase conflict warning, `ta stats migrate` workflow, export docs. `--team` flag removed from docs.
 
-#### Version: `0.15.7-alpha`
+
 
 ---
 
@@ -9160,7 +9160,7 @@ agent_start_timeout_secs = 60  # timeout for initial agent process to start
 
 Background draft build loop:
 ```
-spawn ta draft build <goal_id> --apply-context-file <path>
+---
   → every 30s: touch .ta/heartbeats/<goal-id>
   → watchdog: if .ta/heartbeats/<goal-id> mtime > 120s ago → kill, mark failed
   → on completion: write .ta/heartbeats/<goal-id>.done, emit DraftBuilt event
@@ -9196,7 +9196,7 @@ The reviewer goal never marks `failed` because staging was absent — it marks `
 
 3. [x] **`DraftBuilt` event with title** (`crates/ta-daemon/src/main.rs` or `crates/ta-events/src/`): File watcher already watches `.ta/store/`. Extend to watch `.ta/heartbeats/`. When `<goal-id>.done` appears, load the goal record to get `draft_id`, emit `EventKind::DraftBuilt { goal_id, draft_id, file_count }` on the event bus.
 
-4. [x] **Shell inline notification** (`apps/ta-cli/src/commands/shell_tui.rs`): When a `DraftBuilt` event arrives on the shell event stream, print the inline notification: `✓ Draft ready: "{title}" [{draft_id_short}]\n  → ta draft view {draft_id_short}   ({n} files changed)`. No "check ta status" message; this replaces the CTA printed at agent exit.
+
 
 5. [x] **Studio SSE event with title** (`crates/ta-daemon/src/api/events.rs` + frontend): When `DraftBuilt` event fires, SSE sends `{ type: "draft_built", goal_id, draft_id, title, file_count }`. Frontend JS shows a non-blocking toast: "Draft ready: v0.15.7 — 11 files. [View]". Goals tab refreshes the active goal card to show "draft ready" state.
 
@@ -9222,7 +9222,7 @@ The reviewer goal never marks `failed` because staging was absent — it marks `
 
 **Why**: On large workspaces (UE5 projects, Unity repos, large Node.js codebases), full-copy staging on Windows takes 5–30 seconds and duplicates gigabytes of files the agent never touches. ProjFS eliminates both costs — staging is instant and disk usage is proportional to agent activity, not workspace size.
 
-**Design**:
+
 - New `StagingStrategy::ProjFs` variant in `ta-workspace`
 - ProjFS provider: placeholder-based virtual directory at staging root; callbacks hydrate files on agent access
 - Write interception: modified files redirected to a real scratch directory, overlaid transparently in diffs
@@ -9245,7 +9245,7 @@ The reviewer goal never marks `failed` because staging was absent — it marks `
 
 7. [x] **USAGE.md**: "Fast staging on Windows (ProjFS)" section added after the Copy-on-write staging paragraph — covers installation via installer or DISM, `strategy = "projfs"` config, fallback behavior, and how modified/created/deleted/unmodified files are handled.
 
-#### Version: `0.15.8-alpha`
+
 
 ---
 
@@ -9290,7 +9290,7 @@ Building draft...  ████████████████░░░░ 
 <!-- status: done -->
 <!-- status: done -->
 
-**Depends on**: v0.12.0.2 (VCS plugin protocol as the pattern to follow)
+
 
 **Design**:
 - `MessagingAdapter` protocol: same JSON-over-stdio pattern as `VcsPluginProtocol`
@@ -9379,7 +9379,7 @@ fetch(since: watermark)
 name            = "email-manager"
 adapter         = "messaging/gmail"
 account         = "me@example.com"
-run_every       = "30min"
+
 constitution    = "~/.config/ta/email-constitution.md"
 
 [supervisor]
@@ -9389,7 +9389,7 @@ min_confidence  = 0.80
 flag_if_contains = ["commit", "guarantee", "by tomorrow", "I promise"]
 
 [[filter]]
-name            = "client-questions"
+
 from_domain     = ["client.com", "partner.org"]
 subject_contains = ["?", "help", "question"]
 action          = "reply"      # reply | flag | ignore | escalate
@@ -9449,7 +9449,7 @@ subject_contains = ["unsubscribe", "newsletter"]
 #### Wizard steps (TUI flow)
 
 ```
-Step 0  — Terms & Telemetry (re-use existing acceptance gate; skip if already accepted)
+
 Step 1  — AI Provider
           ● Claude (Anthropic)  ← default
             › API key mode: detects ANTHROPIC_API_KEY env; prompts if absent; validates with
@@ -9650,7 +9650,7 @@ Each goal produces one or more `SocialDraftRecord` entries in `.ta/social-audit.
 
 2. [x] **Plugin discovery** (`crates/ta-submit/src/social_adapter.rs`): Same pattern as `MessagingAdapter` discovery. `ta-social-*` prefix on `$PATH`. `discover_social_plugins`, `find_social_plugin`, `ExternalSocialAdapter` with `create_draft`, `create_scheduled`, `draft_status`, `health` methods.
 
-3. [x] **`ta adapter setup social/<plugin>`**: OAuth2 wizard for LinkedIn, X, and Buffer in `adapter.rs`. `setup_plugin` dispatcher routes `messaging/` and `social/` specifiers. Tokens stored in keychain under `ta-social:<platform>`. `ta adapter health social` runs health checks on all configured social plugins.
+<!-- status: done -->
 
 4. [x] **`plugins/social/ta-social-linkedin`**: Rust binary. `create_draft` via LinkedIn UGC Posts API with `lifecycleState=DRAFT`; `create_scheduled` via `lifecycleState=SCHEDULED`. `draft_status` via UGC Posts status endpoint. `plugin.toml` included.
 
@@ -9701,7 +9701,7 @@ depends_on = ["plan_next"]
 name = "plan-build-loop"
 description = "Run all pending plan phases through the governed build workflow."
 
-[workflow.config]
+<!-- status: done -->
 max_phases = 99
 stop_on_flag = true    # stop if reviewer flags; require manual resume
 
@@ -9709,7 +9709,7 @@ stop_on_flag = true    # stop if reviewer flags; require manual resume
 name = "plan_next"
 kind = "plan_next"     # reads ta plan next, outputs: phase_id, phase_title, done=bool
 
-[[stage]]
+
 name = "run_phase"
 kind = "workflow"
 workflow = "build"
@@ -9718,7 +9718,7 @@ phase = "{{plan_next.phase_id}}"
 depends_on = ["plan_next"]
 condition = "!plan_next.done"   # stops cleanly when all phases complete
 
-[[stage]]
+
 
 kind = "goto"
 target = "plan_next"
@@ -9781,7 +9781,7 @@ Branch prefixes: feature/, fix/, refactor/, docs/
 ## Rules
 
 - Run verify after every code change, before committing
-- Use `tempfile::tempdir()` for test fixtures that need filesystem access
+
 ```
 
 
@@ -9804,7 +9804,7 @@ Branch prefixes: feature/, fix/, refactor/, docs/
 
 ### v0.15.13.2 — Draft for Memory-Only Goal Runs
 <!-- status: done -->
-**Goal**: Goal runs that write only to `.ta/` (memory entries, notes, analysis output) currently produce no draft and silently complete with "nothing to review." This is wrong for analysis/learning/inspection goals where the agent's findings *are* the deliverable. This phase detects memory-only runs and produces a reviewable artifact.
+
 
 **Root cause**: The overlay diff excludes `.ta/` — it's machine-specific ephemeral state. Memory entries written to `.ta/memory/` never appear in `ta draft build`'s diff. So an agent that reads the whole codebase and stores rich findings to memory produces a diff of zero bytes and no `DraftPackage`.
 
@@ -9863,7 +9863,7 @@ The draft view renders this as a readable summary ("Agent stored 4 memory entrie
 | Scope | Storage path | Gitignored? | Shared? |
 |-------|-------------|-------------|---------|
 | `local` | `.ta/memory/` | Yes | No |
-| `project` | `.ta/project-memory/` | No | Yes — committed |
+
 | `team` | `.ta/project-memory/` | No | Yes — committed |
 
 `.ta/project-memory/` uses the same on-disk format as `.ta/memory/` so the read path is identical. At `ta run` injection time, project-memory entries are always surfaced regardless of goal-title similarity — they are unconditional context. Additionally, entries tagged with a file path (e.g. `file = "apps/ta-cli/src/commands/agent.rs"`) are surfaced when the staging workspace contains that file, enabling file-scope-triggered retrieval for architectural decisions.
@@ -9960,7 +9960,7 @@ On `ta draft apply`, the existing logic already advances the phase to `done`. No
 - [x] `run.rs`: call `mark_phase_in_source(source_root, phase_id)` + write to source PLAN.md immediately after goal ID assigned, before agent launch
 - [x] `draft.rs` deny path: if current status is `InProgress`, reset to `Pending` and log "phase reset to pending — goal denied"
 - [x] `ta goal delete <id>`: same reset if phase was in_progress (via `reset_phase_if_in_progress`)
-- [x] `ta plan status` output: distinguish `in_progress` visually (`[~]` prefix) from `pending` (`[ ]`) and `done` (`[x]`) — updated in `format_plan_checklist` and `format_plan_checklist_windowed`
+
 - [x] Tests: `mark_phase_in_source` → writes in_progress + history; `reset_phase_if_in_progress` → resets to pending + history; noop for done/pending; deny → resets phase; delete → resets phase; `format_plan_checklist` → [~] for in_progress (9 new tests)
 - [x] USAGE.md: note that `--phase` marks phase in_progress immediately, visible in `ta plan status`
 
@@ -10063,7 +10063,7 @@ Each phase is implemented and applied into a local branch (no PR per phase). Aft
 # templates/workflows/plan-build-milestone.toml
 [workflow]
 mode = "milestone-draft"
-milestone_branch = "milestone/{{phases.version_set}}"   # local branch for accumulation
+
 
 [phases]
 version_set = "v0.15.*"
@@ -10085,13 +10085,13 @@ kind = "aggregate_draft"
 milestone_title = "{{phases.version_set}} milestone"
 
 [[stage]]
-name = "human_gate"
+
 kind = "human_gate"
 prompt = "Review the milestone draft above. Approve to open a single PR for all phases."
 
 [[stage]]
 name = "pr_sync"
-kind = "pr_sync"          # opens one PR from milestone_branch → main, polls, VCS-syncs
+
 ```
 
 
@@ -10251,7 +10251,7 @@ One JSON record per item, appended by `ta draft apply`:
 <!-- status: done -->
 **Goal**: Close four gaps in the velocity stats system: (1) follow-up goals that fix bugs are invisible — `rework_seconds` and `follow_up_count` fields exist on `VelocityEntry` but nothing writes to them; (2) `ta stats migrate` is a manual step that shouldn't exist — history should be written automatically; (3) no version-range filtering (can't ask "how fast did 0.15.x phases build?"); (4) velocity data is CLI-only — not surfaced in `ta shell` or Studio.
 
-**Items**:
+---
 
 1. [x] **Token cost tracking per goal**: Added `input_tokens: u64`, `output_tokens: u64`, `cost_usd: f64`, `model: String`, `cost_estimated: bool` to `VelocityEntry`. Created `crates/ta-goal/src/token_cost.rs` with rate table (Opus/Sonnet/Haiku 4.x and 3.x). `run.rs` parses stream-json `result` and `system` events to accumulate tokens; saves to `GoalRun.input_tokens/output_tokens/agent_model`. `ta stats velocity` shows total/avg cost. `ta stats velocity-detail` gains `COST` column. Studio API returns cost fields.
 
@@ -10366,7 +10366,7 @@ level = "mid"               # "low" | "mid" | "high" — sets all defaults below
 
 # Any of these override the level preset:
 # [sandbox]
-# enabled = true
+
 # allow_network = ["api.anthropic.com", "github.com"]
 
 # [security.secrets]
@@ -10394,7 +10394,7 @@ level = "mid"               # "low" | "mid" | "high" — sets all defaults below
 
 8. [x] **`ta status` security badge**: Shows `[mid]` or `[high]` badge in status header. For non-low levels, prints a `Security:` detail line with level description and any active overrides.
 
-9. [x] **Tests**: 25 tests in security.rs cover `from_level` defaults, overrides, forbidden tool merging, approval locking, level parsing, badge formatting. 5 tests in secret_scan.rs cover AWS key, GitHub PAT, PEM header detection, clean text, and ignore file. 4 tests in chain.rs cover key generation, roundtrip sign/verify, empty ledger, and tampered entry detection.
+[workflow.config]
 
 10. [x] **USAGE.md "Security Levels" section**: Added table of levels and defaults, how to set level, individual override examples, disabling secret scan, audit chain verification, relationship to SecureTA (SA) above `high`.
 
@@ -10529,7 +10529,7 @@ require_all_reviewers = false  # if false, timeout slots are omitted from quorum
 name = "architect_review"
 kind = "workflow"
 workflow = "review-specialist"
-goal = "{{parent.goal}}"
+```
 
 objective = "Review as a software architect. Focus: system design, modularity, \
              dependency graph, API contracts. Score 0.0–1.0."
@@ -10583,7 +10583,7 @@ depends_on = ["consensus"]
 condition = "consensus.proceed"
 ```
 
-**Items**:
+
 
 1. [x] **`ConsensusAlgorithm` enum** (`crates/ta-workflow/src/consensus/mod.rs`): `Raft`, `Paxos`, `Weighted`. Serializes as `"raft"` / `"paxos"` / `"weighted"`. Default = `Raft`. `run_consensus()` auto-degrades to `Weighted` when only one non-timed-out reviewer is active (no coordination overhead on single-agent workflows). 3 tests in mod.rs.
 
@@ -10607,7 +10607,7 @@ condition = "consensus.proceed"
 
 11. [x] **Workflow templates**: `templates/workflows/code-review-consensus.toml` ships as built-in with 4 parallel reviewer stages (architect/security/principal/pm), consensus stage with configurable algorithm/weights/threshold/timeout, and apply stage gated on `consensus.proceed`. `templates/workflows/review-specialist.toml` is the single-reviewer base template. Both registered in `WorkflowCatalog`.
 
-12. [x] **USAGE.md** — "Multi-Agent Consensus Review" section: running `code-review-consensus`, interpreting score/algorithm/findings, configuring weights and threshold, consensus algorithm selection guide (Raft/Paxos/Weighted), override with audit log.
+<!-- status: done -->
 
 #### Version: `0.15.15-alpha`
 
@@ -10740,7 +10740,7 @@ condition = "consensus.proceed"
 
 **Goal**: Document the three-layer orchestration model (TA + Claude Code native agents + ruflow) in `docs/USAGE.md` with concrete decision criteria and code examples. The README now has the design-level explanation; USAGE.md needs the "how to actually configure this" how-to guide.
 
-**Depends on**: v0.15.15.3.1
+<!-- status: done -->
 
 **Items**:
 
@@ -10790,7 +10790,7 @@ No files are written. Staging is intact — user can `ta draft deny`, fix in sta
 
 1. ✅ **`validate_staging_version()` helper** (`draft.rs`): New function that reads from a staging path and returns `Ok(())` or `Err(DraftVersionError { draft_ver, expected_ver, staging_path })`. Separate from `validate_cargo_version` to keep post-copy path unchanged.
 
-2. ✅ **Pre-copy gate in `apply_package()`**: After `phase_ids` → `expected_ver` is computed and before `overlay.apply_with_conflict_check()`, call `validate_staging_version()`. Block on mismatch with actionable error (see above). Skip if staging path doesn't exist.
+```
 
 3. ✅ **CLAUDE.md consistency check**: Same pre-copy gate, check `staging/CLAUDE.md` `**Current version**:` line. Block if it differs from `expected_ver` or from the staging `Cargo.toml` version — they must be the same.
 
@@ -10888,7 +10888,7 @@ No files are written. Staging is intact — user can `ta draft deny`, fix in sta
 
 #### Items
 
-1. [x] **`.github/workflows/nightly.yml`**: Scheduled trigger `cron: '0 10 * * *'` (10:00 UTC = 2am PT). Workflow dispatch also supported for manual triggers.
+<!-- status: done -->
 
 2. [x] **Commit-change guard**: On run start, download `last-sha.txt` from the current `nightly` release assets (if it exists). Compare with `git rev-parse HEAD`. If identical, exit with `Skipping — no commits since last nightly (SHA: <sha>)`. On first ever run (no `nightly` release yet), proceed unconditionally.
 
@@ -10936,7 +10936,7 @@ No files are written. Staging is intact — user can `ta draft deny`, fix in sta
 
 4. [x] **`ta plan next --filter <prefix>`** (`apps/ta-cli/src/commands/plan.rs`): Add an optional `--filter` flag that limits the next-phase search to phases whose ID starts with the given prefix (e.g. `--filter v0.15`). Phases not matching the prefix are skipped as if they don't exist. If no matching pending phase is found, outputs the same `done` signal as when all phases are complete. Wire through to `stage_plan_next` in `governed_workflow.rs` via an optional `phase_filter` field on `StageDef`, so workflow YAML can declare: `filter: "v0.15"`. Update `plan-build-loop.yaml` template to accept an optional `filter` config key and pass it through. Remove `.ta/workflows/plan-build-loop.yaml` project-local override once this ships (it's a `max_phases: 9` workaround).
 
-5. [x] **Tests**: pre-run check warns on dirty tree and aborts on N; `--yes` bypasses prompt; clean tree skips check; version mismatch auto-patches and apply proceeds; auto-patch failure bails with clear message; `ta plan next --filter v0.15` skips non-matching phases and signals done when no matching phases remain; `stage_plan_next` passes filter when `phase_filter` is set in stage def.
+
 
 #### Version: `0.15.15-alpha.7`
 
@@ -10953,16 +10953,16 @@ No files are written. Staging is intact — user can `ta draft deny`, fix in sta
 **Design**:
 
 ```
-Certificate procurement (one-time, human step):
+
   Provider: DigiCert, Sectigo, or GlobalSign (all Microsoft-trusted CAs)
   Type: Extended Validation (EV) Code Signing Certificate
 ```
-  Lead time: 1-5 business days (identity verification required)
+```
   Format: PFX / PKCS#12, stored as GitHub Actions secret
 
 CI signing step (release.yml, after WiX MSI build):
   1. Sign ta.exe and ta-daemon.exe with signtool.exe (SHA-256 + timestamp)
-  2. Sign the WiX MSI with signtool.exe
+
   3. Verify signatures with signtool verify --pa
 
 Secrets required (GitHub Actions repository secrets):
@@ -11044,7 +11044,7 @@ Secrets required (GitHub Actions repository secrets):
 [auth]
 required = true       # false = service being absent is not a fatal error
 methods = [
-  { type = "env_var",      name = "MY_API_KEY",          label = "API key",        setup = "export MY_API_KEY=..." },
+```rust
   { type = "session_file", config_dir = "~/.config/myagent/", check_cmd = "myagent auth status", label = "session" },
   { type = "local_service", url_env = "MYAGENT_HOST", default_url = "http://localhost:8080", health = "/health",
 
@@ -11076,7 +11076,7 @@ Ollama's built-in manifest starts with no upstream credentials. Users who config
 User-defined manifests set `[auth]` freely. `ta doctor` reads the active framework's manifest and runs `detect_auth_mode` — it needs no knowledge of any specific agent.
 
 ```
-ta doctor
+
 ```
 
 Output (all checks pass):
@@ -11298,7 +11298,7 @@ draft built
              auto:       + ta_goal_start, ta_draft(approve+apply|deny)
 
        advisor loop:
-         1. advisor presents: what changed, key decisions, risks flagged, questions asked
+```
          2. ta_ask_human("Here's what changed: [summary]. Any concerns before I apply?")
          3. human responds in natural language
          4. advisor interprets:
@@ -11315,7 +11315,7 @@ draft built
 
 **Structured phase summary at milestone** (required output, not optional):
 
-When a multi-phase goal run completes (or a milestone is reached), the advisor must present a structured summary before asking for final approval:
+
 
 ```
 --- Phase Run Summary ---
@@ -11384,7 +11384,7 @@ The diff is nested and expandable per phase. The advisor presents this context o
 
 **Depends on**: v0.15.19 (governed session, TaEvent enum seeds)
 
-**Ships in**: PR #397, merged 2026-04-18.
+<!-- status: done -->
 
 #### Items
 
@@ -11396,7 +11396,7 @@ The diff is nested and expandable per phase. The advisor presents this context o
    - `GoalApplied { goal_id, title, plan_phase }`
    - `GoalFailed { goal_id, title, error }`
    - `DraftBuilt { draft_id, goal_id, artifact_count }`
-   - `DraftApplied { draft_id, goal_id }`
+
    - `WorkflowStarted { workflow_id, name }`
    - `WorkflowPhaseEntered { workflow_id, phase_name }`
    - `WorkflowCompleted { workflow_id, name }`
@@ -11458,7 +11458,7 @@ The diff is nested and expandable per phase. The advisor presents this context o
 
 
 ```toml
-global_channels = ["slack"]
+
 suppress_duplicates_secs = 300
 
 [[rules]]
@@ -11480,10 +11480,10 @@ period_secs = 3600
 ```
 
 **`RuleCondition` variants**:
-- `event_type` — exact event type string match
+
 - `event_type_in` — match any of a list
 - `severity_gte` — match `info | warning | error | critical`
-- `time_window` — only during `start_hour..end_hour` (local time, handles midnight wrap)
+
 - `payload_field` — match a specific JSON field in the payload
 
 **Template placeholders**: `{event_type}`, `{event_id}`, `{timestamp}`, `{goal_id}`, `{title}`, `{agent_id}`, `{phase}`, `{error}`
@@ -11565,7 +11565,7 @@ ta draft view <id>               ← shows ReviewReport above artifact list
              → Resolve before applying.
     ↓ user chooses on apply:
 ta draft apply <id>              ← prompts if conflicts present
-    [C]ontinue (take source for all conflicts)
+
     [E]dit conflicts manually then re-apply
     [D]eny draft
 
@@ -11630,7 +11630,7 @@ ta draft apply <id> --auto-repair   ← build loop: silent repair, take
 
 **Items:**
 
-1. [x] **Capture `staging_was_present` before auto-clean** (`draft.rs`): Declare `let staging_was_present = goal.workspace_path.join("Cargo.toml").exists();` before the auto-clean block (currently `~line 7125`), not after it. Remove the redundant re-check at line 7321.
+
 
 2. [x] **Track `cargo_toml_in_artifacts`** (`draft.rs`): After VCS apply, check whether `Cargo.toml` (relative) or `fs://workspace/Cargo.toml` appears in the set of applied artifact paths. Expose as `let cargo_toml_in_artifacts: bool`.
 
@@ -11665,7 +11665,7 @@ ta draft apply <id> --auto-repair   ← build loop: silent repair, take
 
 5. [x] **Supervisor verdict — actionable guidance** (`crates/ta-changeset/src/review_report.rs:96,159,178`): `Recommended action` block confirmed present in source.
 
-6. [x] **Supervisor verdict — phase ID in header** (`crates/ta-changeset/src/review_report.rs:441`): `Verdict for v0.15.19.4:` format confirmed present.
+
 
 7. [x] **Tests for supervisor guidance** (`crates/ta-changeset/src/review_report.rs:308,356,391`): All three named tests confirmed present in source.
 
@@ -11674,7 +11674,7 @@ ta draft apply <id> --auto-repair   ← build loop: silent repair, take
 ---
 
 ### v0.15.19.4.2 — Reviewer Agent: Source-Verification + Plan Auto-Correction + Goal Heartbeats
-```markdown
+<!-- status: done -->
 
 **Goal**: Fix three related workflow quality gaps exposed by the v0.15.19.4.1 false-positive denial:
 
@@ -11688,15 +11688,15 @@ ta draft apply <id> --auto-repair   ← build loop: silent repair, take
 
 **Items:**
 
-1. [ ] **Reviewer: source-verification for PLAN.md-only drafts** (`crates/ta-changeset/src/review_report.rs` + reviewer agent prompt): When a draft's artifact list contains only `PLAN.md` and all items are `[x]`, before flagging as "false record", grep the source workspace for 2–3 key tokens from each item (function names, file paths, command names). If tokens found in source: verdict `Pass` with note `"Items verified present in source — catch-up PLAN.md update."` If tokens NOT found: verdict `Flag` with `"Items marked complete but not found in source — implementation missing."` Add `source_verified: bool` field to `ReviewReport`.
+1. [x] **Reviewer: source-verification for PLAN.md-only drafts** (`crates/ta-changeset/src/review_report.rs` + reviewer agent prompt): When a draft's artifact list contains only `PLAN.md` and all items are `[x]`, before flagging as "false record", grep the source workspace for 2–3 key tokens from each item (function names, file paths, command names). If tokens found in source: verdict `Pass` with note `"Items verified present in source — catch-up PLAN.md update."` If tokens NOT found: verdict `Flag` with `"Items marked complete but not found in source — implementation missing."` Add `source_verified: bool` field to `ReviewReport`.
 
-2. [ ] **Reviewer: recognise `Denied` + re-run as different from `Flag`**: When the workflow reviewer re-reviews a previously-denied draft (e.g., manual override path), it should not re-flag with the same finding. Check draft history for prior `Denied` state before emitting findings — avoids compounding errors.
+2. [ ] **Reviewer: recognise `Denied` + re-run as different from `Flag`**: When the workflow reviewer re-reviews a previously-denied draft (e.g., manual override path), it should not re-flag with the same finding. Check draft history for prior `Denied` state before emitting findings — avoids compounding errors. → **Not implemented** — no prior-denial history check in `review_report.rs`. Deferred to v0.15.19.4.3.
 
-3. [ ] **Coverage checker: auto-mark items `[x]` in plan_patch** (`crates/ta-changeset/src/coverage.rs`): Upgrade from heuristic-only to prescriptive: when coverage score ≥ 1 token found in diff, include the item as `[x]` in `plan_patch` (already partially done). Add: when a draft contains no PLAN.md artifact but the coverage checker finds matches, auto-generate a PLAN.md patch and add it as a synthetic artifact. This means `ta draft build` always produces a correct PLAN.md without agent cooperation.
+3. [x] **Coverage checker: auto-mark items `[x]` in plan_patch** (`crates/ta-changeset/src/coverage.rs`): Upgrade from heuristic-only to prescriptive: when coverage score ≥ 1 token found in diff, include the item as `[x]` in `plan_patch` (already partially done). Add: when a draft contains no PLAN.md artifact but the coverage checker finds matches, auto-generate a PLAN.md patch and add it as a synthetic artifact. This means `ta draft build` always produces a correct PLAN.md without agent cooperation.
 
-4. [ ] **`ta draft build` — emit `[plan]` heartbeat lines**: After coverage check, print one line per phase item: `[plan] v0.15.19.4.1 item 1: verified (token: version_check_suppressed) ✓` or `[plan] v0.15.19.4.1 item 2: not found (gap) —`. These lines appear in the workflow log so operators see plan reconciliation progress without reading the full report.
+4. [x] **`ta draft build` — emit `[plan]` heartbeat lines**: After coverage check, print one line per phase item: `[plan] v0.15.19.4.1 item 1: verified (token: version_check_suppressed) ✓` or `[plan] v0.15.19.4.1 item 2: not found (gap) —`. These lines appear in the workflow log so operators see plan reconciliation progress without reading the full report.
 
-5. [ ] **Goal run heartbeats in CLAUDE.md injection** (`apps/ta-cli/src/commands/run.rs`): Append a `## Progress Reporting` section to the injected CLAUDE.md context:
+5. [x] **Goal run heartbeats in CLAUDE.md injection** (`apps/ta-cli/src/commands/run.rs`): Append a `## Progress Reporting` section to the injected CLAUDE.md context:
    ```
    ## Progress Reporting
    After completing each plan item, print a structured heartbeat:
@@ -11707,33 +11707,51 @@ ta draft apply <id> --auto-repair   ← build loop: silent repair, take
    ```
    The workflow log already captures stdout; these lines surface without any new plumbing.
 
-6. [ ] **Workflow stage: parse `[progress]` lines from `run_goal` stdout** (`apps/ta-cli/src/commands/governed_workflow.rs`): After `run_goal` completes, scan the captured output for `[progress] item N:` lines. Emit a summary: `[run_goal] Progress: 4/7 items reported complete by agent.` If 0 progress lines: warn `[run_goal] No progress heartbeats from agent — check CLAUDE.md injection.`
+6. [x] **Workflow stage: parse `[progress]` lines from `run_goal` stdout** (`apps/ta-cli/src/commands/governed_workflow.rs`): After `run_goal` completes, scan the captured output for `[progress] item N:` lines. Emit a summary: `[run_goal] Progress: 4/7 items reported complete by agent.` If 0 progress lines: warn `[run_goal] No progress heartbeats from agent — check CLAUDE.md injection.`
 
-7. [ ] **`ta draft apply` — enforce plan consistency before copy** (`apps/ta-cli/src/commands/draft.rs`): Before applying files, run the coverage checker against the draft artifacts. If any phase item is `[ ]` in the draft's PLAN.md but coverage finds its tokens in the diff: auto-upgrade to `[x]` in the applied version and log `[apply] Auto-checked item N (coverage match).` If item is `[x]` but coverage finds nothing and the item is NOT already in source: emit a warning `[apply] Item N checked but no coverage found — verify manually.`
+7. [x] **`ta draft apply` — enforce plan consistency before copy** (`apps/ta-cli/src/commands/draft.rs`): Before applying files, run the coverage checker against the draft artifacts. If any phase item is `[ ]` in the draft's PLAN.md but coverage finds its tokens in the diff: auto-upgrade to `[x]` in the applied version and log `[apply] Auto-checked item N (coverage match).` If item is `[x]` but coverage finds nothing and the item is NOT already in source: emit a warning `[apply] Item N checked but no coverage found — verify manually.`
 
-8. [ ] **Tests**:
+8. [x] **Tests**:
    - `reviewer_passes_planmd_only_when_tokens_in_source`: mock source workspace with matching function name, draft with only PLAN.md → verdict Pass.
    - `reviewer_flags_planmd_only_when_tokens_missing`: same setup, token absent from source → verdict Flag.
    - `coverage_auto_generates_plan_patch_when_missing`: draft has no PLAN.md artifact but code matches item tokens → synthetic PLAN.md patch added.
    - `heartbeat_lines_parsed_from_stdout`: goal run stdout with `[progress] item 3: done` → workflow summary shows `3/7 items`.
    - `apply_auto_checks_item_with_coverage_match`: item `[ ]` in draft PLAN.md, token in diff → applied version has `[x]`.
 
-9. [ ] **USAGE.md**: "Plan Auto-Correction" section — explains that `ta draft build` auto-checks items based on code coverage, agents should emit `[progress]` heartbeats, and `ta draft apply` validates consistency. Include the `[progress]` format so agents can use it.
+9. [x] **USAGE.md**: "Plan Auto-Correction" section — explains that `ta draft build` auto-checks items based on code coverage, agents should emit `[progress]` heartbeats, and `ta draft apply` validates consistency. Include the `[progress]` format so agents can use it.
 
-10. [ ] **Phase ordering warning deduplication** (`apps/ta-cli/src/commands/plan.rs`): Replace per-pair ordering warnings with one line per pending phase showing the count of later-done phases: `"[warn] v0.9.0 is still pending — 24 later phases are complete (out of order)"`. Never emit more lines than there are pending out-of-order phases. Also add **missing status marker detection**: phases without `<!-- status: ... -->` emit a separate diagnostic: `"[warn] 16 phases have no status marker — add <!-- status: done --> to suppress (run: ta plan fix-markers --dry-run)"`.
+10. [x] **Phase ordering warning deduplication** (`apps/ta-cli/src/commands/plan.rs`): Replace per-pair ordering warnings with one line per pending phase showing the count of later-done phases: `"[warn] v0.9.0 is still pending — 24 later phases are complete (out of order)"`. Never emit more lines than there are pending out-of-order phases. Also add **missing status marker detection**: phases without `<!-- status: ... -->` emit a separate diagnostic: `"[warn] 16 phases have no status marker — add <!-- status: done --> to suppress (run: ta plan fix-markers --dry-run)"`.
 
-11. [ ] **`ta plan fix-markers --dry-run` / `--apply`** (`apps/ta-cli/src/commands/plan.rs`): Scan PLAN.md for phases whose items are all `[x]` but lack `<!-- status: done -->`. `--dry-run` lists them; `--apply` adds the marker. Prevents the v0.9.x class of false-pending from recurring.
+11. [x] **`ta plan fix-markers --dry-run` / `--apply`** (`apps/ta-cli/src/commands/plan.rs`): Scan PLAN.md for phases whose items are all `[x]` but lack `<!-- status: done -->`. `--dry-run` lists them; `--apply` adds the marker. Prevents the v0.9.x class of false-pending from recurring.
 
 #### Version: `0.15.19-alpha.4.2`
 
 ---
 
+### v0.15.19.4.3 — Reviewer: Denied-History Check (Deferred from v0.15.19.4.2)
+<!-- status: pending -->
+**Goal**: Implement item 2 from v0.15.19.4.2 that was not completed — the reviewer should not re-flag a finding with `Flag` verdict when the same draft was previously `Denied` and re-submitted. This prevents compounding false positives on manual-override re-runs.
 
+**Deferred from**: v0.15.19.4.2 item 2. All other items were shipped; this one had no implementation in `review_report.rs`.
+
+#### Items
+
+1. [ ] **Draft history check in reviewer** (`crates/ta-changeset/src/review_report.rs`): Before emitting `Flag` verdict, call `DraftStore::load_history(draft_id)` and check if any prior state is `Denied`. If yes: downgrade repeated identical finding from `Flag` to `Warn` with note `"Previously denied and re-submitted — flagging as warning only."` Add `prior_denial: bool` field to `ReviewReport`.
+2. [ ] **Tests**: Draft with prior `Denied` state + same finding → `Warn` not `Flag`. Draft with no history + same finding → `Flag` unchanged. Draft with prior `Approved` state → normal flag behavior.
+3. [ ] **USAGE.md**: One-paragraph note in "Reviewer" section explaining re-submission behavior.
+
+#### Version: `0.15.19-alpha.4.3`
+
+---
+
+### v0.15.19.4.1.2 — Review draft 57b3815e for governed workflow
+<!-- status: in_progress -->
+*Inserted goal — not in original plan.*
 ### v0.15.19.4.1.1 — Review draft 1196e2ef for governed workflow
 <!-- status: in_progress -->
 *Inserted goal — not in original plan.*
 ### v0.15.20 — Orchestrated Workflow: Work Planner + Implementor Split
-<!-- status: pending -->
+<!-- status: in_progress -->
 **Goal**: Refactor the implementation node in orchestrated workflows (governed-goal, plan-build-phases, plan-implement-review) so that the single "implement" stage is split into two sequential nodes: a **Work Planner** that reasons about what needs to change and records explicit decisions, followed by an **Implementor** that takes the planner's output as authoritative context and writes the code. This makes the decision record structural rather than voluntary — the planner's output IS the decision log. The implementor is constrained to execute the plan, not re-derive it.
 
 **Why this phase exists**: Decision logging is currently voluntary (agents skip it on substantial work). The root cause is that planning and implementation happen in the same agent context — there is no forcing function to separate reasoning from execution. Splitting into two nodes makes the decision record a first-class artifact: the planner writes what to change and why; the implementor reads that and writes code. Reviewers see the plan before seeing the diff, which is a qualitatively different review experience.
@@ -11793,7 +11811,7 @@ The planner agent runs with read-only tools (Read, Grep, Glob) — it cannot wri
 ---
 
 ### v0.15.21 — Studio Advisor Agent (QA Agent Upgrade)
-<!-- status: pending -->
+
 **Goal**: Replace the Studio QA agent with the advisor agent pattern from v0.15.19. The QA agent currently answers ad-hoc questions and runs context-scoped searches. The advisor is explicitly on the human's side: it interprets intent, explains what is happening, proactively flags concerns, and can execute TA commands depending on the configured security level.
 
 **Why this phase exists**: The QA agent is neutral and passive — it answers what it's asked. The advisor is active and opinionated: it looks out for the human, raises concerns unprompted, and reduces friction for common actions (clear goal requests, obvious approvals) while maintaining strong protection for risky or ambiguous actions. This is the right framing for an always-on Studio assistant.
@@ -11835,7 +11853,7 @@ The planner agent runs with read-only tools (Read, Grep, Glob) — it cannot wri
 ---
 
 ### v0.15.22 — Secret Scan: Real-Threat Discrimination
-<!-- status: pending -->
+
 **Goal**: Distinguish real credential leaks from documentation examples. Currently, `export TA_SLACK_BOT_TOKEN=...` in `USAGE.md` triggers the same finding level as an actual token embedded in source. This creates alert fatigue and erodes trust in the scanner.
 
 **Rules**:
@@ -11861,7 +11879,7 @@ The planner agent runs with read-only tools (Read, Grep, Glob) — it cannot wri
 ---
 
 ### v0.15.23 — Parameterized Workflow Templates
-<!-- status: pending -->
+
 **Goal**: Eliminate one-off workflow YAML files created for specific invocations (e.g., `plan-build-phases-v015.yaml`). Templates declare typed parameters with defaults. Parameters can reference plan context as built-ins. Invocations pass params at runtime.
 
 **Why**: Requiring a new YAML file per version/variation makes workflow templates single-use artifacts rather than reusable tools. The fix is parameterized templates where the template is the reusable product and the invocation carries the context.
@@ -11874,7 +11892,7 @@ The planner agent runs with read-only tools (Read, Grep, Glob) — it cannot wri
 4. [ ] **`--param` CLI flag** (`apps/ta-cli/src/commands/workflow.rs`): `ta workflow run <name> --param key=value`. Multiple `--param` flags allowed. Type-validated against template declaration. Unknown params are errors (not silently ignored).
 5. [ ] **Template library paths**: Load templates from `.ta/workflow-templates/` (project, committed) and `~/.config/ta/workflow-templates/` (user global). Project templates take precedence. Built-in templates ship with the binary (embedded).
 6. [ ] **`ta workflow list` update**: Show template name, description, and parameter summary. `ta workflow show <name>` prints full template YAML with parameter docs.
-7. [ ] **Migrate `plan-build-phases-v015.yaml`**: Replace with parameterized `plan-build-phases` template in built-in library. Remove the one-off file from `.ta/workflows/`. Update `USAGE.md` invocation examples.
+<!-- status: pending -->
 8. [ ] **Tests**: Template with required param missing → error before execution. `{{plan.current_version_prefix}}` resolves from PLAN.md. Loop count guard `loop.count < params.max_phases` terminates correctly. Unknown `--param` key → error.
 9. [ ] **USAGE.md "Workflow Templates"** section: Authoring a template, parameter types, built-in plan vars, invocation with `--param`.
 
@@ -11941,7 +11959,7 @@ The planner agent runs with read-only tools (Read, Grep, Glob) — it cannot wri
 5. [ ] **Confirm-before-action**: All side-effecting advisor actions (run workflow, apply draft, start goal, amend constitution) require a numbered confirm step before execution. Read-only actions (explain, show, list) execute immediately.
 6. [ ] **`ta advisor ask` CLI command** (`apps/ta-cli/src/commands/advisor.rs`): `ta advisor ask "implement remaining v0.15"`. Resolves intent, prints numbered card, accepts stdin number input to confirm. Same logic as Studio advisor panel — shared `AdvisorSession` type.
 7. [ ] **Security level integration**: `read_only` → advisor shows `ta run "..."` command as copyable text. `suggest` → renders as clickable button in Studio / prints with `[run]` prompt in CLI. `auto` → fires at ≥80% confidence, prints what it did.
-8. [ ] **Tests**: Intent bar routes to advisor. Tab context changes numbered menu options. Confirm step fires before `ta_goal_start`. `read_only` never fires `ta_goal_start`. CLI `ta advisor ask` matches Studio behavior for same inputs.
+
 9. [ ] **USAGE.md "Studio Advisor + Intent Bar"** section: Layout overview, how tabs shape context, numbered-menu interaction model, security levels, CLI equivalent.
 
 #### Version: `0.15.26-alpha`
@@ -11985,7 +12003,7 @@ The extension communicates with the TA daemon over the existing HTTP API (localh
 
 ```
 VS Code Extension
-  ├─ Command Palette: "TA: Start Goal", "TA: View Drafts", "TA: Approve Draft"
+
 
   ├─ Diff Viewer: opens staging diff in VS Code's native diff editor
   ├─ Status Bar: current goal state, daemon health indicator
@@ -12012,7 +12030,7 @@ VS Code Extension
 
 ### v0.16.1 — JetBrains Plugin (PyCharm / WebStorm / IntelliJ)
 <!-- status: pending -->
-**Goal**: A JetBrains Platform plugin providing the same core workflow as the VS Code extension — goal management, draft review, inline diff, approval — targeting PyCharm (Python), WebStorm (TypeScript/Node), and IntelliJ IDEA users.
+
 
 #### Items
 
@@ -12035,7 +12053,7 @@ VS Code Extension
 #### Items
 
 1. [ ] **Plugin scaffold**: Lua plugin (`ta.nvim`). Installable via `lazy.nvim`, `packer.nvim`. Communicates with daemon over HTTP (uses `vim.system` + `curl`/`plenary.nvim`).
-2. [ ] **Telescope picker**: `:TA goals` opens telescope with goal list. `:TA drafts` opens draft queue.
+
 3. [ ] **Diff view**: Opens staging diff in a split buffer using `vim.diff()` or `diffview.nvim`.
 4. [ ] **Floating window**: `:TA status` shows daemon health and active goal in a floating window.
 5. [ ] **Commands**: `:TA start`, `:TA approve <id>`, `:TA deny <id>`, `:TA shell`.
@@ -12058,7 +12076,7 @@ VS Code Extension
 
 
 ```bash
-# Via ta agent install (calls the plugin registry)
+
 ta agent install ollama
 
 # Or direct from the plugin repo
@@ -12184,7 +12202,7 @@ high-VRAM machines.
 **Items**:
 1. [ ] **Job Object wrapper** (`crates/ta-runtime/src/sandbox_windows.rs`): `SandboxProvider::WindowsJobObject` variant. `CreateJobObject`, `AssignProcessToJobObject`, `SetInformationJobObject` with `JOBOBJECT_BASIC_LIMIT_INFORMATION` and `JOBOBJECT_EXTENDED_LIMIT_INFORMATION`. Process tree torn down on TA exit. Kills zombie agent processes.
 2. [ ] **AppContainer profile** (`sandbox_windows.rs`): `SandboxProvider::WindowsAppContainer` variant. `CreateAppContainerProfile`, set `SECURITY_CAPABILITIES` with staging-workspace SID. Launches agent via `CreateProcess` with the AppContainer token. Deletes profile on goal completion (`DeleteAppContainerProfile`).
-3. [ ] **Network filtering** (AppContainer mode): Restrict outbound to `[sandbox.allow_network]` hosts. Use AppContainer's built-in outbound-only firewall rule + a `WFP` callout for host filtering. Falls back to command allowlist filtering if WFP is unavailable.
+
 
 5. [ ] **CI test** (Windows runner): Spawn a sandboxed agent subprocess, attempt to write outside the staging path, assert it is denied. Assert process tree is torn down when Job Object handle closes.
 6. [ ] **USAGE.md**: Windows sandbox section — what each containment level restricts, how to enable, elevation requirement for AppContainer, `ta doctor` sandbox check.
@@ -12202,7 +12220,7 @@ high-VRAM machines.
 
 **Goal**: Implement Tier 2 filesystem governance from `docs/file-system-strategy.md`. The agent can write to directories outside the project; every write is captured in a content-addressed SHA store with a URI journal. Writes appear in `ta draft view` as first-class governed-path artifacts. `ta draft apply` replays them; `ta draft deny` prevents replay (writes already landed — denial stops apply, not the write itself).
 
-**Depends on**: v0.15.19 (governed interactive session baseline), v0.16.4 (Windows sandbox — sandbox + SHA journal combine for full Tier 2+3 coverage)
+
 
 **Items**:
 1. [ ] **`governed_paths` config** (`[workflow.toml]`): `[[governed_paths]]` entries with `path`, `mode` (`read-only`/`read-write`), `purpose`, `max_sha_store_mb`. Parsed by `WorkflowConfig`. `read-only` paths block writes at the FUSE/intercept layer.
@@ -12261,7 +12279,7 @@ Current commands to audit for consolidation:
 - Should `ta release` expose `run`, `promote`, `status`, `list`, `adapters` as its subcommands?
 - Can the RC → stable promotion be a single `ta release promote v0.14.16-rc.1 --to stable`?
 
-**ReleaseAdapter trait design**
+
 
 Core trait methods to agree on:
 - `prepare(version, label, channel) → PreparedRelease` — bump version files, generate changelog
@@ -12353,7 +12371,7 @@ Code releases use semver. Content releases don't. Decide:
 
 9. [ ] **Deprecate `ta release dispatch`**: Keep as alias with deprecation warning pointing to `ta release run`.
 
-10. [ ] **Tests**: Each adapter with stub/mock transport. Version bump round-trip. Channel promotion. `ta release status` output format.
+
 
 11. [ ] **USAGE.md "Release Management" section**: Quick-start (5 steps: configure `release.toml`, run `ta release run`, test RC, promote to stable), adapter reference table, `release.toml` field reference.
 
@@ -12490,7 +12508,7 @@ TA core development pauses when **v0.17.4** is shipped and stable. At that point
 
 ### Why v0.17.2 specifically
 
-| Milestone | Unlocks for SA |
+
 |---|---|
 | v0.14.4 — Daemon extension surface | SA can register OCI/VM runtimes without forking TA |
 | v0.15.x — Content pipeline connectors | SA can govern AI-generated content pipelines (e.g., ARK/meerkat) |
@@ -12524,7 +12542,7 @@ SA is a **separate repository** that depends on TA as a library/daemon. It does 
 
    **Multi-human merge coordination**: When multiple human reviewers must reach agreement before a draft is applied (multi-party code review, legal/compliance sign-off, release approval), SA-v0.6 runs a PBFT round among the reviewers' approval signals. Each human approval is a signed vote (verified against their hardware attestation from SA-v0.2). A conflicting approval/denial from two humans is treated as a Byzantine fault and escalated rather than silently resolved.
 
-   **Phases**:
+
    - `SA-v0.6.1` — `ByzantineConsensusAlgorithm` enum extending TA's `ConsensusAlgorithm`: `Pbft`, `HotStuff`, `Scp`, `Tendermint`. Serializes as `"pbft"` / `"hotstuff"` / `"scp"` / `"tendermint"`. Registered as SA-layer variants — TA's `ConsensusAlgorithm::Sa(ByzantineConsensusAlgorithm)` wrapper so TA remains Byzantine-free without an SA plugin.
    - `SA-v0.6.2` — `PbftConsensus` implementation (`sa-consensus/src/pbft.rs`): 3-phase commit (pre-prepare → prepare → commit), view-change on leader timeout, attestation-verified vote signatures (requires SA-v0.2 `AttestationBackend`).
    - `SA-v0.6.3` — `HotStuffConsensus` implementation (`sa-consensus/src/hotstuff.rs`): linear 2-phase BFT with pipelined proposals. Use when panel size > 7 and PBFT message overhead is measurable.
@@ -12573,7 +12591,7 @@ A browser-based interface to TA's daemon API, aimed at users who need to start g
 > Thin orchestration layer that composes TA, agent frameworks, and MCP servers.
 
 - Role definition schema (YAML): purpose, triggers, agent, capabilities, notification channel
-- Trigger system: cron scheduler + webhook receiver + TA event listener
+
 - Office manager daemon: reads role configs, routes triggers, calls `ta run`
 - Multi-agent workflow design with detailed agent guidance
 - Smart security plan generation → produces `AlignmentProfile` + `AccessConstitution` YAML consumed by TA
@@ -12598,7 +12616,7 @@ A browser-based interface to TA's daemon API, aimed at users who need to start g
 
 | Mode | Standard Claude/Codex | TA-mediated |
 |------|----------------------|-------------|
-| **Active coding** | Continuous back-and-forth. ~100% attention. | Fluid session: agent works, human reviews in real-time. ~10-20% attention. |
+
 | **Overnight/batch** | Not possible — agent exits when session closes. | `ta run --checkpoint` in background. Review next morning. 0% attention during execution. |
 | **Auto-approved (v0.6)** | N/A | Supervisor handles review within constitutional bounds. User sees daily summary. ~1% attention. Escalations interrupt. |
 
@@ -12619,7 +12637,7 @@ Process-based plugin architecture so third parties can publish TA adapters as in
 - **Community sync layer**: Publish anonymized entries to a shared registry (hosted service or federated protocol).
 
 - **Retrieval**: `ta context recall` searches local first, then community if opted in.
-- **Provenance tracking**: Did this solution actually work when applied downstream? Feedback loop from consumers back to publishers.
+
 - **Trust model**: Reputation scoring for contributors. Verified solutions (applied successfully N times) ranked higher.
 - **Spam/quality**: Moderation queue for new contributors. Automated quality checks (is the problem statement clear? is the solution actionable?).
 
@@ -12639,7 +12657,7 @@ Key capabilities:
 - **MCP tools surfaced**: `omniverse_stage_open`, `omniverse_prim_query`, `omniverse_usd_export`, `omniverse_usd_import`, `omniverse_render_submit`, `omniverse_nucleus_sync`
 - **USD data exchange**: TA can read and write `.usd`/`.usda`/`.usdc` files as first-class artifacts — diff USD prims between staging and source, track changes to scene hierarchy, material assignments, and xform overrides
 
-- **Governed USD mutations**: Agent proposes USD scene modifications (prim additions, material swaps, physics parameter changes), TA creates a draft showing the USD diff, human approves before the change lands on Nucleus
+
 
 
 - **Distribution**: Published as `ta-mcp-omniverse` + a companion Omniverse Extension installable via the Omniverse Extension Manager
