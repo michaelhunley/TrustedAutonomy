@@ -11616,20 +11616,17 @@ ta draft apply <id> --auto-repair   ← build loop: silent repair, take
 
 **Items:**
 
-1. [ ] **Capture `staging_was_present` before auto-clean** (`draft.rs`): Declare `let staging_was_present = goal.workspace_path.join("Cargo.toml").exists();` before the auto-clean block (currently `~line 7125`), not after it. Remove the redundant re-check at line 7321.
+1. [x] **Capture `staging_was_present` before auto-clean** (`draft.rs`): Declare `let staging_was_present = goal.workspace_path.join("Cargo.toml").exists();` before the auto-clean block (currently `~line 7125`), not after it. Remove the redundant re-check at line 7321.
 
-2. [ ] **Track `cargo_toml_in_artifacts`** (`draft.rs`): After VCS apply, check whether `Cargo.toml` (relative) or `fs://workspace/Cargo.toml` appears in the set of applied artifact paths. Expose as `let cargo_toml_in_artifacts: bool`.
+2. [x] **Track `cargo_toml_in_artifacts`** (`draft.rs`): After VCS apply, check whether `Cargo.toml` (relative) or `fs://workspace/Cargo.toml` appears in the set of applied artifact paths. Expose as `let cargo_toml_in_artifacts: bool`.
 
-3. [ ] **Replace mismatch warning with info message** (`validate_cargo_version_as_fallback` or call site): When `cargo_toml_in_artifacts && vcs_pr_url.is_some()`, skip the `╔══ VERSION MISMATCH` box entirely and print `[version] Bump (source: A → draft: B) is in PR #{n} — will land on merge. ✓`. When `!cargo_toml_in_artifacts`, fire the existing warning (genuine omission).
+3. [x] **Replace mismatch warning with info message** (`validate_cargo_version_as_fallback` or call site): When `cargo_toml_in_artifacts && vcs_pr_url.is_some()`, skip the `╔══ VERSION MISMATCH` box entirely and print `[version] Bump (source: A → draft: B) is in PR #{n} — will land on merge. ✓`. When `!cargo_toml_in_artifacts`, fire the existing warning (genuine omission).
 
-4. [ ] **Update `validate_cargo_version_as_fallback` signature** or add a new thin wrapper that accepts `cargo_in_artifacts: bool` and `pr_url: Option<&str>` to avoid threading context through unrelated callers.
+4. [x] **Update `validate_cargo_version_as_fallback` signature** or add a new thin wrapper that accepts `cargo_in_artifacts: bool` and `pr_url: Option<&str>` to avoid threading context through unrelated callers.
 
-5. [ ] **Tests**:
-   - `version_check_suppressed_when_cargo_in_artifacts_and_pr_created`: mock artifact list with Cargo.toml + mock PR URL → no warning printed, info message printed.
-   - `version_check_fires_when_cargo_not_in_artifacts`: mock artifact list without Cargo.toml → existing warning fires as before.
+5. [ ] **Tests** — deferred to v0.15.19.4.1: named integration tests (`version_check_suppressed_when_cargo_in_artifacts_and_pr_created`, `version_check_fires_when_cargo_not_in_artifacts`, `staging_was_present_captured_before_autoclean`).
 
-
-6. [ ] **USAGE.md**: Add a note under the apply section explaining the `[version] Bump … is in PR` info message and when to expect it.
+6. [ ] **USAGE.md** — deferred to v0.15.19.4.1: note under apply section explaining the info message.
 
 #### Version: `0.15.19-alpha.4`
 
