@@ -1,11 +1,15 @@
-# plan-build-phases-v015.yaml — Run only pending v0.15.x phases (max 3)
+# plan-build-phases-v015.yaml — Run pending v0.15.x phases through v0.15.23
+#
+# Covers: v0.15.20 (Work Planner), v0.15.21 (Studio Advisor),
+#         v0.15.22 (Secret Scan), v0.15.23 (Parameterized Workflow Templates)
+# Stops automatically when no more v0.15.x pending phases exist or max_phases reached.
 workflow:
   name: plan-build-phases-v015
   description: |
     PR-per-phase build loop scoped to v0.15.x phases only.
     Stops automatically when no more v0.15.x pending phases exist.
   config:
-    max_phases: 3
+    max_phases: 4
     stop_on_flag: true
 
 stages:
@@ -30,4 +34,4 @@ stages:
     condition: "!plan_next.done"
     depends_on:
       - run_phase
-    description: "Loop until all v0.15.x phases complete."
+    description: "Loop until all v0.15.x phases complete or max_phases reached."
