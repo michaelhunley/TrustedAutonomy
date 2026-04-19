@@ -11728,17 +11728,28 @@ ta draft apply <id> --auto-repair   ← build loop: silent repair, take
 
 ---
 
-### v0.15.19.4.3 — Reviewer: Denied-History Check (Deferred from v0.15.19.4.2)
+### v0.15.19.4.3 — Apply Reliability + Reviewer Denied-History
+<!-- status: pending -->
+**Goal**: Fix two classes of workflow loop reliability failures discovered during the v0.15.20 plan-build run, combined with the deferred reviewer item from v0.15.19.4.2.
 
-**Goal**: Implement item 2 from v0.15.19.4.2 that was not completed — the reviewer should not re-flag a finding with `Flag` verdict when the same draft was previously `Denied` and re-submitted. This prevents compounding false positives on manual-override re-runs.
-
-**Deferred from**: v0.15.19.4.2 item 2. All other items were shipped; this one had no implementation in `review_report.rs`.
+**Problems fixed**:
+1. **Apply pre-flight branch creation fails when PLAN.md is dirty**: The plan-patch step modifies PLAN.md in the working tree before `git checkout -b`. If the checkout fails (or even before it runs), PLAN.md is left dirty on `main`. Git refuses the branch creation, and rollback does not restore PLAN.md. This repeats on every retry.
+2. **`.ta/*.jsonl` files accumulate on main between iterations**: `goal-audit.jsonl` and `plan_history.jsonl` are written at every TA operation (goal-created, applied, PR-created, plan-next, reviewer spawn). Post-apply writes land on `main` after the feature branch commit. The next iteration's apply finds dirty `.ta/` files and warns; accumulated writes eventually cause conflicts.
+3. **Workflow loop does not `git pull` after PR merge**: After each phase's PR auto-merges, the loop's next `plan_next` stage runs with the working tree still at the pre-merge state. Over multiple phases this compounds the drift.
+4. **Reviewer re-flags previously-Denied drafts** (deferred from v0.15.19.4.2 item 2): No prior-denial history check in `review_report.rs`.
 
 #### Items
 
-1. [ ] **Draft history check in reviewer** (`crates/ta-changeset/src/review_report.rs`): Before emitting `Flag` verdict, call `DraftStore::load_history(draft_id)` and check if any prior state is `Denied`. If yes: downgrade repeated identical finding from `Flag` to `Warn` with note `"Previously denied and re-submitted — flagging as warning only."` Add `prior_denial: bool` field to `ReviewReport`.
-2. [ ] **Tests**: Draft with prior `Denied` state + same finding → `Warn` not `Flag`. Draft with no history + same finding → `Flag` unchanged. Draft with prior `Approved` state → normal flag behavior.
-3. [ ] **USAGE.md**: One-paragraph note in "Reviewer" section explaining re-submission behavior.
+1. [ ] **Stage PLAN.md before `git checkout -b`** (`apps/ta-cli/src/commands/draft.rs`): In the VCS pre-flight, immediately after the plan-patch step writes to PLAN.md, run `git add PLAN.md`. This carries the staged change onto the new branch automatically, so the checkout succeeds. Also: if pre-flight fails after staging, run `git restore --staged PLAN.md && git restore PLAN.md` in the rollback path to fully undo the plan-patch write.
+2. [ ] **Auto-commit `.ta/*.jsonl` before branching** (`apps/ta-cli/src/commands/draft.rs`): Before `git checkout -b`, check if `goal-audit.jsonl`, `plan_history.jsonl`, or `velocity-history.jsonl` are dirty. If yes, run `git add .ta/*.jsonl && git commit -m "chore: auto-commit workflow audit trail (pre-apply)"` directly on `main`. This keeps the working tree clean so the branch checkout succeeds without warnings.
+3. [ ] **`git pull --rebase` after PR merge in build sub-workflow** (`apps/ta-cli/src/commands/governed_workflow.rs`): The `wait_for_merge` stage (or a new `sync_main` stage after it) should run `git checkout main && git pull --rebase origin main` before returning control to the loop. This ensures each loop iteration starts from a fresh, up-to-date working tree.
+4. [ ] **Reviewer: prior-denial history check** (`crates/ta-changeset/src/review_report.rs`): Before emitting `Flag` verdict, check if any prior state for this draft is `Denied`. If yes: downgrade repeated identical finding from `Flag` to `Warn` with note `"Previously denied and re-submitted — flagging as warning only."` Add `prior_denial: bool` field to `ReviewReport`.
+5. [ ] **Tests**:
+   - `apply_stages_plan_md_before_branch_creation`: plan-patch runs → PLAN.md staged → `git checkout -b` succeeds without "overwritten" error.
+   - `apply_auto_commits_ta_jsonl_when_dirty`: dirty `goal-audit.jsonl` before apply → auto-commit runs → working tree clean before branch.
+   - `reviewer_downgrade_flag_to_warn_on_prior_denial`: draft with prior `Denied` + same finding → `Warn` verdict.
+   - `reviewer_flag_unchanged_with_no_prior_denial`: no history → `Flag` unchanged.
+6. [ ] **USAGE.md**: Update "Draft Apply" section with note on how apply handles dirty `.ta/` files and PLAN.md. Update "Reviewer" section with one paragraph on re-submission downgrade behavior.
 
 #### Version: `0.15.19-alpha.4.3`
 
