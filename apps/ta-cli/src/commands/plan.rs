@@ -3310,7 +3310,7 @@ fn plan_fix_markers(config: &GatewayConfig, dry_run: bool, apply: bool) -> anyho
         let mut new_content = content.clone();
         // Process in reverse line order so inserts don't shift earlier line numbers.
         let mut sorted = phases_needing_marker.clone();
-        sorted.sort_by(|a, b| b.1.cmp(&a.1));
+        sorted.sort_by_key(|b| Reverse(b.1));
 
         for (id, line_num) in &sorted {
             // Find the header line and insert marker after it.
