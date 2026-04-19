@@ -136,6 +136,7 @@ Hardening for security-conscious single-node deployments. Multi-user and enterpr
 ## v0.9 — Distribution & Packaging *(release: tag v0.9.0-beta)*
 ---
 ### v0.9.0 — Distribution & Packaging
+<!-- status: done -->
 ---
 - Developer: `cargo run` + local config + Nix
 - Desktop: installer with bundled daemon, git, rg/jq, common MCP servers
@@ -151,6 +152,7 @@ Hardening for security-conscious single-node deployments. Multi-user and enterpr
 - [x] Version bump to 0.9.0-alpha
 ---
 ### v0.9.1 — Native Windows Support
+<!-- status: done -->
 ---
 **Goal**: First-class Windows experience without requiring WSL.
 ---
@@ -176,6 +178,7 @@ Hardening for security-conscious single-node deployments. Multi-user and enterpr
 - `ctrlc` crate → dropped (tokio::signal in v0.10.16 supersedes this)
 ---
 ### v0.9.2 — Sandbox Runner (optional hardening, Layer 2)
+<!-- status: done -->
 ---
 > Optional for users who need kernel-level isolation. Not a prerequisite for v1.0.
 ---
@@ -202,6 +205,7 @@ Hardening for security-conscious single-node deployments. Multi-user and enterpr
 - Enterprise state intercept → v0.11.5 (Runtime Adapter Trait)
 ---
 ### v0.9.3 — Dev Loop Access Hardening
+<!-- status: done -->
 ---
 **Goal**: Severely limit what the `ta dev` orchestrator agent can do — read-only project access, only TA MCP tools, no filesystem writes.
 ---
@@ -220,6 +224,7 @@ Hardening for security-conscious single-node deployments. Multi-user and enterpr
 - Full tool-call audit logging → completed in v0.10.15 (per-tool-call audit via `audit_tool_call()`)
 ---
 ### v0.9.4 — Orchestrator Event Wiring & Gateway Refactor
+<!-- status: done -->
 ---
 **Goal**: Wire the `ta dev` orchestrator to actually launch implementation agents, handle failures, and receive events — plus refactor the growing MCP gateway.
 ---
@@ -245,6 +250,7 @@ Hardening for security-conscious single-node deployments. Multi-user and enterpr
 ---
 ---                                                                                                                                                                                                                                                             
 ### v0.9.4.1 — Event Emission Plumbing Fix                       
+<!-- status: done -->
 ---
 **Goal**: Wire event emission into all goal lifecycle paths so `ta_event_subscribe` actually receives events. Currently only `GoalFailed` on spawn failure emits to FsEventStore — `GoalStarted`, `GoalCompleted`, and `DraftBuilt` are never written, making
 the event subscription system non-functional for orchestrator agents.                
@@ -264,6 +270,7 @@ wired into the MCP goal start path.
 #### Version: `0.9.4-alpha.1`
 ---
 ### v0.9.5 — Enhanced Draft View Output
+<!-- status: done -->
 ---
 **Goal**: Make `ta draft view` output clear and actionable for reviewers — structured "what changed" summaries, design alternatives considered, and grouped visual sections.
 ---
@@ -279,6 +286,7 @@ wired into the MCP goal start path.
 ---
 ---                                                  
 ### v0.9.5.1 — Goal Lifecycle Hygiene & Orchestrator Fixes                                                                                                                                                                                                      
+<!-- status: done -->
 ---
 **Goal**: Fix the bugs discovered during v0.9.5 goal lifecycle monitoring — duplicate goal creation, zombie goal cleanup, event timer accuracy, draft discoverability via MCP, and cursor-based event polling semantics.                                        
                                                                                       
@@ -331,6 +339,7 @@ passing the cursor from the previous response returns only *new* events. Add a t
 ---
 ---
 ### v0.9.6 — Orchestrator API & Goal-Scoped Agent Tracking
+<!-- status: done -->
 ---
 **Goal**: Make MCP tools work without a `goal_run_id` for read-only project-wide operations, and track which agents are working on which goals for observability.
 ---
@@ -411,6 +420,7 @@ passing the cursor from the previous response returns only *new* events. Add a t
 ---
 ---
 ### v0.9.7 — Daemon API Expansion
+<!-- status: done -->
 
 **Goal**: Promote the TA daemon from a draft-review web UI to a full API server that any interface (terminal, web, Discord, Slack, email) can connect to for commands, agent conversations, and event streams.
 
@@ -639,6 +649,7 @@ passing the cursor from the previous response returns only *new* events. Add a t
 ---
 #### Completed
 ### v0.9.8 — Interactive TA Shell (`ta shell`)
+<!-- status: done -->
 ---
 **Goal**: A thin terminal REPL client for the TA daemon — providing a single-terminal interactive experience for commands, agent conversation, and event notifications. The shell is a daemon client, not a standalone tool.
 ---
@@ -778,6 +789,7 @@ All complexity lives in the daemon (v0.9.7). The shell is deliberately thin — 
 ---
 ---
 ### v0.9.8.1 — Auto-Approval, Lifecycle Hygiene & Operational Polish
+<!-- status: done -->
 ---
 **Goal**: Three themes that make TA reliable for sustained multi-phase use:
 - **(A) Policy-driven auto-approval**: Wire the policy engine into draft review so drafts matching configurable conditions are auto-approved — preserving full audit trail and the ability to tighten rules at any time.
@@ -1028,6 +1040,7 @@ agents:
 ---
 #### Completed
 ### v0.9.8.1.1 — Unified Allow/Deny List Pattern
+<!-- status: done -->
 
 **Goal**: Standardize all allowlist/blocklist patterns across TA to support both allow and deny lists with consistent semantics: deny takes precedence over allow, empty allow = allow all, empty deny = deny nothing.
 ---
@@ -1095,6 +1108,7 @@ impl AccessFilter {
 ---
    ```
 ### v0.9.8.2 — Pluggable Workflow Engine & Framework Integration
+<!-- status: done -->
 
 **Goal**: Add a `WorkflowEngine` trait to TA core so multi-stage, multi-role, multi-framework workflows can be orchestrated with pluggable engines — built-in YAML for simple cases, framework adapters (LangGraph, CrewAI) for power users, or custom implementations.
        │
@@ -1352,6 +1366,7 @@ WorkflowFailed { workflow_id, name, reason, timestamp }
 ---
 ---
 ### v0.9.8.3 — Full TUI Shell (`ratatui`)
+<!-- status: done -->
 
 **Goal**: Replace the line-mode rustyline shell with a full terminal UI modeled on Claude Code / claude-flow — persistent status bar, scrolling output, and input area, all in one screen.
 
@@ -1565,6 +1580,7 @@ This pattern extends beyond VCS to any adapter type:
 ---
 
 ### v0.9.9 — Conversational Project Bootstrapping (`ta new`) *(design only)*
+<!-- status: done -->
 
 **Status note**: Sub-phases v0.9.9.1–v0.9.9.5 are all **done** — they built the infrastructure (interactive mode, plan-from-doc, channel delivery, authoring tooling). However, the **parent `ta new` CLI command itself was never implemented**. The end-to-end bootstrapping flow described below doesn't exist yet. Implementation moved to **v0.10.17**.
 
@@ -11703,6 +11719,10 @@ ta draft apply <id> --auto-repair   ← build loop: silent repair, take
    - `apply_auto_checks_item_with_coverage_match`: item `[ ]` in draft PLAN.md, token in diff → applied version has `[x]`.
 
 9. [ ] **USAGE.md**: "Plan Auto-Correction" section — explains that `ta draft build` auto-checks items based on code coverage, agents should emit `[progress]` heartbeats, and `ta draft apply` validates consistency. Include the `[progress]` format so agents can use it.
+
+10. [ ] **Phase ordering warning deduplication** (`apps/ta-cli/src/commands/plan.rs`): Replace per-pair ordering warnings with one line per pending phase showing the count of later-done phases: `"[warn] v0.9.0 is still pending — 24 later phases are complete (out of order)"`. Never emit more lines than there are pending out-of-order phases. Also add **missing status marker detection**: phases without `<!-- status: ... -->` emit a separate diagnostic: `"[warn] 16 phases have no status marker — add <!-- status: done --> to suppress (run: ta plan fix-markers --dry-run)"`.
+
+11. [ ] **`ta plan fix-markers --dry-run` / `--apply`** (`apps/ta-cli/src/commands/plan.rs`): Scan PLAN.md for phases whose items are all `[x]` but lack `<!-- status: done -->`. `--dry-run` lists them; `--apply` adds the marker. Prevents the v0.9.x class of false-pending from recurring.
 
 #### Version: `0.15.19-alpha.4.2`
 

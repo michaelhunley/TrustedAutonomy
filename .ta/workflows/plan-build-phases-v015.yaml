@@ -1,0 +1,33 @@
+# plan-build-phases-v015.yaml — Run only pending v0.15.x phases (max 3)
+workflow:
+  name: plan-build-phases-v015
+  description: |
+    PR-per-phase build loop scoped to v0.15.x phases only.
+    Stops automatically when no more v0.15.x pending phases exist.
+  config:
+    max_phases: 3
+    stop_on_flag: true
+
+stages:
+  - name: plan_next
+    kind: plan_next
+    phase_filter: v0.15
+    description: "Get next pending v0.15.x phase."
+
+  - name: run_phase
+    kind: workflow
+    workflow: build
+    goal: "{{plan_next.phase_id}} — {{plan_next.phase_title}}"
+    phase: "{{plan_next.phase_id}}"
+    condition: "!plan_next.done"
+    depends_on:
+      - plan_next
+    description: "Run governed build workflow for this phase."
+
+  - name: loop
+    kind: goto
+    target: plan_next
+    condition: "!plan_next.done"
+    depends_on:
+      - run_phase
+    description: "Loop until all v0.15.x phases complete."
