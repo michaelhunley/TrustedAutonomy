@@ -11830,6 +11830,140 @@ The planner agent runs with read-only tools (Read, Grep, Glob) — it cannot wri
 
 ---
 
+### v0.15.22 — Secret Scan: Real-Threat Discrimination
+<!-- status: pending -->
+**Goal**: Distinguish real credential leaks from documentation examples. Currently, `export TA_SLACK_BOT_TOKEN=...` in `USAGE.md` triggers the same finding level as an actual token embedded in source. This creates alert fatigue and erodes trust in the scanner.
+
+**Rules**:
+- **Error-level** (real threat): literal token values that match entropy thresholds (e.g., `xoxb-1234-...` for Slack, `sk-ant-...` for Anthropic). These block apply at `security.level = "high"` and always emit `[error]` regardless of level.
+- **Info-level** (doc pattern): `export VAR=placeholder`, `export VAR=your_token_here`, `export VAR=...`, `VAR=<value>` — recognized as documentation shell examples. Never block, emit `[info]` only.
+- **Warn-level** (ambiguous): assignment pattern with a non-placeholder value that doesn't match a known secret format. Continues apply, emits `[warn]` with "verify this is not a real credential."
+
+**Messaging**: Error messages must name the file, line, matched pattern, and say explicitly whether apply is blocked. Info findings are suppressed unless `--verbose`.
+
+#### Items
+
+1. [ ] **Entropy + format classifier** (`crates/ta-changeset/src/secret_scan.rs`): Add `SecretClassification` enum: `RealCredential { service, entropy }`, `DocExample`, `Ambiguous`. Implement per-service format matchers (Slack `xoxb-*`, Anthropic `sk-ant-*`, GitHub `ghp_*`, Discord `MTk*...`, SMTP password heuristics). Entropy check (Shannon > 4.5 bits/char) for generic `SECRET=` assignments.
+2. [ ] **Doc-pattern recognizer**: Recognize common documentation patterns: `export VAR=your_token_here`, `export VAR=<your_token>`, `export VAR=placeholder`, `export VAR=...`, `# Set this to...` comment proximity. Mark these as `DocExample` — never emit above `[info]`.
+3. [ ] **Apply-time output**: `[error]` for `RealCredential` findings (always shown, blocks at `security.level = "high"`). `[warn]` for `Ambiguous`. `[info]` for `DocExample` (only shown with `--verbose`). Each finding includes: file path, line number, matched pattern name, classification, and action taken.
+4. [ ] **Block behavior**: At `security.level = "high"`, `RealCredential` findings abort apply before any files are written. `Ambiguous` and `DocExample` never block. Add `[security.secrets] real_credential_action = "block" | "warn" | "error"` config key (default: `"error"` — always shown but only blocks when level = "high").
+5. [ ] **PLAN.md + commit scan**: On `ta draft apply --git-commit`, also scan the commit diff for real credential patterns. A committed real credential is always `[error]` regardless of security level.
+6. [ ] **Tests**: Slack token (real) → `RealCredential`. Anthropic key (real) → `RealCredential`. `export TA_SLACK_BOT_TOKEN=your_token_here` → `DocExample`. `export FOO=abc123` → `Ambiguous`. High-entropy random string → `Ambiguous`.
+7. [ ] **USAGE.md "Secret Scanning"** section: Explains the three levels, how to configure `real_credential_action`, how to suppress doc-example findings, and what to do if a real credential is flagged.
+
+#### Version: `0.15.22-alpha`
+
+---
+
+### v0.15.23 — Parameterized Workflow Templates
+<!-- status: pending -->
+**Goal**: Eliminate one-off workflow YAML files created for specific invocations (e.g., `plan-build-phases-v015.yaml`). Templates declare typed parameters with defaults. Parameters can reference plan context as built-ins. Invocations pass params at runtime.
+
+**Why**: Requiring a new YAML file per version/variation makes workflow templates single-use artifacts rather than reusable tools. The fix is parameterized templates where the template is the reusable product and the invocation carries the context.
+
+#### Items
+
+1. [ ] **Template parameter declarations** (`crates/ta-workflow/src/template.rs`): Add `parameters` map to workflow YAML schema. Each param: `type` (string/integer/bool), `description`, `default` (optional), `required` (bool). Params are validated at invocation time before any stage runs.
+2. [ ] **Built-in plan context vars**: `{{plan.current_version_prefix}}` (e.g., `v0.15`), `{{plan.next_pending_phase}}` (phase ID), `{{plan.next_pending_title}}`, `{{plan.pending_count}}`. Resolved from PLAN.md at invocation time. Available as defaults in parameter declarations.
+3. [ ] **Stage interpolation**: All stage fields support `{{params.name}}` and `{{plan.*}}` substitution. Interpolation runs at stage execution time (supports loop variables). Error if a required param is missing at invocation time.
+4. [ ] **`--param` CLI flag** (`apps/ta-cli/src/commands/workflow.rs`): `ta workflow run <name> --param key=value`. Multiple `--param` flags allowed. Type-validated against template declaration. Unknown params are errors (not silently ignored).
+5. [ ] **Template library paths**: Load templates from `.ta/workflow-templates/` (project, committed) and `~/.config/ta/workflow-templates/` (user global). Project templates take precedence. Built-in templates ship with the binary (embedded).
+6. [ ] **`ta workflow list` update**: Show template name, description, and parameter summary. `ta workflow show <name>` prints full template YAML with parameter docs.
+7. [ ] **Migrate `plan-build-phases-v015.yaml`**: Replace with parameterized `plan-build-phases` template in built-in library. Remove the one-off file from `.ta/workflows/`. Update `USAGE.md` invocation examples.
+8. [ ] **Tests**: Template with required param missing → error before execution. `{{plan.current_version_prefix}}` resolves from PLAN.md. Loop count guard `loop.count < params.max_phases` terminates correctly. Unknown `--param` key → error.
+9. [ ] **USAGE.md "Workflow Templates"** section: Authoring a template, parameter types, built-in plan vars, invocation with `--param`.
+
+#### Version: `0.15.23-alpha`
+
+---
+
+### v0.15.24 — Intent Resolver: Natural Language → Workflow Invocation
+<!-- status: pending -->
+**Goal**: "implement the rest of v0.15" resolves to `ta workflow run plan-build-phases --param phase_filter=v0.15` without the user needing to know the template name or params. The resolver uses keyword matching + plan context — no LLM required.
+
+**Depends on**: v0.15.23 (parameterized templates)
+
+#### Items
+
+1. [ ] **Entity extractor** (`crates/ta-workflow/src/intent.rs`): Extract from natural language: `version_ref` (e.g., `v0.15`), `intent_verb` (implement/build/run/complete), `scope_modifier` (remaining/all/next/pending). Regex + keyword list, no ML.
+2. [ ] **Template matcher**: Score templates by overlap of extracted entities against template `metadata.tags` and `description`. Top candidate selected if score ≥ 0.80. Below threshold → ask a clarifying question.
+3. [ ] **Param resolver**: Auto-fill template params from extracted entities and plan context. `phase_filter` ← `version_ref`. `max_phases` ← `plan.pending_count` for the filter prefix (capped at template default). Unresolvable required params → disambiguation step.
+4. [ ] **Resolution card output**: Before executing, print (or return to caller) a structured card: template name, resolved params, plan context used (e.g., "2 pending phases under v0.15"). User sees this before anything runs.
+5. [ ] **Confidence gate**: Score ≥ 0.80 → present card + numbered confirm (`1. Run  2. Adjust  3. Different workflow  4. Cancel`). Score < 0.80 → ask clarifying question first. No silent execution.
+6. [ ] **`ta workflow run` intent path**: When `<name>` doesn't match a known template name, try intent resolution. Explicit template name always takes precedence over intent resolution.
+7. [ ] **Advisor integration** (`crates/ta-workflow/src/intent.rs`): `resolve_intent(text, plan_ctx) -> ResolutionResult` is callable from advisor agent. Advisor presents the resolution card via numbered options in its chat response.
+8. [ ] **Tests**: "implement remaining v0.15" → `plan-build-phases`, `phase_filter=v0.15`. "run next phase" → `build`, `phase=plan.next_pending_phase`. Low-confidence input → clarifying question returned. Explicit template name bypasses resolver.
+9. [ ] **USAGE.md "Intent Resolution"** section: How natural language goal expressions are resolved, confidence threshold, how to bypass with explicit template name.
+
+#### Version: `0.15.24-alpha`
+
+---
+
+### v0.15.25 — Auto-Approve Constitution: Rule-Based Policy + Amendment Flow
+<!-- status: pending -->
+**Goal**: Replace the binary `auto_approve = true/false` with a rule-based constitution section. Rules are expressed as file-pattern conditions with approve/review/block actions. The constitution section is amended via the same review-gate flow as drafts — no silent policy changes.
+
+**Why**: "Always auto-approve" is too broad; "never auto-approve" is too conservative. A doc-only draft should auto-approve; an auth-path change should always require review. The constitution makes this explicit and auditable.
+
+#### Items
+
+1. [ ] **`AutoApproveRule` type** (`crates/ta-changeset/src/policy.rs`): Fields: `name`, `description`, `condition` (string expression), `action` (`approve | review | block`). Rules evaluated top-to-bottom; first match wins. `default` rule if no match.
+2. [ ] **Condition DSL**: Initial condition functions: `all_files_match(globs...)`, `any_file_match(globs...)`, `phase_matches(prefix)`, `contains_secret_findings()`, `test_coverage_passed()`, `reviewer_score_above(n)`. Evaluated against the draft's artifact list.
+3. [ ] **Constitution section** (`.ta/constitution.toml`): `[auto_approve]` section with `baseline = "always | never | rules"` and `[[auto_approve.rule]]` array. `[auto_approve.default]` action for no-match case.
+4. [ ] **Evaluation engine** (`crates/ta-changeset/src/policy.rs`): `evaluate_auto_approve(draft, constitution) -> AutoApproveDecision { action, matched_rule, reason }`. Integrated into `ta draft apply` before VCS submit step. Decision logged to goal-audit.jsonl.
+5. [ ] **Amendment flow** (`apps/ta-cli/src/commands/constitution.rs`): `ta constitution amend auto-approve` opens the `[auto_approve]` section in `$EDITOR`. On save, creates an amendment draft (same review path as a code draft). Amendment applied only after human explicit approval. Every amendment recorded in audit log with timestamp and approver.
+6. [ ] **Apply-time output**: Print which rule matched and what action was taken: `[auto-approve] matched rule 'docs-only' → approve`. If blocked: `[auto-approve] matched rule 'auth-path' → BLOCKED — human review required`.
+7. [ ] **Migration**: Existing `auto_merge = true` in `workflow.toml` maps to `baseline = "always"` automatically on first run. Emit one-time migration message suggesting the user review the constitution.
+8. [ ] **Tests**: Doc-only draft → `docs-only` rule → approve. Auth-path draft → `high-risk` rule → block. No matching rule → default action. Amendment draft requires approval before policy takes effect.
+9. [ ] **USAGE.md "Auto-Approve Constitution"** section: Rule DSL reference, amendment flow walkthrough, migration from `auto_merge`.
+
+#### Version: `0.15.25-alpha`
+
+---
+
+### v0.15.26 — Studio: Global Intent Bar + Advisor Panel with Context Tabs
+<!-- status: pending -->
+**Goal**: Replace per-tab chatbots with a single global intent bar and a unified advisor panel. Tabs are navigation/focus context — they tell the advisor what the user is looking at. The advisor uses numbered-option menus for confirm/clarify steps. Same interaction model works in CLI (`ta advisor ask "..."`).
+
+**Depends on**: v0.15.21 (Studio advisor agent), v0.15.24 (intent resolver), v0.15.25 (auto-approve constitution)
+
+#### Items
+
+1. [ ] **Global intent bar** (`apps/ta-studio/src/components/IntentBar.tsx`): Single persistent text input at top of Studio. Always routes to advisor agent. Keyboard shortcut to focus (`Cmd+K` / `Ctrl+K`). Not per-tab.
+2. [ ] **Tab context injection**: Active tab + selected object (e.g., `tab: Workflows, selected: build-phases`) sent to advisor as context prefix on every message. Advisor uses this to narrow options and shape numbered menus.
+3. [ ] **Numbered-option menu component** (`apps/ta-studio/src/components/AdvisorMenu.tsx`): Renders advisor responses with numbered choices as interactive buttons. User can click or type the number. Terminal-compatible plain-text fallback via `ta advisor ask`.
+4. [ ] **Context-shaped menus**: With Workflows tab + template selected, "amend auto-approve" presents: `1. Amend auto-approve for this workflow  2. Amend project constitution  3. Explain the difference`. With Plan tab, same phrase → different menu options. Menus are generated by advisor agent, not hardcoded.
+5. [ ] **Confirm-before-action**: All side-effecting advisor actions (run workflow, apply draft, start goal, amend constitution) require a numbered confirm step before execution. Read-only actions (explain, show, list) execute immediately.
+6. [ ] **`ta advisor ask` CLI command** (`apps/ta-cli/src/commands/advisor.rs`): `ta advisor ask "implement remaining v0.15"`. Resolves intent, prints numbered card, accepts stdin number input to confirm. Same logic as Studio advisor panel — shared `AdvisorSession` type.
+7. [ ] **Security level integration**: `read_only` → advisor shows `ta run "..."` command as copyable text. `suggest` → renders as clickable button in Studio / prints with `[run]` prompt in CLI. `auto` → fires at ≥80% confidence, prints what it did.
+8. [ ] **Tests**: Intent bar routes to advisor. Tab context changes numbered menu options. Confirm step fires before `ta_goal_start`. `read_only` never fires `ta_goal_start`. CLI `ta advisor ask` matches Studio behavior for same inputs.
+9. [ ] **USAGE.md "Studio Advisor + Intent Bar"** section: Layout overview, how tabs shape context, numbered-menu interaction model, security levels, CLI equivalent.
+
+#### Version: `0.15.26-alpha`
+
+---
+
+### v0.15.27 — Workflow Template Library: Install, Publish, Search
+<!-- status: pending -->
+**Goal**: Workflow templates are shareable artifacts. Users can install templates from URLs or a registry, publish their own, and search the library. The registry protocol is simple enough to be served from a GitHub repo.
+
+**Depends on**: v0.15.23 (parameterized templates)
+
+#### Items
+
+1. [ ] **Template manifest format**: Each template YAML has a `metadata` section: `name`, `description`, `version`, `tags: []`, `author`, `min_ta_version`. Manifest is the unit of discovery and versioning.
+2. [ ] **`ta workflow install <url|slug>`** (`apps/ta-cli/src/commands/workflow.rs`): Fetches template YAML from URL or resolves slug against configured registry endpoint. Saves to `~/.config/ta/workflow-templates/`. Validates schema before saving. Shows template metadata on install.
+3. [ ] **`ta workflow publish <name>`** (`apps/ta-cli/src/commands/workflow.rs`): Packages template YAML + manifest. For now: prints the package to stdout (for piping to gist/upload). Future: POST to registry endpoint when configured.
+4. [ ] **`ta workflow search <query>`** (`apps/ta-cli/src/commands/workflow.rs`): Searches name, description, and tags across all library paths (project, user global, registry index if configured). Prints table: name, description, source (project/user/registry).
+5. [ ] **Registry protocol**: Simple JSON index file at a configurable URL. Index entries: `{ name, description, version, tags, url, min_ta_version }`. `ta workflow update-index` refreshes the cached index. Default registry: built-in templates only (no external network call by default).
+6. [ ] **`ta workflow remove <name>`**: Removes from user global library. Cannot remove project templates (edit `.ta/workflow-templates/` directly) or built-in templates.
+7. [ ] **Tests**: `install` from file URL saves to user library. `search` finds templates by tag. `remove` deletes user template. Project template not removable via CLI. Schema validation rejects malformed template.
+8. [ ] **USAGE.md "Workflow Library"** section: Installing, publishing, searching templates. Registry configuration. Difference between project / user / built-in templates.
+
+#### Version: `0.15.27-alpha`
+
+---
+
 ## v0.16 — IDE Integration & Developer Experience
 
 > **Focus**: First-class IDE integration for VS Code, JetBrains (PyCharm, WebStorm, IntelliJ), and Neovim. TA transitions from a pure CLI tool to an embedded development workflow component with sidebar panels, inline draft review, and one-click goal approval.
