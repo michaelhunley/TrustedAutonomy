@@ -4893,6 +4893,140 @@ For multi-channel routing (sending reviews to multiple channels simultaneously),
 
 ---
 
+## Workflow Templates
+
+Workflow templates let you define reusable, parameterized multi-stage workflows. Instead of creating a new YAML file for every variation, a template declares typed parameters with defaults. You pass parameter values at invocation time with `--param`.
+
+### Authoring a Template
+
+Create a YAML file in `.ta/workflow-templates/` (committed with your project). The `params:` section declares each parameter:
+
+```yaml
+# description: Iterate pending PLAN.md phases through the governed build workflow.
+
+name: plan-build-phases
+
+params:
+  phase_filter:
+    type: string
+    description: "Phase ID prefix to process (e.g., v0.15). Empty = all pending."
+    default: "{{plan.current_version_prefix}}"
+    required: false
+  max_phases:
+    type: integer
+    description: "Maximum number of phases to process in one run."
+    default: "5"
+    required: false
+
+stages:
+  - name: build
+    roles: [implementor]
+    await_human: never
+  - name: review
+    depends_on: [build]
+    roles: [reviewer]
+    await_human: on_fail
+
+roles:
+  implementor:
+    agent: claude-code
+    prompt: |
+      Implement phase {{params.phase_filter}}.
+      Start with: {{plan.next_pending_phase}} — {{plan.next_pending_title}}.
+      There are {{plan.pending_count}} phases remaining.
+  reviewer:
+    agent: claude-code
+    prompt: Review the implementation of {{params.phase_filter}} phases.
+
+verdict:
+  pass_threshold: 0.7
+```
+
+### Parameter Types
+
+| Type      | Description                        |
+|-----------|------------------------------------|
+| `string`  | Any text value (default)           |
+| `integer` | Numeric value                      |
+| `boolean` | `true` or `false`                  |
+
+A parameter marked `required: true` with no `default` must be supplied with `--param` at invocation time — the workflow refuses to start without it.
+
+### Built-in Plan Variables
+
+Templates can reference live PLAN.md state as default values or directly in prompt text:
+
+| Variable                          | Resolves to                                              |
+|-----------------------------------|----------------------------------------------------------|
+| `{{plan.current_version_prefix}}` | Current major.minor version prefix, e.g. `v0.15`        |
+| `{{plan.next_pending_phase}}`     | Phase ID of the next `pending` phase, e.g. `v0.15.24`   |
+| `{{plan.next_pending_title}}`     | Title of the next pending phase                          |
+| `{{plan.pending_count}}`          | Number of remaining pending phases                       |
+
+These are resolved from `PLAN.md` at invocation time.
+
+### Invoking a Template with `--param`
+
+```bash
+# Use defaults (plan vars filled in automatically)
+ta workflow run plan-build-phases
+
+# Override specific params
+ta workflow run plan-build-phases --param phase_filter=v0.15 --param max_phases=3
+
+# Required params must be supplied
+ta workflow run governed-goal --param goal_title="Fix the auth bug"
+
+# Dry-run to see what would execute without running anything
+ta workflow run plan-build-phases --param phase_filter=v0.15 --dry-run
+```
+
+### Template Library Paths
+
+TA searches for templates in this order (highest priority first):
+
+1. `.ta/workflow-templates/` — project templates, committed to the repo
+2. `~/.config/ta/workflow-templates/` — user-global templates
+3. Built-in templates shipped with the `ta` binary
+
+Project templates override user-global templates, which override built-ins.
+
+### Listing and Inspecting Templates
+
+```bash
+# List all parameterized templates with their params
+ta workflow list --param-templates
+
+# Show the full YAML for a specific template
+ta workflow show plan-build-phases
+ta workflow show governed-goal
+```
+
+`ta workflow list --param-templates` output example:
+
+```
+Parameterized workflow templates:
+
+  governed-goal        [built-in]   Safe autonomous coding loop: run_goal → review → human_gate → apply → pr_sync
+    --param goal_title             string [required] — Goal title to implement through the governed workflow.
+    --param phase                  string (default: {{plan.next_pending_phase}}) — PLAN.md phase ID to link to.
+
+  plan-build-phases    [built-in]   Iterate pending PLAN.md phases through the governed build workflow.
+    --param phase_filter           string (default: {{plan.current_version_prefix}}) — Phase ID prefix to process.
+    --param max_phases             integer (default: 5) — Maximum number of phases to process in one run.
+```
+
+### Built-in Templates
+
+Two parameterized templates ship with `ta`:
+
+| Name                  | Description                                                          |
+|-----------------------|----------------------------------------------------------------------|
+| `plan-build-phases`   | Iterate pending PLAN.md phases; uses `phase_filter` and `max_phases` |
+| `governed-goal`       | Full governed coding loop (run → review → gate → apply → PR)         |
+
+---
+
 ## Advanced Features
 
 ### Runtime Adapter

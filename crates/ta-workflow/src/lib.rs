@@ -15,6 +15,7 @@ pub mod consensus;
 pub mod definition;
 pub mod error;
 pub mod interaction;
+pub mod params;
 pub mod process_engine;
 pub mod scorer;
 pub mod serial_phases;
@@ -33,6 +34,10 @@ pub use consensus::{
 pub use definition::{
     FailureRouting, RoleDefinition, StageDefinition, StageReview, WorkflowCatalog,
     WorkflowDefinition,
+};
+pub use params::{
+    interpolate, version_prefix_from_id, ParamDecl, ParamValues, PlanContext, TemplateEntry,
+    TemplateLibrary, TemplateSource,
 };
 // Re-export ArtifactType from ta-changeset for callers that only depend on ta-workflow.
 pub use error::WorkflowError;
