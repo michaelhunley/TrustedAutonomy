@@ -11809,28 +11809,28 @@ The planner agent runs with read-only tools (Read, Grep, Glob) — it cannot wri
 
 **Items**:
 
-1. [ ] **`StageKind::PlanWork` variant** (`apps/ta-cli/src/commands/governed_workflow.rs`): New stage kind that spawns a read-only agent (Read/Grep/Glob only, same as the supervisor) with a planning prompt. Agent output is captured to `.ta/work-plan.json` in the staging workspace. Fails if the agent exits without writing a parseable work plan. `work-plan.json` format validated against `WorkPlan` struct.
+1. [x] **`StageKind::PlanWork` variant** (`apps/ta-cli/src/commands/governed_workflow.rs`): New stage kind that spawns a read-only agent (Read/Grep/Glob only, same as the supervisor) with a planning prompt. Agent output is captured to `.ta/work-plan.json` in the staging workspace. Fails if the agent exits without writing a parseable work plan. `work-plan.json` format validated against `WorkPlan` struct.
 
-2. [ ] **`WorkPlan` struct** (`crates/ta-workflow/src/work_plan.rs`): `WorkPlan`, `WorkPlanDecision`, `ImplementationStep` types with serde. `WorkPlan::load(staging_path)` and `WorkPlan::validate()` (checks decisions non-empty, each decision has rationale). Re-exported from `ta-workflow` crate root.
+2. [x] **`WorkPlan` struct** (`crates/ta-workflow/src/work_plan.rs`): `WorkPlan`, `WorkPlanDecision`, `ImplementationStep` types with serde. `WorkPlan::load(staging_path)` and `WorkPlan::validate()` (checks decisions non-empty, each decision has rationale). Re-exported from `ta-workflow` crate root.
 
 
 
-4. [ ] **`work-plan.json` → `agent_decision_log` bridge** (`apps/ta-cli/src/commands/draft.rs`): At draft build time, if `.ta/work-plan.json` exists in staging, load its `decisions` array and merge into `agent_decision_log` (same `DecisionLogEntry` format). This means planner decisions always surface in `ta draft view` without requiring the implementor to write a separate `.ta-decisions.json`.
+4. [x] **`work-plan.json` → `agent_decision_log` bridge** (`apps/ta-cli/src/commands/draft.rs`): At draft build time, if `.ta/work-plan.json` exists in staging, load its `decisions` array and merge into `agent_decision_log` (same `DecisionLogEntry` format). This means planner decisions always surface in `ta draft view` without requiring the implementor to write a separate `.ta-decisions.json`.
 
-5. [ ] **Updated workflow templates**: `governed-goal.toml` gains optional `plan_work` stage before `run_goal` (off by default, enabled with `[workflow.config] use_planner = true`). New `plan-implement-split.toml` template where the split is the default. `plan-build-phases.toml` gains `plan_work` as the first stage in each phase loop iteration.
+5. [x] **Updated workflow templates**: `governed-goal.toml` gains optional `plan_work` stage before `run_goal` (off by default, enabled with `[workflow.config] use_planner = true`). New `plan-implement-split.toml` template where the split is the default. `plan-build-phases.toml` gains `plan_work` as the first stage in each phase loop iteration.
 
-6. [ ] **Planner prompt** (`apps/ta-cli/src/commands/run.rs`): Injected planning prompt explains the role clearly: read the codebase, understand the goal, write a concrete implementation plan with design decisions documented. Explicitly instructs: "Do not write any code. Your output is the plan only." Includes example `work-plan.json`.
+6. [x] **Planner prompt** (`apps/ta-cli/src/commands/run.rs`): Injected planning prompt explains the role clearly: read the codebase, understand the goal, write a concrete implementation plan with design decisions documented. Explicitly instructs: "Do not write any code. Your output is the plan only." Includes example `work-plan.json`.
 
-7. [ ] **`ta draft view` planner section**: When `work-plan.json` was used, `ta draft view` shows an "Implementation Plan" section before the file diff — decisions, step list, out-of-scope items. This gives reviewers the full reasoning context before they see code changes, matching the mental model of a proper code review (understand intent → evaluate execution).
+7. [x] **`ta draft view` planner section**: When `work-plan.json` was used, `ta draft view` shows an "Implementation Plan" section before the file diff — decisions, step list, out-of-scope items. This gives reviewers the full reasoning context before they see code changes, matching the mental model of a proper code review (understand intent → evaluate execution).
 
-8. [ ] **Tests**: `PlanWork` stage spawns read-only agent and writes `work-plan.json`; fails cleanly when no plan written; `WorkPlan::validate()` rejects empty decisions; bridge loads plan decisions into agent_decision_log; draft view shows plan section when present; implementor context injection includes plan when preceding `PlanWork` stage exists.
+8. [x] **Tests**: `PlanWork` stage spawns read-only agent and writes `work-plan.json`; fails cleanly when no plan written; `WorkPlan::validate()` rejects empty decisions; bridge loads plan decisions into agent_decision_log; draft view shows plan section when present; implementor context injection includes plan when preceding `PlanWork` stage exists.
 
 #### Version: `0.15.20-alpha`
 
 ---
 
 ### v0.15.21 — Studio Advisor Agent (QA Agent Upgrade)
----
+<!-- status: done -->
 
 **Goal**: Replace the Studio QA agent with the advisor agent pattern from v0.15.19. The QA agent currently answers ad-hoc questions and runs context-scoped searches. The advisor is explicitly on the human's side: it interprets intent, explains what is happening, proactively flags concerns, and can execute TA commands depending on the configured security level.
 
@@ -11852,28 +11852,28 @@ The planner agent runs with read-only tools (Read, Grep, Glob) — it cannot wri
 
 #### Items
 
-1. [ ] **Rename QA agent → advisor in Studio** (`apps/ta-studio/`): Update all UI labels, button text, and panel titles from "QA Agent" / "Assistant" to "Advisor". Update the Studio chat pane header. This is terminology only — no functional change in this item.
+1. [x] **Rename QA agent → advisor in Studio** (`apps/ta-studio/`): Update all UI labels, button text, and panel titles from "QA Agent" / "Assistant" to "Advisor". Update the Studio chat pane header. This is terminology only — no functional change in this item.
 
 
 
-3. [ ] **Intent classifier integration** (`apps/ta-studio/src/advisor.rs`): Studio advisor uses `classify_intent()` on each human message. In `read_only` mode: present the `ta run "..."` command as copyable text. In `suggest` mode: render as a clickable "Run this" button in the chat pane. In `auto` mode: fire directly when confidence ≥ 80%, otherwise ask for clarification.
+3. [x] **Intent classifier integration** (`apps/ta-studio/src/advisor.rs`): Studio advisor uses `classify_intent()` on each human message. In `read_only` mode: present the `ta run "..."` command as copyable text. In `suggest` mode: render as a clickable "Run this" button in the chat pane. In `auto` mode: fire directly when confidence ≥ 80%, otherwise ask for clarification.
 
-4. [ ] **Structured phase summary in advisor chat** (`apps/ta-studio/src/advisor.rs`): When a multi-phase goal run completes or a milestone is reached, the advisor automatically presents the phase summary (per v0.15.19 spec) in the Studio chat pane. Per-phase diffs are expandable inline sections. Human can ask about any phase before approving.
+4. [x] **Structured phase summary in advisor chat** (`apps/ta-studio/src/advisor.rs`): When a multi-phase goal run completes or a milestone is reached, the advisor automatically presents the phase summary (per v0.15.19 spec) in the Studio chat pane. Per-phase diffs are expandable inline sections. Human can ask about any phase before approving.
 
-5. [ ] **TA tools for advisor** (by security level): In `auto` or `suggest` mode, advisor has access to: `ta_goal_start`, `ta_draft_list`, `ta_draft_view`, `ta_plan_status`. In `read_only`, only read-only tools (`ta_draft_view`, `ta_plan_status`, `ta_fs_read`). Tool availability injected into advisor context at session start.
+5. [x] **TA tools for advisor** (by security level): In `auto` or `suggest` mode, advisor has access to: `ta_goal_start`, `ta_draft_list`, `ta_draft_view`, `ta_plan_status`. In `read_only`, only read-only tools (`ta_draft_view`, `ta_plan_status`, `ta_fs_read`). Tool availability injected into advisor context at session start.
 
 
 
-7. [ ] **Tests**: Intent classifier returns GoalRun with ≥80% for unambiguous goal requests. `read_only` mode never fires `ta_goal_start`. `suggest` mode renders clickable button. `auto` mode fires when confidence ≥ 80%. Phase summary renders in chat pane on milestone. Advisor prompt framing passes constitution review (no neutral-gate language).
+7. [x] **Tests**: Intent classifier returns GoalRun with ≥80% for unambiguous goal requests. `read_only` mode never fires `ta_goal_start`. `suggest` mode renders clickable button. `auto` mode fires when confidence ≥ 80%. Phase summary renders in chat pane on milestone. Advisor prompt framing passes constitution review (no neutral-gate language).
 
-8. [ ] **USAGE.md "Studio Advisor"** section: How the advisor differs from the old QA agent, how security levels work, example interactions (asking questions, starting a goal via advisor, milestone phase summary walkthrough).
+8. [x] **USAGE.md "Studio Advisor"** section: How the advisor differs from the old QA agent, how security levels work, example interactions (asking questions, starting a goal via advisor, milestone phase summary walkthrough).
 
 #### Version: `0.15.21-alpha`
 
 ---
 
 ### v0.15.22 — Secret Scan: Real-Threat Discrimination
-
+<!-- status: pending -->
 
 **Goal**: Distinguish real credential leaks from documentation examples. Currently, `export TA_SLACK_BOT_TOKEN=...` in `USAGE.md` triggers the same finding level as an actual token embedded in source. This creates alert fatigue and erodes trust in the scanner.
 
@@ -11900,7 +11900,7 @@ The planner agent runs with read-only tools (Read, Grep, Glob) — it cannot wri
 ---
 
 ### v0.15.23 — Parameterized Workflow Templates
----
+<!-- status: pending -->
 
 **Goal**: Eliminate one-off workflow YAML files created for specific invocations (e.g., `plan-build-phases-v015.yaml`). Templates declare typed parameters with defaults. Parameters can reference plan context as built-ins. Invocations pass params at runtime.
 
@@ -11923,6 +11923,7 @@ The planner agent runs with read-only tools (Read, Grep, Glob) — it cannot wri
 ---
 
 ### v0.15.24 — Intent Resolver: Natural Language → Workflow Invocation
+<!-- status: pending -->
 
 
 **Goal**: "implement the rest of v0.15" resolves to `ta workflow run plan-build-phases --param phase_filter=v0.15` without the user needing to know the template name or params. The resolver uses keyword matching + plan context — no LLM required.
