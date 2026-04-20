@@ -9,7 +9,7 @@ workflow:
     PR-per-phase build loop scoped to v0.15.x phases only.
     Stops automatically when no more v0.15.x pending phases exist.
   config:
-    max_phases: 4
+    max_phases: 2
     stop_on_flag: true
 
 stages:
