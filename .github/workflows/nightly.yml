@@ -371,7 +371,7 @@ jobs:
             printf '| macOS ARM (M1/M2) | [tar.gz](%s/ta-nightly-aarch64-apple-darwin.tar.gz) | -- |\n' "${ASSET_BASE}"
             printf '| Windows x86_64 | [zip](%s/ta-nightly-x86_64-pc-windows-msvc.zip) | [msi](%s/ta-nightly-x86_64-pc-windows-msvc.msi) |\n\n' "${ASSET_BASE}" "${ASSET_BASE}"
             printf '[SHA256SUMS.txt](%s/SHA256SUMS.txt)\n\n' "${ASSET_BASE}"
-            printf '---\n\n'
+            printf '%s\n\n' '---'
             printf '## Nightly History {#nightly-history}\n\n'
             printf '| Date | Commit | Trigger | Downloads |\n'
             printf '|------|--------|---------|------------|\n'

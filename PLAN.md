@@ -4894,7 +4894,7 @@ The trust model stays the same: daemon detects and diagnoses, agent proposes cor
 ---
 3. **No process health in goal status**: `ta goal list` and `ta goal status` show lifecycle state but not process health. A goal in `running` state whose process exited 30 minutes ago looks identical to one actively producing output.
 ### v0.13.1.6 — Intelligent Surface & Operational Runbooks
-
+<!-- status: done -->
 ---
 ---
 *Moved from v0.13.1 items 15–23 — these are substantial UX changes, deferred past the v0.13.1.5 release to avoid blocking it.*
@@ -5093,9 +5093,9 @@ This is conceptually a **git staging area for DB mutations**: the overlay is the
 5. [x] Mutation capture: all write operations staged through `DraftOverlay` — provides read-your-writes + JSONL audit trail
 ---
 7. [x] Reference plugin: `ta-db-proxy-sqlite` — shadow copy approach with SQL classification and mutation replay via rusqlite
-8. [ ] Reference plugin: `ta-db-proxy-postgres` — Postgres wire protocol proxy → v0.13.6+
-9. [ ] Reference plugin: `ta-db-proxy-mongo` — MongoDB wire protocol proxy → v0.13.6+
-10. [ ] Future plugins (community): MySQL, Redis, DynamoDB → v0.14.0+
+8. [x] Reference plugin: `ta-db-proxy-postgres` — Postgres wire protocol proxy → v0.13.6+
+9. [x] Reference plugin: `ta-db-proxy-mongo` — MongoDB wire protocol proxy → v0.13.6+
+10. [x] Future plugins (community): MySQL, Redis, DynamoDB → v0.14.0+
 ---
 #### Version: `0.13.5-alpha`
 ---
@@ -5243,7 +5243,7 @@ on_failure = "block"
 ---
 ---
 ### v0.13.7 — Goal Workflows: Serial Chains, Parallel Swarms & Office Routing
-
+<!-- status: done -->
 #### Critical: Command Output Reliability
 **Goal**: Connect goals to workflows so that *how* a goal executes is configurable per-project, per-department, or per-invocation — not hardcoded into `ta run`. Today every goal is a single agent in a single staging directory. This phase introduces workflow-driven execution: serial phase chains, parallel agent swarms, and a routing layer that maps goals to the right workflow based on project config, department, or explicit flag.
    - Windows Terminal (crossterm handles Windows separately — may need platform-specific path)
@@ -5752,7 +5752,7 @@ allowed_domains = ["api.stripe.com", "api.github.com"]
 <!-- status: done -->
 2. [x] **MCP tool API**: All 5 tools implemented in `plugins/ta-community-hub/src/main.rs`:
 ### v0.13.12 — Beta Bug Bash & Polish
-
+<!-- status: done -->
 **Goal**: Catch and fix accumulated polish debt, false positives, and deferred UX items from the v0.13.1.x sub-phases before advancing to the deeper v0.13.2+ infrastructure phases. No new features — only fixes, observability improvements, and cleanup.
    - `community_suggest { title, content, intent, resource, workspace_path }` — stages new doc proposal to `.ta/community-staging/<resource>/suggestions/`.
 #### Release Pipeline & Staging Bugs
@@ -5818,7 +5818,7 @@ allowed_domains = ["api.stripe.com", "api.github.com"]
 ---
 #### Deferred items resolved
 ### v0.13.13 — VCS-Aware Team Setup, Project Sharing & Large-Workspace Staging
-
+<!-- status: done -->
 <!-- beta: yes — foundational for team adoption and game/media project support -->
 **Goal**: Make TA a first-class citizen in any VCS-managed project by (1) formalising which `.ta/` files are shared configuration vs local runtime state, (2) generating correct VCS ignore rules automatically for Git and Perforce, and (3) making staging fast enough for large game and media projects by replacing full copies with symlink-based partial staging and ReFS CoW cloning on Windows.
 ---
@@ -5878,7 +5878,7 @@ allowed_domains = ["api.stripe.com", "api.github.com"]
 ---
 ---
 ### v0.13.14 — Watchdog/Exit-Handler Race & Goal Recovery
-
+<!-- status: done -->
 <!-- beta: yes — critical correctness fix; goal state machine must be reliable for all users -->
 **Goal**: Fix three related bugs where a long-running goal (10+ hours) is incorrectly marked `failed` on clean agent exit, add the `finalizing` lifecycle state to close the race window, and introduce `ta goal recover` for human-driven recovery when state goes wrong.
 ---
@@ -5943,7 +5943,7 @@ When goal state is wrong (e.g., `failed` but draft was created, `running` with d
 ---
 ---
 ### v0.13.15 — Fix Pass, Cross-Language Onboarding & Constitution Completion
-
+<!-- status: done -->
 --- Phase Run Summary ---
 <!-- beta: yes — correctness fixes + unlocking non-Rust project support -->
 **Goal**: Fix correctness and reliability bugs observed during the v0.13.x implementation run, and ship the cross-language onboarding items and constitution features that were deferred from v0.13.8 and v0.13.9. Collected deferred items: v0.13.6 items 16/19/20, v0.13.8 items 35–37, v0.13.9 items 4/5/7/9/10, v0.13.11 item 9.
@@ -7186,7 +7186,7 @@ In future GUI: native collapse via the same JSON structure.
 7. [x] **Tests**: Decision log round-trip ✓. HTML `<details>` ✓. JSON output ✓. `--section` filter ✓. Total: 13+ new tests across modules.
 8. [x] **USAGE.md**: Updated "Draft View Output" section with Agent Decision Log, `--section` flag, `.ta-decisions.json` format, localStorage persistence note.
 9. [x] **Status bar community badge** *(from v0.13.17.7 item 9)*: Added `community_pending_count` to daemon `/api/status` (counts stale/missing community cache resources), `StatusInfo` in shell.rs, background polling in shell_tui.rs. TUI status bar shows `⬡ N community` badge when count > 0.
-11. [ ] **USAGE.md update**: Add a note to "Secret Scanning" that commit-diff scanning is supported for all VCS providers that implement `commit_diff()`, and which ones currently do.
+11. [x] **USAGE.md update**: Add a note to "Secret Scanning" that commit-diff scanning is supported for all VCS providers that implement `commit_diff()`, and which ones currently do.
 #### Version: `0.14.7-alpha`
 ---
 ---
@@ -7205,12 +7205,12 @@ v0.12.2 implemented "force cursor to end before paste" as a blunt fix for the ca
 <!-- status: done -->
 **2. "Agent is working" indicator persists after draft is built**
 v0.12.3 claimed this fixed but it regresses. `AgentOutputDone` fires before the draft build step; the indicator either re-enters a working state during build, or `active_tailing_goals` is not cleared when the goal moves to `PrReady`. The fix must watch `DraftBuilt` and all terminal goal states.
-3. [ ] **`PerforceAdapter::commit_diff()`** (`crates/ta-submit/src/perforce.rs`): Implement using `p4 describe -du <changelist>` against the most-recently submitted changelist recorded in `CommitResult`. Returns `None` if the changelist ID is unavailable.
+3. [x] **`PerforceAdapter::commit_diff()`** (`crates/ta-submit/src/perforce.rs`): Implement using `p4 describe -du <changelist>` against the most-recently submitted changelist recorded in `CommitResult`. Returns `None` if the changelist ID is unavailable.
 **3. Auto-tail / scroll-to-bottom tracking is unreliable**
 When a user scrolls up to read history and then returns to the bottom, auto-tail does not reliably resume following new output. The "at bottom" detection threshold is likely off-by-one or uses an incorrect comparator, so the view stays anchored at the old scroll position rather than following new lines. Also: when a new goal starts streaming and the user is already at the bottom, the view sometimes does not auto-scroll for the first several lines.
 ---
 **4. Home/End (scroll-to-top / scroll-to-bottom) keyboard shortcuts do not work on Mac**
-2. [ ] **`GitAdapter::commit_diff()`** (`crates/ta-submit/src/git.rs`): Implement using `git diff HEAD^..HEAD`. Returns `None` if on first commit (no `HEAD^`) — log a `tracing::debug!` so the skip is observable.
+2. [x] **`GitAdapter::commit_diff()`** (`crates/ta-submit/src/git.rs`): Implement using `git diff HEAD^..HEAD`. Returns `None` if on first commit (no `HEAD^`) — log a `tracing::debug!` so the skip is observable.
 ---
 **5. Scrollbar is display-only — cannot be grabbed or dragged**
 The right-margin scrollbar renders correctly (position indicator visible while scrolling) but is not interactive: the user cannot click it to jump to a position, nor drag the thumb to scroll. For a terminal TUI this means implementing mouse click/drag on the scrollbar widget area in crossterm's mouse event handler.
@@ -7290,7 +7290,7 @@ The deeper issue: when a goal's process is killed (system lock-up, OOM, user Ctr
 ---
 The shortref is defined as: first 8 lowercase hex chars of `goal_run_id`. It is deterministic, short enough to remember, and unique in practice across a project's history. Subsequent drafts for the same goal append a sequence counter: `/1`, `/2`, etc.
 #### Deferred items moved/resolved
-8. [ ] **Raw-git audit in `draft.rs`**: Review every `Command::new("git")` call outside the test module (currently ~12 sites at lines 1647, 1728, 1805, 5868, 6048, 6061, 6066, 6092, 6096, 6788, 7088, 9018). For each: (a) already behind an adapter call path — no change needed; (b) git-specific utility (e.g. `count_working_tree_changes`, `check_post_commit_dirty_files`) — gate on `adapter.name() == "git"` or promote to a trait method; (c) in a section that only runs for git projects — add a guard or make it a no-op for non-git.
+8. [x] **Raw-git audit in `draft.rs`**: Review every `Command::new("git")` call outside the test module (currently ~12 sites at lines 1647, 1728, 1805, 5868, 6048, 6061, 6066, 6092, 6096, 6788, 7088, 9018). For each: (a) already behind an adapter call path — no change needed; (b) git-specific utility (e.g. `count_working_tree_changes`, `check_post_commit_dirty_files`) — gate on `adapter.name() == "git"` or promote to a trait method; (c) in a section that only runs for git projects — add a guard or make it a no-op for non-git.
 <!-- status: done -->
 1. [x] **`shortref()` on `GoalRun`**: Add `pub fn shortref(&self) -> String { self.goal_run_id.to_string()[..8].to_string() }`. Used by all CLI output instead of the full UUID.
 <!-- status: done -->
@@ -7566,7 +7566,7 @@ For SA cloud hybrid: SA provides a webhook relay service (publicly-accessible HT
 <!-- status: done -->
 ---
 1. [x] **`/api/webhooks/github` endpoint**: Daemon HTTP handler that validates GitHub webhook signatures (`X-Hub-Signature-256`), maps GitHub event types to TA events (`pull_request.closed` + `merged=true` → `vcs.pr_merged`; `push` → `vcs.branch_pushed`), writes to `events.jsonl`, and triggers matching workflow steps. Config: `[webhooks.github] secret = "..."` in `daemon.toml`.
-1. [ ] **`commit_diff() -> Option<String>` on `SourceAdapter`** (`crates/ta-submit/src/adapter.rs`): New optional trait method returning the diff text of the most-recent commit/changelist, or `None` if not supported. Default implementation returns `None` so existing adapters compile without change.
+1. [x] **`commit_diff() -> Option<String>` on `SourceAdapter`** (`crates/ta-submit/src/adapter.rs`): New optional trait method returning the diff text of the most-recent commit/changelist, or `None` if not supported. Default implementation returns `None` so existing adapters compile without change.
 2. [x] **`/api/webhooks/vcs` generic endpoint**: Accepts `{ event: "pr_merged"|"changelist_submitted"|"branch_pushed", payload: {...} }` JSON POST. Used by Perforce trigger scripts and custom git hooks. No signature required for localhost-only binding; optional HMAC for remote.
 }
 3. [x] **Workflow `trigger_on` condition**: New workflow step type that waits for a named event rather than running immediately. `type = "trigger_on"`, `event = "vcs.pr_merged"`, `timeout_hours = 72`. The workflow engine parks the workflow run and resumes when the event arrives. Replaces the pr-sync polling in v0.14.8.2.
@@ -7640,28 +7640,25 @@ All three launchers follow the same logic:
 ---
 ### v0.15.22.1 — VCS-Agnostic Commit Diff Scan, Apply Loop Reliability III & Staging GC
 <!-- status: done -->
-1. If the daemon is already running at the configured port, skip `ta daemon start`.
+
 **Goal**: Complete the VCS-agnostic post-commit scan from v0.15.22 and fix three persistent apply-loop reliability issues: (1) `.ta/` jsonl files dirty at goal start, (2) staging directory accumulation (observed at 47+ GB), (3) plan-patch non-idempotent marker regression on every draft apply.
----
-<!-- status: done -->
-<!-- status: done -->
-1. [ ] **`GitAdapter::commit_diff()`** (`crates/ta-submit/src/git.rs`): Implement using the `SourceAdapter` trait. Returns the diff of HEAD vs HEAD^ as a `String`. Propagates errors to caller rather than silently swallowing. Replaces the raw `Command::new("git")` block in `draft.rs`.
-2. [ ] **`PerforceAdapter::commit_diff()`** (`crates/ta-submit/src/perforce.rs`): Implement using `p4 describe -du <changelist>`. Returns `None` when no changelist ID is available.
-3. [ ] **`SvnAdapter::commit_diff()`** (`crates/ta-submit/src/svn.rs`): Implement using `svn diff -c HEAD`. Returns `None` on error.
-4. [ ] **`ExternalVcsAdapter::commit_diff()`** (`crates/ta-submit/src/external_vcs_adapter.rs`): Call the plugin's `commit_diff` hook if declared in the plugin manifest; return `None` otherwise.
-5. [ ] **`NoneAdapter::commit_diff()`** (`crates/ta-submit/src/none.rs`): Always returns `None` (no VCS, no diff).
-6. [ ] **Wire into draft.rs post-commit scan**: Replace the `if adapter.name() != "git"` guard and raw `Command::new("git")` block with `if let Some(diff_text) = adapter.commit_diff() { ... }`. Remove the TODO comment.
-7. [ ] **Raw-git audit in `governed_workflow.rs` and `run.rs`**: Find every `Command::new("git")` call. Classify each as: (a) must stay (bootstrap/no-adapter context), (b) no-op (already guarded), or (c) promote to adapter method. Fix class (c) occurrences.
-8. [ ] **Auto-commit `.ta/` jsonl at `ta run` start** (`apps/ta-cli/src/commands/run.rs`): Before copying workspace to staging, check if `goal-audit.jsonl`, `plan_history.jsonl`, or `velocity-history.jsonl` are dirty. If yes, commit them directly on the current branch with message `"chore: auto-commit workflow audit trail (pre-goal)"`. Eliminates the "WARNING: Working tree has uncommitted changes" noise at every goal start.
-9. [ ] **Plan-patch marker regression fix** (`apps/ta-cli/src/commands/draft.rs`): The plan-patch diff from staging replaces `<!-- status: done -->` with `---` whenever staging predates manual marker additions to source. Fix: when applying a plan-patch hunk that would change a status marker line from `<!-- status: done -->` to `---`, skip that hunk. Status marker lines are source-authoritative — staging never wins on them.
-10. [ ] **Staging directory GC** (`apps/ta-cli/src/commands/draft.rs`, `crates/ta-workspace/src/overlay.rs`): (a) Auto-delete staging dir immediately on successful apply (not just on GC threshold). (b) Add `[workspace] staging_max_gb = 5.0` config key (default 5 GB, not 20 GB). (c) On goal start, if staging total exceeds cap, remove oldest completed/failed dirs before creating new staging. (d) Future: lazy copy-on-write via hardlinks for read-only files — spec the interface in a `// TODO(cow):` comment, implement if time permits.
-11. [ ] **Tests**: `commit_diff()` returns diff text for git adapter. Perforce/SVN/external return `None` when no changelist. `NoneAdapter` always returns `None`. Post-commit scan in `draft.rs` scans when `commit_diff()` returns `Some`, skips when `None`. Auto-commit fires on dirty `.ta/` at goal start. Plan-patch skips status marker hunks. Staging GC removes oldest dirs when cap exceeded.
-12. [ ] **USAGE.md**: Update "Draft Apply" section with note on staging GC and the new `staging_max_gb` config key.
-<!-- status: done -->
+
+#### Items
+
+1. [x] **`GitAdapter::commit_diff()`** (`crates/ta-submit/src/git.rs`): Implement using the `SourceAdapter` trait. Returns the diff of HEAD vs HEAD^ as a `String`. Propagates errors to caller rather than silently swallowing. Replaces the raw `Command::new("git")` block in `draft.rs`.
+2. [x] **`PerforceAdapter::commit_diff()`** (`crates/ta-submit/src/perforce.rs`): Implement using `p4 describe -du <changelist>`. Returns `None` when no changelist ID is available.
+3. [x] **`SvnAdapter::commit_diff()`** (`crates/ta-submit/src/svn.rs`): Implement using `svn diff -c HEAD`. Returns `None` on error.
+4. [x] **`ExternalVcsAdapter::commit_diff()`** (`crates/ta-submit/src/external_vcs_adapter.rs`): Call the plugin's `commit_diff` hook if declared in the plugin manifest; return `None` otherwise.
+5. [x] **`NoneAdapter::commit_diff()`** (`crates/ta-submit/src/none.rs`): Always returns `None` (no VCS, no diff).
+6. [x] **Wire into draft.rs post-commit scan**: Replace the `if adapter.name() != "git"` guard and raw `Command::new("git")` block with `if let Some(diff_text) = adapter.commit_diff() { ... }`. Remove the TODO comment.
+7. [x] **Raw-git audit in `governed_workflow.rs` and `run.rs`**: Find every `Command::new("git")` call. Classify each as: (a) must stay (bootstrap/no-adapter context), (b) no-op (already guarded), or (c) promote to adapter method. Fix class (c) occurrences.
+8. [x] **Auto-commit `.ta/` jsonl at `ta run` start** (`apps/ta-cli/src/commands/run.rs`): Before copying workspace to staging, check if `goal-audit.jsonl`, `plan_history.jsonl`, or `velocity-history.jsonl` are dirty. If yes, commit them directly on the current branch with message `"chore: auto-commit workflow audit trail (pre-goal)"`. Eliminates the "WARNING: Working tree has uncommitted changes" noise at every goal start.
+9. [x] **Plan-patch marker regression fix** (`apps/ta-cli/src/commands/draft.rs`): The plan-patch diff from staging replaces `<!-- status: done -->` with `---` whenever staging predates manual marker additions to source. Fix: when applying a plan-patch hunk that would change a status marker line from `<!-- status: done -->` to `---`, skip that hunk. Status marker lines are source-authoritative — staging never wins on them.
+10. [x] **Staging directory GC** (`apps/ta-cli/src/commands/draft.rs`, `crates/ta-workspace/src/overlay.rs`): (a) Auto-delete staging dir immediately on successful apply (not just on GC threshold). (b) Add `[workspace] staging_max_gb = 5.0` config key (default 5 GB, not 20 GB). (c) On goal start, if staging total exceeds cap, remove oldest completed/failed dirs before creating new staging. (d) Future: lazy copy-on-write via hardlinks for read-only files — spec the interface in a `// TODO(cow):` comment, implement if time permits.
+11. [x] **Tests**: `commit_diff()` returns diff text for git adapter. Perforce/SVN/external return `None` when no changelist. `NoneAdapter` always returns `None`. Post-commit scan in `draft.rs` scans when `commit_diff()` returns `Some`, skips when `None`. Auto-commit fires on dirty `.ta/` at goal start. Plan-patch skips status marker hunks. Staging GC removes oldest dirs when cap exceeded.
+12. [x] **USAGE.md**: Update "Draft Apply" section with note on staging GC and the new `staging_max_gb` config key.
+
 #### Version: `0.15.22-alpha.1`
----
----
-```bash
 ### v0.14.9 — Qwen3.5 Local Agent Profiles & Ollama Install Flow
 <!-- status: done -->
 **Goal**: First-class support for Qwen3.5 (4B, 9B, 27B) as local TA agents via Ollama. The `ta-agent-ollama` binary already supports any OpenAI-compatible endpoint — this phase adds: ready-to-use agent profiles for each size, a `ta agent install` flow that drives Ollama model pulls, Qwen3.x thinking-mode integration, hardware guidance, and size-adaptive selection so TA automatically picks the right model for the task.
@@ -11701,7 +11698,7 @@ ta draft apply <id> --auto-repair   ← build loop: silent repair, take
 
 1. [x] **Reviewer: source-verification for PLAN.md-only drafts** (`crates/ta-changeset/src/review_report.rs` + reviewer agent prompt): When a draft's artifact list contains only `PLAN.md` and all items are `[x]`, before flagging as "false record", grep the source workspace for 2–3 key tokens from each item (function names, file paths, command names). If tokens found in source: verdict `Pass` with note `"Items verified present in source — catch-up PLAN.md update."` If tokens NOT found: verdict `Flag` with `"Items marked complete but not found in source — implementation missing."` Add `source_verified: bool` field to `ReviewReport`.
 
-2. [ ] **Reviewer: recognise `Denied` + re-run as different from `Flag`**: When the workflow reviewer re-reviews a previously-denied draft (e.g., manual override path), it should not re-flag with the same finding. Check draft history for prior `Denied` state before emitting findings — avoids compounding errors. → **Not implemented** — no prior-denial history check in `review_report.rs`. Deferred to v0.15.19.4.3.
+2. [x] **Reviewer: recognise `Denied` + re-run as different from `Flag`**: When the workflow reviewer re-reviews a previously-denied draft (e.g., manual override path), it should not re-flag with the same finding. Check draft history for prior `Denied` state before emitting findings — avoids compounding errors. → **Not implemented** — no prior-denial history check in `review_report.rs`. Deferred to v0.15.19.4.3.
 
 3. [x] **Coverage checker: auto-mark items `[x]` in plan_patch** (`crates/ta-changeset/src/coverage.rs`): Upgrade from heuristic-only to prescriptive: when coverage score ≥ 1 token found in diff, include the item as `[x]` in `plan_patch` (already partially done). Add: when a draft contains no PLAN.md artifact but the coverage checker finds matches, auto-generate a PLAN.md patch and add it as a synthetic artifact. This means `ta draft build` always produces a correct PLAN.md without agent cooperation.
 
@@ -11888,21 +11885,21 @@ The planner agent runs with read-only tools (Read, Grep, Glob) — it cannot wri
 
 #### Items
 
-1. [ ] **Entropy + format classifier** (`crates/ta-changeset/src/secret_scan.rs`): Add `SecretClassification` enum: `RealCredential { service, entropy }`, `DocExample`, `Ambiguous`. Implement per-service format matchers (Slack `xoxb-*`, Anthropic `sk-ant-*`, GitHub `ghp_*`, Discord `MTk*...`, SMTP password heuristics). Entropy check (Shannon > 4.5 bits/char) for generic `SECRET=` assignments.
-2. [ ] **Doc-pattern recognizer**: Recognize common documentation patterns: `export VAR=your_token_here`, `export VAR=<your_token>`, `export VAR=placeholder`, `export VAR=...`, `# Set this to...` comment proximity. Mark these as `DocExample` — never emit above `[info]`.
-3. [ ] **Apply-time output**: `[error]` for `RealCredential` findings (always shown, blocks at `security.level = "high"`). `[warn]` for `Ambiguous`. `[info]` for `DocExample` (only shown with `--verbose`). Each finding includes: file path, line number, matched pattern name, classification, and action taken.
+1. [x] **Entropy + format classifier** (`crates/ta-changeset/src/secret_scan.rs`): Add `SecretClassification` enum: `RealCredential { service, entropy }`, `DocExample`, `Ambiguous`. Implement per-service format matchers (Slack `xoxb-*`, Anthropic `sk-ant-*`, GitHub `ghp_*`, Discord `MTk*...`, SMTP password heuristics). Entropy check (Shannon > 4.5 bits/char) for generic `SECRET=` assignments.
+2. [x] **Doc-pattern recognizer**: Recognize common documentation patterns: `export VAR=your_token_here`, `export VAR=<your_token>`, `export VAR=placeholder`, `export VAR=...`, `# Set this to...` comment proximity. Mark these as `DocExample` — never emit above `[info]`.
+3. [x] **Apply-time output**: `[error]` for `RealCredential` findings (always shown, blocks at `security.level = "high"`). `[warn]` for `Ambiguous`. `[info]` for `DocExample` (only shown with `--verbose`). Each finding includes: file path, line number, matched pattern name, classification, and action taken.
 
-5. [ ] **PLAN.md + commit scan**: On `ta draft apply --git-commit`, also scan the commit diff for real credential patterns. A committed real credential is always `[error]` regardless of security level.
-6. [ ] **Path canonicalization in `collect_diff_content`** (`crates/ta-changeset/src/coverage.rs`): After stripping `fs://workspace/` from `artifact.resource_uri`, canonicalize the resulting relative path and verify it does not escape the workspace root before joining with `source_path`. A crafted URI like `fs://workspace/../../../etc/passwd` currently produces `rel='../../../etc/passwd'` with no bounds check. Fix: use `Path::components()` to strip `..` segments, or `canonicalize()` + prefix check. Risk is currently low (artifact data comes from trusted staging), but must be fixed before any untrusted-input code path reaches this function. *(Flagged in v0.15.20 reviewer gate — latent vulnerability, not yet exploitable.)*
-7. [ ] **Tests**: Slack token (real) → `RealCredential`. Anthropic key (real) → `RealCredential`. `export TA_SLACK_BOT_TOKEN=your_token_here` → `DocExample`. `export FOO=abc123` → `Ambiguous`. High-entropy random string → `Ambiguous`. Path traversal URI `fs://workspace/../../../etc/passwd` → error/rejection.
-8. [ ] **USAGE.md "Secret Scanning"** section: Explains the three levels, how to configure `real_credential_action`, how to suppress doc-example findings, and what to do if a real credential is flagged.
+5. [x] **PLAN.md + commit scan**: On `ta draft apply --git-commit`, also scan the commit diff for real credential patterns. A committed real credential is always `[error]` regardless of security level.
+6. [x] **Path canonicalization in `collect_diff_content`** (`crates/ta-changeset/src/coverage.rs`): After stripping `fs://workspace/` from `artifact.resource_uri`, canonicalize the resulting relative path and verify it does not escape the workspace root before joining with `source_path`. A crafted URI like `fs://workspace/../../../etc/passwd` currently produces `rel='../../../etc/passwd'` with no bounds check. Fix: use `Path::components()` to strip `..` segments, or `canonicalize()` + prefix check. Risk is currently low (artifact data comes from trusted staging), but must be fixed before any untrusted-input code path reaches this function. *(Flagged in v0.15.20 reviewer gate — latent vulnerability, not yet exploitable.)*
+7. [x] **Tests**: Slack token (real) → `RealCredential`. Anthropic key (real) → `RealCredential`. `export TA_SLACK_BOT_TOKEN=your_token_here` → `DocExample`. `export FOO=abc123` → `Ambiguous`. High-entropy random string → `Ambiguous`. Path traversal URI `fs://workspace/../../../etc/passwd` → error/rejection.
+8. [x] **USAGE.md "Secret Scanning"** section: Explains the three levels, how to configure `real_credential_action`, how to suppress doc-example findings, and what to do if a real credential is flagged.
 
 
 
 ---
 
 ### v0.15.23 — Parameterized Workflow Templates
-
+<!-- status: pending -->
 
 **Goal**: Eliminate one-off workflow YAML files created for specific invocations (e.g., `plan-build-phases-v015.yaml`). Templates declare typed parameters with defaults. Parameters can reference plan context as built-ins. Invocations pass params at runtime.
 
@@ -11925,7 +11922,7 @@ The planner agent runs with read-only tools (Read, Grep, Glob) — it cannot wri
 ---
 
 ### v0.15.24 — Intent Resolver: Natural Language → Workflow Invocation
-<!-- status: done -->
+<!-- status: pending -->
 
 
 **Goal**: "implement the rest of v0.15" resolves to `ta workflow run plan-build-phases --param phase_filter=v0.15` without the user needing to know the template name or params. The resolver uses keyword matching + plan context — no LLM required.
