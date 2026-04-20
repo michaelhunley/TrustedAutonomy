@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use ta_changeset::ArtifactType;
 
 use crate::interaction::AwaitHumanConfig;
+use crate::params::ParamDecl;
 
 /// Catalog of built-in workflow names and descriptions shipped with TA.
 ///
@@ -82,6 +83,13 @@ pub struct WorkflowDefinition {
     ///   agent_framework: codex
     #[serde(default)]
     pub agent_framework: Option<String>,
+    /// Typed parameter declarations for this template (v0.15.23).
+    ///
+    /// When present, callers must supply required params via `--param key=value`.
+    /// Optional params with defaults are filled in at invocation time.
+    /// All stage/role string fields support `{{params.name}}` substitution.
+    #[serde(default)]
+    pub params: HashMap<String, ParamDecl>,
 }
 
 /// A single stage in the workflow.
@@ -327,6 +335,7 @@ roles:
             roles: Default::default(),
             verdict: None,
             agent_framework: None,
+            params: Default::default(),
         };
         let order = def.stage_order().unwrap();
         assert_eq!(order, vec!["build", "review"]);
@@ -363,6 +372,7 @@ roles:
             roles: Default::default(),
             verdict: None,
             agent_framework: None,
+            params: Default::default(),
         };
         let result = def.stage_order();
         assert!(matches!(

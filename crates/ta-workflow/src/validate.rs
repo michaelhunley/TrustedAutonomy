@@ -515,6 +515,7 @@ mod tests {
             },
             verdict: None,
             agent_framework: None,
+            params: Default::default(),
         }
     }
 
@@ -596,6 +597,7 @@ mod tests {
             roles: HashMap::new(),
             verdict: None,
             agent_framework: None,
+            params: Default::default(),
         };
         let result = validate_workflow(&wf, None);
         assert!(result.has_errors());

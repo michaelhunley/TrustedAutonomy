@@ -22,8 +22,8 @@ use clap::Subcommand;
 use ta_changeset::sources::{ExternalSource, Lockfile, PackageManifest, SourceCache};
 use ta_mcp_gateway::GatewayConfig;
 use ta_workflow::{
-    artifact_dag, ArtifactStore, ArtifactType, WorkflowCatalog, WorkflowDefinition, WorkflowEngine,
-    YamlWorkflowEngine,
+    artifact_dag, ArtifactStore, ArtifactType, ParamValues, PlanContext, TemplateLibrary,
+    WorkflowCatalog, WorkflowDefinition, WorkflowEngine, YamlWorkflowEngine,
 };
 
 use super::email_manager;
@@ -38,6 +38,10 @@ pub enum WorkflowCommands {
     ///
     /// For the email-manager workflow (v0.15.10), runs the email assistant pipeline:
     ///   fetch → filter → reply-draft goal → supervisor → create_draft
+    ///
+    /// Parameterized templates (v0.15.23):
+    ///   ta workflow run plan-build-phases --param phase_filter=v0.15
+    ///   ta workflow run governed-goal --param goal_title="Fix the auth bug"
     ///
     /// Examples:
     ///   ta workflow run governed-goal --goal "Fix the auth bug"
@@ -71,6 +75,27 @@ pub enum WorkflowCommands {
         /// Useful for catching up after time away. Example: --since 2026-04-01T00:00:00Z
         #[arg(long)]
         since: Option<String>,
+        /// Template parameter overrides as key=value pairs (v0.15.23).
+        ///
+        /// Each `--param` sets one parameter declared in the template's `params:` section.
+        /// Unknown keys are rejected. Required params with no default must be supplied.
+        ///
+        /// Example:
+        ///   ta workflow run plan-build-phases --param phase_filter=v0.15 --param max_phases=3
+        #[arg(long = "param")]
+        params: Vec<String>,
+    },
+    /// Print the full definition of a workflow template with parameter docs (v0.15.23).
+    ///
+    /// Searches .ta/workflow-templates/ (project), ~/.config/ta/workflow-templates/ (user),
+    /// and built-in templates for the given name.
+    ///
+    /// Example:
+    ///   ta workflow show plan-build-phases
+    ///   ta workflow show governed-goal
+    Show {
+        /// Template name to display.
+        name: String,
     },
     /// Initialise a built-in workflow template (v0.15.10).
     ///
@@ -140,6 +165,9 @@ pub enum WorkflowCommands {
         /// List built-in workflow names shipped with TA (usable with `ta run --workflow`).
         #[arg(long)]
         builtin: bool,
+        /// List parameterized templates (project + user global + built-in) with their params (v0.15.23).
+        #[arg(long)]
+        param_templates: bool,
     },
     /// Cancel a running workflow.
     Cancel {
@@ -208,6 +236,7 @@ pub fn execute(command: &WorkflowCommands, config: &GatewayConfig) -> anyhow::Re
             dry_run,
             resume,
             since,
+            params,
         } => {
             // email-manager uses a different pipeline.
             if name == "email-manager" {
@@ -218,8 +247,13 @@ pub fn execute(command: &WorkflowCommands, config: &GatewayConfig) -> anyhow::Re
                     agent,
                 );
             }
+
+            // Resolve template parameters if the workflow has a params section.
+            let resolved_goal =
+                resolve_template_goal(name, goal.as_deref(), params, &config.workspace_root)?;
+
             // Governed-goal and other TOML-based workflows require --goal.
-            let goal_title = goal.as_deref().ok_or_else(|| {
+            let goal_title = resolved_goal.as_deref().ok_or_else(|| {
                 anyhow::anyhow!(
                     "--goal is required for workflow '{}'\n\
                      Usage: ta workflow run {} --goal \"<title>\"",
@@ -239,6 +273,7 @@ pub fn execute(command: &WorkflowCommands, config: &GatewayConfig) -> anyhow::Re
             };
             governed_workflow::run_governed_workflow(&opts)
         }
+        WorkflowCommands::Show { name } => show_template(name, config),
         WorkflowCommands::Init { name } => match name.as_str() {
             "email-manager" => email_manager::init_email_manager(&config.workspace_root),
             other => anyhow::bail!(
@@ -275,11 +310,14 @@ pub fn execute(command: &WorkflowCommands, config: &GatewayConfig) -> anyhow::Re
             templates,
             source,
             builtin,
+            param_templates,
         } => {
             if *builtin {
                 list_builtin_workflows()
             } else if *templates {
                 list_templates()
+            } else if *param_templates {
+                list_parameterized_templates(config)
             } else if source.as_deref() == Some("external") {
                 list_external_workflows(config)
             } else {
@@ -299,6 +337,94 @@ pub fn execute(command: &WorkflowCommands, config: &GatewayConfig) -> anyhow::Re
         } => publish_workflow(name, registry.as_deref(), bump.as_deref(), config),
         WorkflowCommands::Update { name, all } => update_workflows(name.as_deref(), *all, config),
     }
+}
+
+/// Resolve a workflow's goal title by processing template parameters if present.
+///
+/// When a workflow template declares a `params:` section, we:
+///   1. Parse the `--param key=value` pairs from CLI.
+///   2. Validate them against the template's param declarations.
+///   3. Fill in defaults (which may reference `{{plan.*}}` built-ins).
+///   4. If the template has `goal_title` in its params and no `--goal` was given,
+///      synthesize the goal title from the resolved parameters.
+///
+/// Returns `Ok(Some(goal_title))` if a goal is available, `Ok(None)` if neither
+/// the template nor CLI provides one (the caller will reject it for governed workflows).
+fn resolve_template_goal(
+    workflow_name: &str,
+    goal: Option<&str>,
+    param_pairs: &[String],
+    workspace_root: &std::path::Path,
+) -> anyhow::Result<Option<String>> {
+    // If --goal was given, use it directly (no template param processing needed).
+    if let Some(g) = goal {
+        if !param_pairs.is_empty() {
+            // Still validate the params so unknown keys are caught early.
+            validate_params_only(workflow_name, param_pairs, workspace_root)?;
+        }
+        return Ok(Some(g.to_string()));
+    }
+
+    // No --goal: check if the template has a goal_title param we can use.
+    let lib = TemplateLibrary::new(workspace_root);
+    let template_yaml = match lib.load(workflow_name) {
+        Some(y) => y,
+        None => {
+            // Not a parameterized template — let the caller handle missing --goal.
+            return Ok(None);
+        }
+    };
+
+    let def = match WorkflowDefinition::from_yaml(&template_yaml) {
+        Ok(d) => d,
+        Err(_) => return Ok(None),
+    };
+
+    if def.params.is_empty() {
+        // Template has no params — no goal synthesis possible.
+        return Ok(None);
+    }
+
+    let plan_ctx = PlanContext::load(workspace_root);
+
+    let mut pv = ParamValues::from_cli_pairs(param_pairs)
+        .map_err(|e| anyhow::anyhow!("invalid --param: {}", e))?;
+    pv.validate_and_fill(&def.params, &plan_ctx)
+        .map_err(|e| anyhow::anyhow!("parameter error for workflow '{}': {}", workflow_name, e))?;
+
+    // Try to synthesize a goal title from the resolved params.
+    if let Some(goal_val) = pv.get("goal_title") {
+        if !goal_val.is_empty() {
+            return Ok(Some(goal_val.to_string()));
+        }
+    }
+
+    // Fall through — caller decides if --goal is required.
+    Ok(None)
+}
+
+/// Validate `--param` values against a template without running it.
+fn validate_params_only(
+    workflow_name: &str,
+    param_pairs: &[String],
+    workspace_root: &std::path::Path,
+) -> anyhow::Result<()> {
+    let lib = TemplateLibrary::new(workspace_root);
+    let Some(template_yaml) = lib.load(workflow_name) else {
+        return Ok(());
+    };
+    let Ok(def) = WorkflowDefinition::from_yaml(&template_yaml) else {
+        return Ok(());
+    };
+    if def.params.is_empty() {
+        return Ok(());
+    }
+    let plan_ctx = PlanContext::load(workspace_root);
+    let mut pv = ParamValues::from_cli_pairs(param_pairs)
+        .map_err(|e| anyhow::anyhow!("invalid --param: {}", e))?;
+    pv.validate_and_fill(&def.params, &plan_ctx)
+        .map_err(|e| anyhow::anyhow!("parameter error for workflow '{}': {}", workflow_name, e))?;
+    Ok(())
 }
 
 fn start_workflow(definition_path: &std::path::Path) -> anyhow::Result<()> {
@@ -441,6 +567,109 @@ fn list_templates() -> anyhow::Result<()> {
     println!("  orchestrator      Multi-agent orchestrator role");
     println!();
     println!("Role files: templates/workflows/roles/");
+    Ok(())
+}
+
+/// List parameterized templates from the template library (project + user + built-in).
+fn list_parameterized_templates(config: &GatewayConfig) -> anyhow::Result<()> {
+    let lib = TemplateLibrary::new(&config.workspace_root);
+    let entries = lib.list();
+
+    println!("Parameterized workflow templates:");
+    println!();
+    if entries.is_empty() {
+        println!("  (none found)");
+    } else {
+        for entry in &entries {
+            println!(
+                "  {:<28} [{}]  {}",
+                entry.name, entry.source, entry.description
+            );
+            for (param_name, param_summary) in &entry.params {
+                println!("    --param {:<20} {}", param_name, param_summary);
+            }
+            if !entry.params.is_empty() {
+                println!();
+            }
+        }
+    }
+
+    println!();
+    println!("Template search paths (highest priority first):");
+    println!(
+        "  1. {}  (project)",
+        config
+            .workspace_root
+            .join(".ta")
+            .join("workflow-templates")
+            .display()
+    );
+    println!("  2. ~/.config/ta/workflow-templates/  (user global)");
+    println!("  3. built-in templates (shipped with ta)");
+    println!();
+    println!("Inspect a template:");
+    println!("  ta workflow show plan-build-phases");
+    println!();
+    println!("Run with parameters:");
+    println!("  ta workflow run plan-build-phases --param phase_filter=v0.15 --param max_phases=3");
+    Ok(())
+}
+
+/// Show a template's full YAML with parameter documentation.
+fn show_template(name: &str, config: &GatewayConfig) -> anyhow::Result<()> {
+    let lib = TemplateLibrary::new(&config.workspace_root);
+    let content = lib.load(name).ok_or_else(|| {
+        // Build a helpful error with the searched locations.
+        let project_path = config
+            .workspace_root
+            .join(".ta")
+            .join("workflow-templates")
+            .join(format!("{}.yaml", name));
+        anyhow::anyhow!(
+            "Template '{}' not found.\n\
+             Searched:\n  \
+               {}\n  \
+               ~/.config/ta/workflow-templates/{}.yaml\n  \
+               built-in templates\n\
+             \n\
+             List all available templates:\n  \
+               ta workflow list --templates\n  \
+               ta workflow list --param-templates",
+            name,
+            project_path.display(),
+            name
+        )
+    })?;
+
+    // Find the source location.
+    let source_label = {
+        let project_path = config
+            .workspace_root
+            .join(".ta")
+            .join("workflow-templates")
+            .join(format!("{}.yaml", name));
+        if project_path.exists() {
+            format!("project ({})", project_path.display())
+        } else if let Ok(home) = std::env::var("HOME") {
+            let user_path = std::path::PathBuf::from(home)
+                .join(".config")
+                .join("ta")
+                .join("workflow-templates")
+                .join(format!("{}.yaml", name));
+            if user_path.exists() {
+                format!("user global ({})", user_path.display())
+            } else {
+                "built-in".to_string()
+            }
+        } else {
+            "built-in".to_string()
+        }
+    };
+
+    println!("Template: {}  [{}]", name, source_label);
+    println!();
+    println!("{}", content);
+
     Ok(())
 }
 
