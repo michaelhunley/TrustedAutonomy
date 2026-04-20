@@ -4532,6 +4532,7 @@ kind = "plan_next"
             agent: "claude-code",
             plan_phase: None,
             depth: 6, // exceeds MAX_DEPTH = 5
+            params: Default::default(),
         };
         let err = run_governed_workflow(&opts).unwrap_err();
         assert!(
