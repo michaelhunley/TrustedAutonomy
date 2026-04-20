@@ -1,7 +1,6 @@
 # plan-build-phases.yaml — Project-scoped parameterized build loop
 #
 # Replaces one-off version-specific workflow files (e.g., plan-build-phases-v015.yaml).
-# Uses the built-in plan-build-phases parameterized template with project defaults.
 #
 # Usage (run remaining v0.15 phases):
 #   ta workflow run plan-build-phases --param phase_filter=v0.15
@@ -11,52 +10,46 @@
 #
 # Usage (limit iterations):
 #   ta workflow run plan-build-phases --param phase_filter=v0.15 --param max_phases=3
-#
-# Parameters:
-#   phase_filter  — Phase ID prefix to process. Default: current version prefix
-#                   from PLAN.md (e.g., v0.15). Pass empty string for all pending.
-#   max_phases    — Cap on phases processed per run. Default: 5.
 
-workflow:
-  name: plan-build-phases
-  description: |
-    PR-per-phase build loop. Iterates pending PLAN.md phases through the
-    governed build workflow (agent → review → approve → apply → PR → merge).
-    Pass --param phase_filter=v0.15 to scope to a version range.
-  config:
-    max_phases: "{{params.max_phases}}"
-    stop_on_flag: true
+name: plan-build-phases
 
 params:
   phase_filter:
     type: string
     default: "{{plan.current_version_prefix}}"
     description: "Phase ID prefix to process (e.g., v0.15). Empty = all pending."
+    required: false
   max_phases:
     type: integer
-    default: 5
+    default: "5"
     description: "Maximum number of phases to process in one run."
+    required: false
 
 stages:
-  - name: plan_next
-    kind: plan_next
-    phase_filter: "{{params.phase_filter}}"
-    description: "Get next pending phase matching the filter."
+  - name: build
+    roles: [implementor]
+    await_human: never
 
-  - name: run_phase
-    kind: workflow
-    workflow: build
-    goal: "{{plan_next.phase_id}} — {{plan_next.phase_title}}"
-    phase: "{{plan_next.phase_id}}"
-    condition: "!plan_next.done"
-    depends_on:
-      - plan_next
-    description: "Run governed build workflow for this phase."
+  - name: review
+    depends_on: [build]
+    roles: [reviewer]
+    await_human: on_fail
+    on_fail:
+      route_to: build
+      max_retries: 2
 
-  - name: loop
-    kind: goto
-    target: plan_next
-    condition: "!plan_next.done && loop.count < params.max_phases"
-    depends_on:
-      - run_phase
-    description: "Loop until all matching phases complete or max_phases reached."
+roles:
+  implementor:
+    agent: claude-code
+    prompt: |
+      You are implementing PLAN.md phases matching the filter: {{params.phase_filter}}.
+      Process up to {{params.max_phases}} pending phases.
+      Next phase: {{plan.next_pending_phase}} — {{plan.next_pending_title}}.
+      There are {{plan.pending_count}} phases remaining.
+      Use: ta run "{{plan.next_pending_phase}} — {{plan.next_pending_title}}" --phase {{plan.next_pending_phase}}
+
+  reviewer:
+    agent: claude-code
+    prompt: |
+      You are reviewing the implementation of {{params.phase_filter}} phases.
+      Verify correctness, test coverage, and adherence to project standards.

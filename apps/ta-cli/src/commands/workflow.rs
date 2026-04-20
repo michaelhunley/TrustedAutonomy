@@ -399,6 +399,17 @@ fn resolve_template_goal(
         }
     }
 
+    // For plan-phase-loop templates (identified by having a `phase_filter` param),
+    // synthesize a goal title from the resolved filter so --goal is not required.
+    if def.params.contains_key("phase_filter") {
+        let filter = pv.get("phase_filter").filter(|v| !v.is_empty());
+        let title = match filter {
+            Some(f) => format!("Build pending {} phases", f),
+            None => "Build all pending phases".to_string(),
+        };
+        return Ok(Some(title));
+    }
+
     // Fall through — caller decides if --goal is required.
     Ok(None)
 }
