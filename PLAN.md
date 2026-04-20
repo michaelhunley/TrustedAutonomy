@@ -11899,11 +11899,7 @@ The planner agent runs with read-only tools (Read, Grep, Glob) — it cannot wri
 ---
 
 ### v0.15.23 — Parameterized Workflow Templates
-<<<<<<< HEAD
 <!-- status: done -->
-=======
-<!-- status: in_progress -->
->>>>>>> ea4733ced1 (chore: auto-commit workflow audit trail (pre-apply))
 
 **Goal**: Eliminate one-off workflow YAML files created for specific invocations (e.g., `plan-build-phases-v015.yaml`). Templates declare typed parameters with defaults. Parameters can reference plan context as built-ins. Invocations pass params at runtime.
 
@@ -11911,23 +11907,19 @@ The planner agent runs with read-only tools (Read, Grep, Glob) — it cannot wri
 
 #### Items
 
-
-2. [ ] **Built-in plan context vars**: `{{plan.current_version_prefix}}` (e.g., `v0.15`), `{{plan.next_pending_phase}}` (phase ID), `{{plan.next_pending_title}}`, `{{plan.pending_count}}`. Resolved from PLAN.md at invocation time. Available as defaults in parameter declarations.
-3. [ ] **Stage interpolation**: All stage fields support `{{params.name}}` and `{{plan.*}}` substitution. Interpolation runs at stage execution time (supports loop variables). Error if a required param is missing at invocation time.
----
-5. [ ] **Template library paths**: Load templates from `.ta/workflow-templates/` (project, committed) and `~/.config/ta/workflow-templates/` (user global). Project templates take precedence. Built-in templates ship with the binary (embedded).
-6. [ ] **`ta workflow list` update**: Show template name, description, and parameter summary. `ta workflow show <name>` prints full template YAML with parameter docs.
-
-8. [ ] **Tests**: Template with required param missing → error before execution. `{{plan.current_version_prefix}}` resolves from PLAN.md. Loop count guard `loop.count < params.max_phases` terminates correctly. Unknown `--param` key → error.
-9. [ ] **USAGE.md "Workflow Templates"** section: Authoring a template, parameter types, built-in plan vars, invocation with `--param`.
+2. [x] **Built-in plan context vars**: `{{plan.current_version_prefix}}` (e.g., `v0.15`), `{{plan.next_pending_phase}}` (phase ID), `{{plan.next_pending_title}}`, `{{plan.pending_count}}`. Resolved from PLAN.md at invocation time. Available as defaults in parameter declarations.
+3. [x] **Stage interpolation**: All stage fields support `{{params.name}}` and `{{plan.*}}` substitution. Interpolation runs at stage execution time (supports loop variables). Error if a required param is missing at invocation time.
+5. [x] **Template library paths**: Load templates from `.ta/workflow-templates/` (project, committed) and `~/.config/ta/workflow-templates/` (user global). Project templates take precedence. Built-in templates ship with the binary (embedded).
+6. [x] **`ta workflow list` update**: Show template name, description, and parameter summary. `ta workflow show <name>` prints full template YAML with parameter docs.
+8. [x] **Tests**: Template with required param missing → error before execution. `{{plan.current_version_prefix}}` resolves from PLAN.md. Loop count guard `loop.count < params.max_phases` terminates correctly. Unknown `--param` key → error.
+9. [x] **USAGE.md "Workflow Templates"** section: Authoring a template, parameter types, built-in plan vars, invocation with `--param`.
 
 #### Version: `0.15.23-alpha`
 
 ---
 
 ### v0.15.24 — Intent Resolver: Natural Language → Workflow Invocation
-
-
+<!-- status: pending -->
 
 **Goal**: "implement the rest of v0.15" resolves to `ta workflow run plan-build-phases --param phase_filter=v0.15` without the user needing to know the template name or params. The resolver uses keyword matching + plan context — no LLM required.
 

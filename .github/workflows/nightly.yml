@@ -354,6 +354,13 @@ jobs:
           # Trim to limit
           ALL_ROWS=$(echo "$ALL_ROWS" | head -n "${NIGHTLY_HISTORY_LIMIT}")
 
+          # Determine what's new since the last stable (non-prerelease) release.
+          LAST_STABLE_TAG=$(gh release list --exclude-pre-releases --limit 1 --json tagName --jq '.[0].tagName' 2>/dev/null || true)
+          WHATS_NEW=""
+          if [ -n "${LAST_STABLE_TAG}" ]; then
+            WHATS_NEW=$(git log "${LAST_STABLE_TAG}..HEAD" --oneline --no-merges 2>/dev/null | head -30 || true)
+          fi
+
           # Build the full release body (avoid heredoc — unindented content breaks YAML block scalars)
           {
             printf '## Nightly Build -- %s\n\n' "${BUILD_DATE}"
@@ -371,6 +378,13 @@ jobs:
             printf '| macOS ARM (M1/M2) | [tar.gz](%s/ta-nightly-aarch64-apple-darwin.tar.gz) | -- |\n' "${ASSET_BASE}"
             printf '| Windows x86_64 | [zip](%s/ta-nightly-x86_64-pc-windows-msvc.zip) | [msi](%s/ta-nightly-x86_64-pc-windows-msvc.msi) |\n\n' "${ASSET_BASE}" "${ASSET_BASE}"
             printf '[SHA256SUMS.txt](%s/SHA256SUMS.txt)\n\n' "${ASSET_BASE}"
+            if [ -n "${WHATS_NEW}" ]; then
+              printf '%s\n\n' '---'
+              printf '### Changes since %s\n\n' "${LAST_STABLE_TAG}"
+              printf '```\n'
+              printf '%s\n' "${WHATS_NEW}"
+              printf '```\n\n'
+            fi
             printf '%s\n\n' '---'
             printf '## Nightly History {#nightly-history}\n\n'
             printf '| Date | Commit | Trigger | Downloads |\n'

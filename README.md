@@ -5,9 +5,13 @@
 <h1 align="center">Trusted Autonomy</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/latest-v0.15.15--alpha.1-blue" alt="Latest">
-  <img src="https://img.shields.io/badge/released-public--alpha--v0.15.15.1.1-green" alt="Released">
-  <img src="https://img.shields.io/badge/license-Apache--2.0-orange" alt="License">
+  <a href="https://github.com/Trusted-Autonomy/TrustedAutonomy/releases/latest">
+    <img src="https://img.shields.io/github/v/release/Trusted-Autonomy/TrustedAutonomy?label=stable&color=blue" alt="Latest stable release">
+  </a>
+  <a href="https://github.com/Trusted-Autonomy/TrustedAutonomy/releases/tag/nightly">
+    <img src="https://img.shields.io/github/v/release/Trusted-Autonomy/TrustedAutonomy?include_prereleases&label=nightly&color=orange" alt="Latest nightly pre-release">
+  </a>
+  <img src="https://img.shields.io/badge/license-Apache--2.0-lightgrey" alt="License">
 </p>
 
 **Trusted Autonomy** is a local-first, Rust-based substrate for running autonomous AI agents **safely**, **reviewably**, and **without changing how agents behave**.
@@ -374,11 +378,14 @@ These are additive — not architectural rewrites.
 
 ## Quick Start (5 minutes)
 
-### 1. Install TA from source
+### 1. Install TA
 
-> **Nightly builds** — latest unreleased features, built nightly from `main`:
-> [![Nightly](https://img.shields.io/badge/nightly-pre--release-orange)](https://github.com/Trusted-Autonomy/TrustedAutonomy/releases/tag/nightly)
-> [Download latest nightly](https://github.com/Trusted-Autonomy/TrustedAutonomy/releases/tag/nightly) · [Nightly history →](https://github.com/Trusted-Autonomy/TrustedAutonomy/releases/tag/nightly#nightly-history)
+| Channel | Version | Downloads |
+|---------|---------|-----------|
+| **Stable** | [![stable](https://img.shields.io/github/v/release/Trusted-Autonomy/TrustedAutonomy?label=&color=blue)](https://github.com/Trusted-Autonomy/TrustedAutonomy/releases/latest) | [macOS · Linux · Windows](https://github.com/Trusted-Autonomy/TrustedAutonomy/releases/latest) |
+| **Nightly** | [![nightly](https://img.shields.io/github/v/release/Trusted-Autonomy/TrustedAutonomy?include_prereleases&label=&color=orange)](https://github.com/Trusted-Autonomy/TrustedAutonomy/releases/tag/nightly) | [macOS · Linux · Windows](https://github.com/Trusted-Autonomy/TrustedAutonomy/releases/tag/nightly) · [History](https://github.com/Trusted-Autonomy/TrustedAutonomy/releases/tag/nightly#nightly-history) |
+
+**Build from source:**
 
 ```bash
 # Clone the repo
