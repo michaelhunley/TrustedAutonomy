@@ -665,14 +665,25 @@ pub fn phase_ids_match(parsed_id: &str, phase_id: &str) -> bool {
 }
 
 /// Look ahead from `start` for a status marker comment.
-/// Checks the immediate next line (matching existing behavior).
+/// Skips blank lines (up to 3) so that a blank line between a phase heading
+/// and its `<!-- status: ... -->` marker does not cause it to read as Pending.
+/// Stops immediately on the first non-blank, non-status line.
 fn find_status_in_lookahead(lines: &[&str], start: usize, status_re: &Regex) -> PlanStatus {
-    if start < lines.len() {
-        let line = lines[start].trim();
+    let mut skipped = 0;
+    let mut i = start;
+    while i < lines.len() && skipped <= 3 {
+        let line = lines[i].trim();
+        if line.is_empty() {
+            skipped += 1;
+            i += 1;
+            continue;
+        }
         if let Some(caps) = status_re.captures(line) {
             let status_str = caps.get(1).map(|m| m.as_str().trim()).unwrap_or("");
             return parse_status_str(status_str);
         }
+        // First non-blank line that isn't a status marker — stop scanning.
+        break;
     }
     PlanStatus::Pending
 }
@@ -775,12 +786,31 @@ pub fn update_phase_status_with_schema(
 
         result.push(line.to_string());
 
-        // If this is the target phase, replace the next line's status marker.
-        if is_target && i + 1 < lines.len() {
-            let next_line = lines[i + 1].trim();
-            if status_re.is_match(next_line) {
-                result.push(format!("<!-- status: {} -->", new_status));
-                i += 2;
+        // If this is the target phase, find and replace the status marker,
+        // skipping over blank lines (up to 3) between the header and the marker.
+        if is_target {
+            let mut j = i + 1;
+            let mut blank_count = 0;
+            while j < lines.len() && blank_count <= 3 {
+                let next = lines[j].trim();
+                if next.is_empty() {
+                    blank_count += 1;
+                    j += 1;
+                    continue;
+                }
+                if status_re.is_match(next) {
+                    // Emit the blank lines we skipped, then the replacement marker.
+                    for blank_line in &lines[(i + 1)..j] {
+                        result.push(blank_line.to_string());
+                    }
+                    result.push(format!("<!-- status: {} -->", new_status));
+                    i = j + 1;
+                    break;
+                }
+                // Non-blank, non-status line — no marker found; leave as-is.
+                break;
+            }
+            if i == j + 1 {
                 continue;
             }
         }
