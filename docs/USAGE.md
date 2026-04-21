@@ -4981,6 +4981,40 @@ ta workflow run governed-goal --param goal_title="Fix the auth bug"
 ta workflow run plan-build-phases --param phase_filter=v0.15 --dry-run
 ```
 
+### Natural Language Intent Resolution
+
+When you pass a phrase that doesn't match a known template name, TA tries to resolve it to a template using keyword extraction — no LLM required.
+
+```bash
+# Resolves to: ta workflow run plan-build-phases --param phase_filter=v0.15
+ta workflow run "implement remaining v0.15"
+
+# Resolves to: ta workflow run plan-build-phases (next pending phase as filter)
+ta workflow run "run next phase"
+```
+
+If TA is confident (≥ 80%), it shows a confirmation card:
+
+```
+Resolved workflow  [95% confidence]
+  Template : plan-build-phases
+  Command  : ta workflow run plan-build-phases --param phase_filter=v0.15
+  Goal     : Build remaining v0.15 phases
+  About    : Iterate pending PLAN.md phases through the governed build workflow.
+
+1. Run   2. Adjust   3. Different workflow   4. Cancel
+Choice [1]:
+```
+
+If confidence is below 80%, TA asks a clarifying question instead of guessing.
+
+Explicit template names always bypass intent resolution:
+
+```bash
+# Always runs governed-goal directly (no intent resolution attempted)
+ta workflow run governed-goal --goal "Fix the auth bug"
+```
+
 ### Template Library Paths
 
 TA searches for templates in this order (highest priority first):
@@ -4990,6 +5024,13 @@ TA searches for templates in this order (highest priority first):
 3. Built-in templates shipped with the `ta` binary
 
 Project templates override user-global templates, which override built-ins.
+
+To add tags to a custom template for better intent matching, add a `metadata` section:
+
+```yaml
+metadata:
+  tags: [deploy, release, production, ship]
+```
 
 ### Listing and Inspecting Templates
 

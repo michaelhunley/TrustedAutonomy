@@ -338,7 +338,7 @@ impl TemplateLibrary {
 
         // 3. Built-ins first (lowest priority — may be overridden).
         for (name, content) in BUILTIN_TEMPLATES {
-            let (description, params) = extract_template_meta(content);
+            let (description, params, tags) = extract_template_meta(content);
             entries.insert(
                 name.to_string(),
                 TemplateEntry {
@@ -346,6 +346,7 @@ impl TemplateLibrary {
                     description,
                     source: TemplateSource::Builtin,
                     params,
+                    tags,
                 },
             );
         }
@@ -408,7 +409,7 @@ impl TemplateLibrary {
             let Ok(content) = std::fs::read_to_string(&path) else {
                 continue;
             };
-            let (description, params) = extract_template_meta(&content);
+            let (description, params, tags) = extract_template_meta(&content);
             entries.insert(
                 stem.to_string(),
                 TemplateEntry {
@@ -416,6 +417,7 @@ impl TemplateLibrary {
                     description,
                     source: source.clone(),
                     params,
+                    tags,
                 },
             );
         }
@@ -430,6 +432,8 @@ pub struct TemplateEntry {
     pub source: TemplateSource,
     /// Parameter names with their summaries.
     pub params: Vec<(String, String)>,
+    /// Keyword tags for intent matching (v0.15.24).
+    pub tags: Vec<String>,
 }
 
 /// Where a template comes from.
@@ -461,8 +465,11 @@ fn user_templates_dir() -> Option<std::path::PathBuf> {
     )
 }
 
-/// Extract description and param list from a template YAML.
-fn extract_template_meta(content: &str) -> (String, Vec<(String, String)>) {
+/// Extract description, param list, and tags from a template YAML.
+///
+/// Tags are read from `metadata.tags` in the YAML if present, otherwise an
+/// empty list is returned (callers may derive tags from the template name).
+fn extract_template_meta(content: &str) -> (String, Vec<(String, String)>, Vec<String>) {
     // Parse description from leading comments: first `# description:` line or first non-empty comment.
     let mut description = String::new();
     for line in content.lines() {
@@ -483,9 +490,12 @@ fn extract_template_meta(content: &str) -> (String, Vec<(String, String)>) {
         }
     }
 
-    // Parse params section from YAML.
+    // Parse params and metadata.tags sections from YAML.
     let mut params: Vec<(String, String)> = Vec::new();
+    let mut tags: Vec<String> = Vec::new();
+
     if let Ok(value) = serde_yaml::from_str::<serde_yaml::Value>(content) {
+        // params section
         if let Some(serde_yaml::Value::Mapping(param_map)) = value.get("params") {
             for (key, val) in param_map {
                 let name = match key {
@@ -500,9 +510,20 @@ fn extract_template_meta(content: &str) -> (String, Vec<(String, String)>) {
                 params.push((name, summary));
             }
         }
+
+        // metadata.tags section (v0.15.24)
+        if let Some(meta) = value.get("metadata") {
+            if let Some(serde_yaml::Value::Sequence(tag_list)) = meta.get("tags") {
+                for tag in tag_list {
+                    if let serde_yaml::Value::String(s) = tag {
+                        tags.push(s.clone());
+                    }
+                }
+            }
+        }
     }
 
-    (description, params)
+    (description, params, tags)
 }
 
 /// Built-in templates embedded in the binary.
@@ -524,6 +545,9 @@ const TEMPLATE_PLAN_BUILD_PHASES: &str = r#"# description: Iterate pending PLAN.
 #   {{plan.current_version_prefix}} → current major.minor version prefix
 #   {{plan.next_pending_phase}}     → next pending phase ID
 #   {{plan.pending_count}}          → number of pending phases
+
+metadata:
+  tags: [plan, phases, build, implement, run, pending, remaining, iterate, loop, phase-loop]
 
 name: plan-build-phases
 
@@ -576,6 +600,9 @@ const TEMPLATE_GOVERNED_GOAL: &str = r#"# description: Safe autonomous coding lo
 # Parameters:
 #   goal_title — the goal to implement (required)
 #   phase      — PLAN.md phase to link the goal to (optional)
+
+metadata:
+  tags: [goal, implement, build, run, single, feature, fix, autonomous, governed]
 
 name: governed-goal
 
@@ -865,5 +892,44 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let lib = TemplateLibrary::new(dir.path());
         assert!(lib.load("nonexistent-template").is_none());
+    }
+
+    #[test]
+    fn builtin_templates_have_tags() {
+        let dir = tempfile::tempdir().unwrap();
+        let lib = TemplateLibrary::new(dir.path());
+        let entries = lib.list();
+        let phase_entry = entries
+            .iter()
+            .find(|e| e.name == "plan-build-phases")
+            .unwrap();
+        assert!(
+            !phase_entry.tags.is_empty(),
+            "plan-build-phases should have tags"
+        );
+        assert!(
+            phase_entry
+                .tags
+                .iter()
+                .any(|t| t == "phases" || t == "pending"),
+            "plan-build-phases tags should include 'phases' or 'pending', got: {:?}",
+            phase_entry.tags
+        );
+    }
+
+    #[test]
+    fn project_template_tags_parsed_from_yaml() {
+        let dir = tempfile::tempdir().unwrap();
+        let templates_dir = dir.path().join(".ta").join("workflow-templates");
+        std::fs::create_dir_all(&templates_dir).unwrap();
+        std::fs::write(
+            templates_dir.join("tagged.yaml"),
+            "# description: A tagged template\nmetadata:\n  tags: [foo, bar, baz]\nname: tagged\nstages: []\nroles: {}\n",
+        )
+        .unwrap();
+
+        let lib = TemplateLibrary::new(dir.path());
+        let entry = lib.list().into_iter().find(|e| e.name == "tagged").unwrap();
+        assert_eq!(entry.tags, vec!["foo", "bar", "baz"]);
     }
 }

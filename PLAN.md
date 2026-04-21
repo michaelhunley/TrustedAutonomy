@@ -11998,7 +11998,7 @@ The planner agent runs with read-only tools (Read, Grep, Glob) — it cannot wri
 ---
 
 ### v0.15.24 — Intent Resolver: Natural Language → Workflow Invocation
-<!-- status: in_progress -->
+<!-- status: done -->
 
 **Goal**: "implement the rest of v0.15" resolves to `ta workflow run plan-build-phases --param phase_filter=v0.15` without the user needing to know the template name or params. The resolver uses keyword matching + plan context — no LLM required.
 

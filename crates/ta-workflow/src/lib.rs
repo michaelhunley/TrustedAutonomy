@@ -14,6 +14,7 @@ pub mod artifact_store;
 pub mod consensus;
 pub mod definition;
 pub mod error;
+pub mod intent;
 pub mod interaction;
 pub mod params;
 pub mod process_engine;
@@ -34,6 +35,9 @@ pub use consensus::{
 pub use definition::{
     FailureRouting, RoleDefinition, StageDefinition, StageReview, WorkflowCatalog,
     WorkflowDefinition,
+};
+pub use intent::{
+    extract_intent, resolve_intent, ExtractedIntent, IntentResolution, TemplateCandidate,
 };
 pub use params::{
     interpolate, version_prefix_from_id, ParamDecl, ParamValues, PlanContext, TemplateEntry,

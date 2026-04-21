@@ -22,8 +22,9 @@ use clap::Subcommand;
 use ta_changeset::sources::{ExternalSource, Lockfile, PackageManifest, SourceCache};
 use ta_mcp_gateway::GatewayConfig;
 use ta_workflow::{
-    artifact_dag, ArtifactStore, ArtifactType, ParamValues, PlanContext, TemplateLibrary,
-    WorkflowCatalog, WorkflowDefinition, WorkflowEngine, YamlWorkflowEngine,
+    artifact_dag, resolve_intent, ArtifactStore, ArtifactType, IntentResolution, ParamValues,
+    PlanContext, TemplateLibrary, WorkflowCatalog, WorkflowDefinition, WorkflowEngine,
+    YamlWorkflowEngine,
 };
 
 use super::email_manager;
@@ -246,6 +247,88 @@ pub fn execute(command: &WorkflowCommands, config: &GatewayConfig) -> anyhow::Re
                     *dry_run,
                     agent,
                 );
+            }
+
+            // Intent resolution path (v0.15.24): when `name` doesn't match a
+            // known template or catalog entry, treat it as natural language and
+            // try to resolve it to a template. Explicit names always take precedence.
+            let lib = TemplateLibrary::new(&config.workspace_root);
+            let is_known_template = lib.load(name).is_some();
+            let is_known_catalog = WorkflowCatalog::is_known(name);
+
+            if !is_known_template && !is_known_catalog && goal.is_none() && params.is_empty() {
+                let plan_ctx = PlanContext::load(&config.workspace_root);
+                let templates = lib.list();
+                match resolve_intent(name, &templates, &plan_ctx) {
+                    IntentResolution::Resolved {
+                        candidate,
+                        confirmation_card,
+                    } => {
+                        println!("{}", confirmation_card);
+                        println!();
+                        print!("Choice [1]: ");
+                        use std::io::Write;
+                        let _ = std::io::stdout().flush();
+
+                        let mut input = String::new();
+                        let _ = std::io::stdin().read_line(&mut input);
+                        let choice = input.trim();
+
+                        match choice {
+                            "" | "1" => {
+                                // Run the resolved template.
+                                let resolved_goal = resolve_template_goal(
+                                    &candidate.name,
+                                    candidate.goal_title.as_deref(),
+                                    &candidate.params,
+                                    &config.workspace_root,
+                                )?;
+                                let goal_title =
+                                    resolved_goal.as_deref().unwrap_or("Resolved intent");
+                                let mut param_map = std::collections::HashMap::new();
+                                for pair in &candidate.params {
+                                    if let Some((k, v)) = pair.split_once('=') {
+                                        param_map.insert(k.to_string(), v.to_string());
+                                    }
+                                }
+                                let opts = governed_workflow::RunOptions {
+                                    workspace_root: &config.workspace_root,
+                                    workflow_name: &candidate.name,
+                                    goal_title,
+                                    dry_run: *dry_run,
+                                    resume_run_id: None,
+                                    agent,
+                                    plan_phase: phase.as_deref(),
+                                    depth: 0,
+                                    params: param_map,
+                                };
+                                return governed_workflow::run_governed_workflow(&opts);
+                            }
+                            "2" => {
+                                println!("Adjust the command and re-run:");
+                                println!("  ta workflow run {} --param ...", candidate.name);
+                                return Ok(());
+                            }
+                            "3" => {
+                                println!("Available templates:");
+                                for t in &templates {
+                                    println!("  {}  — {}", t.name, t.description);
+                                }
+                                println!();
+                                println!("Run with: ta workflow run <name>");
+                                return Ok(());
+                            }
+                            _ => {
+                                println!("Cancelled.");
+                                return Ok(());
+                            }
+                        }
+                    }
+                    IntentResolution::NeedsQuestion(question) => {
+                        println!("{}", question);
+                        return Ok(());
+                    }
+                }
             }
 
             // Resolve template parameters if the workflow has a params section.
