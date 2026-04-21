@@ -77,18 +77,6 @@ Today TA mediates filesystem changes. The same staging model in future releases 
 
 ---
 
-## Core idea
-
-> **Give agents everything they need to do the work — but nothing that can irreversibly affect the world without passing through a single, auditable gateway.**
-
-Trusted Autonomy achieves this by:
-- mediating *all* filesystem, network, execution, and external-service access through MCP tools
-- defaulting **mutations** to *collection* (staging), not execution
-- defaulting **capabilities** to deny unless explicitly granted
-- representing each milestone within a goal as a **draft package** for review
-
----
-
 ## What this is (and is not)
 
 ### This **is**
@@ -106,7 +94,7 @@ Trusted Autonomy achieves this by:
 
 ---
 
-## Current status: v0.15.15-alpha.1
+## Current status: 0.15.24-alpha.2
 
 Under active development. See [PLAN.md](PLAN.md) for the full roadmap.
 
@@ -119,75 +107,11 @@ If any of these are blockers for your use case, watch the repo — progress is t
 
 ---
 
-## Quick Start
+## How the staging model works
 
-See the [detailed Quick Start](#quick-start-5-minutes) below for full install + agent setup instructions, or jump to [docs/USAGE.md](docs/USAGE.md) for comprehensive usage guidance. Run `ta --help` for CLI reference.
+Agents interact with a **staging workspace** — an isolated copy of your project — using their native tools (read, write, run tests). TA intercepts nothing at the OS level; it simply presents the staging copy as the workspace. All writes become **ChangeSets with diffs** bundled into a Draft package. Nothing touches the real project until you approve.
 
----
-
-## Design principles
-- Normal environment illusion: tools feel like standard filesystem/network access, but all effects are mediated.
-- Default collect (staged-by-default): changes accumulate as pending review artifacts (Draft package) rather than applying immediately.
-- Capability boundary (default deny): agents can only perform actions explicitly granted by a signed capability manifest.
-- Single chokepoint: all reads/writes and external effects flow through an MCP Gateway with policy enforcement and audit.
-- Draft-per-milestone workflow: complex goals are decomposed into major steps, each producing a Draft package for approval.
-- Replaceable orchestration: the substrate is the trust layer; planners/swarms are pluggable.
-
-## Why MCP is the abstraction boundary
-
-Trusted Autonomy uses **Model Context Protocol (MCP)** as its sole integration surface with agents.
-
-This is intentional.
-
-### MCP gives us:
-- a standardized tool interface
-- explicit, inspectable actions
-- a single chokepoint for policy, audit, and transformation
-- compatibility with existing and future agent frameworks
-
-### MCP is treated as:
-> **The agent’s “operating environment”, not an API to bypass.**
-
-Agents do not know they are operating in a staged, policy-controlled system — and they do not need to.
-
----
-
-## Filesystem abstraction (why it works this way)
-
-### Design goal
-Agents should be able to **read, write, and modify files normally**, without learning a new model — while all changes remain reviewable.
-
-### How it works
-- Agents interact with filesystem tools exposed via MCP
-- Those tools operate on a **staging workspace** (isolated directory per goal today, sparse virtual file system in the future)
-- Reads snapshot the original file; writes create diffs against the snapshot
-- All writes become **ChangeSets with diffs**, bundled into Draft packages
-
-```
-Agent
-  ↓
-MCP ta_fs_read / ta_fs_write
-  ↓
-StagingWorkspace (isolated temp directory)
-  ↓
-ChangeSet → Diff → Draft Package → Human Review → Apply
-```
-
-### Why staging directories?
-- cross-platform (Windows/macOS/Linux)
-- no kernel drivers, FUSE mounts, or Git dependency
-- native diff/rollback semantics
-- binary changes can be summarized and hashed
-- maps cleanly to Draft-style review
-- each GoalRun gets complete isolation
-
-### Why not a mounted VFS?
-Kernel-level VFS (FUSE, sandboxfs, etc.) introduces:
-- install friction
-- permissions complexity
-- platform inconsistencies
-
-Those can be added later, but staging workspaces keep the system **portable and maintainable**.
+The staging approach is cross-platform, requires no kernel drivers or FUSE mounts, and gives each GoalRun complete isolation. Kernel-level VFS can be added later — staging keeps the system portable and maintainable.
 
 ```mermaid
 flowchart TD
@@ -205,160 +129,6 @@ flowchart TD
   WS -. Temporary staging workspace today .-> TA0
   TA0 -. Draft is a PR-style review artifact generalized beyond code .-> DP
 ```
-
----
-
-## Network & web access abstraction
-
-### Design goal
-Allow agents to fetch web content **without enabling prompt injection or uncontrolled exfiltration**.
-
-### How it works
-- Agents use MCP web tools (`web.fetch`, `web.search`)
-- The gateway:
-  - enforces allowlists and rate limits
-  - sanitizes active content
-  - labels provenance and trust level
-  - treats fetched content as **data, never instructions**
-
-### Why not raw network sockets?
-Raw sockets:
-- bypass policy
-- bypass audit
-- enable hidden side effects
-
-If needed, a transparent local proxy can be added later — but MCP tools are the correct starting point for deterministic autonomy.
-
----
-
-## Email, social media, databases: everything is a ChangeSet
-
-### Unifying principle
-> **Anything that changes the world is a staged artifact.**
-
-This includes:
-- emails
-- social media posts
-- database writes
-- API mutations
-- permissions changes
-
-### How it works
-Each connector implements:
-- `read`
-- `write_patch` / `create_draft`
-- `preview`
-- `commit` (gated)
-
-So:
-- an email is drafted, not sent
-- a post is created, not published
-- a DB mutation is recorded, not applied
-
-All appear in the **same Draft package** alongside filesystem changes.
-
----
-
-## “Default deny” vs “default collect”
-
-Trusted Autonomy uses **two defaults**, intentionally separated:
-
-### Capability default: **deny**
-If an agent does not have an explicit capability, the gateway rejects the action.
-
-This is the hard security boundary.
-
-### Mutation default: **collect**
-If an agent *does* have permission to write:
-- the write is staged
-- the change is collected
-- a Draft package is generated
-
-Commit/send/post requires explicit approval or a narrowly scoped write-through capability.
-
-This allows agents to “just work” inside their charter without risk.
-
----
-
-## Execution environment (why just-bash exists)
-
-### Design goal
-Allow agents to:
-- search
-- format
-- run tests
-- scaffold code
-
-…without giving them a real shell or OS.
-
-### Approach
-- default execution uses a **just-bash-style emulated shell**
-- commands are allowlisted
-- filesystem access is limited to the workspace
-- transcripts are hashed and audited
-
-For workloads requiring real runtimes, isolated containers or microVMs can be added later — still behind the same MCP gateway.
-
----
-
-## Nix: why and how it’s used
-
-### Why Nix is included
-- reproducible Rust toolchains
-- deterministic builds in CI
-- consistent dev environments
-
-### Why Nix is **not required** for users
-- Nix has a learning curve
-- some environments prohibit it
-- bundling Nix into desktop apps is heavy
-
-### Strategy
-- **Use Nix for developers and CI**
-- **Ship bundled binaries for end users**
-- **Produce OCI images for cloud deployment**
-
-Nix improves correctness without becoming a dependency tax.
-
----
-
-## Compatibility with existing agent systems
-
-Trusted Autonomy is designed so that:
-- Claude Code (tested)
-- Codex
-- LangGraph
-- claude-flow (tested and my default operating model)
-- Ollama-based agents
-- future orchestration layers
-
-…can all run **unchanged** on top.
-
-They see:
-- a normal workspace
-- normal tools
-- normal outputs
-
-They do **not** need to know:
-- staging exists
-- policies exist
-- approvals exist
-
-That separation is the core architectural property.
-
----
-
-## Why Draft-style milestones matter
-
-Continuous human oversight destroys autonomy.
-Zero oversight destroys trust.
-
-Trusted Autonomy enforces review at **meaningful boundaries**:
-- when a milestone is complete
-- when external effects are requested
-- when risk increases
-
-This mirrors how high-trust engineering systems already work.
 
 ---
 
@@ -390,28 +160,7 @@ The two questions governance and orchestration each answer:
 
 **Institutional process encoding**: Different teams, project types, and risk levels need different execution patterns. A legal document review is not the same as a code sprint. Workflow routing makes this explicit rather than leaving it to ad-hoc manual process.
 
-### The deeper argument
-
-**Governance without orchestration** creates a safe but exhausting system. Every safety guarantee is honored, but the human load is unbounded — you must manually chain, schedule, route, and monitor every agent action. Adoption collapses under operational weight.
-
-**Orchestration without governance** creates an efficient but untrustworthy system. Tasks complete, but you can't prove what happened, why, or whether any policy was respected.
-
-**TA's thesis is that safety and efficiency are not a trade-off — they compound.** Orchestration multiplies the value of governance by making governed workflows the default, and governance ensures every orchestrated step is auditable and human-overridable.
-
-> Governance is a gate. Orchestration is a map. Both are required for autonomy that organizations will actually trust.
-
----
-
-## Future extensions (by design)
-
-- continuous security auditor agents
-- automatic least-privilege recommendations
-- anomaly detection over audit logs
-- richer diff renderers (spreadsheets, docs, binaries)
-- multi-tenant cloud deployments
-- stronger runtime isolation tiers
-
-These are additive — not architectural rewrites.
+> **TA's thesis**: safety and efficiency compound. Orchestration makes governed workflows the default operating model; governance ensures every orchestrated step is auditable and human-overridable. Governance is a gate. Orchestration is a map. Both are required for autonomy that organizations will actually trust.
 
 ---
 
@@ -528,33 +277,6 @@ ta draft apply <package-id> --git-commit
 That's it. The agent never knew it was in a staging workspace.
 
 > **For detailed usage, configuration options, and troubleshooting, see [docs/USAGE.md](docs/USAGE.md)** or run `ta --help`.
->
-> **New in v0.3.1.2:** Interactive session orchestration — see [docs/interactive-sessions.md](docs/interactive-sessions.md) for the full guide.
-
----
-
-## How It Works
-
-```
-Your Project                     Staging Copy (.ta/staging/)
-     |                                    |
-     |-- ta run "task" -------->|  (full copy, minus build artifacts)
-     |                                    |
-     |                              Agent works here
-     |                              (reads, writes, tests — normal tools)
-     |                                    |
-     |                              ta draft build --latest
-     |                                    |
-     |<--- ta draft apply <id> -------------|  (only approved changes copied back)
-     |
-   Your project updated + optional git commit
-```
-
-TA is invisible to the agent. It works by:
-1. Copying your project to a staging directory (with `.taignore` to skip build artifacts)
-2. Letting the agent work normally in the copy using its native tools
-3. Diffing the staging copy against the original to create a Draft package
-4. Letting you review, approve, and apply changes back
 
 ---
 
@@ -957,9 +679,7 @@ MCP-native mode:
 
 Multiple agents can work simultaneously. Each gets an isolated GoalRun with its own staging workspace and capabilities.
 
----
-
-## Project Structure
+### Project structure
 
 ```
 crates/
@@ -988,6 +708,37 @@ plugins/
   ta-channel-slack/     Slack channel plugin (JSON-over-stdio)
   ta-channel-email/     Email channel plugin (JSON-over-stdio)
 ```
+
+---
+
+## Roadmap
+
+For the full per-phase development plan, see [PLAN.md](PLAN.md) or run `ta plan list`.
+
+**Implemented** (v0.15.24-alpha.2):
+- Transparent overlay mediation — agents work in staging copies, TA is invisible
+- Selective approval — `--approve "src/**" --reject "*.test.rs" --discuss "config/*"` with dependency warnings
+- Follow-up goals — iterate on review feedback with full parent context injection
+- Multi-stage workflow engine — serial phase chains, parallel swarms, verdict scoring
+- Web shell (`ta shell`) — browser-based shell with live agent streaming
+- Channel plugin system — out-of-process review channels (Discord, Slack, Email)
+- Plan tracking — `ta plan list/status`, auto-update on `ta draft apply`
+- Event system — SSE streaming, event-driven hooks, notification rules
+- Multi-project office management (`ta office`)
+- Release pipeline (`ta release run`) with validation and multi-stage templates
+- Persistent context memory — file and ruvector backends with semantic search
+- Credential vault and identity broker
+- Append-only audit log with SHA-256 hash chain
+- URI-aware pattern matching (scheme-scoped — `src/**` can never match `gmail://`)
+- Default-deny capability engine with glob pattern matching and policy cascade
+
+**Coming next** (see [PLAN.md](PLAN.md) for details):
+- Work Planner + Implementor split (v0.15.20) — decompose goals into tracked sub-plans
+- Studio Advisor agent (v0.15.21) — structured phase review at milestones
+- Auto-Approve Constitution (v0.15.25) — rule-based policy for low-risk changes
+- Parameterized workflow templates (v0.15.23) + template library (v0.15.27)
+- Intent Resolver: natural language → workflow invocation (v0.15.24)
+- Studio: global intent bar + advisor panel (v0.15.26)
 
 ---
 
@@ -1070,68 +821,6 @@ cargo fmt --all -- --check
 ./dev cargo test --workspace
 ./dev cargo clippy --workspace --all-targets -- -D warnings
 ```
-
----
-
-## What's Implemented
-
-- **Transparent overlay mediation** — agents work in staging copies using native tools, TA is invisible
-- **Selective approval** — `--approve "src/**" --reject "*.test.rs" --discuss "config/*"` with dependency warnings
-- **Concurrent session conflict detection** — detects source changes during active goals, prevents stale overwrites
-- **Interactive session orchestration** — `ta run --interactive` for tracked human-agent sessions with lifecycle management. See [docs/interactive-sessions.md](docs/interactive-sessions.md)
-- **External diff routing** — route binary/media files to external tools (`*.uasset` to Unreal, `*.png` to image diff, etc.)
-- **YAML agent configs** — discoverable config files for any agent framework (`.ta/agents/`, `~/.config/ta/agents/`)
-- **Settings injection** — auto-configures agent permissions (replaces `--dangerously-skip-permissions`)
-- **Follow-up goals** — `--follow-up` to iterate on review feedback with full parent context injection
-- **Submit adapters** — pluggable VCS integration (git commit/push/Draft, or no-VCS file copy)
-- **Multi-stage workflow engine** — pluggable adapters, stage orchestration, verdict scoring
-- **Web shell** — responsive browser-based shell (`ta shell`) with conversation chaining, live agent streaming, and full command routing. Terminal TUI available via `ta shell --tui`
-- **Developer loop** — `ta dev` for iterative development with automatic staging and review
-- **Channel plugin system** — out-of-process review channels (Discord, Slack, Email) via JSON-over-stdio protocol
-- **Multi-project office management** — `ta office` for managing multiple projects under a single daemon
-- **External workflow and agent definitions** — install from registry, GitHub, or URL sources (`ta workflow add`, `ta agent add`)
-- **Release pipeline** — `ta release run` with validation, interactive mode, and multi-stage workflow templates
-- **Unified garbage collection** — `ta gc` for cleaning up stale staging workspaces and old drafts
-- **Project status dashboard** — `ta status` for at-a-glance project health
-- **Conversational project bootstrapping** — `ta new` for guided project setup
-- **External channel delivery** — route review questions to external services
-- **Multi-language plugin builds** — `ta plugin build` for compiling channel plugins from source
-- **Plan-from-document generation** — `ta plan from <doc>` to generate PLAN.md from requirements docs
-- **Persistent context memory** — file and ruvector backends with semantic search
-- **Credential vault and identity broker** — `ta credentials` for managing agent secrets
-- **Sandbox runner** — command allowlisting and path escape detection
-- **Event system** — subscription API with SSE streaming and event-driven hooks
-- Append-only audit log with SHA-256 hash chain
-- Default-deny capability engine with glob pattern matching and policy document cascade
-- Per-artifact review model (disposition, dependencies, rationale)
-- URI-aware pattern matching (scheme-scoped safety — `src/**` can't match `gmail://`)
-- MCP server with policy enforcement and tool call interception
-- CLI: `goal`, `draft`, `run`, `plan`, `context`, `credentials`, `events`, `token`, `dev`, `setup`, `init`, `agent`, `adapter`, `release`, `shell`, `office`, `plugin`, `workflow`, `policy`, `config`, `gc`, `status`, `serve`
-- Plan tracking (`ta plan list/status`, auto-update on `ta draft apply`)
-
----
-
-## License
-
-Apache 2.0
-
----
-
-## Why This Matters
-
-**The short version:** AI agents that can only act while you're watching aren't autonomous — they're autocomplete with extra steps.
-
-AI agents that can only act while you're watching aren't autonomous — they're autocomplete with extra steps. The bottleneck isn't the agent's capability; it's the human's attention. Every time the agent needs to write a file, send an email, modify a database record, or run a command, someone has to be present to approve it or clean up after it. That's not delegation — that's supervision, and it doesn't scale.
-
-Trusted Autonomy is built on a different premise: that safe autonomy requires a boundary, not a babysitter. The agent works in a complete isolated copy of your project — code, documents, database scripts, whatever the goal touches — and runs to completion without requiring your attention. When it's done, you see the entire result as a single reviewable unit: what changed, why, what the automated review found, what risks were flagged. You approve or deny — partially or entirely, with follow-up questions fed back to the agent on any item. Nothing lands in your real environment until you say so.
-
-This changes the human role fundamentally. Instead of monitoring every step to prevent mistakes, you define goals, set the rules once in a constitution, and review outcomes. You become the architect and product guide — the person who decides what should be built and whether the result meets the bar — not the implementor who has to stay present to keep things from going sideways.
-
-The model works across workloads beyond code. An agent writing database migrations, drafting customer emails, posting to social channels, or modifying infrastructure faces the same problem: the blast radius of an unchecked mistake is real, and humans can't be present for every action at scale. A staging boundary with constitutional rules and pre-apply review applies equally whether the artifact is a Terraform file, an outbound email, a social post, or a database schema. The governance layer doesn't care what kind of work the agent is doing — it cares that nothing irreversible happens without a human having seen it first.
-
-Compliance capability is directly in play. Regulated industries need demonstrable answers to "who approved this, when, under what rules, and what did the automated review find?" TA produces a signed audit trail for every goal: the objective, the agent identity, the constitution version, the supervisor findings, and the human approval — all chained together. That's not a feature bolted on for enterprise sales; it's what the staging-and-review model produces naturally.
-
-Multi-step and autonomous workflows are where the compounding value is clearest. A single goal run is useful. A chained sequence — research → draft → review → apply → verify — where each step's output feeds the next, governed by the same constitutional rules throughout, running while the team is focused elsewhere, is a different order of productivity. The human sets the destination and the constraints. The system executes, flags exceptions, and presents a coherent result. That's the shift from task tool to execution substrate.
 
 ---
 
