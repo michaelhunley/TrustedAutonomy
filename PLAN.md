@@ -12029,19 +12029,19 @@ The planner agent runs with read-only tools (Read, Grep, Glob) — it cannot wri
 
 #### Items
 
-1. [ ] **Bundle audit files into draft apply commit** (`apps/ta-cli/src/commands/draft.rs`): When `--git-commit` is set, include staged mutations to `.ta/plan_history.jsonl` and `.ta/goal-audit.jsonl` in the apply commit rather than letting the daemon write them as freestanding commits. Daemon must not commit these files directly to `main` outside of a draft apply.
+1. [x] **Bundle audit files into draft apply commit** (`apps/ta-cli/src/commands/draft.rs`): When `--git-commit` is set, include staged mutations to `.ta/plan_history.jsonl` and `.ta/goal-audit.jsonl` in the apply commit rather than letting the daemon write them as freestanding commits. Daemon must not commit these files directly to `main` outside of a draft apply.
 
-2. [ ] **Ordering validation** (`crates/ta-goal/src/audit.rs`): On append, assert each new entry's `timestamp` is ≥ the previous entry's timestamp. On `ta draft apply`, validate ordering of the full file before committing. Log `[warn]` and refuse to apply if ordering is violated.
+2. [x] **Ordering validation** (`crates/ta-audit/src/ledger.rs`): On append, assert each new entry's `timestamp` is ≥ the previous entry's timestamp (`AuditError::OutOfOrderTimestamp`). On `ta draft apply`, `GoalAuditLedger::validate_ordering` reads the full file and rejects disordered entries before the commit is made.
 
-3. [ ] **Implementation agent task-marking requirement** (`apps/ta-cli/src/commands/run.rs` + CLAUDE.md injection): Inject explicit instruction into the agent's CLAUDE.md context: as each plan item is implemented, mark it `[x]` in PLAN.md immediately. Unimplemented items remain `[ ]`. Items must not all be left unchecked at the end of the run.
+3. [x] **Implementation agent task-marking requirement** (`apps/ta-cli/src/commands/run.rs` + CLAUDE.md injection): "Task Completion Enforcement (REQUIRED)" section injected into agent's CLAUDE.md context — mark each plan item `[x]` immediately after implementing it.
 
-4. [ ] **Reviewer: per-item completion check** (`crates/ta-goal/src/reviewer.rs`): For each `[x]` item in the phase, reviewer must locate the implementing code and confirm it exists (file + function/struct name). For each `[ ]` item, reviewer must check whether the code was actually written despite the item being unchecked — if so, mark it `[x]` and note the discrepancy. Reviewer summary must include a per-item completion table: `item | marked | code-verified`.
+4. [x] **Reviewer: per-item completion check** (`crates/ta-goal/src/reviewer.rs`): `verify_phase_completion()` builds per-item completion table (`ItemCompletionStatus`: marked / code-verified). Called from `run_plan_review()` in `draft.rs`. Reviewer summary includes per-item results.
 
-5. [ ] **Reviewer: unchecked-but-implemented correction** (`crates/ta-goal/src/reviewer.rs`): If reviewer finds code that implements an unchecked item, it auto-corrects the PLAN.md checkbox to `[x]` and adds a note in the review summary: `[auto-corrected] item N was implemented but not marked complete by agent`. This correction is part of the reviewer draft, not a separate commit.
+5. [x] **Reviewer: unchecked-but-implemented correction** (`crates/ta-goal/src/reviewer.rs`): `auto_correct_plan_md()` replaces `[ ]` with `[x]` for items found implemented but not marked. Result applied in `run_plan_review()` before the apply commit.
 
-6. [ ] **Tests**: Audit append with out-of-order timestamp → rejected. Apply with disordered `plan_history.jsonl` → blocked. Agent injection includes task-marking instruction. Reviewer summary contains per-item completion table. Reviewer auto-corrects unchecked-but-implemented item.
+6. [x] **Tests**: `validate_ordering` rejects disordered file; accepts ordered file. Agent injection verified (`inject_claude_md_includes_task_marking_instruction`). `reviewer.rs` has 8 tests covering parse, verify, auto-correct paths.
 
-7. [ ] **USAGE.md update**: Add note to "Audit Trail" section explaining that audit files are committed as part of `ta draft apply`, not as standalone commits. Add note to "Reviewer" section describing per-item completion verification.
+7. [x] **USAGE.md update**: "Audit files and git commits" subsection added under Goal Audit Ledger. "Per-item completion table" subsection added under Draft Plan Review.
 
 #### Version: `0.15.24-alpha.1`
 
@@ -12064,7 +12064,7 @@ The planner agent runs with read-only tools (Read, Grep, Glob) — it cannot wri
 
 1. [ ] **`is_actionable()` fix** (`apps/ta-cli/src/commands/plan.rs`): `InProgress` is NOT actionable for new dispatch — return `true` only for `Pending`. `find_next_pending` must skip `in_progress` phases entirely. Add a separate `find_in_progress` query for introspection/resume use cases that explicitly need it.
 
-2. [ ] **`ta run` writes `in_progress` marker** (`apps/ta-cli/src/commands/run.rs`): At goal start (after staging copy is ready, before agent launches), atomically write `<!-- status: in_progress -->` to the source PLAN.md and commit it to the current branch. This is the claim token. If the marker is already `in_progress` when `ta run` attempts to claim it, abort with a clear error: `"Phase v0.X.Y is already in_progress — claimed by another goal. Use --force to override."`.
+2. [ ] **Daemon-mediated phase claim** (`crates/ta-daemon/src/phase_claim.rs` + `apps/ta-cli/src/commands/run.rs`): The claim must go through the daemon, not be a direct file write from `ta run`. The daemon holds an in-memory mutex on phase claims, serializing all concurrent requests. Flow: `ta run` calls daemon `claim_phase(phase_id)` → daemon acquires mutex → reads PLAN.md → if already `in_progress`, returns error `"Phase v0.X.Y is already claimed"` → else writes `in_progress` marker, records claim in run state, releases mutex → `ta run` proceeds with goal launch. Direct file write from `ta run` is not sufficient — two concurrent workers reading before either writes would race past the guard.
 
 3. [ ] **`ta draft apply` writes `done` marker** (`apps/ta-cli/src/commands/draft.rs`): On successful apply with `--git-commit`, transition the phase from `in_progress` → `done` in the apply commit. This replaces the current behaviour where apply writes `in_progress` and leaves `done` unset. The apply commit must include both the code changes and the PLAN.md status transition atomically.
 
