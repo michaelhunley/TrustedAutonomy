@@ -1,7 +1,8 @@
-// api/plan.rs — Plan phase browser and goal-start API (v0.14.19).
+// api/plan.rs — Plan phase browser, goal-start, and phase-claim API.
 //
 // GET  /api/plan/phases          — parse PLAN.md, return phase list with items
 // POST /api/plan/phase/add       — append a new pending phase to PLAN.md
+// POST /api/plan/phase/claim     — atomically claim a phase (pending → in_progress)
 // POST /api/goal/start           — start a goal (optionally linked to a phase)
 
 use std::sync::Arc;
@@ -379,6 +380,177 @@ pub fn ids_match(a: &str, b: &str) -> bool {
     let a = a.strip_prefix('v').unwrap_or(a);
     let b = b.strip_prefix('v').unwrap_or(b);
     a == b
+}
+
+// ── Phase claim ────────────────────────────────────────────────
+
+/// Request body for `POST /api/plan/phase/claim`.
+#[derive(Deserialize)]
+pub struct ClaimPhaseRequest {
+    /// The phase ID to claim (e.g., "v0.15.24.2").
+    pub phase_id: String,
+    /// Optional goal ID that will own this phase (recorded for diagnostics).
+    pub goal_id: Option<String>,
+}
+
+/// `POST /api/plan/phase/claim` — Atomically claim a plan phase.
+///
+/// Flow:
+///   1. Acquire the in-memory `PhaseClaims` mutex — serialises concurrent requests.
+///   2. If the phase is already in the claim registry → 409.
+///   3. Read PLAN.md and check the phase status:
+///      - `done` or `in_progress` → release memory claim + 409.
+///      - `pending` → write `in_progress` marker + record history.
+///   4. Return 200 with `{ "status": "claimed" }`.
+///
+/// If `ta run` calls this endpoint and receives 409, it must NOT launch the agent.
+/// If the daemon is unreachable, `ta run` falls back to a direct file-write with
+/// the same pending-only guard.
+pub async fn claim_phase(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<ClaimPhaseRequest>,
+) -> impl IntoResponse {
+    let phase_id = body.phase_id.trim().to_string();
+    if phase_id.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "phase_id must not be empty" })),
+        )
+            .into_response();
+    }
+
+    // Step 1: acquire in-memory claim (serialised by mutex).
+    if let Err(msg) = state
+        .phase_claims
+        .try_claim(&phase_id, body.goal_id.as_deref())
+    {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": msg })),
+        )
+            .into_response();
+    }
+
+    // Step 2: validate PLAN.md — phase must be pending.
+    let plan_path = state.project_root.join("PLAN.md");
+    if plan_path.exists() {
+        let content = match std::fs::read_to_string(&plan_path) {
+            Ok(c) => c,
+            Err(e) => {
+                state.phase_claims.release(&phase_id);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({ "error": format!("Failed to read PLAN.md: {}", e) })),
+                )
+                    .into_response();
+            }
+        };
+
+        let phases = parse_plan_phases(&content);
+        let maybe_phase = phases.iter().find(|p| ids_match(&p.id, &phase_id));
+
+        match maybe_phase.map(|p| p.status.as_str()) {
+            Some("done") => {
+                state.phase_claims.release(&phase_id);
+                return (
+                    StatusCode::CONFLICT,
+                    Json(serde_json::json!({
+                        "error": format!("Phase {} is already done", phase_id)
+                    })),
+                )
+                    .into_response();
+            }
+            Some("in_progress") => {
+                state.phase_claims.release(&phase_id);
+                return (
+                    StatusCode::CONFLICT,
+                    Json(serde_json::json!({
+                        "error": format!(
+                            "Phase {} is already claimed (in_progress in PLAN.md)",
+                            phase_id
+                        )
+                    })),
+                )
+                    .into_response();
+            }
+            _ => {} // pending or not found — proceed
+        }
+
+        // Step 3: write in_progress marker to PLAN.md.
+        let updated = update_phase_status_in_content(&content, &phase_id, "in_progress");
+        if let Err(e) = std::fs::write(&plan_path, &updated) {
+            state.phase_claims.release(&phase_id);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": format!("Failed to write PLAN.md: {}", e) })),
+            )
+                .into_response();
+        }
+
+        // Step 4: record in plan_history.jsonl.
+        let history_path = state.project_root.join(".ta/plan_history.jsonl");
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&history_path)
+        {
+            use std::io::Write as _;
+            let entry = serde_json::json!({
+                "timestamp": chrono::Utc::now().to_rfc3339(),
+                "phase_id": phase_id,
+                "old_status": "pending",
+                "new_status": "in_progress",
+                "source": "daemon_claim",
+            });
+            let _ = writeln!(file, "{}", entry);
+        }
+    }
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "status": "claimed", "phase_id": phase_id })),
+    )
+        .into_response()
+}
+
+/// Update a phase status marker in PLAN.md content.
+fn update_phase_status_in_content(content: &str, phase_id: &str, new_status: &str) -> String {
+    let status_re = regex::Regex::new(r"<!--\s*status:\s*\w+\s*-->").expect("static regex");
+    // Phase header patterns (same as parse_plan_phases).
+    let phase_re = regex::Regex::new(
+        r"(?m)^(?:##\s+Phase[\s\u{00a0}]+([0-9a-z.]+)\s+[—\-]|###\s+(v[\d.]+[a-z]?)\s+[—\-])",
+    )
+    .expect("static regex");
+
+    let lines: Vec<&str> = content.lines().collect();
+    let mut result = Vec::with_capacity(lines.len());
+    let mut in_target = false;
+    let mut replaced = false;
+
+    for line in &lines {
+        if phase_re.is_match(line) {
+            // Extract the ID from this header.
+            let header_id = if let Some(caps) = phase_re.captures(line) {
+                caps.get(1)
+                    .or_else(|| caps.get(2))
+                    .map(|m| m.as_str())
+                    .unwrap_or("")
+                    .to_string()
+            } else {
+                String::new()
+            };
+            in_target = ids_match(&header_id, phase_id);
+            replaced = false;
+        }
+        if in_target && !replaced && status_re.is_match(line) {
+            result.push(format!("<!-- status: {} -->", new_status));
+            replaced = true;
+            in_target = false;
+            continue;
+        }
+        result.push(line.to_string());
+    }
+    result.join("\n")
 }
 
 // ── Goal start ─────────────────────────────────────────────────

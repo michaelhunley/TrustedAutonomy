@@ -39,6 +39,7 @@ pub mod config_watcher;
 pub mod external_channel;
 pub mod notification_dispatcher;
 pub mod office;
+pub mod phase_claim;
 pub mod power_manager;
 pub mod project_context;
 pub mod question_registry;

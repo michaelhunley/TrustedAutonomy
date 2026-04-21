@@ -1458,19 +1458,41 @@ pub fn execute(
     let goal_id = goal.goal_run_id.to_string();
     let staging_path = goal.workspace_path.clone();
 
-    // v0.15.13.5: Mark the plan phase as in_progress in the source PLAN.md
-    // immediately after staging is confirmed, before the agent launches.
-    // This makes active work visible in `ta plan status` right away.
+    // v0.15.24.2: Claim the plan phase before launching the agent.
+    // Try the daemon endpoint first (atomic mutex + PLAN.md write); fall
+    // back to a direct file write when the daemon is not running.
     if let Some(ref phase_id) = goal.plan_phase {
         let source_root = goal.source_dir.as_deref().unwrap_or(&config.workspace_root);
-        if let Err(e) = super::plan::mark_phase_in_source(source_root, phase_id) {
-            tracing::warn!(
-                phase = %phase_id,
-                error = %e,
-                "Failed to mark plan phase in_progress — continuing"
-            );
-        } else if !quiet {
-            println!("Plan: phase {} marked in_progress", phase_id);
+        match try_daemon_claim_phase(source_root, phase_id, &goal_id) {
+            Ok(ClaimOutcome::Claimed) => {
+                if !quiet {
+                    println!("Plan: phase {} claimed via daemon (in_progress)", phase_id);
+                }
+            }
+            Ok(ClaimOutcome::FallbackDirect) => {
+                // Daemon not running — use direct write with pending-only guard.
+                if let Err(e) = super::plan::mark_phase_in_source(source_root, phase_id) {
+                    tracing::warn!(
+                        phase = %phase_id,
+                        error = %e,
+                        "Failed to mark plan phase in_progress — continuing"
+                    );
+                } else if !quiet {
+                    println!("Plan: phase {} marked in_progress (direct)", phase_id);
+                }
+            }
+            Err(e) => {
+                // Daemon rejected the claim (phase already in_progress or done).
+                anyhow::bail!(
+                    "Phase {} could not be claimed: {}\n\
+                     Use `ta plan status` to check the current phase state.\n\
+                     If the phase was left in_progress by a crashed run, reset it with \
+                     `ta plan reset {}`.",
+                    phase_id,
+                    e,
+                    phase_id
+                );
+            }
         }
     }
 
@@ -5838,13 +5860,60 @@ fn append_progress_journal(
     }
 }
 
-/// Auto-commit dirty `.ta/` audit trail jsonl files before a goal starts (v0.15.22.1).
+// ── Daemon-mediated phase claim (v0.15.24.2) ───────────────────────────────
+
+/// Result of a daemon phase claim attempt.
+enum ClaimOutcome {
+    /// Daemon accepted the claim and wrote `in_progress` to PLAN.md.
+    Claimed,
+    /// Daemon was unreachable — caller should fall back to direct file write.
+    FallbackDirect,
+}
+
+/// Try to claim `phase_id` through the running daemon.
 ///
-/// Stages and commits the three workflow audit files if any are modified or
-/// untracked, using message "chore: auto-commit workflow audit trail (pre-goal)".
-/// This prevents the "Working tree has uncommitted changes" warning that appears
-/// every time a goal starts because these files are updated by TA itself.
+/// On success the daemon has atomically checked that the phase is `pending`,
+/// written `in_progress` to PLAN.md, and recorded the claim in memory.
 ///
+/// Returns `Err` only when the daemon is running but explicitly rejects the
+/// claim (phase already `in_progress` or `done`). Connection failures produce
+/// `Ok(FallbackDirect)` so the caller can fall back to the legacy direct write.
+fn try_daemon_claim_phase(
+    project_root: &Path,
+    phase_id: &str,
+    goal_id: &str,
+) -> anyhow::Result<ClaimOutcome> {
+    let daemon_url = super::daemon::resolve_daemon_url(project_root, None);
+    let url = format!("{}/api/plan/phase/claim", daemon_url);
+
+    let client = match reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return Ok(ClaimOutcome::FallbackDirect),
+    };
+
+    let body = serde_json::json!({
+        "phase_id": phase_id,
+        "goal_id": goal_id,
+    });
+
+    match client.post(&url).json(&body).send() {
+        Ok(resp) if resp.status().is_success() => Ok(ClaimOutcome::Claimed),
+        Ok(resp) if resp.status().as_u16() == 409 => {
+            let msg = resp
+                .json::<serde_json::Value>()
+                .ok()
+                .and_then(|v| v["error"].as_str().map(|s| s.to_string()))
+                .unwrap_or_else(|| format!("Phase {} is already claimed", phase_id));
+            Err(anyhow::anyhow!("{}", msg))
+        }
+        // Any other response or connection error → daemon not available, fall back.
+        _ => Ok(ClaimOutcome::FallbackDirect),
+    }
+}
+
 /// Silently skips when:
 /// - `project_root` is not inside a git repo.
 /// - git is not on PATH.

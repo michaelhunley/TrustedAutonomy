@@ -671,12 +671,18 @@ pub struct PlanConfig {
     /// Name of the plan file relative to workspace root. Default: "PLAN.md".
     #[serde(default = "default_plan_file")]
     pub file: String,
+    /// When true, `record_history` returns an error for illegal state-machine
+    /// transitions (e.g. `pending → done`, `done → in_progress`). Default: false
+    /// (warn only). Set in `.ta/workflow.toml` under `[plan]`. (v0.15.24.2)
+    #[serde(default)]
+    pub strict_transitions: bool,
 }
 
 impl Default for PlanConfig {
     fn default() -> Self {
         Self {
             file: default_plan_file(),
+            strict_transitions: false,
         }
     }
 }
@@ -2624,6 +2630,7 @@ exclude_paths = ["staging/", "goals/"]
     fn plan_config_custom_file_resolves_path() {
         let config = PlanConfig {
             file: "ROADMAP.md".to_string(),
+            strict_transitions: false,
         };
         let workflow = WorkflowConfig {
             plan: config,

@@ -39,6 +39,7 @@ use axum::Router;
 
 use crate::config::{DaemonConfig, ShellConfig, TokenStore};
 use crate::office::ProjectRegistry;
+use crate::phase_claim::PhaseClaims;
 use crate::project_context::ProjectStatusSummary;
 use crate::question_registry::QuestionRegistry;
 
@@ -65,6 +66,8 @@ pub struct AppState {
     pub persistent_qa: Arc<agent::PersistentQaAgent>,
     /// Currently active project root for TA Studio multi-project support (v0.14.18).
     pub active_project_root: Arc<std::sync::RwLock<PathBuf>>,
+    /// Atomic in-memory claim registry for plan phases (v0.15.24.2).
+    pub phase_claims: Arc<PhaseClaims>,
 }
 
 impl AppState {
@@ -94,6 +97,7 @@ impl AppState {
             bootstrap_sessions: project_new::BootstrapSessionManager::new(),
             persistent_qa,
             active_project_root: Arc::new(std::sync::RwLock::new(project_root.clone())),
+            phase_claims: Arc::new(PhaseClaims::new()),
             project_root,
             daemon_config,
         }
@@ -348,6 +352,7 @@ pub fn build_api_router(state: Arc<AppState>) -> Router {
         // Plan phase browser routes (v0.14.19).
         .route("/api/plan/phases", get(plan::get_plan_phases))
         .route("/api/plan/phase/add", post(plan::add_plan_phase))
+        .route("/api/plan/phase/claim", post(plan::claim_phase))
         .route("/api/goal/start", post(plan::start_goal))
         // Plan generation (v0.14.20).
         .route("/api/plan/generate", post(plan::generate_plan_phases))
