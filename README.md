@@ -30,22 +30,15 @@ TA ensures:
 
 ```mermaid
 flowchart TD
-  H1["👤 Human Goal<br/><b>"Handle my email correspondence"</b><br/>• Track urgent/important emails<br/>• Reply in my voice<br/>• Notify me via Slack of commitments + anything needing attention"]
-
-  TA0["🛡️ Trusted Autonomy (TA)<br/><b>Goal Run</b><br/>• Suggest + enforce access charter<br/>• Mediate tools + connectors<br/>• Collect all mutations as ChangeSets<br/>• Produce Draft Package for review"]
-
-  VW["🧩 Virtual Workspace (Conceptual)<br/><i>Agents operate within a bounded capability space</i><br/>• Virtualized state across endpoints<br/>• Staged-by-default mutations<br/>• Per-goal settings + budgets"]
-
-  A1["🤖 Agent / Swarm (any framework)<br/><b>Operates normally</b><br/>Claude / Codex / LangChain / Ollama / etc."]
-
-  C1["🔌 Connectors (mediated)<br/> • Email<br/> • Slack<br/> • Docs/Drive<br/> • DB<br/> • Web<br/> • Filesystem<br/> • Social"]
-  C2["🌐 Research / Web Access (mediated)<br/>• Sanitized inputs<br/>• Provenance labels<br/>• Instruction-hierarchy firewall"]
-
-  DP["📦 Draft Package (semantic review bundle)<br/><b>Changes + rationale + risk flags</b><br/>• Email drafts<br/>• Slack notifications queued<br/>• DB / API mutations staged<br/>• File changes staged"]
-
-  H2["👤 Human Review<br/><b>Review Draft Package</b><br/>Approve / Reject / Discuss per item"]
-
-  APPLY["✅ Apply Approved Changes<br/><b>Commit staged effects to real world</b><br/>Send emails • Post Slack • Write DB • Apply file changes"]
+  H1["👤 Human sets a goal\ne.g. Handle my email correspondence\nTrack urgent emails · Reply in my voice · Notify via Slack"]
+  TA0["🛡️ Trusted Autonomy\nGoal Run\nEnforces charter · Mediates connectors\nCollects all mutations as ChangeSets\nProduces Draft Package for review"]
+  VW["🧩 Virtual Workspace\nAgents operate in a bounded capability space\nStaged-by-default mutations · Per-goal budgets"]
+  A1["🤖 Agent or Swarm\nOperates normally with native tools\nClaude · Codex · LangChain · Ollama · etc."]
+  C1["🔌 Connectors mediated\nEmail · Slack · Docs · DB · Web · Filesystem · Social"]
+  C2["🌐 Web Access mediated\nSanitized inputs · Provenance labels\nInstruction-hierarchy firewall"]
+  DP["📦 Draft Package\nChanges + rationale + risk flags\nEmail drafts · Slack queued · DB staged · File diffs"]
+  H2["👤 Human Review\nApprove · Reject · Discuss per item"]
+  APPLY["✅ Apply Approved Changes\nSend emails · Post Slack · Write DB · Apply file changes"]
 
   H1 --> TA0 --> DP --> H2 --> APPLY
   TA0 --> VW --> A1
@@ -54,8 +47,8 @@ flowchart TD
   A1 --> TA0
   C1 --> TA0
   C2 --> TA0
-  A1 -. "TA is transparent<br/>to agent framework" .-> TA0
-  DP -. "Single milestone review,<br/>not per-action prompts" .-> H2
+  A1 -. TA is transparent to agent .-> TA0
+  DP -. Single milestone review not per-action prompts .-> H2
 ```
 
 ---
@@ -198,26 +191,19 @@ Those can be added later, but staging workspaces keep the system **portable and 
 
 ```mermaid
 flowchart TD
-  H1["👤 Human Goal<br/><b>"Implement the Slack integration feature set for Trusted Autonomy."</b>"]
-
-  TA0["🛡️ Trusted Autonomy (TA)<br/><b>Goal Run</b><br/>• Enforce charter (filesystem only today)<br/>• Collect file mutations as ChangeSets<br/>• Build Draft Package for review"]
-
-  WS["🗂️ Staging Workspace (filesystem)<br/><i>Temporary isolated copy for the Goal Run</i><br/>• Agent works normally here<br/>• TA diffs vs source"]
-
-  A1["🤖 Coding Agent / Swarm<br/><b>Operates with native tools</b><br/>• edits, searches, runs tests (as allowed)<br/>• TA is invisible"]
-
-  FS["📁 Filesystem (today)<br/>• Read source<br/>• Write in staging<br/>• Capture diffs + binary summaries"]
-
-  DP["📦 Draft Package (today)<br/><b>Semantic diff + agent rationale</b><br/>• Per-file approve / reject / discuss<br/>• Binary changes summarized (hash/size/type)"]
-
-  H2["👤 Human Review<br/><b>Review Draft Package</b><br/>Approve / Reject / Discuss per file"]
-
-  APPLY["✅ Apply Approved File Changes<br/><b>Copy back only approved deltas</b><br/>Optional: create git commit"]
+  H1["👤 Human sets a goal\ne.g. Implement the Slack integration feature set"]
+  TA0["🛡️ Trusted Autonomy\nGoal Run\nEnforces charter · Collects file mutations as ChangeSets\nBuilds Draft Package for review"]
+  WS["🗂️ Staging Workspace\nTemporary isolated copy of the project\nAgent works normally here · TA diffs vs source"]
+  A1["🤖 Coding Agent or Swarm\nOperates with native tools\nEdits · searches · runs tests · TA is invisible"]
+  FS["📁 Filesystem\nRead source · Write in staging\nCapture diffs and binary summaries"]
+  DP["📦 Draft Package\nSemantic diff + agent rationale\nPer-file approve · reject · discuss\nBinary changes summarized"]
+  H2["👤 Human Review\nApprove · Reject · Discuss per file"]
+  APPLY["✅ Apply Approved File Changes\nCopy back only approved deltas\nOptional git commit"]
 
   H1 --> TA0 --> WS --> A1 --> FS --> TA0
   TA0 --> DP --> H2 --> APPLY
-  WS -. "Temporary implementation detail (today only)" .-> TA0
-  TA0 -. "Draft = PR-style review artifact, generalized beyond code" .-> DP
+  WS -. Temporary staging workspace today .-> TA0
+  TA0 -. Draft is a PR-style review artifact generalized beyond code .-> DP
 ```
 
 ---
