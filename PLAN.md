@@ -12018,6 +12018,33 @@ The planner agent runs with read-only tools (Read, Grep, Glob) — it cannot wri
 
 ---
 
+### v0.15.24.1 — Audit Trail Integrity + Agent Task Completion Enforcement
+<!-- status: pending -->
+
+**Goal**: Fix two reliability gaps exposed by the plan-build workflow run:
+(1) Daemon was auto-committing `plan_history.jsonl` and `goal-audit.jsonl` as standalone commits to `main` outside of any draft — these must be bundled into the `ta draft apply --git-commit` commit.
+(2) Implementation agents consistently skip marking plan items `[x]` as they complete them, and the reviewer agent skips verifying completion — both must be enforced.
+
+**Why**: Standalone audit-trail commits on `main` cause rebase conflicts when a PR merges concurrently (observed: v0.15.24 workflow run left 4 orphan commits that conflicted with #416). Agent task tracking is the primary human-readable audit of what was actually built — if it is not maintained, the plan becomes an unreliable record and the reviewer's code-check is weakened.
+
+#### Items
+
+1. [ ] **Bundle audit files into draft apply commit** (`apps/ta-cli/src/commands/draft.rs`): When `--git-commit` is set, include staged mutations to `.ta/plan_history.jsonl` and `.ta/goal-audit.jsonl` in the apply commit rather than letting the daemon write them as freestanding commits. Daemon must not commit these files directly to `main` outside of a draft apply.
+
+2. [ ] **Ordering validation** (`crates/ta-goal/src/audit.rs`): On append, assert each new entry's `timestamp` is ≥ the previous entry's timestamp. On `ta draft apply`, validate ordering of the full file before committing. Log `[warn]` and refuse to apply if ordering is violated.
+
+3. [ ] **Implementation agent task-marking requirement** (`apps/ta-cli/src/commands/run.rs` + CLAUDE.md injection): Inject explicit instruction into the agent's CLAUDE.md context: as each plan item is implemented, mark it `[x]` in PLAN.md immediately. Unimplemented items remain `[ ]`. Items must not all be left unchecked at the end of the run.
+
+4. [ ] **Reviewer: per-item completion check** (`crates/ta-goal/src/reviewer.rs`): For each `[x]` item in the phase, reviewer must locate the implementing code and confirm it exists (file + function/struct name). For each `[ ]` item, reviewer must check whether the code was actually written despite the item being unchecked — if so, mark it `[x]` and note the discrepancy. Reviewer summary must include a per-item completion table: `item | marked | code-verified`.
+
+5. [ ] **Reviewer: unchecked-but-implemented correction** (`crates/ta-goal/src/reviewer.rs`): If reviewer finds code that implements an unchecked item, it auto-corrects the PLAN.md checkbox to `[x]` and adds a note in the review summary: `[auto-corrected] item N was implemented but not marked complete by agent`. This correction is part of the reviewer draft, not a separate commit.
+
+6. [ ] **Tests**: Audit append with out-of-order timestamp → rejected. Apply with disordered `plan_history.jsonl` → blocked. Agent injection includes task-marking instruction. Reviewer summary contains per-item completion table. Reviewer auto-corrects unchecked-but-implemented item.
+
+7. [ ] **USAGE.md update**: Add note to "Audit Trail" section explaining that audit files are committed as part of `ta draft apply`, not as standalone commits. Add note to "Reviewer" section describing per-item completion verification.
+
+#### Version: `0.15.24-alpha.1`
+
 ---
 
 ### v0.15.25 — Auto-Approve Constitution: Rule-Based Policy + Amendment Flow
