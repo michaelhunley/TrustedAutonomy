@@ -2088,6 +2088,36 @@ ta plan add "Add auth middleware"    # Add a phase to the existing plan (interac
 ta plan add "Quick fix" --auto       # Add phase non-interactively (best-guess placement)
 ```
 
+#### Phase Lifecycle and Claim Locking
+
+Phases follow a strict three-state machine:
+
+```
+pending → in_progress → done
+              ↓
+           pending    (on deny or delete)
+```
+
+**Who writes each transition:**
+
+| Transition | Trigger |
+|---|---|
+| `pending → in_progress` | `ta run --phase <id>` claims the phase before launching the agent |
+| `in_progress → done` | `ta draft apply` marks the phase complete in the apply commit |
+| `in_progress → pending` | `ta draft deny` or `ta goal delete` releases the claim |
+
+**Exclusive claim**: once a phase is `in_progress` it is **claimed** — `ta plan next` will skip it and no second goal can claim it. This prevents the duplicate-dispatch problem where two loop iterations try to work the same phase concurrently.
+
+**Parallel workflows**: when multiple workers share a running daemon, phase claims go through the daemon's HTTP endpoint (`POST /api/plan/phase/claim`), which holds an in-memory mutex. The mutex serializes all claim attempts, so two workers claiming the same phase simultaneously always results in one success and one 409 conflict. Without a running daemon, `ta run` falls back to a direct file-write with the same pending-only guard.
+
+**Loop dispatch guard**: governed workflows additionally track `dispatched_phases` per run. If `ta plan next` returns a phase that was already dispatched in the current run — indicating a status-marker race — the loop halts immediately with:
+
+```
+SAFETY: phase v0.X.Y was already dispatched in this run (iteration N).
+```
+
+**Strict transition mode** (`[plan] strict_transitions = true` in `.ta/workflow.toml`): by default, illegal transitions (e.g. `pending → done` without claiming) produce a warning in the history log. In strict mode they return an error, preventing the write.
+
 #### Generating a Plan from a Document
 
 Use `ta plan from <path>` to generate a phased development plan from a product document (PRD, spec, RFC, design doc, etc.):

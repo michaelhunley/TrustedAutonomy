@@ -432,33 +432,30 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HEAD_SHA_SHORT: ${{ needs.check-for-changes.outputs.head_sha_short }}
+          BUILD_DATE: ${{ env.BUILD_DATE }}
         run: |
           BUILD_DATE=$(date -u +"%Y-%m-%d")
           RELEASE_TITLE="Nightly ${BUILD_DATE} (${HEAD_SHA_SHORT})"
 
-          # Delete the existing nightly release if present.
-          # Required because repos with "Immutable releases" enabled cannot have
-          # assets replaced on a published release (HTTP 422). Delete-recreate is
-          # the only safe path. The nightly tag was already force-pushed above.
+          # Check if the nightly release already exists
           if gh release view nightly 2>/dev/null; then
-            echo "Deleting existing nightly release..."
-            gh release delete nightly --yes
+            echo "Updating existing nightly release..."
+            gh release edit nightly \
+              --title "$RELEASE_TITLE" \
+              --notes-file nightly-body.md \
+              --prerelease \
+              --draft=false
+            # Replace all assets (clobber existing ones)
+            gh release upload nightly artifacts/* --clobber
+          else
+            echo "Creating first nightly release..."
+            gh release create nightly \
+              --title "$RELEASE_TITLE" \
+              --notes-file nightly-body.md \
+              --prerelease \
+              --draft=false
+            gh release upload nightly artifacts/* --clobber
           fi
-
-          # Create as draft first, upload all assets, then publish.
-          # Draft-first prevents a window where the release exists but has no assets.
-          echo "Creating nightly draft..."
-          gh release create nightly \
-            --title "$RELEASE_TITLE" \
-            --notes-file nightly-body.md \
-            --prerelease \
-            --draft
-
-          echo "Uploading assets..."
-          gh release upload nightly artifacts/*
-
-          echo "Publishing nightly release..."
-          gh release edit nightly --draft=false
 
           echo ""
           echo "Nightly release published:"

@@ -28,6 +28,7 @@ use clap::Subcommand;
 use regex::Regex;
 use ta_goal::{extract_human_review_items, HumanReviewStore};
 use ta_mcp_gateway::GatewayConfig;
+use ta_submit::WorkflowConfig as TaWorkflowConfig;
 
 #[derive(Subcommand)]
 pub enum PlanCommands {
@@ -443,9 +444,30 @@ pub enum PlanStatus {
 }
 
 impl PlanStatus {
-    /// Returns true if this phase should be considered when finding the "next" phase to work on.
+    /// Returns true if this phase can be dispatched as new work.
+    ///
+    /// `InProgress` is NOT actionable — it means the phase is already claimed by a running
+    /// goal and must be skipped by `find_next_pending`. Only `Pending` phases are eligible
+    /// for new dispatch. (v0.15.24.2: fixed from `Pending | InProgress` to `Pending` only.)
     pub fn is_actionable(&self) -> bool {
-        matches!(self, PlanStatus::Pending | PlanStatus::InProgress)
+        matches!(self, PlanStatus::Pending)
+    }
+
+    /// Returns true if the transition from `self` to `to` is a legal state-machine move.
+    ///
+    /// Legal transitions:
+    ///   `pending    → in_progress`  (claim: ta run)
+    ///   `in_progress → done`         (complete: ta draft apply)
+    ///   `in_progress → pending`      (reset: ta draft deny or ta goal delete)
+    ///
+    /// Everything else is illegal.
+    pub fn is_valid_transition_to(&self, to: &PlanStatus) -> bool {
+        matches!(
+            (self, to),
+            (PlanStatus::Pending, PlanStatus::InProgress)
+                | (PlanStatus::InProgress, PlanStatus::Done)
+                | (PlanStatus::InProgress, PlanStatus::Pending)
+        )
     }
 }
 
@@ -997,9 +1019,10 @@ pub fn format_plan_checklist_windowed(
 
 /// Find the next actionable phase after the given phase ID.
 ///
-/// Skips phases marked as `Deferred` or `Done`. Only returns phases with
-/// `Pending` or `InProgress` status. If `after_phase` is None, returns the
-/// first actionable phase.
+/// Skips phases marked as `Deferred`, `Done`, or `InProgress` — only
+/// returns `Pending` phases. `InProgress` means the phase is already
+/// claimed by a running goal; returning it again would cause duplicate
+/// dispatch. If `after_phase` is None, returns the first pending phase.
 pub fn find_next_pending<'a>(
     phases: &'a [PlanPhase],
     after_phase: Option<&str>,
@@ -1020,6 +1043,16 @@ pub fn find_next_pending<'a>(
     }
 }
 
+/// Find the first `InProgress` phase.
+///
+/// Used for status introspection, resume flows, and claim checks. Not for
+/// dispatch decisions — use `find_next_pending` for those.
+pub fn find_in_progress(phases: &[PlanPhase]) -> Option<&PlanPhase> {
+    phases
+        .iter()
+        .find(|p| matches!(p.status, PlanStatus::InProgress))
+}
+
 /// Record a plan phase status change to the history log.
 pub fn record_history(
     project_root: &Path,
@@ -1027,6 +1060,30 @@ pub fn record_history(
     old_status: &PlanStatus,
     new_status: &PlanStatus,
 ) -> anyhow::Result<()> {
+    // Validate state-machine transition. Log a warning for illegal moves;
+    // return an error when strict_transitions is enabled in [plan] config.
+    if !old_status.is_valid_transition_to(new_status) {
+        tracing::warn!(
+            phase = %phase_id,
+            from = %old_status,
+            to = %new_status,
+            "invalid plan phase transition — expected pending→in_progress, \
+             in_progress→done, or in_progress→pending"
+        );
+        // Check strict mode from workflow config.
+        let wf_path = project_root.join(".ta/workflow.toml");
+        let wf_config = TaWorkflowConfig::load_or_default(&wf_path);
+        if wf_config.plan.strict_transitions {
+            anyhow::bail!(
+                "Phase {}: invalid state transition {} → {} (strict_transitions enabled). \
+                 Legal: pending → in_progress → done, or in_progress → pending on reset.",
+                phase_id,
+                old_status,
+                new_status
+            );
+        }
+    }
+
     let ta_dir = project_root.join(".ta");
     std::fs::create_dir_all(&ta_dir)?;
     let history_path = ta_dir.join("plan_history.jsonl");
@@ -1654,12 +1711,9 @@ fn show_next(config: &GatewayConfig, filter: Option<&str>) -> anyhow::Result<()>
         phases
     };
 
-    // Find next pending (prefer after in_progress, fallback to first pending).
-    let after_current = filtered
-        .iter()
-        .rev()
-        .find(|p| p.status == PlanStatus::InProgress)
-        .map(|p| p.id.as_str());
+    // Find next pending. Start the search after the current in_progress phase
+    // (if any) so we don't re-suggest a phase that is already claimed.
+    let after_current = find_in_progress(&filtered).map(|p| p.id.as_str());
 
     let next = find_next_pending(&filtered, after_current);
 
@@ -3670,6 +3724,7 @@ pub fn auto_detect_phase(project_root: &Path, title: &str, quiet: bool) -> Optio
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     const SAMPLE_PLAN: &str = r#"# Trusted Autonomy — Development Plan
 
@@ -3928,12 +3983,51 @@ Release automation.
     }
 
     #[test]
-    fn find_next_pending_returns_first_actionable() {
+    fn find_next_pending_returns_first_pending() {
         let phases = parse_plan(SAMPLE_PLAN);
         let next = find_next_pending(&phases, None);
         assert!(next.is_some());
-        // 4a.1 is in_progress — that's actionable, so it comes first.
-        assert_eq!(next.unwrap().id, "4a.1");
+        // 4a.1 is in_progress — skipped (already claimed). 4b is the first Pending phase.
+        assert_eq!(next.unwrap().id, "4b");
+    }
+
+    #[test]
+    fn find_next_pending_skips_in_progress() {
+        let plan = r#"
+## Phase 0 — Done
+<!-- status: done -->
+
+## Phase 1 — In Progress
+<!-- status: in_progress -->
+
+## Phase 2 — Next
+<!-- status: pending -->
+"#;
+        let phases = parse_plan(plan);
+        let next = find_next_pending(&phases, None);
+        assert!(next.is_some());
+        // Phase 1 is in_progress (claimed) — must be skipped.
+        assert_eq!(next.unwrap().id, "2");
+    }
+
+    #[test]
+    fn find_in_progress_finds_claimed_phase() {
+        let phases = parse_plan(SAMPLE_PLAN);
+        let ip = find_in_progress(&phases);
+        assert!(ip.is_some());
+        assert_eq!(ip.unwrap().id, "4a.1");
+    }
+
+    #[test]
+    fn find_in_progress_returns_none_when_no_in_progress() {
+        let plan = r#"
+## Phase 0 — Done
+<!-- status: done -->
+## Phase 1 — Pending
+<!-- status: pending -->
+"#;
+        let phases = parse_plan(plan);
+        assert!(find_in_progress(&phases).is_none());
     }
 
     #[test]
@@ -3973,6 +4067,45 @@ Release automation.
         let next = find_next_pending(&phases, None);
         assert!(next.is_some());
         assert_eq!(next.unwrap().id, "2");
+    }
+
+    // ── State machine transition tests (v0.15.24.2) ──────────────────────────
+
+    #[test]
+    fn valid_transitions_accepted() {
+        assert!(PlanStatus::Pending.is_valid_transition_to(&PlanStatus::InProgress));
+        assert!(PlanStatus::InProgress.is_valid_transition_to(&PlanStatus::Done));
+        assert!(PlanStatus::InProgress.is_valid_transition_to(&PlanStatus::Pending));
+    }
+
+    #[test]
+    fn invalid_transitions_rejected() {
+        // Direct pending → done (skips claim step).
+        assert!(!PlanStatus::Pending.is_valid_transition_to(&PlanStatus::Done));
+        // Re-claim an already in_progress phase.
+        assert!(!PlanStatus::InProgress.is_valid_transition_to(&PlanStatus::InProgress));
+        // Reopen a done phase.
+        assert!(!PlanStatus::Done.is_valid_transition_to(&PlanStatus::InProgress));
+        assert!(!PlanStatus::Done.is_valid_transition_to(&PlanStatus::Pending));
+    }
+
+    #[test]
+    fn record_history_warns_on_invalid_transition_but_succeeds_without_strict() {
+        let dir = tempdir().unwrap();
+        // pending → done is illegal, but without strict mode it should not error.
+        let result = record_history(
+            dir.path(),
+            "v0.1.0",
+            &PlanStatus::Pending,
+            &PlanStatus::Done,
+        );
+        assert!(
+            result.is_ok(),
+            "non-strict mode should not error on bad transition"
+        );
+        // History file should still be written.
+        let history = dir.path().join(".ta/plan_history.jsonl");
+        assert!(history.exists());
     }
 
     #[test]

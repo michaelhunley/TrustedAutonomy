@@ -610,6 +610,11 @@ pub struct GovernedWorkflowRun {
     /// Loop iteration counts per goto stage name (v0.15.13).
     #[serde(default)]
     pub loop_iterations: std::collections::HashMap<String, u32>,
+    /// Phase IDs that have already been dispatched in this run (v0.15.24.2).
+    /// Second line of defence against duplicate dispatch: if `plan_next` returns
+    /// a phase that is already in this list, the loop halts with a safety error.
+    #[serde(default)]
+    pub dispatched_phases: Vec<String>,
     pub started_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -655,6 +660,7 @@ impl GovernedWorkflowRun {
             outputs: std::collections::HashMap::new(),
             sub_workflow_records: Vec::new(),
             loop_iterations: std::collections::HashMap::new(),
+            dispatched_phases: Vec::new(),
             started_at: Utc::now(),
             updated_at: Utc::now(),
         }
@@ -1751,6 +1757,30 @@ fn stage_plan_next(
     }
 
     let parsed = PlanNextOutput::parse(&stdout);
+
+    // Dispatch-history guard (v0.15.24.2): if plan_next returns a phase that
+    // was already dispatched in this run, a status-marker race is in progress.
+    // Halt immediately rather than launching a duplicate goal.
+    if !parsed.done && !parsed.phase_id.is_empty() {
+        let already_dispatched = run
+            .dispatched_phases
+            .iter()
+            .enumerate()
+            .find(|(_, id)| *id == &parsed.phase_id);
+        if let Some((idx, _)) = already_dispatched {
+            anyhow::bail!(
+                "SAFETY: phase {} was already dispatched in this run (iteration {}). \
+                 This indicates a status-marker race or a PLAN.md write failure. \
+                 Halting to avoid duplicate work. Check PLAN.md — the phase should be \
+                 marked in_progress or done. If the phase marker is still pending, \
+                 mark it manually with `ta plan mark-in-progress {}` and resume.",
+                parsed.phase_id,
+                idx + 1,
+                parsed.phase_id,
+            );
+        }
+    }
+
     let detail = if parsed.done {
         "all phases complete".to_string()
     } else {
@@ -2685,6 +2715,23 @@ fn stage_run_goal(
 
     // v0.15.19.4.2: Parse [progress] heartbeat lines from agent stdout.
     parse_and_report_progress_heartbeats(&stdout);
+
+    // v0.15.24.2: Record the dispatched phase_id for the dispatch-history guard.
+    // Look for a phase_id in stage outputs (plan_next or loop_next stage).
+    let dispatched_phase_id: Option<String> =
+        opts.plan_phase.map(|p| p.to_string()).or_else(|| {
+            run.outputs.values().find_map(|stage_out| {
+                stage_out
+                    .get("phase_id")
+                    .filter(|id| !id.is_empty())
+                    .cloned()
+            })
+        });
+    if let Some(ref pid) = dispatched_phase_id {
+        if !run.dispatched_phases.contains(pid) {
+            run.dispatched_phases.push(pid.clone());
+        }
+    }
 
     let detail = match &run.draft_id {
         Some(id) => format!("draft {}", &id[..8.min(id.len())]),
@@ -4424,6 +4471,61 @@ mod tests {
 
         let loaded = GovernedWorkflowRun::load(&runs_dir, "loop-test").unwrap();
         assert_eq!(loaded.loop_iterations.get("loop"), Some(&3));
+    }
+
+    // ── Dispatch-history guard tests (v0.15.24.2) ────────────────────────────
+
+    #[test]
+    fn dispatched_phases_default_empty() {
+        let run = GovernedWorkflowRun::new("run-x", "governed-goal", "Goal");
+        assert!(run.dispatched_phases.is_empty());
+    }
+
+    #[test]
+    fn dispatched_phases_persist_through_save_load() {
+        let dir = tempdir().unwrap();
+        let runs_dir = dir.path().join("workflow-runs");
+        let mut run = GovernedWorkflowRun::new("dp-test", "test-wf", "Goal");
+        run.dispatched_phases.push("v0.15.0".to_string());
+        run.dispatched_phases.push("v0.15.1".to_string());
+        run.save(&runs_dir).unwrap();
+
+        let loaded = GovernedWorkflowRun::load(&runs_dir, "dp-test").unwrap();
+        assert_eq!(loaded.dispatched_phases, vec!["v0.15.0", "v0.15.1"]);
+    }
+
+    #[test]
+    fn plan_next_output_phase_id_duplicate_detected() {
+        // Simulate the dispatch-history guard logic used in stage_plan_next.
+        let mut run = GovernedWorkflowRun::new("safety-test", "governed-goal", "Goal");
+        run.dispatched_phases.push("v0.15.0".to_string());
+
+        // Same phase returned again — the guard should detect it.
+        let phase_id = "v0.15.0";
+        let already = run
+            .dispatched_phases
+            .iter()
+            .enumerate()
+            .find(|(_, id)| *id == phase_id);
+        assert!(
+            already.is_some(),
+            "guard must fire for already-dispatched phase"
+        );
+    }
+
+    #[test]
+    fn plan_next_output_new_phase_not_blocked() {
+        let mut run = GovernedWorkflowRun::new("safety-new", "governed-goal", "Goal");
+        run.dispatched_phases.push("v0.15.0".to_string());
+
+        // Different phase — guard must not fire.
+        let phase_id = "v0.15.1";
+        let already = run
+            .dispatched_phases
+            .iter()
+            .enumerate()
+            .find(|(_, id)| *id == phase_id);
+        assert!(already.is_none(), "guard must not fire for a new phase");
     }
 
     // ── StageKind deserialization (v0.15.13) ──────────────────────────────────
