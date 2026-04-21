@@ -12019,7 +12019,7 @@ The planner agent runs with read-only tools (Read, Grep, Glob) — it cannot wri
 ---
 
 ### v0.15.24.1 — Audit Trail Integrity + Agent Task Completion Enforcement
-<!-- status: in_progress -->
+<!-- status: done -->
 
 **Goal**: Fix two reliability gaps exposed by the plan-build workflow run:
 (1) Daemon was auto-committing `plan_history.jsonl` and `goal-audit.jsonl` as standalone commits to `main` outside of any draft — these must be bundled into the `ta draft apply --git-commit` commit.

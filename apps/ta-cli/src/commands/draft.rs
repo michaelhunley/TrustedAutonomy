@@ -1099,6 +1099,7 @@ fn run_plan_review(
     source_path: &std::path::Path,
     artifacts: &[Artifact],
     prior_denial: bool,
+    plan_phase: Option<&str>,
 ) -> anyhow::Result<ta_changeset::review_report::ReviewReport> {
     use ta_changeset::plan_merge::merge_plan_md;
     use ta_changeset::review_report::ReviewReport;
@@ -1132,6 +1133,46 @@ fn run_plan_review(
     // v0.15.19.4.2: Emit [plan] heartbeat lines for coverage status.
     emit_plan_heartbeat_lines(&merge_result.merged, &coverage_gaps);
 
+    // v0.15.24.1: Per-item completion verification and auto-correction.
+    // For the current phase, check each item for code coverage. Unchecked items
+    // that have code coverage are auto-corrected to [x] in the staging PLAN.md.
+    let merged_after_autocorrect = if let Some(phase_id) = plan_phase {
+        let completion =
+            ta_goal::verify_phase_completion(&merge_result.merged, &diff_content, phase_id);
+        println!(
+            "[review] Per-item completion: {}",
+            completion.summary_line()
+        );
+        for item in &completion.items {
+            println!("{}", item.status_line());
+        }
+        if completion.auto_corrected_count > 0 {
+            println!(
+                "[review] Auto-corrected {} unchecked item(s) where code was found.",
+                completion.auto_corrected_count
+            );
+            for item in completion.items.iter().filter(|i| i.auto_corrected) {
+                if let Some(ref note) = item.note {
+                    println!("  {}", note);
+                }
+            }
+            let corrected = ta_goal::auto_correct_plan_md(&merge_result.merged, &completion);
+            // Write auto-corrected PLAN.md back to staging so the draft includes corrections.
+            if let Err(e) = std::fs::write(&staging_plan, &corrected) {
+                tracing::warn!(
+                    path = %staging_plan.display(),
+                    error = %e,
+                    "reviewer: failed to write auto-corrected PLAN.md to staging"
+                );
+            }
+            corrected
+        } else {
+            merge_result.merged.clone()
+        }
+    } else {
+        merge_result.merged.clone()
+    };
+
     // v0.15.19.4.2: Source-verification for PLAN.md-only drafts.
     // When the draft touches only PLAN.md and all newly-checked items are already
     // in the source workspace, this is a catch-up record, not a fabrication.
@@ -1153,11 +1194,11 @@ fn run_plan_review(
         );
     }
 
-    // Compute plan_patch as a unified diff of merged vs source.
-    let plan_patch = if merge_result.merged != source_content {
+    // Compute plan_patch as a unified diff of merged (post-autocorrect) vs source.
+    let plan_patch = if merged_after_autocorrect != source_content {
         Some(build_unified_diff(
             &source_content,
-            &merge_result.merged,
+            &merged_after_autocorrect,
             "PLAN.md",
         ))
     } else {
@@ -2668,6 +2709,7 @@ pub(crate) fn build_package(
             source_dir,
             &pkg.changes.artifacts,
             prior_denial,
+            goal.plan_phase.as_deref(),
         );
         match plan_review_result {
             Ok(report) => {
@@ -6047,60 +6089,11 @@ fn apply_package(
                     "[apply] On protected branch '{}' — creating feature branch before writing any files...",
                     branch
                 );
-                // Auto-commit any dirty workflow audit trail files before branch creation
-                // to keep the working tree clean (prevents "would be overwritten" errors).
-                {
-                    let ta_jsonl_candidates = [
-                        ".ta/goal-audit.jsonl",
-                        ".ta/plan_history.jsonl",
-                        ".ta/velocity-history.jsonl",
-                    ];
-                    let mut dirty_jsonl: Vec<&str> = Vec::new();
-                    for rel_path in &ta_jsonl_candidates {
-                        let abs_path = target_dir.join(rel_path);
-                        if abs_path.exists() {
-                            if let Ok(out) = std::process::Command::new("git")
-                                .args(["status", "--porcelain", rel_path])
-                                .current_dir(&target_dir)
-                                .output()
-                            {
-                                if !out.stdout.is_empty() {
-                                    dirty_jsonl.push(rel_path);
-                                }
-                            }
-                        }
-                    }
-                    if !dirty_jsonl.is_empty() {
-                        for path in &dirty_jsonl {
-                            let _ = std::process::Command::new("git")
-                                .args(["add", path])
-                                .current_dir(&target_dir)
-                                .status();
-                        }
-                        let commit_result = std::process::Command::new("git")
-                            .args([
-                                "commit",
-                                "-m",
-                                "chore: auto-commit workflow audit trail (pre-apply)",
-                            ])
-                            .current_dir(&target_dir)
-                            .status();
-                        match commit_result {
-                            Ok(s) if s.success() => {
-                                eprintln!(
-                                    "[apply] Auto-committed {} dirty workflow audit file(s) on {} before branching.",
-                                    dirty_jsonl.len(),
-                                    branch
-                                );
-                            }
-                            Ok(_) | Err(_) => {
-                                tracing::warn!(
-                                    "[apply] Auto-commit of .ta/*.jsonl files failed — continuing."
-                                );
-                            }
-                        }
-                    }
-                }
+                // NOTE (v0.15.24.1): Do NOT auto-commit .ta/*.jsonl files here.
+                // Committing them as standalone commits to main before branching causes
+                // orphan commits that conflict with concurrent PR merges. Instead, dirty
+                // audit/history files carry over to the feature branch via `git checkout -b`
+                // and are included in the apply commit by auto_stage_critical_files().
                 if let Err(e) = adapter.prepare(goal, &wf_config.submit) {
                     // Roll back staged PLAN.md if pre-flight fails.
                     let _ = std::process::Command::new("git")
@@ -7245,6 +7238,27 @@ fn apply_package(
                     let vs = VelocityStore::for_project(&target_dir);
                     if let Err(e) = migrate_local_to_history(&vs, &hs, &target_dir) {
                         tracing::warn!("Auto-migrate velocity history (pre-commit) failed: {}", e);
+                    }
+                }
+
+                // v0.15.24.1: Validate goal-audit.jsonl timestamp ordering before commit.
+                // A disordered ledger indicates tampering or a concurrent write race.
+                // Log a warning and abort rather than committing a corrupted audit trail.
+                {
+                    let audit_path = ta_audit::GoalAuditLedger::path_for(&target_dir);
+                    if let Err(e) = ta_audit::GoalAuditLedger::validate_ordering(&audit_path) {
+                        tracing::warn!(
+                            path = %audit_path.display(),
+                            error = %e,
+                            "goal-audit.jsonl ordering validation failed — aborting apply commit"
+                        );
+                        anyhow::bail!(
+                            "Audit trail integrity check failed: {}\n\
+                             The goal-audit.jsonl file has out-of-order timestamps, which may \
+                             indicate a concurrent write race or tampering.\n\
+                             Inspect the file, correct the ordering, and re-run `ta draft apply`.",
+                            e
+                        );
                     }
                 }
 
