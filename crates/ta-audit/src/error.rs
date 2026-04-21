@@ -42,4 +42,16 @@ pub enum AuditError {
     /// Attestation signing or verification failed.
     #[error("attestation failed: {0}")]
     AttestationFailed(String),
+
+    /// Audit ledger has out-of-order timestamps — integrity violation.
+    #[error(
+        "audit ledger ordering violation at entry {index}: \
+         recorded_at {entry_ts} < previous {prev_ts} — \
+         ledger may have been tampered with or written out of order"
+    )]
+    OutOfOrderTimestamp {
+        index: usize,
+        prev_ts: String,
+        entry_ts: String,
+    },
 }

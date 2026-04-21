@@ -4890,10 +4890,20 @@ Rules for per-target descriptions:
 - `depended_by`: list of other file paths that would break if this change is reverted
 - Be honest about dependencies — the reviewer uses this to decide which changes to accept individually
 
+## Task Completion Enforcement (REQUIRED)
+
+As you implement each plan item, mark it `[x]` in PLAN.md **immediately** — do not wait until all items are done. The reviewer verifies each item individually. Leaving all checkboxes unchecked at the end is treated as incomplete work.
+
+Rules:
+- Mark `[x]` as soon as the code for that item is written and compiles.
+- If an item turns out to be N/A or already done, mark it `[x]` and add a note explaining why.
+- Never mark an item `[x]` if you have not actually implemented it.
+- Unimplemented items must stay `[ ]` — the reviewer will check these for code coverage.
+
 ## Plan Updates (REQUIRED if PLAN.md exists)
 
 As you complete planned work items, update PLAN.md to reflect progress:
-- Move completed items from "Remaining" to "Completed" with a ✅ checkmark
+- Mark each item `[x]` immediately when its code is implemented (see Task Completion Enforcement above)
 - Update test counts when you add or remove tests
 - Do NOT change the `<!-- status: ... -->` marker — only `ta draft apply` transitions phase status
 - If you complete all remaining items in a phase, note that in your change_summary.json
@@ -6337,6 +6347,46 @@ mod tests {
         assert!(
             !claude_md.contains("Interactive Mode"),
             "should NOT contain interactive section"
+        );
+    }
+
+    #[test]
+    fn inject_claude_md_includes_task_marking_instruction() {
+        let staging = TempDir::new().unwrap();
+        let config = GatewayConfig::for_project(staging.path());
+        let goal_store = GoalRunStore::new(&config.goals_dir).unwrap();
+
+        inject_claude_md(
+            staging.path(),
+            "Task marking test",
+            "goal-taskmark-001",
+            None,
+            None,
+            None,
+            &goal_store,
+            &config,
+            false,
+            false,
+            None,
+            0,
+            5,
+            5,
+            &ta_submit::config::ContextMode::default(),
+        )
+        .unwrap();
+
+        let claude_md = std::fs::read_to_string(staging.path().join("CLAUDE.md")).unwrap();
+        assert!(
+            claude_md.contains("Task Completion Enforcement"),
+            "injected CLAUDE.md must contain task-marking instruction section"
+        );
+        assert!(
+            claude_md.contains("mark it `[x]` in PLAN.md **immediately**"),
+            "injected CLAUDE.md must instruct agent to mark items immediately"
+        );
+        assert!(
+            claude_md.contains("Leaving all checkboxes unchecked"),
+            "injected CLAUDE.md must warn about leaving all checkboxes unchecked"
         );
     }
 

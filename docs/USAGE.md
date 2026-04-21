@@ -2398,6 +2398,30 @@ Coverage gaps never block apply — they are informational reminders that a plan
 
 **Note**: this review is not `ta doctor`. `ta doctor` validates your runtime environment (auth, daemon health, agent binary). The plan review is a draft-lifecycle gate that runs automatically — you do not need to invoke it manually.
 
+#### Per-item completion table
+
+When a `plan_phase` is set on the goal, the reviewer produces a per-item completion table for that phase:
+
+```
+[review] Per-item completion: phase v0.15.24.1: 5/7 marked, 6/7 code-verified, 1 auto-corrected
+  1 [x] code:✓  Bundle audit files into draft apply commit
+  2 [x] code:✓ [auto-corrected] Ordering validation
+  3 [x] code:✓  Implementation agent task-marking requirement
+  4 [x] code:✓  Reviewer per-item completion check
+  5 [x] code:✓  Reviewer unchecked-but-implemented correction
+  6 [x] code:✓  Tests
+  7 [ ] code:?   USAGE.md update
+```
+
+| Column | Meaning |
+|--------|---------|
+| `[x]` / `[ ]` | Whether the agent marked the item complete |
+| `code:✓` | Implementing tokens found in the artifact diff |
+| `code:?` | No matching code tokens found |
+| `[auto-corrected]` | Item was unchecked but code was found — reviewer corrected the checkbox |
+
+If the reviewer auto-corrects any items, the staging PLAN.md is updated immediately so the draft includes the corrected checkboxes. Auto-corrections appear in `ta draft view` under the plan review section.
+
 ### Plan Auto-Correction
 
 `ta draft build` and `ta draft apply` automatically reconcile PLAN.md item state with code coverage — you do not need to rely on agents to check boxes correctly.
@@ -5282,6 +5306,14 @@ ta audit ledger verify --ledger /path/to/goal-audit.jsonl
 ```
 
 A broken chain prints the first entry where the hash link fails and exits non-zero.
+
+#### Audit files and git commits
+
+`.ta/goal-audit.jsonl` and `.ta/plan_history.jsonl` are included in the same commit as the code changes they describe — not as separate standalone commits on `main`. When `ta draft apply` runs with `--submit`, these files are staged via `auto_stage_critical_files` and bundled into the feature-branch commit. This means they appear in the PR alongside the code, preserving context and preventing rebase conflicts caused by orphan audit commits.
+
+If these files are dirty when `ta draft apply` runs on a protected branch, they carry over to the feature branch automatically when git checks out the new branch — no pre-commit to main is made.
+
+**Timestamp ordering**: Before committing, `ta draft apply` validates that all entries in `goal-audit.jsonl` have monotonically non-decreasing `recorded_at` timestamps. An out-of-order ledger aborts the apply with an actionable error. This guards against concurrent write races or manual tampering.
 
 #### Retention / GC
 

@@ -190,6 +190,10 @@ pub struct GoalAuditLedger {
     #[allow(dead_code)]
     path: PathBuf,
     last_hash: Option<String>,
+    /// Timestamp of the most recently appended entry (for ordering validation).
+    last_recorded_at: Option<DateTime<Utc>>,
+    /// Number of entries appended in this session.
+    entry_count: usize,
 }
 
 impl GoalAuditLedger {
@@ -204,10 +208,10 @@ impl GoalAuditLedger {
             })?;
         }
 
-        let last_hash = if path.exists() {
-            Self::read_last_hash(&path)?
+        let (last_hash, last_recorded_at, entry_count) = if path.exists() {
+            Self::read_tail_state(&path)?
         } else {
-            None
+            (None, None, 0)
         };
 
         let file = OpenOptions::new()
@@ -223,6 +227,8 @@ impl GoalAuditLedger {
             writer: BufWriter::new(file),
             path,
             last_hash,
+            last_recorded_at,
+            entry_count,
         })
     }
 
@@ -232,11 +238,28 @@ impl GoalAuditLedger {
     }
 
     /// Append an entry to the ledger, setting its hash chain link.
+    ///
+    /// Returns `Err(AuditError::OutOfOrderTimestamp)` if the new entry's
+    /// `recorded_at` is earlier than the previous entry's timestamp. Callers
+    /// that need to handle clock-skew gracefully can use `append_unchecked`.
     pub fn append(&mut self, entry: &mut AuditEntry) -> Result<(), AuditError> {
+        // Ordering check: new entry must be ≥ last entry's recorded_at.
+        if let Some(ref prev_ts) = self.last_recorded_at {
+            if entry.recorded_at < *prev_ts {
+                return Err(AuditError::OutOfOrderTimestamp {
+                    index: self.entry_count,
+                    prev_ts: prev_ts.to_rfc3339(),
+                    entry_ts: entry.recorded_at.to_rfc3339(),
+                });
+            }
+        }
+
         entry.previous_hash = self.last_hash.clone();
 
         let json = serde_json::to_string(entry)?;
         self.last_hash = Some(hasher::hash_str(&json));
+        self.last_recorded_at = Some(entry.recorded_at);
+        self.entry_count += 1;
 
         writeln!(self.writer, "{}", json)?;
         self.writer.flush()?;
@@ -296,22 +319,70 @@ impl GoalAuditLedger {
         Ok(true)
     }
 
-    fn read_last_hash(path: &Path) -> Result<Option<String>, AuditError> {
+    /// Read the tail state (last hash, last recorded_at, entry count) from an existing ledger.
+    #[allow(clippy::type_complexity)]
+    fn read_tail_state(
+        path: &Path,
+    ) -> Result<(Option<String>, Option<DateTime<Utc>>, usize), AuditError> {
         let file = File::open(path).map_err(|source| AuditError::OpenFailed {
             path: path.to_path_buf(),
             source,
         })?;
         let reader = BufReader::new(file);
         let mut last_line: Option<String> = None;
+        let mut last_ts: Option<DateTime<Utc>> = None;
+        let mut count = 0usize;
 
         for line in reader.lines() {
             let line = line?;
             if !line.trim().is_empty() {
+                count += 1;
+                if let Ok(entry) = serde_json::from_str::<AuditEntry>(&line) {
+                    last_ts = Some(entry.recorded_at);
+                }
                 last_line = Some(line);
             }
         }
 
-        Ok(last_line.map(|line| hasher::hash_str(&line)))
+        let last_hash = last_line.map(|line| hasher::hash_str(&line));
+        Ok((last_hash, last_ts, count))
+    }
+
+    /// Validate that all entries in the ledger have monotonically non-decreasing
+    /// `recorded_at` timestamps. Called by `ta draft apply` before committing.
+    ///
+    /// Returns `Err(AuditError::OutOfOrderTimestamp)` if any violation is found.
+    pub fn validate_ordering(path: impl AsRef<Path>) -> Result<(), AuditError> {
+        if !path.as_ref().exists() {
+            return Ok(());
+        }
+        let file = File::open(path.as_ref()).map_err(|source| AuditError::OpenFailed {
+            path: path.as_ref().to_path_buf(),
+            source,
+        })?;
+        let reader = BufReader::new(file);
+        let mut prev_ts: Option<DateTime<Utc>> = None;
+        let mut index = 0usize;
+
+        for line in reader.lines() {
+            let line = line?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            index += 1;
+            let entry: AuditEntry = serde_json::from_str(&line)?;
+            if let Some(prev) = prev_ts {
+                if entry.recorded_at < prev {
+                    return Err(AuditError::OutOfOrderTimestamp {
+                        index,
+                        prev_ts: prev.to_rfc3339(),
+                        entry_ts: entry.recorded_at.to_rfc3339(),
+                    });
+                }
+            }
+            prev_ts = Some(entry.recorded_at);
+        }
+        Ok(())
     }
 }
 
@@ -722,6 +793,79 @@ mod tests {
 
         let count = migrate_from_history(&history_path, &mut ledger, &existing).unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn append_out_of_order_timestamp_rejected() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("goal-audit.jsonl");
+
+        let mut ledger = GoalAuditLedger::open(&path).unwrap();
+        let t1 = Utc::now();
+        let t2 = t1 + chrono::Duration::seconds(5);
+
+        let mut e1 = make_entry("First", AuditDisposition::Applied);
+        e1.recorded_at = t2; // later time
+        ledger.append(&mut e1).unwrap();
+
+        let mut e2 = make_entry("Second", AuditDisposition::Applied);
+        e2.recorded_at = t1; // earlier than t2 — should be rejected
+        let result = ledger.append(&mut e2);
+        assert!(result.is_err(), "out-of-order timestamp should be rejected");
+        let err_str = result.unwrap_err().to_string();
+        assert!(
+            err_str.contains("ordering violation"),
+            "error should mention ordering violation"
+        );
+    }
+
+    #[test]
+    fn validate_ordering_rejects_disordered_file() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("goal-audit.jsonl");
+
+        // Write two entries out of order directly to bypass append() check.
+        let t1 = Utc::now();
+        let t2 = t1 + chrono::Duration::seconds(10);
+
+        let mut e1 = make_entry("A", AuditDisposition::Applied);
+        e1.recorded_at = t2;
+        e1.previous_hash = None;
+        let line1 = serde_json::to_string(&e1).unwrap();
+
+        let mut e2 = make_entry("B", AuditDisposition::Denied);
+        e2.recorded_at = t1; // earlier — out of order
+        e2.previous_hash = Some(hasher::hash_str(&line1));
+        let line2 = serde_json::to_string(&e2).unwrap();
+
+        std::fs::write(&path, format!("{}\n{}\n", line1, line2)).unwrap();
+
+        let result = GoalAuditLedger::validate_ordering(&path);
+        assert!(result.is_err(), "disordered file should fail validation");
+    }
+
+    #[test]
+    fn validate_ordering_accepts_ordered_file() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("goal-audit.jsonl");
+
+        let mut ledger = GoalAuditLedger::open(&path).unwrap();
+        let t0 = Utc::now();
+        for i in 0..3 {
+            let mut e = make_entry(&format!("Goal {}", i), AuditDisposition::Applied);
+            e.recorded_at = t0 + chrono::Duration::seconds(i as i64 * 10);
+            ledger.append(&mut e).unwrap();
+        }
+        drop(ledger);
+
+        assert!(GoalAuditLedger::validate_ordering(&path).is_ok());
+    }
+
+    #[test]
+    fn validate_ordering_empty_file_ok() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("nonexistent.jsonl");
+        assert!(GoalAuditLedger::validate_ordering(&path).is_ok());
     }
 
     #[test]
