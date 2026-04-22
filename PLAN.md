@@ -7116,34 +7116,38 @@ The planner agent runs with read-only tools (Read, Grep, Glob) — it cannot wri
 
 **Depends on**: v0.15.24.1 (audit trail integrity), v0.15.24.2 (phase claim locking)
 
+#### Version: `0.15.24-alpha.3`
 
+---
 
+### v0.15.24.4 — Draft Apply: Branch from `origin/main`, Not Stale Local HEAD
+<!-- status: pending -->
 
+**Goal**: Fix `ta draft apply --git-commit` so the feature branch starts from `origin/{target_branch}` (fetched just before branching) instead of the local HEAD. This eliminates PLAN.md rebase conflicts that occur when `ta run` writes an `in_progress` marker to the local source tree and that state diverges from what the remote has by the time the PR merges and the user pulls.
 
+**Why**: `mark_phase_in_source` writes `in_progress` directly to the source PLAN.md before the agent starts. If another PR also touched PLAN.md during the goal run, local main diverges from origin/main. `ta draft apply` currently creates the feature branch from local HEAD, carrying that divergence into the PR. When the user later runs `git pull --rebase`, the `in_progress` dirty state conflicts with the merged result on origin/main. Starting from `origin/main` ensures the feature branch has a clean base regardless of local drift.
 
+**Depends on**: v0.15.24.2 (phase claim locking)
 
+1. [ ] **`GitAdapter::prepare()` fetch before branch** (`crates/ta-submit/src/git.rs`): Call `git fetch <remote>` before `git checkout -b`. If fetch fails (offline), log a warning and fall back to local HEAD. Use `origin/{target_branch}` as the start point for new branches so the feature branch base matches the current remote state.
+2. [ ] **Tests**: `prepare()` with a remote ahead of local HEAD creates branch at remote's commit, not local; offline fallback creates branch from local HEAD without error; existing-branch checkout still works.
 
-
-
-
-
-
-
-
-
-
-
-
+#### Version: `0.15.24-alpha.4`
 
 ---
 
 ### v0.15.25 — Auto-Approve Constitution: Rule-Based Policy + Amendment Flow
-
+<!-- status: pending -->
 
 **Goal**: Replace the binary `auto_approve = true/false` with a rule-based constitution section. Rules are expressed as file-pattern conditions with approve/review/block actions. The constitution section is amended via the same review-gate flow as drafts — no silent policy changes.
 
 **Why**: "Always auto-approve" is too broad; "never auto-approve" is too conservative. A doc-only draft should auto-approve; an auth-path change should always require review. The constitution makes this explicit and auditable.
 
+1. [ ] **`[[constitution.rules]]` config section**: `patterns` (glob list), `action` (`approve` / `review` / `block`). Parsed by `ta-constitution`. First-match-wins evaluation order. Multiple rules supported.
+2. [ ] **Default rules** in `constitution.toml` template: `["docs/**", "*.md"]` → approve; `["src/auth/**", "*_token*", "*.pem", "*.key"]` → block; all others → review.
+3. [ ] **Amendment flow**: `ta constitution amend` opens a draft for the constitution file itself. Follows the same review-gate as code drafts — no silent policy changes. Change takes effect only after `ta draft apply`.
+4. [ ] **CLI**: `ta constitution show` prints active rules with match examples. `ta constitution validate` checks schema and warns on overlapping patterns.
+5. [ ] **Tests**: rule matching (approve/review/block), default rule application, amendment draft round-trip, block rule prevents auto-approve, schema validation rejects malformed rules.
 
 #### Version: `0.15.25-alpha`
 
@@ -7152,8 +7156,11 @@ The planner agent runs with read-only tools (Read, Grep, Glob) — it cannot wri
 ### v0.15.26 — Studio: Global Intent Bar + Advisor Panel with Context Tabs
 <!-- status: pending -->
 
+**Goal**: Add a global intent bar to TA Studio that routes natural language input to the advisor agent from anywhere in the UI, and a context-aware numbered-option menu for advisor responses. Add `ta advisor ask` CLI command for terminal access.
 
+**Why**: The advisor panel (v0.15.21) lives in a dedicated tab. Power users need it reachable without switching context. A persistent `Cmd+K` bar and numbered-option menus bring the advisor to the surface at all times across all Studio tabs.
 
+**Depends on**: v0.15.21 (Studio Advisor Agent)
 
 1. [ ] **Global intent bar** (`apps/ta-studio/src/components/IntentBar.tsx`): Single persistent text input at top of Studio. Always routes to advisor agent. Keyboard shortcut to focus (`Cmd+K` / `Ctrl+K`). Not per-tab.
 
@@ -7170,8 +7177,11 @@ The planner agent runs with read-only tools (Read, Grep, Glob) — it cannot wri
 ### v0.15.27 — Workflow Template Library: Install, Publish, Search
 <!-- status: pending -->
 
-**Depends on**: v0.15.23 (parameterized templates)
+**Goal**: Let users install workflow templates from a URL or registry, publish their own templates, and search the built-in template index — all via `ta workflow install/publish/search`.
 
+**Why**: Sharing workflows between projects and teams requires a distribution mechanism. The registry protocol is intentionally minimal (a JSON index file at a configurable URL) so the feature works without central infrastructure.
+
+**Depends on**: v0.15.23 (parameterized templates)
 
 1. [ ] **`ta workflow publish <name>`** (`apps/ta-cli/src/commands/workflow.rs`): Packages template YAML + manifest. For now: prints the package to stdout (for piping to gist/upload). Future: POST to registry endpoint when configured.
 

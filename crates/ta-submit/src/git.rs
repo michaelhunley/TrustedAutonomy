@@ -350,14 +350,46 @@ impl SourceAdapter for GitAdapter {
 
         tracing::info!("GitAdapter: creating branch {}", branch_name);
 
-        // Check if branch already exists
+        // Check if branch already exists — if so, just switch to it.
         let branches = self.git_cmd(&["branch", "--list", &branch_name])?;
-        if branches.is_empty() {
-            // Create new branch
-            self.git_cmd(&["checkout", "-b", &branch_name])?;
-        } else {
-            // Switch to existing branch
+        if !branches.is_empty() {
             self.git_cmd(&["checkout", &branch_name])?;
+            return Ok(());
+        }
+
+        // Fetch from origin before creating the feature branch so the branch
+        // starts from the current remote state rather than a potentially stale
+        // local HEAD. This prevents PLAN.md rebase conflicts that arise when
+        // `ta run` writes an `in_progress` marker to the local source tree and
+        // another PR merges to origin/main during the goal run — without this
+        // fetch the feature branch diverges from origin/main, causing conflicts
+        // on `git pull --rebase` after the PR merges.
+        //
+        // Staged and unstaged working-tree changes carry over to the new branch
+        // regardless of the start point, so the apply files are not lost.
+        //
+        // If the fetch fails (offline, no remote configured), fall back to
+        // branching from local HEAD with a warning.
+        let remote = &self.config.git.remote;
+        let target_branch = &self.config.git.target_branch;
+        match self.git_cmd(&["fetch", remote]) {
+            Ok(_) => {
+                let start_point = format!("{}/{}", remote, target_branch);
+                tracing::info!(
+                    "GitAdapter: branching {} from {} (fetched)",
+                    branch_name,
+                    start_point
+                );
+                self.git_cmd(&["checkout", "-b", &branch_name, &start_point])?;
+            }
+            Err(e) => {
+                tracing::warn!(
+                    remote = %remote,
+                    error = %e,
+                    "GitAdapter: fetch failed — branching from local HEAD instead"
+                );
+                self.git_cmd(&["checkout", "-b", &branch_name])?;
+            }
         }
 
         Ok(())
