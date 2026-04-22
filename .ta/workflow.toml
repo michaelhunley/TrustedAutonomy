@@ -8,7 +8,7 @@ commands = [
     "./dev 'cargo test --workspace -- --test-threads=4'",
 ]
 on_failure = "block"     # "block" (fail draft), "warn", or "agent" (let agent fix)
-timeout = 600            # seconds per command
+timeout = 2400           # seconds per command (workspace full test+compile ~20min)
 
 [commit]
 # Files auto-staged alongside every `ta draft apply --git-commit`.
