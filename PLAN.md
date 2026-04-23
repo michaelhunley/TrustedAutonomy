@@ -7108,8 +7108,6 @@ The planner agent runs with read-only tools (Read, Grep, Glob) — it cannot wri
 - The loop has no memory of previously dispatched phase IDs within a single run
 
 
-```
-
 #### Version: `0.15.24-alpha.2`
 
 ---
@@ -7147,14 +7145,14 @@ The planner agent runs with read-only tools (Read, Grep, Glob) — it cannot wri
 ### v0.15.24.4 — Draft Apply: Branch from `origin/main`, Not Stale Local HEAD
 <!-- status: done -->
 
+**Goal**: Fix `GitAdapter::prepare()` to fetch from `origin` before creating a feature branch, using `origin/<target_branch>` as the start point. This ensures the feature branch has a clean base regardless of local HEAD drift.
 
-
-**Why**: `mark_phase_in_source` writes `in_progress` directly to the source PLAN.md before the agent starts. If another PR also touched PLAN.md during the goal run, local main diverges from origin/main. `ta draft apply` currently creates the feature branch from local HEAD, carrying that divergence into the PR. When the user later runs `git pull --rebase`, the `in_progress` dirty state conflicts with the merged result on origin/main. Starting from `origin/main` ensures the feature branch has a clean base regardless of local drift.
+**Why**: `mark_phase_in_source` writes `in_progress` directly to the source PLAN.md before the agent starts. If another PR also touched PLAN.md during the goal run, local main diverges from origin/main. `ta draft apply` was creating the feature branch from local HEAD, carrying that divergence into the PR. When the user later ran `git pull --rebase`, the `in_progress` dirty state conflicted with the merged result on origin/main.
 
 **Depends on**: v0.15.24.2 (phase claim locking)
 
----
-
+1. [x] **`GitAdapter::prepare()` fix** (`crates/ta-submit/src/git.rs`): Call `git fetch <remote>` before `git checkout -b`. Use `origin/<target_branch>` as the start point for new branches. Fall back to local HEAD with a `tracing::warn` if the fetch fails (offline/network error), so the flow degrades gracefully.
+2. [x] **Tests**: `prepare()` with a remote ahead of local HEAD creates branch at remote's commit, not local; offline fallback creates branch from local HEAD without error; existing-branch checkout still works.
 
 #### Version: `0.15.24-alpha.4`
 
@@ -7174,15 +7172,15 @@ The planner agent runs with read-only tools (Read, Grep, Glob) — it cannot wri
 
 **Depends on**: v0.15.24.4
 
-1. [ ] **`DraftPackage` base snapshot** (`crates/ta-changeset/src/lib.rs` or wherever `DraftPackage` is defined): Add `plan_md_base: Option<String>` field. During `ta draft build`, if PLAN.md is in `DEFAULT_PROTECTED_FILES`, capture the PLAN.md content from the staging overlay's base (the source copy made at goal-start time) and store it in this field. Serialise/deserialise with the rest of the package.
+1. [x] **`DraftPackage` base snapshot** (`crates/ta-changeset/src/lib.rs` or wherever `DraftPackage` is defined): Add `plan_md_base: Option<String>` field. During `ta draft build`, if PLAN.md is in `DEFAULT_PROTECTED_FILES`, capture the PLAN.md content from the staging overlay's base (the source copy made at goal-start time) and store it in this field. Serialise/deserialise with the rest of the package.
 
-2. [ ] **3-way merge function** (`crates/ta-changeset/src/plan_merge.rs`, new file): Implement `merge_plan_md(base: &str, staging: &str, source: &str) -> String`. Identify lines present in `staging` but not `base` (agent additions) and lines present in `source` but not `base` (post-goal source additions). Apply both sets of additions to `source`. Phase blocks added by the agent (new `### v0.X.Y` sections) are appended in order. Existing phase items in source are never removed.
+2. [x] **3-way merge function** (`crates/ta-changeset/src/plan_merge.rs`, new file): Implement `merge_plan_md(base: &str, staging: &str, source: &str) -> String`. Identify lines present in `staging` but not `base` (agent additions) and lines present in `source` but not `base` (post-goal source additions). Apply both sets of additions to `source`. Phase blocks added by the agent (new `### v0.X.Y` sections) are appended in order. Existing phase items in source are never removed.
 
-3. [ ] **Wire into apply path** (`apps/ta-cli/src/commands/draft.rs`, protected-file guard ~line 6402): Replace the mtime comparison with: if `plan_md_base` is present in the package, call `merge_plan_md(base, staging_content, source_content)` and write the merged result; if `plan_md_base` is absent (legacy package), fall back to keeping source unchanged and log a warning. Remove all mtime logic for this case.
+3. [x] **Wire into apply path** (`apps/ta-cli/src/commands/draft.rs`, protected-file guard ~line 6402): Replace the mtime comparison with: if `plan_md_base` is present in the package, call `merge_plan_md(base, staging_content, source_content)` and write the merged result; if `plan_md_base` is absent (legacy package), fall back to keeping source unchanged and log a warning. Remove all mtime logic for this case.
 
-4. [ ] **Tests**: (a) goal that strips items from a phase → apply keeps source items intact; (b) goal that adds a new phase section → new section is present in result and source items are intact; (c) goal where staging and source are identical → result equals source; (d) legacy package (no base snapshot) → source kept, warning logged.
+4. [x] **Tests**: (a) goal that strips items from a phase → apply keeps source items intact; (b) goal that adds a new phase section → new section is present in result and source items are intact; (c) goal where staging and source are identical → result equals source; (d) legacy package (no base snapshot) → source kept, warning logged.
 
-5. [ ] **USAGE.md**: Add one sentence to the "Protected files" section explaining that PLAN.md is merged rather than overwritten.
+5. [x] **USAGE.md**: Add one sentence to the "Protected files" section explaining that PLAN.md is merged rather than overwritten.
 
 #### Version: `0.15.24-alpha.5`
 
@@ -7196,6 +7194,10 @@ The planner agent runs with read-only tools (Read, Grep, Glob) — it cannot wri
 
 **Why**: "Always auto-approve" is too broad; "never auto-approve" is too conservative. A doc-only draft should auto-approve; an auth-path change should always require review. The constitution makes this explicit and auditable.
 
+1. [ ] **`[[constitution.rules]]` config section**: `patterns` (glob list), `action` (`approve` / `review` / `block`). Parsed by `ta-constitution`. First-match-wins evaluation order. Multiple rules supported.
+2. [ ] **Default rules** in `constitution.toml` template: `["docs/**", "*.md"]` → approve; `["src/auth/**", "*_token*", "*.pem", "*.key"]` → block; all others → review.
+3. [ ] **Amendment flow**: `ta constitution amend` opens a draft for the constitution file itself. Follows the same review-gate as code drafts — no silent policy changes. Change takes effect only after `ta draft apply`.
+4. [ ] **CLI**: `ta constitution show` prints active rules with match examples. `ta constitution validate` checks schema and warns on overlapping patterns.
 
 #### Version: `0.15.25-alpha`
 
@@ -7203,6 +7205,10 @@ The planner agent runs with read-only tools (Read, Grep, Glob) — it cannot wri
 
 ### v0.15.26 — Studio: Global Intent Bar + Advisor Panel with Context Tabs
 <!-- status: pending -->
+
+**Goal**: Add a global intent bar to TA Studio that routes natural language input to the advisor agent from anywhere in the UI, and a context-aware numbered-option menu for advisor responses. Add `ta advisor ask` CLI command for terminal access.
+
+**Why**: The advisor panel (v0.15.21) lives in a dedicated tab. Power users need it reachable without switching context. A persistent `Cmd+K` bar and numbered-option menus bring the advisor to the surface at all times across all Studio tabs.
 
 **Depends on**: v0.15.21 (Studio advisor agent), v0.15.24 (intent resolver), v0.15.25 (auto-approve constitution)
 
@@ -7221,6 +7227,10 @@ The planner agent runs with read-only tools (Read, Grep, Glob) — it cannot wri
 
 ### v0.15.27 — Workflow Template Library: Install, Publish, Search
 <!-- status: pending -->
+
+**Goal**: A discoverable library of reusable workflow templates that users can install from a registry, publish their own, and search by tag or capability. First-party templates ship with TA; community templates are fetched on demand.
+
+**Why**: Parameterized workflow templates (v0.15.23) give users the building blocks; without a library they still have to write templates from scratch. A registry makes existing patterns discoverable and shareable, which accelerates adoption of the governed workflow system.
 
 **Depends on**: v0.15.23 (parameterized templates)
 
@@ -7266,32 +7276,17 @@ The extension communicates with the TA daemon over the existing HTTP API (localh
 3. [ ] **Desktop notifications**: `vscode.window.showInformationMessage` (or `showWarningMessage`) on goal completion, draft ready, and approval-needed events — polled via SSE from the daemon.
 
 4. [ ] **Walkthrough**: VS Code onboarding walkthrough ("Get Started with TA") covering: install daemon, configure `workflow.toml` for Python/TS/Node, start first goal, approve first draft.
-**Items**:
 
 #### Version: `0.16.0-alpha`
 
 ---
 
-
-5. [ ] **Plugin scaffold**: Kotlin plugin using the IntelliJ Platform SDK. Published to JetBrains Marketplace as `com.trusted-autonomy.ta`. Supports PyCharm 2024.1+, WebStorm 2024.1+, IntelliJ IDEA 2024.1+.
-
-6. [ ] **Daemon connectivity**: HTTP client connecting to `http://127.0.0.1:7700`. Health check on IDE startup.
-   ```toml
-
-7. [ ] **Marketplace publishing**: CI workflow to build and publish to JetBrains Marketplace on `v*` tags.
-
-
-8. [ ] **Diff view**: Opens staging diff in a split buffer using `vim.diff()` or `diffview.nvim`.
-9. [ ] **Floating window**: `:TA status` shows daemon health and active goal in a floating window.
-10. [ ] **Commands**: `:TA start`, `:TA approve <id>`, `:TA deny <id>`, `:TA shell`.
-11. [ ] **luarocks / GitHub Releases packaging**: Distribute via `luarocks` and GitHub Releases.
-
-#### Version: `0.16.2-alpha`
-
----
-
 ### v0.16.1 — JetBrains IDE Plugin (PyCharm, WebStorm, IntelliJ)
 <!-- status: pending -->
+
+**Goal**: First-class JetBrains IDE integration for TA. Surfaces goal management, draft review, and approve/deny inline in PyCharm, WebStorm, and IntelliJ IDEA without leaving the editor.
+
+**Why**: JetBrains IDEs are the primary environment for Java, Kotlin, Python (PyCharm), and JavaScript/TypeScript (WebStorm) developers. Same rationale as the VS Code extension — reduces context-switching friction for non-Rust developers.
 
 1. [ ] **Plugin scaffold**: Kotlin plugin using the IntelliJ Platform SDK. Published to JetBrains Marketplace as `com.trusted-autonomy.ta`. Supports PyCharm 2024.1+, WebStorm 2024.1+, IntelliJ IDEA 2024.1+.
 
@@ -7299,45 +7294,16 @@ The extension communicates with the TA daemon over the existing HTTP API (localh
 
 3. [ ] **Marketplace publishing**: CI workflow to build and publish to JetBrains Marketplace on `v*` tags.
 
-
-
----
-
-
-<!-- status: pending -->
-
-1. [ ] **Diff view**: Opens staging diff in a split buffer using `vim.diff()` or `diffview.nvim`.
-2. [ ] **Floating window**: `:TA status` shows daemon health and active goal in a floating window.
-3. [ ] **Commands**: `:TA start`, `:TA approve <id>`, `:TA deny <id>`, `:TA shell`.
-4. [ ] **luarocks / GitHub Releases packaging**: Distribute via `luarocks` and GitHub Releases.
-
-#### Version: `0.16.2-alpha`
+#### Version: `0.16.1-alpha`
 
 ---
-
-
-<!-- status: pending -->
-**Goal**: Extract `ta-agent-ollama` from the TA monorepo into a standalone agent-framework plugin with its own repository, README, and usage documentation. TA's built-in USAGE.md "Local Models" section becomes a short pointer to the plugin project. This follows the same pattern as the VCS plugins (`ta-vcs-git`, `ta-vcs-p4`) — TA ships the plugin protocol and discovery, first-party plugins live in their own repos and are published to the plugin registry.
-
-**Why extract**: Ollama support has its own dependency surface (Ollama binary, model management, thinking-mode tokens), release cadence (tracks Ollama API changes independently of TA core), and user audience (local-model users who may not need TA's full feature set). Keeping it in-tree makes the core binary heavier and couples TA releases to Ollama API changes.
-
-**Depends on**: v0.14.9 (Qwen3.5 profiles, `ta agent install` flow), v0.14.4 (daemon extension surface / plugin traits)
-
-#### Design
-
-```bash
-
-ta agent install ollama
-
-ta plugin install github:trusted-autonomy/ta-agent-ollama
-```
-
-The plugin's own `README.md` covers everything Ollama-specific: prerequisites, model selection, thinking-mode, hardware sizing, `ta agent install qwen3.5` workflow, troubleshooting. TA's USAGE.md "Local Models" section becomes:
-
-```markdown
 
 ### v0.16.2 — Neovim Plugin
 <!-- status: pending -->
+
+**Goal**: A Neovim plugin that integrates TA's draft review and goal management into the terminal editor via Lua, using split buffers and floating windows.
+
+**Why**: Neovim users are a significant portion of the Rust/systems developer audience and strongly prefer terminal-native tools. A Lua plugin bridges TA with their existing workflow without requiring a browser or separate UI.
 
 1. [ ] **Diff view**: Opens staging diff in a split buffer using `vim.diff()` or `diffview.nvim`.
 2. [ ] **Floating window**: `:TA status` shows daemon health and active goal in a floating window.
@@ -7350,6 +7316,7 @@ The plugin's own `README.md` covers everything Ollama-specific: prerequisites, m
 
 ### v0.16.3 — Ollama Agent Framework Plugin (Extract & Standalone)
 <!-- status: pending -->
+
 **Goal**: Extract `ta-agent-ollama` from the TA monorepo into a standalone agent-framework plugin with its own repository, README, and usage documentation. TA's built-in USAGE.md "Local Models" section becomes a short pointer to the plugin project. This follows the same pattern as the VCS plugins (`ta-vcs-git`, `ta-vcs-p4`) — TA ships the plugin protocol and discovery, first-party plugins live in their own repos and are published to the plugin registry.
 
 **Why extract**: Ollama support has its own dependency surface (Ollama binary, model management, thinking-mode tokens), release cadence (tracks Ollama API changes independently of TA core), and user audience (local-model users who may not need TA's full feature set). Keeping it in-tree makes the core binary heavier and couples TA releases to Ollama API changes.
