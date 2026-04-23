@@ -1535,6 +1535,10 @@ pub fn execute(
         // plan_work stage in a governed workflow), inject it into CLAUDE.md.
         inject_work_plan_if_present(&staging_path)?;
 
+        // v0.15.25.1: If reviewer feedback was passed via env var (from a
+        // follow-up at the human_gate stage), inject it into CLAUDE.md.
+        inject_reviewer_feedback_if_present(&staging_path)?;
+
         // Inject persona section if --persona was specified (v0.14.20).
         if let Some(pname) = persona_name {
             match ta_goal::PersonaConfig::load(&config.workspace_root, pname) {
@@ -5535,6 +5539,34 @@ fn inject_work_plan_if_present(staging_path: &Path) -> anyhow::Result<()> {
         plan.decisions.len(),
         plan.implementation_plan.len()
     );
+
+    Ok(())
+}
+
+/// v0.15.25.1: Inject reviewer feedback into CLAUDE.md if TA_REVIEWER_FEEDBACK is set.
+///
+/// When a governed workflow's human_gate presents the "follow-up" option, the
+/// orchestrator sets this env var so the re-run agent sees the reviewer's findings
+/// as a dedicated section in its CLAUDE.md context.
+fn inject_reviewer_feedback_if_present(staging_path: &Path) -> anyhow::Result<()> {
+    let feedback = match std::env::var("TA_REVIEWER_FEEDBACK") {
+        Ok(f) if !f.is_empty() => f,
+        _ => return Ok(()),
+    };
+
+    let claude_md_path = staging_path.join("CLAUDE.md");
+    let existing = std::fs::read_to_string(&claude_md_path).unwrap_or_default();
+    let section = format!(
+        "\n\n## Reviewer Feedback from Previous Attempt\n\n\
+         The previous draft of this goal was reviewed and flagged. \
+         Address every finding listed below before completing the goal.\n\n\
+         {}\n",
+        feedback
+    );
+    std::fs::write(&claude_md_path, format!("{}{}", existing, section))?;
+
+    tracing::info!("Reviewer feedback injected into CLAUDE.md");
+    println!("  Reviewer feedback: injected into context");
 
     Ok(())
 }
