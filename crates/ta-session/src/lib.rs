@@ -1,6 +1,7 @@
 // ta-session — Session & Human Control Plane (Layer 3).
 
 pub mod advisor_agent;
+pub mod advisor_session;
 pub mod error;
 pub mod intent;
 pub mod manager;
@@ -13,6 +14,9 @@ pub mod workflow_session;
 pub use advisor_agent::{
     build_advisor_context, check_advisor_auto_approve, poll_draft_outcome, spawn_advisor_agent,
     write_advisor_context, AdvisorConfig, AdvisorOutcome,
+};
+pub use advisor_session::{
+    build_response_and_options, AdvisorContext, AdvisorOption, AdvisorSession,
 };
 pub use error::SessionError;
 pub use intent::{classify_intent, Intent, IntentResult};

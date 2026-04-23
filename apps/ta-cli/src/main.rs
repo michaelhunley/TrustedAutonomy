@@ -441,6 +441,19 @@ enum Commands {
         #[command(subcommand)]
         command: commands::new::NewCommands,
     },
+    /// Ask the advisor agent a question or give it a natural language instruction.
+    ///
+    /// Classifies your intent, presents numbered options, and executes the
+    /// selected action. Security level follows `[shell.advisor]` in workflow.toml.
+    ///
+    /// Examples:
+    ///   ta advisor ask "implement remaining v0.15"
+    ///   ta advisor ask "apply" --security suggest
+    ///   ta advisor ask "what changed?" --tab plan --no-input
+    Advisor {
+        #[command(subcommand)]
+        command: commands::advisor::AdvisorCommands,
+    },
     /// Author, validate, and manage agent configurations.
     Agent {
         #[command(subcommand)]
@@ -944,6 +957,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Persona { command } => commands::persona::execute(command, &config),
         Commands::Context { command } => commands::context::execute(command, &config),
         Commands::Credentials { command } => commands::credentials::execute(command, &config),
+        Commands::Advisor { command } => commands::advisor::execute(command, &config),
         Commands::Agent { command } => commands::agent::execute(command, &config),
         Commands::Constitution { command } => commands::constitution::execute(command, &config),
         Commands::Memory { command } => commands::memory::execute(command, &config),

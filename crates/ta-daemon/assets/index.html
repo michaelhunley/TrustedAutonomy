@@ -124,12 +124,72 @@
   .template-tile.selected { background: #1e2235; }
   .template-name { font-weight: 600; font-size: 0.9rem; margin-bottom: 0.25rem; }
   .template-desc { font-size: 0.75rem; color: var(--muted); }
+  /* Global Intent Bar (v0.15.26) */
+  .intent-bar { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 1rem;
+                background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+                padding: 0.4rem 0.75rem; transition: border-color 0.15s; }
+  .intent-bar:focus-within { border-color: var(--accent); }
+  .intent-bar input { flex: 1; background: transparent; border: none; color: var(--text);
+                      font-size: 0.9rem; outline: none; }
+  .intent-bar input::placeholder { color: var(--muted); }
+  .intent-bar .intent-shortcut { font-size: 0.7rem; color: var(--muted); white-space: nowrap;
+                                  border: 1px solid var(--border); border-radius: 4px;
+                                  padding: 0.1rem 0.35rem; }
+  .intent-bar .intent-send { background: var(--accent); color: #fff; border: none;
+                             border-radius: 4px; padding: 0.25rem 0.6rem; font-size: 0.8rem;
+                             cursor: pointer; transition: opacity 0.15s; }
+  .intent-bar .intent-send:hover { opacity: 0.85; }
+  /* Advisor Menu (v0.15.26) */
+  .advisor-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+                     background: rgba(0,0,0,0.6); z-index: 500; }
+  .advisor-overlay.visible { display: flex; align-items: flex-start; justify-content: center;
+                              padding-top: 6rem; }
+  .advisor-modal { background: var(--surface); border: 1px solid var(--accent);
+                   border-radius: 12px; padding: 1.5rem; max-width: 560px; width: 100%; }
+  .advisor-modal h3 { font-size: 0.9rem; color: var(--muted); margin-bottom: 0.75rem;
+                      text-transform: uppercase; letter-spacing: 0.05em; }
+  .advisor-response { color: var(--text); font-size: 0.95rem; margin-bottom: 1rem;
+                      line-height: 1.5; }
+  .advisor-options { display: flex; flex-direction: column; gap: 0.5rem; }
+  .advisor-option { display: flex; align-items: center; gap: 0.75rem; background: var(--bg);
+                    border: 1px solid var(--border); border-radius: 6px; padding: 0.6rem 0.9rem;
+                    cursor: pointer; transition: border-color 0.15s; }
+  .advisor-option:hover { border-color: var(--accent); }
+  .advisor-option .opt-num { background: var(--accent); color: #fff; border-radius: 50%;
+                              width: 1.4rem; height: 1.4rem; display: flex; align-items: center;
+                              justify-content: center; font-size: 0.75rem; font-weight: 700;
+                              flex-shrink: 0; }
+  .advisor-option .opt-label { flex: 1; font-size: 0.9rem; }
+  .advisor-option .opt-cmd { font-size: 0.75rem; color: var(--muted); font-family: monospace; }
+  .advisor-option.opt-apply .opt-num { background: var(--green); }
+  .advisor-option.opt-deny .opt-num { background: var(--red); }
+  .advisor-option.opt-auto .opt-num { background: var(--yellow); color: #000; }
+  .advisor-close { margin-top: 1rem; text-align: right; }
+  /* Advisor tab chat panel */
+  .advisor-chat { display: flex; flex-direction: column; gap: 0.75rem; }
+  .advisor-msg { padding: 0.75rem; border-radius: 8px; font-size: 0.9rem; line-height: 1.5; }
+  .advisor-msg.user { background: #1e2235; border: 1px solid var(--border); align-self: flex-end;
+                       max-width: 80%; }
+  .advisor-msg.advisor { background: var(--surface); border: 1px solid var(--accent);
+                          max-width: 90%; }
+  .advisor-input-row { display: flex; gap: 0.5rem; margin-top: 0.5rem; }
+  .advisor-input-row input { flex: 1; background: var(--bg); border: 1px solid var(--border);
+                             border-radius: 6px; padding: 0.5rem 0.75rem; color: var(--text);
+                             font-size: 0.9rem; }
+  .advisor-input-row input:focus { outline: none; border-color: var(--accent); }
 </style>
 </head>
 <body>
 <div class="container">
   <h1>Trusted Autonomy</h1>
   <p class="subtitle" id="subtitle">Loading...</p>
+  <!-- Global Intent Bar (v0.15.26): Cmd+K to focus, routes to advisor from any tab -->
+  <div class="intent-bar" id="intent-bar">
+    <input type="text" id="intent-input" placeholder="Ask the advisor anything… (Cmd+K)"
+           onkeydown="intentBarKeydown(event)" oninput="intentBarInput(event)">
+    <span class="intent-shortcut">⌘K</span>
+    <button class="intent-send" onclick="submitIntentBar()">Ask</button>
+  </div>
   <div class="tabs">
     <div class="tab active" onclick="switchTab('dashboard')">Dashboard</div>
     <div class="tab" onclick="switchTab('plan')">Plan</div>
@@ -139,9 +199,21 @@
     <div class="tab" onclick="switchTab('projects')" id="tab-projects">Projects</div>
     <div class="tab" onclick="switchTab('workflows')">Workflows</div>
     <div class="tab" onclick="switchTab('personas')">Personas</div>
+    <div class="tab" onclick="switchTab('advisor')">Advisor</div>
     <div class="tab" onclick="switchTab('settings')">Settings</div>
   </div>
   <div id="app"><div class="loading">Loading...</div></div>
+  <!-- Advisor Menu Overlay (v0.15.26): numbered-option modal shown after intent bar submit -->
+  <div class="advisor-overlay" id="advisor-overlay" onclick="closeAdvisorOverlay(event)">
+    <div class="advisor-modal" id="advisor-modal">
+      <h3>Advisor</h3>
+      <div class="advisor-response" id="advisor-overlay-response"></div>
+      <div class="advisor-options" id="advisor-overlay-options"></div>
+      <div class="advisor-close">
+        <button class="btn btn-ghost btn-sm" onclick="closeAdvisorOverlayDirect()">Close (Esc)</button>
+      </div>
+    </div>
+  </div>
   <!-- Setup Wizard Overlay -->
   <div id="wizard-overlay" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);z-index:1000;overflow-y:auto;">
     <div style="max-width:620px;margin:3rem auto;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:2rem;">
@@ -153,6 +225,9 @@
 const app = document.getElementById('app');
 let currentTab = 'dashboard';
 let drafts = [];
+// Advisor state (v0.15.26)
+let advisorHistory = [];
+let advisorSecurity = 'read_only';
 
 // ── Utilities ─────────────────────────────────────────────────
 function esc(s) {
@@ -197,7 +272,280 @@ function switchTab(tab) {
   else if (tab === 'projects') loadProjects();
   else if (tab === 'workflows') loadWorkflows();
   else if (tab === 'personas') loadPersonas();
+  else if (tab === 'advisor') loadAdvisor();
   else if (tab === 'settings') loadSettings();
+}
+
+// ── Global Intent Bar (v0.15.26) ──────────────────────────────
+// Cmd+K / Ctrl+K focuses the intent bar from anywhere in the UI.
+document.addEventListener('keydown', function(e) {
+  if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+    e.preventDefault();
+    const input = document.getElementById('intent-input');
+    if (input) { input.focus(); input.select(); }
+  }
+  if (e.key === 'Escape') closeAdvisorOverlayDirect();
+});
+
+function intentBarKeydown(e) {
+  if (e.key === 'Enter') submitIntentBar();
+  if (e.key === 'Escape') document.getElementById('intent-input').blur();
+}
+
+function intentBarInput(e) {
+  // Could do live suggestions in a future iteration.
+}
+
+async function submitIntentBar() {
+  const input = document.getElementById('intent-input');
+  const message = (input.value || '').trim();
+  if (!message) return;
+  input.value = '';
+
+  // Build context from current tab.
+  const context = { tab: currentTab, selection: null };
+
+  try {
+    const resp = await fetch('/api/advisor/message', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, context })
+    });
+    if (!resp.ok) { console.error('Advisor API error', resp.status); return; }
+    const data = await resp.json();
+    showAdvisorOverlay(message, data);
+    // Also record in advisor tab history.
+    advisorHistory.push({ role: 'user', text: message });
+    advisorHistory.push({ role: 'advisor', text: data.response, options: data.options || [] });
+  } catch (e) {
+    console.error('Advisor fetch failed', e);
+  }
+}
+
+// ── Advisor Menu Overlay (v0.15.26) ───────────────────────────
+// Shows after the intent bar sends a message — numbered options are interactive.
+function showAdvisorOverlay(message, data) {
+  const overlay = document.getElementById('advisor-overlay');
+  const responseEl = document.getElementById('advisor-overlay-response');
+  const optionsEl = document.getElementById('advisor-overlay-options');
+
+  responseEl.textContent = data.response || '';
+  optionsEl.innerHTML = renderAdvisorOptions(data.options || [], data);
+
+  overlay.classList.add('visible');
+}
+
+function closeAdvisorOverlay(e) {
+  // Only close if clicking the backdrop (not the modal itself).
+  if (e.target === document.getElementById('advisor-overlay')) closeAdvisorOverlayDirect();
+}
+
+function closeAdvisorOverlayDirect() {
+  const overlay = document.getElementById('advisor-overlay');
+  if (overlay) overlay.classList.remove('visible');
+}
+
+function renderAdvisorOptions(options, data) {
+  if (!options.length) return '';
+  return options.map(opt => {
+    const colorClass = opt.action_type === 'apply' ? ' opt-apply'
+      : opt.action_type === 'deny' ? ' opt-deny'
+      : opt.action_type === 'auto_fire' ? ' opt-auto'
+      : '';
+    const cmdHtml = opt.command
+      ? `<span class="opt-cmd">${esc(opt.command)}</span>`
+      : '';
+    return `<div class="advisor-option${colorClass}" onclick="handleAdvisorOption(${opt.number}, '${esc(JSON.stringify(opt))}', '${esc(JSON.stringify(data))}')">
+      <span class="opt-num">${opt.number}</span>
+      <span class="opt-label">${esc(opt.label)}</span>
+      ${cmdHtml}
+    </div>`;
+  }).join('');
+}
+
+async function handleAdvisorOption(num, optJson, dataJson) {
+  const opt = JSON.parse(optJson);
+  const data = JSON.parse(dataJson);
+
+  switch (opt.action_type) {
+    case 'apply':
+      closeAdvisorOverlayDirect();
+      await applyLatestDraft();
+      break;
+    case 'deny':
+      closeAdvisorOverlayDirect();
+      await denyLatestDraft();
+      break;
+    case 'auto_fire':
+    case 'button':
+      closeAdvisorOverlayDirect();
+      if (opt.command) await fireGoalCommand(opt.command);
+      break;
+    case 'text':
+      // Copy command to clipboard and show confirmation.
+      if (opt.command) {
+        try { await navigator.clipboard.writeText(opt.command); } catch(_) {}
+        alert('Copied to clipboard:\n' + opt.command);
+      }
+      closeAdvisorOverlayDirect();
+      break;
+    case 'answer':
+      closeAdvisorOverlayDirect();
+      switchTab('advisor');
+      break;
+    default:
+      closeAdvisorOverlayDirect();
+  }
+}
+
+async function applyLatestDraft() {
+  try {
+    const resp = await fetch('/api/drafts');
+    const all = resp.ok ? await resp.json() : [];
+    const pending = all.filter(d => (d.status || '').toLowerCase().includes('pending'));
+    if (pending.length === 0) { alert('No pending drafts to apply.'); return; }
+    const latest = pending[0];
+    const r = await fetch('/api/drafts/' + latest.package_id + '/apply', { method: 'POST' });
+    if (r.ok) { alert('Draft applied.'); loadDashboard(); }
+    else { alert('Apply failed: ' + r.status); }
+  } catch(e) { alert('Network error: ' + e.message); }
+}
+
+async function denyLatestDraft() {
+  try {
+    const resp = await fetch('/api/drafts');
+    const all = resp.ok ? await resp.json() : [];
+    const pending = all.filter(d => (d.status || '').toLowerCase().includes('pending'));
+    if (pending.length === 0) { alert('No pending drafts to deny.'); return; }
+    const latest = pending[0];
+    const r = await fetch('/api/drafts/' + latest.package_id + '/deny', { method: 'POST' });
+    if (r.ok) { alert('Draft denied.'); loadDashboard(); }
+    else { alert('Deny failed: ' + r.status); }
+  } catch(e) { alert('Network error: ' + e.message); }
+}
+
+async function fireGoalCommand(command) {
+  // Extract goal title from `ta run "..."` command.
+  const match = command.match(/ta run "([^"]+)"/);
+  if (!match) { alert('Cannot parse goal command: ' + command); return; }
+  const title = match[1];
+  try {
+    const r = await fetch('/api/goal/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, headless: true })
+    });
+    if (r.ok) {
+      const d = await r.json();
+      alert('Goal started: ' + (d.goal_id || title));
+      switchTab('dashboard');
+    } else {
+      alert('Start goal failed: ' + r.status + '. Run manually:\n' + command);
+    }
+  } catch(e) { alert('Network error. Run manually:\n' + command); }
+}
+
+// ── Advisor Tab (v0.15.26) ────────────────────────────────────
+// Persistent conversation panel with numbered-option menus per message.
+async function loadAdvisor() {
+  // Load advisor config.
+  try {
+    const r = await fetch('/api/advisor/config');
+    if (r.ok) {
+      const cfg = await r.json();
+      advisorSecurity = cfg.security || 'read_only';
+    }
+  } catch(_) {}
+  renderAdvisorTab();
+}
+
+function renderAdvisorTab() {
+  const securityBadge = advisorSecurity === 'auto'
+    ? '<span class="badge badge-active">auto</span>'
+    : advisorSecurity === 'suggest'
+    ? '<span class="badge badge-pending">suggest</span>'
+    : '<span class="badge badge-draft">read-only</span>';
+
+  let historyHtml = '';
+  for (const msg of advisorHistory) {
+    if (msg.role === 'user') {
+      historyHtml += `<div class="advisor-msg user">${esc(msg.text)}</div>`;
+    } else {
+      let optHtml = '';
+      if (msg.options && msg.options.length) {
+        optHtml = '<div class="advisor-options" style="margin-top:0.75rem">' +
+          msg.options.map(opt => {
+            const colorClass = opt.action_type === 'apply' ? ' opt-apply'
+              : opt.action_type === 'deny' ? ' opt-deny'
+              : opt.action_type === 'auto_fire' ? ' opt-auto' : '';
+            const cmdHtml = opt.command ? `<span class="opt-cmd">${esc(opt.command)}</span>` : '';
+            return `<div class="advisor-option${colorClass}" onclick="handleAdvisorOption(${opt.number}, '${esc(JSON.stringify(opt))}', '{}')">
+              <span class="opt-num">${opt.number}</span>
+              <span class="opt-label">${esc(opt.label)}</span>${cmdHtml}
+            </div>`;
+          }).join('') + '</div>';
+      }
+      historyHtml += `<div class="advisor-msg advisor">${esc(msg.text)}${optHtml}</div>`;
+    }
+  }
+
+  const emptyHint = advisorHistory.length === 0
+    ? '<div class="empty" style="padding:2rem">Send a message to the advisor using the bar above (⌘K), or type below.</div>'
+    : '';
+
+  app.innerHTML = `
+    <div class="section">
+      <div class="card-header" style="margin-bottom:0.75rem">
+        <span class="card-title">Advisor Panel</span>
+        <span>Security: ${securityBadge}</span>
+      </div>
+      <div class="advisor-chat" id="advisor-chat-history">${emptyHint}${historyHtml}</div>
+      <div class="advisor-input-row" style="margin-top:1rem">
+        <input type="text" id="advisor-tab-input" placeholder="Ask the advisor…"
+               onkeydown="advisorTabKeydown(event)">
+        <button class="btn btn-primary" onclick="submitAdvisorTab()">Send</button>
+        <button class="btn btn-ghost btn-sm" onclick="clearAdvisorHistory()">Clear</button>
+      </div>
+    </div>
+  `;
+
+  // Scroll to bottom.
+  const hist = document.getElementById('advisor-chat-history');
+  if (hist) hist.scrollTop = hist.scrollHeight;
+}
+
+function advisorTabKeydown(e) {
+  if (e.key === 'Enter') submitAdvisorTab();
+}
+
+async function submitAdvisorTab() {
+  const input = document.getElementById('advisor-tab-input');
+  const message = (input ? input.value : '').trim();
+  if (!message) return;
+  if (input) input.value = '';
+
+  advisorHistory.push({ role: 'user', text: message });
+  renderAdvisorTab();
+
+  const context = { tab: currentTab, selection: null };
+  try {
+    const resp = await fetch('/api/advisor/message', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message, context })
+    });
+    const data = resp.ok ? await resp.json() : { response: 'Error contacting advisor.', options: [] };
+    advisorHistory.push({ role: 'advisor', text: data.response, options: data.options || [] });
+    renderAdvisorTab();
+  } catch(e) {
+    advisorHistory.push({ role: 'advisor', text: 'Network error: ' + e.message, options: [] });
+    renderAdvisorTab();
+  }
+}
+
+function clearAdvisorHistory() {
+  advisorHistory = [];
+  renderAdvisorTab();
 }
 
 // ── Dashboard ─────────────────────────────────────────────────
