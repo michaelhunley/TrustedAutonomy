@@ -126,6 +126,16 @@ pub fn classify_intent(message: &str) -> IntentResult {
         "make it ",
         "could you ",
         "while you're at it",
+        "amend ",
+        "implement ",
+        "create ",
+        "generate ",
+        "write ",
+        "delete ",
+        "rename ",
+        "move ",
+        "extract ",
+        "migrate ",
     ];
     for prefix in &goal_prefixes {
         if trimmed.starts_with(prefix) {

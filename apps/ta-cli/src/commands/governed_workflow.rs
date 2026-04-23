@@ -8,7 +8,7 @@
 //   ta workflow status <run-id>
 
 use std::cmp::Reverse;
-use std::io::Write as _;
+use std::io::{BufRead, Write as _};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -473,9 +473,6 @@ pub enum WorkflowRunState {
     Completed,
     Failed,
     Cancelled,
-    /// Human chose "follow-up" at the human_gate: draft denied, feedback stored,
-    /// goal stages reset — the outer execution loop will restart from run_goal.
-    FollowUpPending,
 }
 
 impl std::fmt::Display for WorkflowRunState {
@@ -486,7 +483,6 @@ impl std::fmt::Display for WorkflowRunState {
             WorkflowRunState::Completed => write!(f, "completed"),
             WorkflowRunState::Failed => write!(f, "failed"),
             WorkflowRunState::Cancelled => write!(f, "cancelled"),
-            WorkflowRunState::FollowUpPending => write!(f, "follow_up_pending"),
         }
     }
 }
@@ -614,10 +610,6 @@ pub struct GovernedWorkflowRun {
     /// Loop iteration counts per goto stage name (v0.15.13).
     #[serde(default)]
     pub loop_iterations: std::collections::HashMap<String, u32>,
-    /// Reviewer feedback to inject into the next run_goal invocation.
-    /// Set by the human_gate "follow-up" option (v0.15.25.1).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reviewer_feedback: Option<String>,
     /// Phase IDs that have already been dispatched in this run (v0.15.24.2).
     /// Second line of defence against duplicate dispatch: if `plan_next` returns
     /// a phase that is already in this list, the loop halts with a safety error.
@@ -668,7 +660,6 @@ impl GovernedWorkflowRun {
             outputs: std::collections::HashMap::new(),
             sub_workflow_records: Vec::new(),
             loop_iterations: std::collections::HashMap::new(),
-            reviewer_feedback: None,
             dispatched_phases: Vec::new(),
             started_at: Utc::now(),
             updated_at: Utc::now(),
@@ -908,8 +899,6 @@ pub enum GateDecision {
     Override,
     /// Reject: deny draft and stop workflow.
     Reject,
-    /// Follow-up: deny draft, inject reviewer feedback, restart from run_goal.
-    FollowUp(String),
 }
 
 /// Evaluate the human gate given the verdict and gate mode.
@@ -927,12 +916,7 @@ pub fn evaluate_human_gate(
         (VerdictDecision::Approve, GateMode::Auto) => Ok(GateDecision::Proceed),
         (VerdictDecision::Approve, GateMode::Prompt | GateMode::Always) => {
             if interactive {
-                print!("Reviewer approved. Apply the draft? [Y/n]: ");
-                std::io::stdout().flush().ok();
-                let answer = read_stdin_line().trim().to_lowercase();
-                if answer == "n" || answer == "no" {
-                    return Ok(GateDecision::Reject);
-                }
+                prompt_human_gate(verdict, "Reviewer approved. Apply the draft? [Y/n]: ")?;
             }
             Ok(GateDecision::Proceed)
         }
@@ -945,7 +929,25 @@ pub fn evaluate_human_gate(
                      Resume with: ta workflow run governed-goal --resume <run-id>"
                 );
             }
-            prompt_human_gate_three_options(verdict)
+            let findings_text = if verdict.findings.is_empty() {
+                "(no specific findings listed)".to_string()
+            } else {
+                verdict.findings.join("\n  - ")
+            };
+            println!();
+            println!(
+                "Reviewer flagged issues (confidence {:.0}%):",
+                verdict.confidence * 100.0
+            );
+            println!("  - {}", findings_text);
+            println!();
+            let apply =
+                prompt_human_gate(verdict, "Reviewer flagged issues — apply anyway? [y/N]: ")?;
+            if apply {
+                Ok(GateDecision::Override)
+            } else {
+                Ok(GateDecision::Reject)
+            }
         }
 
         // Flag + prompt/always: pause for human.
@@ -956,7 +958,13 @@ pub fn evaluate_human_gate(
                      Resume with: ta workflow run governed-goal --resume <run-id>"
                 );
             }
-            prompt_human_gate_three_options(verdict)
+            let apply =
+                prompt_human_gate(verdict, "Reviewer flagged issues — apply anyway? [y/N]: ")?;
+            if apply {
+                Ok(GateDecision::Override)
+            } else {
+                Ok(GateDecision::Reject)
+            }
         }
 
         // Reject: always deny.
@@ -964,105 +972,15 @@ pub fn evaluate_human_gate(
     }
 }
 
-/// Present a 3-option menu when the reviewer has flagged issues.
-///
-/// Options:
-///   1  Approve anyway (override)
-///   2  Deny
-///   3  Follow-up — re-run the goal with reviewer feedback injected as context
-///
-/// For option 3, the reviewer findings are pre-filled and the human may append
-/// additional instructions before pressing Enter.
-fn prompt_human_gate_three_options(verdict: &ReviewerVerdict) -> anyhow::Result<GateDecision> {
-    let findings_text = if verdict.findings.is_empty() {
-        "(no specific findings listed)".to_string()
-    } else {
-        verdict
-            .findings
-            .iter()
-            .map(|f| format!("  - {}", f))
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-
-    println!();
-    println!(
-        "Reviewer flagged issues (confidence {:.0}%):",
-        verdict.confidence * 100.0
-    );
-    println!("{}", findings_text);
-    println!();
-    println!("Options:");
-    println!("  1  Approve anyway (override reviewer)");
-    println!("  2  Deny (discard draft, stop workflow)");
-    println!("  3  Follow-up (deny draft, re-run goal with reviewer feedback as context)");
-    println!();
-    print!("Choice [1/2/3]: ");
+/// Prompt the human and return true if they confirmed (y/Y).
+fn prompt_human_gate(_verdict: &ReviewerVerdict, prompt: &str) -> anyhow::Result<bool> {
+    print!("{}", prompt);
     std::io::stdout().flush().ok();
-
-    let choice_line = read_stdin_line();
-    let choice = choice_line.trim();
-
-    match choice {
-        "1" | "y" | "yes" => Ok(GateDecision::Override),
-        "3" => {
-            // Pre-fill the feedback buffer with the reviewer findings and let the
-            // human append additional instructions before pressing Enter.
-            let prefilled = format!(
-                "Reviewer findings from previous attempt (confidence {:.0}%):\n{}\n\nAdditional instructions (optional — press Enter to accept as-is):",
-                verdict.confidence * 100.0,
-                findings_text
-            );
-            println!();
-            println!("{}", prefilled);
-            println!();
-            print!("> ");
-            std::io::stdout().flush().ok();
-
-            let extra_line = read_stdin_line();
-            let extra = extra_line.trim();
-
-            let feedback = if extra.is_empty() {
-                format!(
-                    "Reviewer findings from previous attempt (confidence {:.0}%):\n{}",
-                    verdict.confidence * 100.0,
-                    findings_text
-                )
-            } else {
-                format!(
-                    "Reviewer findings from previous attempt (confidence {:.0}%):\n{}\n\nAdditional instructions from human reviewer:\n{}",
-                    verdict.confidence * 100.0,
-                    findings_text,
-                    extra
-                )
-            };
-
-            Ok(GateDecision::FollowUp(feedback))
-        }
-        _ => Ok(GateDecision::Reject), // "2", empty, anything else → deny
-    }
-}
-
-/// Read one line from stdin, accepting `\n`, `\r\n`, or bare `\r` as the
-/// line terminator. `read_line` only terminates on `\n`, so terminals that
-/// send CR-only (e.g. raw-mode PTY or some IDE terminals) would block forever.
-fn read_stdin_line() -> String {
-    use std::io::Read;
-    let mut buf = Vec::with_capacity(64);
     let stdin = std::io::stdin();
-    let mut locked = stdin.lock();
-    let mut byte = [0u8; 1];
-    loop {
-        match locked.read(&mut byte) {
-            Ok(0) | Err(_) => break, // EOF or error
-            Ok(_) => match byte[0] {
-                b'\n' => break,
-                b'\r' => break,
-                ch => buf.push(ch),
-            },
-        }
-    }
-    String::from_utf8_lossy(&buf).into_owned()
+    let mut line = String::new();
+    stdin.lock().read_line(&mut line).ok();
+    let answer = line.trim().to_lowercase();
+    Ok(answer == "y" || answer == "yes")
 }
 
 // ── PR sync poll ──────────────────────────────────────────────────────────────
@@ -1450,103 +1368,76 @@ pub fn run_governed_workflow(opts: &RunOptions) -> anyhow::Result<()> {
         run_loop_workflow(&def.stages, config, &mut run, opts, &runs_dir)?;
     } else {
         // DAG execution mode: topological order, skip completed stages.
-        // The outer loop handles the "follow-up" case where human_gate resets
-        // goal stages and signals a restart (WorkflowRunState::FollowUpPending).
-        const MAX_FOLLOWUP_ITERATIONS: u32 = 5;
-        let mut followup_count = 0u32;
-        'dag: loop {
-            run.state = WorkflowRunState::Running;
-            for stage_name in &stage_order {
-                let stage_def = def.stages.iter().find(|s| s.name == *stage_name).unwrap();
-                let already_done = run
-                    .stages
-                    .iter()
-                    .find(|s| &s.name == stage_name)
-                    .map(|s| s.status == StageStatus::Completed)
-                    .unwrap_or(false);
-                if already_done {
-                    println!("[{}] already completed — skipping", stage_name);
-                    continue;
-                }
+        for stage_name in &stage_order {
+            let stage_def = def.stages.iter().find(|s| s.name == *stage_name).unwrap();
+            let already_done = run
+                .stages
+                .iter()
+                .find(|s| &s.name == stage_name)
+                .map(|s| s.status == StageStatus::Completed)
+                .unwrap_or(false);
+            if already_done {
+                println!("[{}] already completed — skipping", stage_name);
+                continue;
+            }
 
-                print_stage_header(stage_name);
+            print_stage_header(stage_name);
 
-                run.current_stage = Some(stage_name.clone());
-                if let Some(s) = run.stage_mut(stage_name) {
-                    s.start();
-                }
-                run.updated_at = Utc::now();
-                run.save(&runs_dir)?;
+            run.current_stage = Some(stage_name.clone());
+            if let Some(s) = run.stage_mut(stage_name) {
+                s.start();
+            }
+            run.updated_at = Utc::now();
+            run.save(&runs_dir)?;
 
-                let start = Instant::now();
-                let result = execute_stage(stage_def, &mut run, opts, config);
-                let elapsed = start.elapsed().as_secs();
+            let start = Instant::now();
+            let result = execute_stage(stage_def, &mut run, opts, config);
+            let elapsed = start.elapsed().as_secs();
 
-                match result {
-                    Ok(detail) => {
-                        if let Some(s) = run.stage_mut(stage_name) {
-                            s.complete(detail.clone());
-                        }
-                        run.emit_audit(stage_name, opts.agent, None, elapsed);
-                        run.updated_at = Utc::now();
-                        run.save(&runs_dir)?;
-                        println!(
-                            "  [{}] completed in {}s{}",
-                            stage_name,
-                            elapsed,
-                            detail
-                                .as_deref()
-                                .map(|d| format!(" — {}", d))
-                                .unwrap_or_default()
-                        );
-                        // After human_gate: if a follow-up was requested, restart
-                        // the DAG from the top (run_goal and successors are reset
-                        // to Pending by stage_human_gate).
-                        if stage_name == "human_gate"
-                            && run.state == WorkflowRunState::FollowUpPending
-                        {
-                            followup_count += 1;
-                            if followup_count >= MAX_FOLLOWUP_ITERATIONS {
-                                anyhow::bail!(
-                                    "Follow-up limit reached ({} iterations). \
-                                     Address the reviewer findings and start a new workflow run.",
-                                    MAX_FOLLOWUP_ITERATIONS
-                                );
-                            }
-                            println!();
-                            println!("━━━ Follow-up iteration {} ━━━", followup_count);
-                            run.save(&runs_dir)?;
-                            continue 'dag;
-                        }
+            match result {
+                Ok(detail) => {
+                    if let Some(s) = run.stage_mut(stage_name) {
+                        s.complete(detail.clone());
                     }
-                    Err(e) => {
-                        let reason = e.to_string();
-                        if let Some(s) = run.stage_mut(stage_name) {
-                            s.fail(&reason);
-                        }
-                        run.emit_audit(stage_name, opts.agent, Some("failed"), elapsed);
-                        run.state = WorkflowRunState::Failed;
-                        run.updated_at = Utc::now();
-                        run.save(&runs_dir)?;
-                        println!("  [{}] FAILED: {}", stage_name, reason);
-                        println!();
-                        println!(
-                            "Workflow run {} failed at stage '{}'.",
-                            &run.run_id[..8.min(run.run_id.len())],
-                            stage_name
-                        );
-                        println!("Check the above error and retry or resume:");
-                        println!(
-                            "  ta workflow run {} --goal \"{}\" --resume {}",
-                            opts.workflow_name,
-                            opts.goal_title,
-                            &run.run_id[..8.min(run.run_id.len())]
-                        );
-                        return Err(e);
+                    run.emit_audit(stage_name, opts.agent, None, elapsed);
+                    run.updated_at = Utc::now();
+                    run.save(&runs_dir)?;
+                    println!(
+                        "  [{}] completed in {}s{}",
+                        stage_name,
+                        elapsed,
+                        detail
+                            .as_deref()
+                            .map(|d| format!(" — {}", d))
+                            .unwrap_or_default()
+                    );
+                }
+                Err(e) => {
+                    let reason = e.to_string();
+                    if let Some(s) = run.stage_mut(stage_name) {
+                        s.fail(&reason);
                     }
+                    run.emit_audit(stage_name, opts.agent, Some("failed"), elapsed);
+                    run.state = WorkflowRunState::Failed;
+                    run.updated_at = Utc::now();
+                    run.save(&runs_dir)?;
+                    println!("  [{}] FAILED: {}", stage_name, reason);
+                    println!();
+                    println!(
+                        "Workflow run {} failed at stage '{}'.",
+                        &run.run_id[..8.min(run.run_id.len())],
+                        stage_name
+                    );
+                    println!("Check the above error and retry or resume:");
+                    println!(
+                        "  ta workflow run {} --goal \"{}\" --resume {}",
+                        opts.workflow_name,
+                        opts.goal_title,
+                        &run.run_id[..8.min(run.run_id.len())]
+                    );
+                    return Err(e);
                 }
             }
-            break 'dag;
         }
     }
 
@@ -2753,15 +2644,6 @@ fn stage_run_goal(
         cmd.env("TA_WORK_PLAN_JSON_PATH", wp_path);
         println!("  [run_goal] Work plan injected from: {}", wp_path);
     }
-    // v0.15.25.1: If this is a follow-up run, pass the reviewer feedback so
-    // ta run can inject it into CLAUDE.md as additional context.
-    if let Some(ref feedback) = run.reviewer_feedback.clone() {
-        cmd.env("TA_REVIEWER_FEEDBACK", feedback);
-        println!(
-            "  [run_goal] Reviewer feedback injected ({} chars)",
-            feedback.len()
-        );
-    }
     let output = cmd.output().map_err(|e| {
         anyhow::anyhow!(
             "Failed to invoke 'ta run': {}\nIs ta installed and on PATH?",
@@ -3413,44 +3295,6 @@ fn stage_human_gate(
                     verdict_clone.findings.join("\n  ")
                 }
             )
-        }
-        GateDecision::FollowUp(feedback) => {
-            // Deny the current draft.
-            if let Some(draft_id) = &run.draft_id.clone() {
-                deny_draft_for_rejection(run, draft_id, &verdict_clone)?;
-            }
-            // Store feedback and signal the outer loop to restart from run_goal.
-            run.reviewer_feedback = Some(feedback);
-            run.draft_id = None;
-            run.goal_id = None;
-            run.verdict = None;
-            // Reset the goal-execution stages back to Pending so the outer loop
-            // re-executes them on the next iteration.
-            for stage in run.stages.iter_mut() {
-                if matches!(
-                    stage.name.as_str(),
-                    "run_goal" | "review_draft" | "human_gate" | "apply_draft" | "pr_sync"
-                ) {
-                    stage.status = StageStatus::Pending;
-                    stage.started_at = None;
-                    stage.completed_at = None;
-                    stage.detail = None;
-                }
-            }
-            run.state = WorkflowRunState::FollowUpPending;
-            run.audit_trail.push(StageAuditEntry {
-                stage: "human_gate".to_string(),
-                agent: "human".to_string(),
-                verdict: Some("follow-up".to_string()),
-                duration_secs: 0,
-                at: Utc::now(),
-            });
-            println!();
-            println!("  Follow-up: draft denied, re-running goal with reviewer feedback.");
-            Ok(Some(format!(
-                "verdict={} — follow-up, restarting run_goal with reviewer feedback",
-                verdict_clone.verdict
-            )))
         }
     }
 }
