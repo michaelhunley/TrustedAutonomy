@@ -7188,16 +7188,16 @@ The planner agent runs with read-only tools (Read, Grep, Glob) — it cannot wri
 
 
 ### v0.15.25 — Auto-Approve Constitution: Rule-Based Policy + Amendment Flow
-<!-- status: pending -->
+<!-- status: done -->
 
 **Goal**: Replace the binary `auto_approve = true/false` with a rule-based constitution section. Rules are expressed as file-pattern conditions with approve/review/block actions. The constitution section is amended via the same review-gate flow as drafts — no silent policy changes.
 
 **Why**: "Always auto-approve" is too broad; "never auto-approve" is too conservative. A doc-only draft should auto-approve; an auth-path change should always require review. The constitution makes this explicit and auditable.
 
-1. [ ] **`[[constitution.rules]]` config section**: `patterns` (glob list), `action` (`approve` / `review` / `block`). Parsed by `ta-constitution`. First-match-wins evaluation order. Multiple rules supported.
-2. [ ] **Default rules** in `constitution.toml` template: `["docs/**", "*.md"]` → approve; `["src/auth/**", "*_token*", "*.pem", "*.key"]` → block; all others → review.
-3. [ ] **Amendment flow**: `ta constitution amend` opens a draft for the constitution file itself. Follows the same review-gate as code drafts — no silent policy changes. Change takes effect only after `ta draft apply`.
-4. [ ] **CLI**: `ta constitution show` prints active rules with match examples. `ta constitution validate` checks schema and warns on overlapping patterns.
+1. [x] **`[[constitution.rules]]` config section**: `patterns` (glob list), `action` (`approve` / `review` / `block`). Parsed by `ta-constitution`. First-match-wins evaluation order. Multiple rules supported.
+2. [x] **Default rules** in `constitution.toml` template: `["docs/**", "*.md"]` → approve; `["src/auth/**", "*_token*", "*.pem", "*.key"]` → block; all others → review. Flat-mode glob guard (`!path.contains('/')`) prevents `*.md` from matching `src/auth/notes.md` (security fix, follow-up PR #425).
+3. [x] **Amendment flow**: `ta constitution amend` opens a draft for the constitution file itself. Follows the same review-gate as code drafts — no silent policy changes. Change takes effect only after `ta draft apply`.
+4. [x] **CLI**: `ta constitution show` prints active rules with match examples. `ta constitution validate` checks schema and warns on overlapping patterns.
 
 #### Version: `0.15.25-alpha`
 
