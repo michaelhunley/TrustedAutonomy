@@ -6949,6 +6949,7 @@ The planner agent runs with read-only tools (Read, Grep, Glob) — it cannot wri
 
 1. [x] **Entity extractor** (`crates/ta-workflow/src/intent.rs`): Extract from natural language: `version_ref` (e.g., `v0.15`), `intent_verb` (implement/build/run/complete), `scope_modifier` (remaining/all/next/pending). Regex + keyword list, no ML.
 
+2. [x] **Template matcher**: Score templates by overlap of extracted entities against template `metadata.tags` and `description`. Top candidate selected if score ≥ 0.80. Below threshold → ask a clarifying question.
 
 3. [x] **Confidence gate**: Score ≥ 0.80 → present card + numbered confirm (`1. Run  2. Adjust  3. Different workflow  4. Cancel`). Score < 0.80 → ask clarifying question first. No silent execution.
 4. [x] **`ta workflow run` intent path**: When `<name>` doesn't match a known template name, try intent resolution. Explicit template name always takes precedence over intent resolution.
@@ -7131,24 +7132,24 @@ The planner agent runs with read-only tools (Read, Grep, Glob) — it cannot wri
 
 ---
 
-### v0.15.28 — Interactive Planning Session
+### v0.15.28 — Live Human Interjection: `ta advise` + Studio Sidebar
 <!-- status: pending -->
 
-**Goal**: A structured pre-goal dialogue between the human and the planner that clarifies spec ambiguities before the implementor agent runs. The human can ask questions, the planner proposes answers and spec refinements, and only when the human confirms does `ta run` launch the implementor. Eliminates the current pattern of reviewers flagging spec deviations that the agent couldn't resolve because the spec was ambiguous.
+**Goal**: Let the human interject into a running agent or at any workflow review point without stopping the workflow. `ta advise [--goal <id>] <message>` sends a message to the advisor agent in the daemon; the advisor decides whether to answer directly or inject the context into the working agent's next iteration. The Studio version surfaces the same capability as a persistent sidebar command accessible from any tab.
 
-**Why**: The v0.15.26 reviewer denial (react/TypeScript path vs. index.html) exposed a gap: the agent encountered an ambiguous spec, made a reasonable call, but the human had a different expectation. There was no channel to surface that ambiguity before the agent started work. An interactive planning session puts the planner in front of the human *before* implementation — acting as a spec clarifier rather than a post-hoc reviewer.
+**Why**: Agents are currently fire-and-forget from the human's perspective — once a goal starts, there is no channel to course-correct, answer a question the agent didn't know to ask, or add a constraint that emerged mid-run. The v0.15.26 typescript/index.html ambiguity is a concrete example: had the human been able to say "use the existing index.html, not a new React component" mid-run, the reviewer denial would not have happened. The advisor already classifies intent and routes to actions (v0.15.24/26) — the missing piece is routing advisor output to a *running* agent, not just producing CLI output.
 
-**Depends on**: v0.15.20 (work planner + implementor split), v0.15.27 (workflow template library)
+**Depends on**: v0.15.21 (Studio advisor agent), v0.15.26 (advisor panel + `ta advisor ask`)
 
-1. [ ] **`ta plan session <phase>` command** (`apps/ta-cli/src/commands/plan.rs`): Launches a planner agent for the specified phase. Planner reads the phase spec, identifies ambiguities, and opens a back-and-forth dialogue via `ta_ask_human`. Human can answer questions, amend items, or add constraints. Session ends with `confirmed` or `abandoned`. On confirm, emits a session transcript saved to `.ta/sessions/<phase>.md`.
+1. [ ] **`ta advise [--goal <id>] <message>` CLI command** (`apps/ta-cli/src/commands/advise.rs`): Sends `message` to the daemon advisor endpoint. `--goal` defaults to the active/latest goal. Daemon advisor agent decides: (a) answer directly (informational question), (b) inject the message as a `## Human Note` block into the running goal's staging CLAUDE.md (the agent reads this on its next file-read cycle), or (c) queue it for the next `ta_ask_human` callback. Prints the advisor's routing decision so the human knows what happened.
 
-2. [ ] **Session transcript injection**: When `ta run` is called with a phase that has a confirmed session transcript, inject `.ta/sessions/<phase>.md` as a `## Planning Session Notes` section in CLAUDE.md. Implementor agent reads the clarifications before starting.
+2. [ ] **Daemon `POST /api/advisor/inject` endpoint** (`crates/ta-daemon/src/api/advisor.rs`): Accepts `{ goal_id, message, routing_hint? }`. Advisor agent classifies the message and either responds via the existing advisor chat channel or writes a `## Human Note (injected <timestamp>)` section to `.ta/staging/<goal-id>/CLAUDE.md`. Append-only — never overwrites existing content. The running agent sees it on its next Read of CLAUDE.md.
 
-3. [ ] **Studio integration**: `ta plan session` available from the Plan tab in Studio. The back-and-forth dialogue renders in the advisor panel — planner questions appear as advisor messages, human answers as user messages. No new UI component needed.
+3. [ ] **Studio sidebar command** (`crates/ta-daemon/assets/index.html`): Persistent `ta advise` input field in the Studio sidebar visible from all tabs (not just the Advisor tab). Shows the active goal title. Sends to `/api/advisor/inject` with the active goal. Advisor response rendered inline. Shortcut: `Cmd+Shift+K` (distinct from `Cmd+K` intent bar).
 
-4. [ ] **Governed workflow stage**: Add `planning_session` as an optional stage in the governed workflow pipeline (between `plan_phase` and `run_goal`). Controlled by `planning_session = true/false` in `workflow.toml` or per-phase override. When enabled, workflow pauses for interactive session before launching the implementor.
+4. [ ] **Workflow discussion option at review points** (`apps/ta-cli/src/commands/governed_workflow.rs`): At every `prompt_human_gate_*` call, always render a `D. Discuss` option alongside Approve/Deny/Follow-up. Selecting D opens a short interactive loop (using `read_stdin_line`) where the human can ask questions or give notes; the advisor answers from the daemon. Does not pause or branch the workflow — purely informational/clarifying before the human makes their Approve/Deny decision.
 
-5. [ ] **`ta_ask_human` MCP tool availability**: Planning sessions always have `ta_ask_human` enabled regardless of the workflow `security` level. The implementor run that follows inherits the security level as normal.
+5. [ ] **Injection visibility**: `ta goal status <id>` shows a `Injections: N human note(s)` line when notes were injected into a running goal's staging. `ta advise --list [--goal <id>]` shows the full injection history for a goal.
 
 #### Version: `0.15.28-alpha`
 
