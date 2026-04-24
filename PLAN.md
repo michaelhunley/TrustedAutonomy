@@ -7135,23 +7135,81 @@ The planner agent runs with read-only tools (Read, Grep, Glob) — it cannot wri
 ### v0.15.28 — Live Human Interjection: `ta advise` + Studio Sidebar
 <!-- status: pending -->
 
-**Goal**: Let the human interject into a running agent or at any workflow review point without stopping the workflow. `ta advise [--goal <id>] <message>` sends a message to the advisor agent in the daemon; the advisor decides whether to answer directly or inject the context into the working agent's next iteration. The Studio version surfaces the same capability as a persistent sidebar command accessible from any tab.
+**Goal**: Let the human interject into a running agent or at any workflow review point without stopping the workflow. `ta advise [--goal <id>] <message>` sends a message to the advisor agent in the daemon; the advisor decides whether to answer directly or append the note to a polling file the agent reads. The Studio version surfaces the same capability as a persistent sidebar command accessible from any tab. Also makes interactive planning the default mode for `ta plan` and Studio Plan tab, so spec ambiguities are resolved *before* the implementor runs.
 
-**Why**: Agents are currently fire-and-forget from the human's perspective — once a goal starts, there is no channel to course-correct, answer a question the agent didn't know to ask, or add a constraint that emerged mid-run. The v0.15.26 typescript/index.html ambiguity is a concrete example: had the human been able to say "use the existing index.html, not a new React component" mid-run, the reviewer denial would not have happened. The advisor already classifies intent and routes to actions (v0.15.24/26) — the missing piece is routing advisor output to a *running* agent, not just producing CLI output.
+**Why**: Agents are currently fire-and-forget — once a goal starts there is no channel to course-correct. The v0.15.26 typescript/index.html ambiguity is the canonical example: the agent made a reasonable call on an ambiguous spec, the human had a different expectation, and neither had a channel to resolve it mid-run. Two complementary fixes: (1) pre-run interactive planning so the spec is unambiguous before work starts; (2) live injection so the human can still course-correct during a run.
 
-**Depends on**: v0.15.21 (Studio advisor agent), v0.15.26 (advisor panel + `ta advisor ask`)
+**Depends on**: v0.15.21 (Studio advisor agent), v0.15.26 (advisor panel + `ta advisor ask`), v0.15.27 (workflow template library)
 
-1. [ ] **`ta advise [--goal <id>] <message>` CLI command** (`apps/ta-cli/src/commands/advise.rs`): Sends `message` to the daemon advisor endpoint. `--goal` defaults to the active/latest goal. Daemon advisor agent decides: (a) answer directly (informational question), (b) inject the message as a `## Human Note` block into the running goal's staging CLAUDE.md (the agent reads this on its next file-read cycle), or (c) queue it for the next `ta_ask_human` callback. Prints the advisor's routing decision so the human knows what happened.
+#### Injection Mechanism
 
-2. [ ] **Daemon `POST /api/advisor/inject` endpoint** (`crates/ta-daemon/src/api/advisor.rs`): Accepts `{ goal_id, message, routing_hint? }`. Advisor agent classifies the message and either responds via the existing advisor chat channel or writes a `## Human Note (injected <timestamp>)` section to `.ta/staging/<goal-id>/CLAUDE.md`. Append-only — never overwrites existing content. The running agent sees it on its next Read of CLAUDE.md.
+Direct mid-run CLAUDE.md write does not work for most agents — Claude Code reads CLAUDE.md once at startup and holds it in context; Codex gets a fixed system prompt. The correct approach is a **polling file**: daemon writes to `.ta/advisor-notes/<goal-id>.md`; the constitution (injected at goal start) instructs Claude Code to read this file before each major action step. Claude Code WILL re-read files on demand — this is the hook. For Codex and other frameworks that can't re-read mid-run, notes are queued and injected at the next restart/follow-up. Framework manifests (`AgentFrameworkManifest.polling_notes_file`) declare whether live polling is supported.
 
-3. [ ] **Studio sidebar command** (`crates/ta-daemon/assets/index.html`): Persistent `ta advise` input field in the Studio sidebar visible from all tabs (not just the Advisor tab). Shows the active goal title. Sends to `/api/advisor/inject` with the active goal. Advisor response rendered inline. Shortcut: `Cmd+Shift+K` (distinct from `Cmd+K` intent bar).
+1. [ ] **`ta advise [--goal <id>] <message>` CLI command** (`apps/ta-cli/src/commands/advise.rs`): Sends `message` to the daemon. `--goal` defaults to active/latest goal. Advisor classifies: (a) direct answer (informational), (b) append note to `.ta/advisor-notes/<goal-id>.md` for agent polling, or (c) queue for next `ta_ask_human` callback. Prints the routing decision.
 
-4. [ ] **Workflow discussion option at review points** (`apps/ta-cli/src/commands/governed_workflow.rs`): At every `prompt_human_gate_*` call, always render a `D. Discuss` option alongside Approve/Deny/Follow-up. Selecting D opens a short interactive loop (using `read_stdin_line`) where the human can ask questions or give notes; the advisor answers from the daemon. Does not pause or branch the workflow — purely informational/clarifying before the human makes their Approve/Deny decision.
+2. [ ] **Daemon `POST /api/advisor/inject` endpoint** (`crates/ta-daemon/src/api/advisor.rs`): Accepts `{ goal_id, message, routing_hint? }`. Advisor writes `## Human Note (<timestamp>)\n<message>` to `.ta/advisor-notes/<goal-id>.md` (append-only, never truncates). Claude Code constitution rule: "Before each major action, read `.ta/advisor-notes/<goal-id>.md` if it exists and act on any new notes." Codex/other: notes queued for next restart.
 
-5. [ ] **Injection visibility**: `ta goal status <id>` shows a `Injections: N human note(s)` line when notes were injected into a running goal's staging. `ta advise --list [--goal <id>]` shows the full injection history for a goal.
+3. [ ] **Studio sidebar command** (`crates/ta-daemon/assets/index.html`): Persistent `ta advise` input visible from all Studio tabs. Shows active goal title. Posts to `/api/advisor/inject`. Advisor response rendered inline. Shortcut: `Cmd+Shift+K` (distinct from `Cmd+K` intent bar).
+
+4. [ ] **Workflow discussion option at review points** (`apps/ta-cli/src/commands/governed_workflow.rs`): Every `prompt_human_gate_*` call renders a `D. Discuss` option alongside Approve/Deny/Follow-up. Selecting D enters a short interactive loop (`read_stdin_line`) where the human can ask questions; advisor answers from daemon. Non-blocking — human still chooses Approve/Deny/Follow-up after discussion.
+
+5. [ ] **Injection visibility**: `ta goal status <id>` shows `Injections: N human note(s)` when notes exist. `ta advise --list [--goal <id>]` shows full injection history.
+
+6. [ ] **Interactive planning as default for `ta plan` and Studio Plan tab**: `ta plan` (without subcommand) and the Studio Plan tab open an interactive planning session by default: advisor agent reads the next pending phase spec, surfaces ambiguities as numbered questions, and the human confirms or amends before `ta run` launches. Session transcript saved to `.ta/sessions/<phase>.md` and injected into the implementor's context. `--no-interactive` / `--auto` skips the session for CI/scripted use. Studio Plan tab: session runs in the advisor panel; "Start Implementation" button is gated on session completion.
+
+7. [ ] **`interactive-plan-build` workflow template**: Extends `plan-build-phases` with a mandatory `planning_session` stage before each `run_goal` stage. Stage uses `ta_ask_human` to let planner and human align. Controlled by `planning_session = true` in `workflow.toml` or `--param planning_session=true` on `ta workflow run`. Default for `ta plan build` command; opt-out for headless/CI runs.
 
 #### Version: `0.15.28-alpha`
+
+---
+
+### v0.15.29 — VCS Adapter Enforcement: Eliminate Direct Git Calls in TA Source
+<!-- status: pending -->
+
+**Goal**: All VCS operations in TA's own source code that affect a project (staging copies, branch creation, commits, pushes, dirty-check, log reads) must go through `SourceAdapter` — not raw `Command::new("git")`. A constitution rule enforces this on all future agents working in this codebase.
+
+**Why**: A reviewer audit found 20+ locations in `ta-workspace`, `ta-goal`, `ta-cli/governed_workflow.rs`, `ta-cli/release.rs`, and `ta-cli/onboard.rs` calling `git` directly, bypassing the VCS adapter layer. This means those paths silently break for non-git VCS (Perforce, SVN via plugin) and cannot be tested with adapter mocks. `ta-submit/src/git.rs` is the *implementation* of the git adapter — direct calls there are intentional. All other crates must go through `SourceAdapter` or a thin `GitHelper` that wraps read-only queries (log, rev-parse, status) that the adapter trait doesn't yet expose.
+
+**Depends on**: v0.12.0.2 (VCS plugin architecture)
+
+1. [ ] **Audit and fix `ta-workspace/src/overlay.rs`**: ~8 direct git calls for `ls-files`, `log`, dirty-check, and staging-root commit. Route `ls-files` / dirty-check through `SourceAdapter::is_dirty()` / `SourceAdapter::list_tracked_files()`. Add those methods to the trait with git and no-op implementations.
+
+2. [ ] **Audit and fix `ta-workspace/src/partitioning.rs`**: 2 direct git calls (ls-files, rev-parse). Route through adapter or new `GitReadHelper` for read-only queries where no adapter instance is available (partitioning is workspace-level, pre-adapter selection).
+
+3. [ ] **Audit and fix `ta-goal/src/velocity.rs`**: 1 direct git call (rev-parse HEAD for commit SHA). Add `SourceAdapter::head_sha() -> Option<String>` and route through it.
+
+4. [ ] **Audit and fix `apps/ta-cli/src/commands/governed_workflow.rs`**: 2 direct git calls (checkout, log). These are in the PR-sync path — route through the adapter's `sync()` and `log_since()` methods. Add `log_since(ref: &str) -> Vec<CommitSummary>` to the trait.
+
+5. [ ] **Audit and fix `apps/ta-cli/src/commands/release.rs`**: 15+ direct git calls (status, log, tag, push, add, commit). The release pipeline is the largest offender. Add `SourceAdapter::create_tag()`, `tag_exists()`, `push_tag()` and route remaining calls through them. git-specific helpers that are release-pipeline-only and genuinely have no multi-VCS meaning may stay in a `release_git.rs` helper with a `#[cfg(feature = "git-release")]` guard and a TODO comment.
+
+6. [ ] **Audit and fix `apps/ta-cli/src/commands/onboard.rs`**: 1 direct git call (status). Route through `SourceAdapter::is_dirty()`.
+
+7. [ ] **Constitution rule**: Add `[rules.vcs-adapter-enforcement]` to `.ta/constitution.toml` with a pattern scan for `Command::new("git")` outside of `crates/ta-submit/src/git.rs` and `build.rs`. Severity `high`. All future agent work in this codebase must route VCS operations through `SourceAdapter`.
+
+#### Version: `0.15.29-alpha`
+
+---
+
+### v0.15.30 — Agent Framework Abstraction: No CLAUDE.md Assumptions in TA Source
+<!-- status: pending -->
+
+**Goal**: TA's injection, constitution enforcement, and context-building logic must not assume Claude Code or CLAUDE.md. All agent interaction must go through the `AgentFrameworkManifest` abstraction introduced in v0.13.3. Constitution rules enforce this on all future agent work in this codebase.
+
+**Why**: v0.13.3 built `AgentFrameworkManifest` with `context_file`, `context_inject_mode()`, and `polling_notes_file` — the skeleton is there. But `inject_claude_md()` in `run.rs` still hardcodes the filename, the reviewer goal spawner hardcodes `CLAUDE.md`, and the constitution injection in `governed_workflow.rs` hardcodes the file path. Codex, Ollama, Claude-Flow, BMAD, and any future framework each have a different context injection model; hardcoding CLAUDE.md means those paths silently fail or inject into the wrong file. The polling-file mechanism in v0.15.28 also needs this abstraction to work correctly per-framework.
+
+**Depends on**: v0.13.3 (AgentFramework trait + manifest), v0.15.28 (live interjection polling file)
+
+1. [ ] **`inject_claude_md()` → `inject_agent_context(framework: &dyn AgentFramework)`** (`apps/ta-cli/src/commands/run.rs`): Replace the hardcoded `CLAUDE.md` filename with `framework.context_file()`. For Claude Code this returns `CLAUDE.md`; for Codex it returns the system-prompt file; for Ollama it returns `.ta/agent_context.md`. Backup/restore logic uses the same resolved path.
+
+2. [ ] **Constitution injection routes through framework manifest**: `governed_workflow.rs`, `plan.rs`, and the reviewer goal spawner resolve the framework manifest for the active agent and call `framework.context_file()` rather than hardcoding `CLAUDE.md`. If the framework has `context_inject_mode = "none"`, skip file injection and pass context via the framework's native mechanism (e.g., system prompt prepend for Codex).
+
+3. [ ] **`polling_notes_file` in `AgentFrameworkManifest`**: Add `polling_notes_file: Option<String>` field. Claude Code manifest sets `".ta/advisor-notes/{goal_id}.md"`. Codex manifest sets `null` (queued for restart). Ollama manifest sets `null` (uses system-prompt restart). `POST /api/advisor/inject` reads the manifest to decide whether to write the file or queue the note.
+
+4. [ ] **Constitution rule**: Add `[rules.agent-framework-abstraction]` to `.ta/constitution.toml`. Pattern: any hardcoded `"CLAUDE.md"` string literal outside of `crates/ta-runtime/src/framework.rs` (the manifest definitions) and `run.rs`'s migration shim. Severity `high`. Also: any direct construction of agent commands without going through `AgentFramework::build_command()`.
+
+5. [ ] **`ta agent list` framework info**: `ta agent list` shows the resolved framework for each configured agent YAML — name, context_file, inject_mode, polling_notes_file. Makes the abstraction visible and debuggable without reading manifests manually.
+
+#### Version: `0.15.30-alpha`
 
 ---
 
