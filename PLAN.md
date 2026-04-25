@@ -7164,11 +7164,21 @@ pub enum NoteDelivery {
 
 `AgentFrameworkManifest` gains a `channel_type: ChannelType` field that selects the implementation. The common path in `run.rs` calls `channel.inject_initial()` and never references CLAUDE.md directly.
 
+1. [x] **`AgentContextChannel` trait** (`crates/ta-runtime/src/channels/mod.rs`): Define `inject_initial`, `inject_note`, `restore`, `capabilities`. Define `NoteDelivery` enum (`LivePolled`, `ApiPushed`, `Queued`, `Answered`) and `ChannelCapabilities` struct. All injection in TA's core logic calls this trait — no agent-type awareness in the common path.
 
+2. [x] **`ClaudeCodeChannel` implementation**: `inject_initial` writes to `CLAUDE.md` (existing behavior preserved). `inject_note` appends to `.ta/advisor-notes/<goal-id>.md`; constitution rule instructs the agent to poll this file before each major action. Returns `LivePolled`.
 
+3. [x] **`CodexChannel` implementation** (VS Code integration): `inject_initial` writes system-prompt file. `inject_note` pushes via `vscode.lm` conversation API when `VSCODE_IPC_HOOK_CLI` is set (`ApiPushed`); falls back to `Queued` outside VS Code. Codex supports mid-session injection through the `vscode.lm` API — not restart-only.
 
+4. [x] **`OllamaChannel` and `GenericFileChannel` implementations**: `OllamaChannel` writes `.ta/agent_context.md`; `inject_note` returns `Queued`. `GenericFileChannel` writes to manifest-declared `context_file`; `inject_note` returns `Queued`. Both guarded by feature flags.
 
+5. [x] **`AgentFrameworkManifest` channel selection**: Add `channel_type: ChannelType` field to `AgentFrameworkManifest`. Manifest loader in `crates/ta-runtime/src/framework.rs` instantiates the correct `AgentContextChannel` implementation. No channel-type logic remains in `run.rs`.
 
+6. [x] **Migrate `run.rs` and `governed_workflow.rs`**: Replace `inject_claude_md()` calls with `channel.inject_initial()`. Keep `inject_claude_md()` as a deprecated shim for the v0.15.30 transition. `governed_workflow.rs` reviewer spawner also migrated to `channel.inject_initial()`.
+
+7. [x] **`ta advise [--goal <id>] <message>` CLI command** (`apps/ta-cli/src/commands/advise.rs`): Routes to daemon `POST /api/advisor/inject { goal_id, message }`. Daemon advisor agent decides: answer directly (returns `Answered`) or call `channel.inject_note(note)` on the active goal's channel. Response printed to stdout with delivery mode (e.g. `Note delivered: LivePolled`).
+
+8. [x] **Interactive planning default + workflow template + Studio integration**: `ta plan` and Studio Plan tab open an interactive planning session by default. `interactive-plan-build` built-in workflow template added. Studio advisor sidebar routes `ta advise`-style messages through the same `/api/advisor/inject` endpoint. Constitution rule `no-direct-claude-md` added at severity `warn` (escalated to `block` in v0.15.30).
 
 
 
@@ -7182,9 +7192,33 @@ pub enum NoteDelivery {
 
 #### Version: `0.15.28-alpha`
 
+---
+### v0.15.28.1 — PLAN.md Integrity Enforcement: Diagnostics, Validation, and Apply Guard
+<!-- status: pending -->
 
+**Goal**: PLAN.md must not be silently corrupted during draft apply. Add diagnostic tracing of base/staging/source versions at 3-way merge time, structural validation of the post-merge result (heading count, status markers, no blank-only sections), and a hard guard that aborts the apply and prompts the user if validation fails.
 
+**Why**: Every goal run that modifies PLAN.md risks corruption via 3-way merge when the staging base is stale — i.e., when human doc commits were pushed to main *after* staging was created. The merge sees: base=stale pre-doc-commit snapshot, staging=agent's changes on old structure, source=new structure. When both sides diverge from a stale base, the merge drops items and headings silently. This corrupted PLAN.md on three consecutive goal/apply/merge cycles (v0.15.26, v0.15.27, v0.15.28). The fix is to detect corruption and abort rather than apply garbage.
 
+**Depends on**: v0.15.28 (triggered by corruption observed during v0.15.28 apply)
+
+1. [ ] **Pre-goal PLAN.md snapshot** (`crates/ta-workspace/src/overlay.rs`): At overlay creation time, record a SHA-256 hash of PLAN.md into `.ta/goals/<goal-id>/plan_snapshot.sha256`. This is the exact base version the agent will edit — needed to detect staging-base drift at apply time.
+
+2. [ ] **Staging-base drift detection** (`crates/ta-workspace/src/overlay.rs` or `draft.rs`): At `ta draft apply` time, compare the stored `plan_snapshot.sha256` against the SHA of `PLAN.md` at the staging base commit (`git show <base-sha>:PLAN.md | sha256`). If they differ, log `WARN: PLAN.md staging base is stale — base sha differs from current source base` with both SHAs. Informational; merge may still be clean, but flags the risk.
+
+3. [ ] **Post-merge structural validation** (`crates/ta-workspace/src/overlay.rs`): After 3-way merge produces a candidate PLAN.md, validate before writing to source: (a) all `### v0.x.y` headings from source are present in merged result; (b) each heading has a matching `<!-- status: ... -->` marker; (c) no phase section contains only blank lines between heading and next `---` or `###`. Returns `PlanValidationError` with structured report of what is missing.
+
+4. [ ] **Apply guard**: If `PlanValidationError` is returned, abort the PLAN.md portion of the apply, write the failed merge result to `.ta/plan-merge-failed-<goal-id>.md` for inspection, and surface an actionable error: `PLAN.md merge validation failed — see .ta/plan-merge-failed-<goal-id>.md. Restore manually and re-run 'ta draft apply --skip-plan-merge'.` Add `--skip-plan-merge` flag for emergency use (logged to audit trail).
+
+5. [ ] **Diagnostic tracing at merge time**: Add `tracing::info!` (visible at `RUST_LOG=ta_workspace=info`) logging of: base SHA, staging SHA, source SHA of PLAN.md before merge; merge strategy selected; heading and status-marker counts in each version; validation result. Events captured in `.ta/events/` for post-mortem.
+
+6. [ ] **Constitution rule** (`[rules.plan-merge-validation]` in `.ta/constitution.toml`): Require that `ta draft apply` always runs PLAN.md structural validation. Severity `block`. Exception: `--skip-plan-merge` flag, which is logged to the audit trail with reason.
+
+#### Version: `0.15.28-alpha.1`
+
+---
+### v0.15.29 — VCS Adapter Enforcement: Eliminate Direct Git Calls in TA Source
+<!-- status: pending -->
 
 **Goal**: All VCS operations in TA's own source code that affect a project (staging copies, branch creation, commits, pushes, dirty-check, log reads) must go through `SourceAdapter` — not raw `Command::new("git")`. A constitution rule enforces this on all future agents working in this codebase.
 
@@ -7210,7 +7244,7 @@ pub enum NoteDelivery {
 
 ---
 ### v0.15.30 — Agent Framework Abstraction: Remove Shims, Full Enforcement
-
+<!-- status: pending -->
 
 **Goal**: Remove the `inject_claude_md()` shim left by v0.15.28, complete the migration of all remaining hardcoded CLAUDE.md references, and activate the constitution enforcement rule across the codebase. After this phase, adding a new agent type requires only a new `AgentContextChannel` implementation and a manifest entry — no changes to TA's core logic.
 
