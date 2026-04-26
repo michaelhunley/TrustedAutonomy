@@ -7194,7 +7194,7 @@ pub enum NoteDelivery {
 
 ---
 ### v0.15.28.1 — PLAN.md Integrity Enforcement: Diagnostics, Validation, and Apply Guard
-<!-- status: pending -->
+<!-- status: in_progress -->
 
 **Goal**: PLAN.md must not be silently corrupted during draft apply. Add diagnostic tracing of base/staging/source versions at 3-way merge time, structural validation of the post-merge result (heading count, status markers, no blank-only sections), and a hard guard that aborts the apply and prompts the user if validation fails.
 
