@@ -7207,6 +7207,22 @@ pub enum NoteDelivery {
 #### Version: `0.15.28-alpha.1`
 
 ---
+### v0.15.28.2 — PLAN.md Merge Safety: Pre-Merge Rebase and Atomic Status Commit
+<!-- status: pending -->
+
+**Goal**: Eliminate the two remaining root causes of PLAN.md staging-base drift: (1) the PLAN.md status change (`pending → in_progress`) is committed and pushed to main *before* staging is created, so staging base matches HEAD; (2) at apply time, before 3-way merge, PLAN.md is rebased against the latest main so the merge base is never stale.
+
+**Why**: v0.15.28.1 adds detection and abort — it catches corruption but the stale-base situation still occurs on every goal that touches PLAN.md. Two gaps remain: `ta goal run` writes `in_progress` to the working tree without committing first (staging base differs from HEAD by one uncommitted change), and post-goal doc commits to main still make the staging base stale at apply time. Fixing these prevents the stale-base situation rather than just detecting it after the fact.
+
+**Depends on**: v0.15.28.1 (validation + abort guard must be in place before we relax manual workarounds)
+
+1. [ ] **Atomic status commit before staging** (`apps/ta-cli/src/commands/run.rs`): When `ta goal run` (or `ta run`) updates PLAN.md from `pending` to `in_progress`, commit and push that change to the VCS branch *before* `OverlayWorkspace::create()` copies the source to staging. This ensures the staging base SHA matches the committed HEAD — no uncommitted drift. Also covers `plan_history.jsonl` (already in `auto_stage`). If the commit or push fails, abort with a clear error rather than continuing with a dirty working tree.
+
+2. [ ] **Pre-merge PLAN.md rebase** (`crates/ta-workspace/src/overlay.rs`): At `ta draft apply` time, before running the 3-way merge for PLAN.md, fetch the latest `PLAN.md` from the VCS HEAD (`git show HEAD:PLAN.md`) and use it as the merge *source* rather than the on-disk working-tree file. This ensures any doc commits pushed after staging creation are included in the source side, giving the merge the true current state rather than a potentially-stale working-tree copy. Log the HEAD SHA used as source for traceability (feeds into the diagnostic tracing added by v0.15.28.1).
+
+#### Version: `0.15.28-alpha.2`
+
+---
 ### v0.15.29 — VCS Adapter Enforcement: Eliminate Direct Git Calls in TA Source
 <!-- status: pending -->
 
