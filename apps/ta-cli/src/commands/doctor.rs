@@ -434,6 +434,7 @@ fn check_vcs(config: &GatewayConfig) -> Vec<CheckResult> {
 
     match &vcs {
         VcsBackend::Git => {
+            // git-only: no adapter equivalent (VCS health check runs before adapter is constructed)
             let git_ok = std::process::Command::new("git")
                 .args(["status", "--porcelain"])
                 .current_dir(&config.workspace_root)

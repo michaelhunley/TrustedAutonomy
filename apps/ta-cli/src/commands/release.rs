@@ -2805,6 +2805,7 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    // git-only: test fixture — exempt from no-direct-git rule (cfg(test))
     /// Initialize a git repo in a temp dir with user config (needed in CI).
     fn git_init_with_commit(dir: &std::path::Path) {
         let run = |args: &[&str]| {

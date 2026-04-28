@@ -11,7 +11,7 @@
 use std::path::Path;
 use std::process::Command;
 use ta_changeset::DraftPackage;
-use ta_goal::GoalRun;
+use ta_goal::CommitContext;
 
 use crate::adapter::{
     CommitResult, PushResult, Result, ReviewResult, SourceAdapter, SubmitError, SyncResult,
@@ -57,14 +57,19 @@ impl SvnAdapter {
 }
 
 impl SourceAdapter for SvnAdapter {
-    fn prepare(&self, _goal: &GoalRun, _config: &SubmitConfig) -> Result<()> {
+    fn prepare(&self, _ctx: &CommitContext, _config: &SubmitConfig) -> Result<()> {
         // SVN doesn't use branches the same way as Git.
         // No-op: the working copy is already pointing at the correct location.
         tracing::debug!("SvnAdapter: prepare() — no-op (SVN working copy)");
         Ok(())
     }
 
-    fn commit(&self, goal: &GoalRun, _pr: &DraftPackage, message: &str) -> Result<CommitResult> {
+    fn commit(
+        &self,
+        ctx: &CommitContext,
+        _pr: &DraftPackage,
+        message: &str,
+    ) -> Result<CommitResult> {
         tracing::info!("SvnAdapter: committing changes");
 
         // Add any new (unversioned) files.
@@ -72,7 +77,7 @@ impl SourceAdapter for SvnAdapter {
         let _ = self.svn_cmd(&["add", "--force", "."]);
 
         // Build commit message with goal metadata.
-        let commit_msg = format!("{}\n\nGoal-ID: {}", message, goal.goal_run_id);
+        let commit_msg = format!("{}\n\nGoal-ID: {}", message, ctx.goal_run_id);
 
         // Commit — this sends changes to the remote server immediately.
         let output = self.svn_cmd(&["commit", "-m", &commit_msg])?;
@@ -97,7 +102,7 @@ impl SourceAdapter for SvnAdapter {
         })
     }
 
-    fn push(&self, _goal: &GoalRun) -> Result<PushResult> {
+    fn push(&self, _ctx: &CommitContext) -> Result<PushResult> {
         // SVN commit is already remote — no separate push step.
         tracing::debug!("SvnAdapter: push() — no-op (SVN commit is already remote)");
         Ok(PushResult {
@@ -107,7 +112,7 @@ impl SourceAdapter for SvnAdapter {
         })
     }
 
-    fn open_review(&self, _goal: &GoalRun, _pr: &DraftPackage) -> Result<ReviewResult> {
+    fn open_review(&self, _ctx: &CommitContext, _pr: &DraftPackage) -> Result<ReviewResult> {
         // SVN doesn't have built-in code review.
         tracing::debug!("SvnAdapter: open_review() — no-op (SVN has no built-in review)");
         Ok(ReviewResult {
@@ -179,6 +184,84 @@ impl SourceAdapter for SvnAdapter {
             .map(|r| r.trim().to_string())
             .unwrap_or_else(|| "unknown".to_string());
         Ok(format!("r{}", rev))
+    }
+
+    fn is_dirty(&self) -> Result<bool> {
+        // svn status: non-empty output means there are local modifications.
+        let output = self.svn_cmd(&["status"]);
+        match output {
+            Ok(s) => Ok(!s.trim().is_empty()),
+            Err(_) => Ok(false),
+        }
+    }
+
+    fn list_tracked_files(&self) -> Result<Vec<std::path::PathBuf>> {
+        // svn list --depth infinity: lists all versioned files.
+        let output = self.svn_cmd(&["list", "--depth", "infinity"])?;
+        let files = output
+            .lines()
+            .filter(|l| !l.ends_with('/'))
+            .map(|l| self.work_dir.join(l))
+            .collect();
+        Ok(files)
+    }
+
+    fn head_sha(&self) -> Option<String> {
+        // svn info --show-item revision: returns the current working-copy revision.
+        self.svn_cmd(&["info", "--show-item", "revision"])
+            .ok()
+            .map(|s| format!("r{}", s.trim()))
+    }
+
+    fn log_since(&self, ref_: &str) -> Result<Vec<crate::adapter::CommitSummary>> {
+        // svn log -r <rev>:HEAD --limit 50: returns commits since a given revision.
+        let rev_range = if ref_.is_empty() {
+            "1:HEAD".to_string()
+        } else {
+            format!("{}:HEAD", ref_.trim_start_matches('r'))
+        };
+        let output = self.svn_cmd(&["log", "-r", &rev_range, "--limit", "50"])?;
+        let summaries = output
+            .lines()
+            .filter(|l| l.starts_with('r') && l.contains(" | "))
+            .map(|l| {
+                let parts: Vec<&str> = l.splitn(3, " | ").collect();
+                crate::adapter::CommitSummary {
+                    sha: parts.first().unwrap_or(&l).trim().to_string(),
+                    subject: parts.get(2).unwrap_or(&"").trim().to_string(),
+                }
+            })
+            .collect();
+        Ok(summaries)
+    }
+
+    fn checkout_branch(&self, _branch: &str) -> Result<()> {
+        // SVN uses switch (svn switch URL) not checkout for branch changes.
+        Err(SubmitError::VcsError(
+            "SVN: use `svn switch <url>` to change branches".to_string(),
+        ))
+    }
+
+    fn create_tag(&self, tag: &str, message: &str) -> Result<()> {
+        // SVN tags are copies in the repository.
+        let _ = (tag, message);
+        Err(SubmitError::VcsError(
+            "SVN: create tags via `svn copy trunk tags/<name>` in your repository".to_string(),
+        ))
+    }
+
+    fn tag_exists(&self, tag: &str) -> Result<bool> {
+        let _ = tag;
+        Err(SubmitError::VcsError(
+            "SVN: check tags via `svn list <repo>/tags`".to_string(),
+        ))
+    }
+
+    fn push_tag(&self, tag: &str) -> Result<()> {
+        let _ = tag;
+        Err(SubmitError::VcsError(
+            "SVN: tags are copies in the repo; use `svn copy` to create and they're immediately remote".to_string(),
+        ))
     }
 
     fn protected_submit_targets(&self) -> Vec<String> {
@@ -271,14 +354,15 @@ mod tests {
     fn test_svn_adapter_push_is_noop() {
         let dir = tempfile::tempdir().unwrap();
         let adapter = SvnAdapter::new(dir.path());
-        let goal = GoalRun::new(
+        let goal = ta_goal::GoalRun::new(
             "Test",
             "Test",
             "test-agent",
             dir.path().to_path_buf(),
             dir.path().join("store"),
         );
-        let result = adapter.push(&goal).unwrap();
+        let ctx = ta_goal::CommitContext::from(&goal);
+        let result = adapter.push(&ctx).unwrap();
         assert_eq!(result.remote_ref, "svn://committed");
     }
 }

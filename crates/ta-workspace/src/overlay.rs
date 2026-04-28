@@ -17,6 +17,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use crate::merge_tool::MergeTool;
+
 use crate::copy_strategy::{copy_file_with_strategy, detect_strategy, CopyStat, CopyStrategy};
 
 /// Staging mode for workspace creation (v0.13.13).
@@ -1019,8 +1021,6 @@ pub fn three_way_merge(
     _snap: &crate::conflict::FileSnapshot,
     _staging_dir: &std::path::Path,
 ) -> Result<MergeResult, Box<dyn std::error::Error>> {
-    use std::io::Write;
-
     // We need the base content (file as it was at goal start). We reconstruct it
     // using `git show HEAD:<path>` from the source repository. This gives us the
     // committed version before any external edit — the ideal 3-way merge base.
@@ -1043,6 +1043,7 @@ pub fn three_way_merge(
             // Path relative to git root.
             let rel = source_path.strip_prefix(&root).unwrap_or(source_path);
             let path_str = rel.to_string_lossy();
+            // git-only: no adapter equivalent (overlay has no adapter context)
             // git show HEAD:<path> — the committed version = the base before any edits.
             let out = std::process::Command::new("git")
                 .args(["show", &format!("HEAD:{}", path_str)])
@@ -1086,35 +1087,17 @@ pub fn three_way_merge(
         return Err("Binary file — skipping three-way merge".into());
     }
 
-    // Write three temp files: base, ours, theirs.
-    let tmp = tempfile::tempdir()?;
-    let base_file = tmp.path().join("base");
-    let ours_file = tmp.path().join("ours");
-    let theirs_file = tmp.path().join("theirs");
+    // Route through MergeTool abstraction (Diff3MergeTool wraps git merge-file).
+    let tool = crate::merge_tool::Diff3MergeTool;
+    let result = tool.merge(&base_bytes, &ours_bytes, &theirs_bytes)?;
 
-    fs::File::create(&base_file)?.write_all(&base_bytes)?;
-    fs::File::create(&ours_file)?.write_all(&ours_bytes)?;
-    fs::File::create(&theirs_file)?.write_all(&theirs_bytes)?;
-
-    // Run: git merge-file --quiet ours base theirs
-    // Modifies `ours_file` in-place. Exit 0 = clean, non-zero = conflicts remain.
-    let status = std::process::Command::new("git")
-        .args([
-            "merge-file",
-            "--quiet",
-            ours_file.to_str().unwrap_or("ours"),
-            base_file.to_str().unwrap_or("base"),
-            theirs_file.to_str().unwrap_or("theirs"),
-        ])
-        .output()?;
-
-    let merged_content = fs::read(&ours_file)?;
+    let merged_content = result.content;
 
     // Count change hunks (lines containing <<<<<<< are conflict markers).
     let has_conflict_markers = merged_content.windows(7).any(|w| w == b"<<<<<<<");
 
-    // git merge-file exit code: 0 = clean, positive = number of conflicts.
-    let hunks_merged = if status.status.success() {
+    // MergeTool: clean = no conflicts, non-zero conflicts = merge conflict markers remain.
+    let hunks_merged = if result.clean {
         // Count `@@` markers in unified diff approximation — count non-overlapping
         // occurrences of `\n@@` in merged output as a hunk count proxy.
         let content_str = String::from_utf8_lossy(&merged_content);
@@ -1123,7 +1106,7 @@ pub fn three_way_merge(
         0
     };
 
-    if status.status.success() && !has_conflict_markers {
+    if result.clean && !has_conflict_markers {
         Ok(MergeResult::Clean {
             content: merged_content,
             hunks: hunks_merged,

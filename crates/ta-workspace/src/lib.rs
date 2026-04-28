@@ -19,6 +19,7 @@
 pub mod conflict;
 pub mod copy_strategy;
 pub mod error;
+pub mod merge_tool;
 pub mod overlay;
 pub mod partitioning;
 pub mod projfs_strategy;

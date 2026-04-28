@@ -12,7 +12,7 @@
 use std::path::Path;
 use std::process::Command;
 use ta_changeset::DraftPackage;
-use ta_goal::GoalRun;
+use ta_goal::CommitContext;
 
 use crate::adapter::{
     CommitResult, MergeResult, PushResult, Result, ReviewResult, ReviewStatus, SavedVcsState,
@@ -71,10 +71,10 @@ impl PerforceAdapter {
 }
 
 impl SourceAdapter for PerforceAdapter {
-    fn prepare(&self, goal: &GoalRun, _config: &SubmitConfig) -> Result<()> {
+    fn prepare(&self, ctx: &CommitContext, _config: &SubmitConfig) -> Result<()> {
         tracing::info!(
             "PerforceAdapter: creating pending changelist for goal {}",
-            goal.goal_run_id
+            ctx.goal_run_id
         );
 
         // Create a new pending changelist.
@@ -82,7 +82,7 @@ impl SourceAdapter for PerforceAdapter {
         let spec = self.p4_cmd(&["change", "-o"])?;
 
         // Replace the description in the spec.
-        let new_desc = format!("TA Goal: {} [{}]", goal.title, goal.goal_run_id);
+        let new_desc = format!("TA Goal: {} [{}]", ctx.title, ctx.goal_run_id);
         let modified_spec = spec
             .lines()
             .map(|line| {
@@ -123,7 +123,12 @@ impl SourceAdapter for PerforceAdapter {
         Ok(())
     }
 
-    fn commit(&self, goal: &GoalRun, _pr: &DraftPackage, message: &str) -> Result<CommitResult> {
+    fn commit(
+        &self,
+        ctx: &CommitContext,
+        _pr: &DraftPackage,
+        message: &str,
+    ) -> Result<CommitResult> {
         tracing::info!("PerforceAdapter: reconciling and shelving changes");
 
         // Reconcile: detect added/edited/deleted files.
@@ -144,7 +149,7 @@ impl SourceAdapter for PerforceAdapter {
             message: format!("{} (shelved in changelist {})", message, cl),
             metadata: [
                 ("changelist".to_string(), cl),
-                ("goal_id".to_string(), goal.goal_run_id.to_string()),
+                ("goal_id".to_string(), ctx.goal_run_id.to_string()),
             ]
             .into_iter()
             .collect(),
@@ -152,7 +157,7 @@ impl SourceAdapter for PerforceAdapter {
         })
     }
 
-    fn push(&self, _goal: &GoalRun) -> Result<PushResult> {
+    fn push(&self, _ctx: &CommitContext) -> Result<PushResult> {
         tracing::info!("PerforceAdapter: submitting changelist");
 
         let output = self.p4_cmd(&["submit", "-c", "default"])?;
@@ -164,15 +169,15 @@ impl SourceAdapter for PerforceAdapter {
         })
     }
 
-    fn open_review(&self, goal: &GoalRun, _pr: &DraftPackage) -> Result<ReviewResult> {
+    fn open_review(&self, ctx: &CommitContext, _pr: &DraftPackage) -> Result<ReviewResult> {
         // Shelving is the Perforce equivalent of opening a review.
         // If Helix Swarm is configured, the shelved changelist appears there automatically.
         tracing::debug!(
             "PerforceAdapter: open_review() — shelved changelist serves as review (use Helix Swarm for web UI)"
         );
         Ok(ReviewResult {
-            review_url: format!("p4://shelved/{}", goal.goal_run_id),
-            review_id: format!("p4-{}", goal.goal_run_id),
+            review_url: format!("p4://shelved/{}", ctx.goal_run_id),
+            review_id: format!("p4-{}", ctx.goal_run_id),
             message: "Changes shelved. If Helix Swarm is configured, the review is available in the Swarm web UI.".to_string(),
             metadata: Default::default(),
         })
@@ -404,6 +409,82 @@ impl SourceAdapter for PerforceAdapter {
                 cl, e
             ))),
         }
+    }
+
+    fn is_dirty(&self) -> Result<bool> {
+        // p4 opened -s: lists files opened for edit/add/delete in current CL.
+        let output = self.p4_cmd(&["opened", "-s"]);
+        match output {
+            Ok(s) => Ok(!s.trim().is_empty()),
+            Err(_) => Ok(false), // degrade gracefully if p4 not available
+        }
+    }
+
+    fn list_tracked_files(&self) -> Result<Vec<std::path::PathBuf>> {
+        // p4 files does not have a simple "list all tracked files" equivalent.
+        Err(SubmitError::VcsError(
+            "Perforce: list_tracked_files not supported — use p4 files directly".to_string(),
+        ))
+    }
+
+    fn head_sha(&self) -> Option<String> {
+        // p4 changes -m 1 -s submitted: returns the latest submitted changelist.
+        self.p4_cmd(&["changes", "-m", "1", "-s", "submitted"])
+            .ok()
+            .and_then(|s| {
+                s.lines()
+                    .next()
+                    .and_then(|l| l.split_whitespace().nth(1))
+                    .map(|s| s.to_string())
+            })
+    }
+
+    fn log_since(&self, ref_: &str) -> Result<Vec<crate::adapter::CommitSummary>> {
+        // p4 changes -l -s submitted: returns changelists since a given CL number.
+        let _ = ref_;
+        let output = self.p4_cmd(&["changes", "-l", "-s", "submitted"])?;
+        let summaries = output
+            .lines()
+            .filter(|l| l.starts_with("Change "))
+            .map(|l| {
+                let parts: Vec<&str> = l.splitn(4, ' ').collect();
+                crate::adapter::CommitSummary {
+                    sha: parts.get(1).unwrap_or(&"").to_string(),
+                    subject: parts.get(3).unwrap_or(&l).to_string(),
+                }
+            })
+            .collect();
+        Ok(summaries)
+    }
+
+    fn checkout_branch(&self, _branch: &str) -> Result<()> {
+        // Perforce uses workspaces/clients, not branches in the git sense.
+        Err(SubmitError::VcsError(
+            "Perforce: checkout_branch not applicable — use p4 client to switch workspaces"
+                .to_string(),
+        ))
+    }
+
+    fn create_tag(&self, tag: &str, message: &str) -> Result<()> {
+        // p4 label creates a named label (closest equivalent to a git tag).
+        let _ = (tag, message);
+        Err(SubmitError::VcsError(
+            "Perforce: tag creation via TA not supported — use p4 label".to_string(),
+        ))
+    }
+
+    fn tag_exists(&self, tag: &str) -> Result<bool> {
+        let _ = tag;
+        Err(SubmitError::VcsError(
+            "Perforce: tag_exists not supported — use p4 labels".to_string(),
+        ))
+    }
+
+    fn push_tag(&self, tag: &str) -> Result<()> {
+        let _ = tag;
+        Err(SubmitError::VcsError(
+            "Perforce: push_tag not applicable — Perforce labels are shared directly".to_string(),
+        ))
     }
 
     fn stage_env(

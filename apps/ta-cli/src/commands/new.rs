@@ -954,6 +954,7 @@ fn setup_vcs(project_dir: &Path, vcs_name: &str, ta_dir: &Path) -> anyhow::Resul
         "git" => {
             // Run git init if not already a git repo.
             if !project_dir.join(".git").exists() {
+                // git-only: project initialization — no SourceAdapter exists before init
                 let status = std::process::Command::new("git")
                     .arg("init")
                     .current_dir(project_dir)

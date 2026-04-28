@@ -1,7 +1,7 @@
 //! "None" adapter - backwards-compatible fallback with no VCS operations
 
 use ta_changeset::DraftPackage;
-use ta_goal::GoalRun;
+use ta_goal::CommitContext;
 
 use crate::adapter::{CommitResult, PushResult, Result, ReviewResult, SourceAdapter};
 use crate::config::SubmitConfig;
@@ -26,39 +26,44 @@ impl Default for NoneAdapter {
 }
 
 impl SourceAdapter for NoneAdapter {
-    fn prepare(&self, _goal: &GoalRun, _config: &SubmitConfig) -> Result<()> {
+    fn prepare(&self, _ctx: &CommitContext, _config: &SubmitConfig) -> Result<()> {
         // No-op: no workspace preparation needed
         tracing::debug!("NoneAdapter: prepare() - no-op");
         Ok(())
     }
 
-    fn commit(&self, goal: &GoalRun, _pr: &DraftPackage, message: &str) -> Result<CommitResult> {
+    fn commit(
+        &self,
+        ctx: &CommitContext,
+        _pr: &DraftPackage,
+        message: &str,
+    ) -> Result<CommitResult> {
         // No-op: no commit operation
         tracing::debug!("NoneAdapter: commit() - no-op");
         Ok(CommitResult {
-            commit_id: format!("none-{}", goal.goal_run_id),
+            commit_id: format!("none-{}", ctx.goal_run_id),
             message: message.to_string(),
             metadata: Default::default(),
             ignored_artifacts: vec![],
         })
     }
 
-    fn push(&self, goal: &GoalRun) -> Result<PushResult> {
+    fn push(&self, ctx: &CommitContext) -> Result<PushResult> {
         // No-op: no push operation
         tracing::debug!("NoneAdapter: push() - no-op");
         Ok(PushResult {
-            remote_ref: format!("none-{}", goal.goal_run_id),
+            remote_ref: format!("none-{}", ctx.goal_run_id),
             message: "No push operation (none adapter)".to_string(),
             metadata: Default::default(),
         })
     }
 
-    fn open_review(&self, goal: &GoalRun, _pr: &DraftPackage) -> Result<ReviewResult> {
+    fn open_review(&self, ctx: &CommitContext, _pr: &DraftPackage) -> Result<ReviewResult> {
         // No-op: no review creation
         tracing::debug!("NoneAdapter: open_review() - no-op");
         Ok(ReviewResult {
-            review_url: format!("none://{}", goal.goal_run_id),
-            review_id: format!("none-{}", goal.goal_run_id),
+            review_url: format!("none://{}", ctx.goal_run_id),
+            review_id: format!("none-{}", ctx.goal_run_id),
             message: "No review creation (none adapter)".to_string(),
             metadata: Default::default(),
         })
@@ -72,16 +77,17 @@ impl SourceAdapter for NoneAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ta_goal::GoalRun;
+    use ta_goal::{CommitContext, GoalRun};
 
-    fn mock_goal() -> GoalRun {
-        GoalRun::new(
+    fn mock_ctx() -> CommitContext {
+        let goal = GoalRun::new(
             "Test Goal",
             "Test objective",
             "test-agent",
             std::path::PathBuf::from("/tmp/workspace"),
             std::path::PathBuf::from("/tmp/store"),
-        )
+        );
+        CommitContext::from(&goal)
     }
 
     #[test]
@@ -93,18 +99,18 @@ mod tests {
     #[test]
     fn test_none_adapter_prepare() {
         let adapter = NoneAdapter::new();
-        let goal = mock_goal();
+        let ctx = mock_ctx();
         let config = SubmitConfig::default();
 
-        assert!(adapter.prepare(&goal, &config).is_ok());
+        assert!(adapter.prepare(&ctx, &config).is_ok());
     }
 
     #[test]
     fn test_none_adapter_push() {
         let adapter = NoneAdapter::new();
-        let goal = mock_goal();
+        let ctx = mock_ctx();
 
-        let result = adapter.push(&goal).unwrap();
+        let result = adapter.push(&ctx).unwrap();
         assert!(result.remote_ref.starts_with("none-"));
     }
 
