@@ -24,7 +24,7 @@ use ta_changeset::draft_package::{
     RequestedAction, ReviewRequests, Risk, Signatures, Summary, WorkspaceRef,
 };
 use ta_changeset::{DraftPackage, DraftStatus};
-use ta_goal::GoalRun;
+use ta_goal::{CommitContext, GoalRun};
 use ta_submit::{GitAdapter, GitConfig, SourceAdapter, SubmitConfig};
 use tempfile::tempdir;
 
@@ -271,7 +271,7 @@ fn test_open_review_uses_workflow_config() {
         format!("{}:{}", stub_dir.path().display(), original_path),
     );
 
-    let result = adapter.open_review(&goal, &pkg);
+    let result = adapter.open_review(&CommitContext::from(&goal), &pkg);
 
     // Restore PATH before any assertions so a test panic doesn't leave PATH broken.
     std::env::set_var("PATH", &original_path);
@@ -348,7 +348,7 @@ fn test_open_review_idempotency_returns_existing_pr() {
         format!("{}:{}", stub_dir.path().display(), original_path),
     );
 
-    let result = adapter.open_review(&goal, &pkg);
+    let result = adapter.open_review(&CommitContext::from(&goal), &pkg);
 
     std::env::set_var("PATH", &original_path);
 

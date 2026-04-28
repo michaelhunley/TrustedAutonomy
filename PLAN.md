@@ -5029,7 +5029,6 @@ The reviewer goal never marks `failed` because staging was absent — it marks `
 7. [ ] **Update `ExternalVcsAdapter` plugin protocol**: Add `FileAtHead { repo_root, rel_path }` and `HeadRevId { repo_root }` message types to `vcs_plugin_protocol.rs`. External plugins that declare the `history_read` capability receive these messages and return content/rev-id. Plugins that don't declare it get the default `None`.
 4. [x] **USAGE.md**: Added "After the agent exits — inline vs background build" section with example output. Updated heartbeat section to clarify background-only context.
 #### Version: `0.15.29-alpha.1`
----
 - Built-in plugins: `ta-messaging-gmail`, `ta-messaging-outlook`, `ta-messaging-imap` (in `plugins/messaging/`)
 - Plugin discovery: `~/.config/ta/plugins/messaging/`, `.ta/plugins/messaging/`, `$PATH` (prefix `ta-messaging-`)
 - Credentials stored in OS keychain via `keyring` crate — plugin calls `ta adapter credentials get <key>` to retrieve; `ta adapter credentials set <key>` to store. Never written to disk in plaintext.
@@ -7286,7 +7285,7 @@ pub enum NoteDelivery {
 
 ---
 ### v0.15.29.1 — VCS Adapter Enforcement: Full Completion & Structural Fixes
-<!-- status: in_progress -->
+<!-- status: done -->
 
 **Goal**: Complete VCS adapter enforcement to zero constitution violations. Fix the `release.rs` test-code gap, route remaining direct git calls in CLI commands, and resolve four architectural issues that v0.15.29 deferred: the `ta-submit`→`ta-goal` dependency cycle, `VcsHistoryReader` surface on `SourceAdapter`, pluggable `MergeTool` abstraction, and Perforce/SVN no-op implementations.
 

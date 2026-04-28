@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::process::Command;
 use ta_changeset::DraftPackage;
-use ta_goal::GoalRun;
+use ta_goal::CommitContext;
 
 use crate::adapter::{
     CommitResult, CommitSummary, MergeResult, PushResult, Result, ReviewResult, ReviewStatus,
@@ -120,11 +120,11 @@ impl GitAdapter {
     ///
     /// All characters are passed directly to git as command arguments, not
     /// through shell interpolation, so no shell-escaping is needed.
-    fn branch_name(&self, goal: &GoalRun, config: &SubmitConfig) -> String {
+    fn branch_name(&self, ctx: &CommitContext, config: &SubmitConfig) -> String {
         let prefix = &config.git.branch_prefix;
 
         // Step 1: lowercase + replace non-alphanumeric/dash with dash.
-        let raw: String = goal
+        let raw: String = ctx
             .title
             .to_lowercase()
             .chars()
@@ -167,7 +167,7 @@ impl GitAdapter {
 
         // v0.14.7.3: Prefix branch with goal shortref for traceability.
         // e.g. ta/2159d87e-v0-14-7-1-shell-ux-fixes
-        let shortref = goal.shortref();
+        let shortref = ctx.shortref();
         format!("{}{}-{}", prefix, shortref, truncated)
     }
 
@@ -345,8 +345,8 @@ impl GitAdapter {
 }
 
 impl SourceAdapter for GitAdapter {
-    fn prepare(&self, goal: &GoalRun, config: &SubmitConfig) -> Result<()> {
-        let branch_name = self.branch_name(goal, config);
+    fn prepare(&self, ctx: &CommitContext, config: &SubmitConfig) -> Result<()> {
+        let branch_name = self.branch_name(ctx, config);
 
         tracing::info!("GitAdapter: creating branch {}", branch_name);
 
@@ -395,7 +395,12 @@ impl SourceAdapter for GitAdapter {
         Ok(())
     }
 
-    fn commit(&self, goal: &GoalRun, pr: &DraftPackage, message: &str) -> Result<CommitResult> {
+    fn commit(
+        &self,
+        ctx: &CommitContext,
+        pr: &DraftPackage,
+        message: &str,
+    ) -> Result<CommitResult> {
         tracing::info!("GitAdapter: committing changes");
 
         // Build list of explicit artifact paths from draft package.
@@ -510,7 +515,7 @@ impl SourceAdapter for GitAdapter {
         }
 
         // Append metadata trailers to the caller-provided message.
-        let phase_line = goal
+        let phase_line = ctx
             .plan_phase
             .as_ref()
             .map(|p| format!("\nPhase: {}", p))
@@ -522,7 +527,7 @@ impl SourceAdapter for GitAdapter {
         };
         let commit_msg = format!(
             "{}\n\nGoal-ID: {}\nPR-ID: {}{}{}",
-            message, goal.goal_run_id, pr.package_id, phase_line, co_author_line
+            message, ctx.goal_run_id, pr.package_id, phase_line, co_author_line
         );
 
         // Commit
@@ -539,8 +544,8 @@ impl SourceAdapter for GitAdapter {
         })
     }
 
-    fn push(&self, goal: &GoalRun) -> Result<PushResult> {
-        let branch_name = self.branch_name(goal, &self.config);
+    fn push(&self, ctx: &CommitContext) -> Result<PushResult> {
+        let branch_name = self.branch_name(ctx, &self.config);
         let remote = &self.config.git.remote;
 
         tracing::info!("GitAdapter: pushing branch {} to {}", branch_name, remote);
@@ -560,7 +565,7 @@ impl SourceAdapter for GitAdapter {
         })
     }
 
-    fn open_review(&self, goal: &GoalRun, pr: &DraftPackage) -> Result<ReviewResult> {
+    fn open_review(&self, ctx: &CommitContext, pr: &DraftPackage) -> Result<ReviewResult> {
         if !self.has_gh_cli() {
             return Err(SubmitError::ReviewError(
                 "gh CLI not found - install GitHub CLI to create PRs".to_string(),
@@ -570,10 +575,10 @@ impl SourceAdapter for GitAdapter {
         // Use self.config (not SubmitConfig::default()) so target_branch and
         // other git settings from workflow.toml are respected.
         let target_branch = &self.config.git.target_branch;
-        let head_branch = self.branch_name(goal, &self.config);
+        let head_branch = self.branch_name(ctx, &self.config);
 
         // Build PR body
-        let body = self.build_pr_body(goal, pr, &self.config)?;
+        let body = self.build_pr_body(ctx, pr, &self.config)?;
 
         tracing::info!(
             "GitAdapter: creating PR {} → {}",
@@ -651,7 +656,7 @@ impl SourceAdapter for GitAdapter {
         // is targeted even if the working tree HEAD has drifted (e.g. daemon
         // restart between push and PR creation).
         // v0.14.7.3: Prefix PR title with [<shortref>] for goal traceability.
-        let pr_title = format!("[{}] {}", goal.shortref(), goal.title);
+        let pr_title = format!("[{}] {}", ctx.shortref(), ctx.title);
         let output = Command::new("gh")
             .args([
                 "pr",
@@ -1309,6 +1314,36 @@ impl SourceAdapter for GitAdapter {
             }
         }
     }
+
+    fn file_at_head(&self, repo_root: &Path, rel_path: &str) -> Option<Vec<u8>> {
+        let out = Command::new("git")
+            .args(["show", &format!("HEAD:{}", rel_path)])
+            .current_dir(repo_root)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .output()
+            .ok()?;
+        if out.status.success() {
+            Some(out.stdout)
+        } else {
+            None
+        }
+    }
+
+    fn head_rev_id(&self, repo_root: &Path) -> Option<String> {
+        let out = Command::new("git")
+            .args(["rev-parse", "--short", "HEAD"])
+            .current_dir(repo_root)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .output()
+            .ok()?;
+        if out.status.success() {
+            Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        } else {
+            None
+        }
+    }
 }
 
 impl GitAdapter {
@@ -1320,7 +1355,7 @@ impl GitAdapter {
     /// 3. Built-in default format with per-artifact detail
     fn build_pr_body(
         &self,
-        goal: &GoalRun,
+        ctx: &CommitContext,
         pr: &DraftPackage,
         config: &SubmitConfig,
     ) -> Result<String> {
@@ -1328,7 +1363,7 @@ impl GitAdapter {
         if let Some(template_path) = &config.git.pr_template {
             if template_path.exists() {
                 let template = std::fs::read_to_string(template_path)?;
-                return Ok(self.substitute_template(&template, goal, pr));
+                return Ok(self.substitute_template(&template, ctx, pr));
             }
         }
 
@@ -1336,7 +1371,7 @@ impl GitAdapter {
         let convention_path = self.work_dir.join(".ta/pr-template.md");
         if convention_path.exists() {
             if let Ok(template) = std::fs::read_to_string(&convention_path) {
-                return Ok(self.substitute_template(&template, goal, pr));
+                return Ok(self.substitute_template(&template, ctx, pr));
             }
         }
 
@@ -1360,9 +1395,9 @@ impl GitAdapter {
             pr.summary.impact,
             pr.changes.artifacts.len(),
             artifact_detail,
-            goal.goal_run_id,
+            ctx.goal_run_id,
             pr.package_id,
-            goal.plan_phase
+            ctx.plan_phase
                 .as_ref()
                 .map(|p| format!("- **Plan Phase**: `{}`", p))
                 .unwrap_or_default()
@@ -1420,18 +1455,23 @@ impl GitAdapter {
     ///   {goal_id}        -- goal UUID
     ///   {pr_id}          -- PR package UUID
     ///   {plan_phase}     -- plan phase (or "N/A")
-    fn substitute_template(&self, template: &str, goal: &GoalRun, pr: &DraftPackage) -> String {
+    fn substitute_template(
+        &self,
+        template: &str,
+        ctx: &CommitContext,
+        pr: &DraftPackage,
+    ) -> String {
         let artifact_lines = Self::format_artifacts_detail(pr);
 
         template
             .replace("{summary}", &pr.summary.what_changed)
             .replace("{why}", &pr.summary.why)
             .replace("{impact}", &pr.summary.impact)
-            .replace("{goal_id}", &goal.goal_run_id.to_string())
+            .replace("{goal_id}", &ctx.goal_run_id.to_string())
             .replace("{pr_id}", &pr.package_id.to_string())
-            .replace("{title}", &goal.title)
-            .replace("{objective}", &goal.objective)
-            .replace("{plan_phase}", goal.plan_phase.as_deref().unwrap_or("N/A"))
+            .replace("{title}", &ctx.title)
+            .replace("{objective}", &ctx.objective)
+            .replace("{plan_phase}", ctx.plan_phase.as_deref().unwrap_or("N/A"))
             .replace("{artifact_count}", &pr.changes.artifacts.len().to_string())
             .replace("{artifacts}", &artifact_lines)
     }
@@ -1440,6 +1480,7 @@ impl GitAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ta_goal::GoalRun;
     use tempfile::tempdir;
 
     fn init_git_repo(dir: &Path) -> Result<()> {
@@ -1527,7 +1568,9 @@ mod tests {
 
         // Create a feature branch
         let config = SubmitConfig::default();
-        adapter.prepare(&goal, &config).unwrap();
+        adapter
+            .prepare(&CommitContext::from(&goal), &config)
+            .unwrap();
 
         // On a feature branch: verify should pass
         assert!(adapter.verify_not_on_protected_target().is_ok());
@@ -1563,7 +1606,7 @@ mod tests {
         );
 
         let config = SubmitConfig::default();
-        let branch = adapter.branch_name(&goal, &config);
+        let branch = adapter.branch_name(&CommitContext::from(&goal), &config);
 
         assert!(branch.starts_with("ta/"));
         assert!(branch.contains("add-new-feature"));
@@ -1584,7 +1627,7 @@ mod tests {
             dir.path().to_path_buf(),
             dir.path().join("store"),
         );
-        let branch = adapter.branch_name(&goal, &config);
+        let branch = adapter.branch_name(&CommitContext::from(&goal), &config);
         assert!(
             !branch.contains("--"),
             "consecutive dashes should be collapsed: {}",
@@ -1618,7 +1661,7 @@ mod tests {
             dir.path().to_path_buf(),
             dir.path().join("store"),
         );
-        let branch = adapter.branch_name(&goal, &config);
+        let branch = adapter.branch_name(&CommitContext::from(&goal), &config);
         assert!(
             branch.ends_with("goal"),
             "fallback should be 'goal': {}",
@@ -1641,7 +1684,7 @@ mod tests {
             dir.path().to_path_buf(),
             dir.path().join("store"),
         );
-        let branch = adapter.branch_name(&goal, &config);
+        let branch = adapter.branch_name(&CommitContext::from(&goal), &config);
         assert!(!branch.contains("--"), "no consecutive dashes: {}", branch);
         assert!(branch.contains("fix"), "should contain 'fix': {}", branch);
     }
@@ -1661,7 +1704,9 @@ mod tests {
         );
 
         let config = SubmitConfig::default();
-        assert!(adapter.prepare(&goal, &config).is_ok());
+        assert!(adapter
+            .prepare(&CommitContext::from(&goal), &config)
+            .is_ok());
 
         // Verify we're on the new branch
         let current = adapter.current_branch().unwrap();
@@ -1709,7 +1754,9 @@ mod tests {
             dir.path().join("store"),
         );
         let config = SubmitConfig::default();
-        adapter.prepare(&goal, &config).unwrap();
+        adapter
+            .prepare(&CommitContext::from(&goal), &config)
+            .unwrap();
 
         // Verify we're on a different branch
         let current = adapter.current_branch().unwrap();
@@ -2249,7 +2296,9 @@ mod tests {
             local_dir.path().join("store"),
         );
 
-        adapter.prepare(&goal, &config).unwrap();
+        adapter
+            .prepare(&CommitContext::from(&goal), &config)
+            .unwrap();
 
         let feature_head =
             String::from_utf8_lossy(&git_in(local_dir.path(), &["rev-parse", "HEAD"]).stdout)
@@ -2296,7 +2345,9 @@ mod tests {
         );
 
         assert!(
-            adapter.prepare(&goal, &config).is_ok(),
+            adapter
+                .prepare(&CommitContext::from(&goal), &config)
+                .is_ok(),
             "prepare() must succeed even when remote is unreachable"
         );
 
@@ -2342,7 +2393,9 @@ mod tests {
         );
 
         // First call: creates the feature branch.
-        adapter.prepare(&goal, &config).unwrap();
+        adapter
+            .prepare(&CommitContext::from(&goal), &config)
+            .unwrap();
         let feature_branch = String::from_utf8_lossy(
             &git_in(dir.path(), &["rev-parse", "--abbrev-ref", "HEAD"]).stdout,
         )
@@ -2358,7 +2411,9 @@ mod tests {
         git_in(dir.path(), &["checkout", &initial_branch]);
 
         // Second call with the same goal: must check out the existing branch without error.
-        adapter.prepare(&goal, &config).unwrap();
+        adapter
+            .prepare(&CommitContext::from(&goal), &config)
+            .unwrap();
         let current = String::from_utf8_lossy(
             &git_in(dir.path(), &["rev-parse", "--abbrev-ref", "HEAD"]).stdout,
         )

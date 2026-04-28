@@ -28,7 +28,7 @@ use ta_changeset::review_session_store::ReviewSessionStore;
 use ta_changeset::supervisor::{SupervisorAgent, ValidationWarning};
 use ta_changeset::uri_pattern;
 use ta_connector_fs::FsConnector;
-use ta_goal::{GoalRun, GoalRunState, GoalRunStore};
+use ta_goal::{CommitContext, GoalRun, GoalRunState, GoalRunStore};
 use ta_mcp_gateway::GatewayConfig;
 use ta_memory::{memory_store_from_config, MemoryQuery};
 use ta_workspace::{
@@ -6123,7 +6123,7 @@ fn apply_package(
                 // orphan commits that conflict with concurrent PR merges. Instead, dirty
                 // audit/history files carry over to the feature branch via `git checkout -b`
                 // and are included in the apply commit by auto_stage_critical_files().
-                if let Err(e) = adapter.prepare(goal, &wf_config.submit) {
+                if let Err(e) = adapter.prepare(&CommitContext::from(goal), &wf_config.submit) {
                     // Roll back staged PLAN.md if pre-flight fails.
                     let _ = std::process::Command::new("git")
                         .args(["restore", "--staged", "PLAN.md"])
@@ -7272,7 +7272,7 @@ fn apply_package(
                 // (which may be main). This is a TA precept: all code changes go
                 // through a feature branch + PR, never directly to main.
                 adapter
-                    .prepare(goal, &workflow_config.submit)
+                    .prepare(&CommitContext::from(goal), &workflow_config.submit)
                     .map_err(|e| {
                         anyhow::anyhow!(
                             "Failed to create feature branch before commit — aborting to prevent \
@@ -7548,7 +7548,7 @@ fn apply_package(
                 let mut vcs_review_id = None;
                 let mut commit_ignored_artifacts: Vec<ta_changeset::IgnoredArtifact> = vec![];
 
-                match adapter.commit(goal, &pkg, &commit_msg) {
+                match adapter.commit(&CommitContext::from(goal), &pkg, &commit_msg) {
                     Ok(result) => {
                         println!("[ok] {}", result.message);
                         vcs_commit_sha = result
@@ -7639,7 +7639,7 @@ fn apply_package(
                 // Submit (push) to remote if requested.
                 if git_push {
                     println!("Submitting to remote...");
-                    match adapter.push(goal) {
+                    match adapter.push(&CommitContext::from(goal)) {
                         Ok(result) => {
                             println!("[ok] {}", result.message);
                             if let Some(b) = result.metadata.get("branch") {
@@ -7700,7 +7700,7 @@ fn apply_package(
                 // Open review (PR / CL review) if requested.
                 if git_review {
                     println!("Creating review request...");
-                    match adapter.open_review(goal, &pkg) {
+                    match adapter.open_review(&CommitContext::from(goal), &pkg) {
                         Ok(result) => {
                             println!("[ok] {}", result.message);
                             if !result.review_url.starts_with("none://") {
@@ -10661,7 +10661,7 @@ fn draft_reopen_review(config: &GatewayConfig, id: &str) -> anyhow::Result<()> {
             .ok_or_else(|| anyhow::anyhow!("Goal {} not found in store", goal_id_str))?
     };
 
-    match adapter.open_review(&goal_run, &pkg) {
+    match adapter.open_review(&CommitContext::from(&goal_run), &pkg) {
         Ok(result) => {
             println!("[ok] {}", result.message);
             if !result.review_url.starts_with("none://") {

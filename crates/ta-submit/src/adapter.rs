@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 use ta_changeset::DraftPackage;
-use ta_goal::GoalRun;
+use ta_goal::CommitContext;
 use thiserror::Error;
 
 use crate::config::SubmitConfig;
@@ -146,28 +146,29 @@ pub trait SourceAdapter: Send + Sync {
     /// For Git: creates a feature branch
     /// For Perforce: creates a changelist
     /// For "none": no-op
-    fn prepare(&self, goal: &GoalRun, config: &SubmitConfig) -> Result<()>;
+    fn prepare(&self, ctx: &CommitContext, config: &SubmitConfig) -> Result<()>;
 
     /// Commit the approved changes from staging
     ///
     /// For Git: `git add` + `git commit`
     /// For Perforce: shelve files
     /// For "none": no-op
-    fn commit(&self, goal: &GoalRun, pr: &DraftPackage, message: &str) -> Result<CommitResult>;
+    fn commit(&self, ctx: &CommitContext, pr: &DraftPackage, message: &str)
+        -> Result<CommitResult>;
 
     /// Push the committed changes
     ///
     /// For Git: `git push`
     /// For Perforce: submit changelist
     /// For "none": no-op
-    fn push(&self, goal: &GoalRun) -> Result<PushResult>;
+    fn push(&self, ctx: &CommitContext) -> Result<PushResult>;
 
     /// Open a review request
     ///
     /// For Git: create GitHub/GitLab PR via API or `gh pr create`
     /// For Perforce: create Swarm review
     /// For "none": no-op
-    fn open_review(&self, goal: &GoalRun, pr: &DraftPackage) -> Result<ReviewResult>;
+    fn open_review(&self, ctx: &CommitContext, pr: &DraftPackage) -> Result<ReviewResult>;
 
     /// Sync the local workspace with upstream changes.
     ///
@@ -393,6 +394,26 @@ pub trait SourceAdapter: Send + Sync {
         let _ = tag;
         Ok(())
     }
+
+    /// Read a file's content at HEAD revision.
+    ///
+    /// Git: equivalent to `git show HEAD:<rel_path>` — returns None if not found.
+    /// SVN: `svn cat -r HEAD <rel_path>` — returns None on error.
+    /// Perforce: `p4 print -q <path>` at head rev — returns None on error.
+    /// Default: None (not supported).
+    fn file_at_head(&self, _repo_root: &Path, _rel_path: &str) -> Option<Vec<u8>> {
+        None
+    }
+
+    /// Get the current HEAD revision identifier.
+    ///
+    /// Git: short commit SHA (7 chars).
+    /// SVN: revision number string (e.g., "1234").
+    /// Perforce: changelist number (e.g., "1234").
+    /// Default: None.
+    fn head_rev_id(&self, _repo_root: &Path) -> Option<String> {
+        None
+    }
 }
 
 /// Result of merging a review (PR, shelved CL, etc.) into the target branch.
@@ -436,16 +457,16 @@ mod tests {
 
     struct MockAdapter;
     impl SourceAdapter for MockAdapter {
-        fn prepare(&self, _: &GoalRun, _: &SubmitConfig) -> Result<()> {
+        fn prepare(&self, _: &CommitContext, _: &SubmitConfig) -> Result<()> {
             Ok(())
         }
-        fn commit(&self, _: &GoalRun, _: &DraftPackage, _: &str) -> Result<CommitResult> {
+        fn commit(&self, _: &CommitContext, _: &DraftPackage, _: &str) -> Result<CommitResult> {
             unimplemented!()
         }
-        fn push(&self, _: &GoalRun) -> Result<PushResult> {
+        fn push(&self, _: &CommitContext) -> Result<PushResult> {
             unimplemented!()
         }
-        fn open_review(&self, _: &GoalRun, _: &DraftPackage) -> Result<ReviewResult> {
+        fn open_review(&self, _: &CommitContext, _: &DraftPackage) -> Result<ReviewResult> {
             unimplemented!()
         }
         fn name(&self) -> &str {

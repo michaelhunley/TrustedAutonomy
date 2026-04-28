@@ -528,6 +528,10 @@ pub struct ConstitutionRule {
     /// Severity of violations from this rule: "high" | "medium" | "low"
     #[serde(default = "default_severity")]
     pub severity: String,
+    /// File paths (relative to project root) that are exempt from this rule's `patterns` scan.
+    /// Useful for files that have legitimate git-only calls that can't be routed through adapters.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_in: Vec<String>,
 }
 
 fn default_severity() -> String {
@@ -542,6 +546,7 @@ impl Default for ConstitutionRule {
             restore_fns: vec![],
             patterns: vec![],
             severity: default_severity(),
+            allowed_in: vec![],
         }
     }
 }
@@ -685,6 +690,7 @@ impl ProjectConstitutionConfig {
                 ],
                 patterns: vec![],
                 severity: "high".to_string(),
+                allowed_in: vec![],
             },
         );
         rules.insert(
@@ -695,6 +701,7 @@ impl ProjectConstitutionConfig {
                 restore_fns: vec![],
                 patterns: vec!["return Err(".to_string()],
                 severity: "medium".to_string(),
+                allowed_in: vec![],
             },
         );
         // Identifier-consistency rule (v0.14.8.1): any ID shown in output must resolve as input.
@@ -717,6 +724,7 @@ impl ProjectConstitutionConfig {
                 restore_fns: vec![],
                 patterns: vec![],
                 severity: "high".to_string(),
+                allowed_in: vec![],
             },
         );
         // File-format-convention rule (v0.15.15.3.1): agent manifests and orchestration
@@ -738,6 +746,7 @@ impl ProjectConstitutionConfig {
                 restore_fns: vec![],
                 patterns: vec![],
                 severity: "medium".to_string(),
+                allowed_in: vec![],
             },
         );
         // Context-channel enforcement rule (v0.15.28): agent context must go through
@@ -757,6 +766,41 @@ impl ProjectConstitutionConfig {
                 inject_fns: vec![],
                 restore_fns: vec![],
                 patterns: vec!["\"CLAUDE.md\"".to_string()],
+                severity: "high".to_string(),
+                allowed_in: vec![],
+            },
+        );
+        // VCS adapter enforcement rule (v0.15.29.1): direct git subprocess calls must go
+        // through SourceAdapter methods or be explicitly marked with the git-only exemption
+        // comment. Files with irreducible git-specific operations are listed in `allowed_in`.
+        rules.insert(
+            "no-direct-git".to_string(),
+            ConstitutionRule {
+                description: Some(
+                    "Direct git subprocess calls must go through SourceAdapter methods or be explicitly \
+                     marked with `// git-only: no adapter equivalent`. Files with irreducible git-specific \
+                     operations (apply workflow, plan commits, test fixtures) are listed in `allowed_in`. \
+                     Enforced by scanning for `Command::new(\"git\")` patterns. Introduced in v0.15.29.1."
+                        .to_string(),
+                ),
+                inject_fns: vec![],
+                restore_fns: vec![],
+                patterns: vec!["Command::new(\"git\")".to_string()],
+                allowed_in: vec![
+                    "apps/ta-cli/src/commands/draft.rs".to_string(),
+                    "apps/ta-cli/src/commands/run.rs".to_string(),
+                    "apps/ta-cli/src/commands/pr.rs".to_string(),
+                    "apps/ta-cli/src/commands/release.rs".to_string(),
+                    "apps/ta-cli/src/commands/release_git.rs".to_string(),
+                    "apps/ta-cli/src/commands/constitution.rs".to_string(),
+                    "apps/ta-cli/src/commands/new.rs".to_string(),
+                    "apps/ta-cli/src/commands/doctor.rs".to_string(),
+                    "apps/ta-cli/src/commands/goal.rs".to_string(),
+                    "crates/ta-workspace/src/overlay.rs".to_string(),
+                    "crates/ta-submit/src/git.rs".to_string(),
+                    "crates/ta-submit/src/perforce.rs".to_string(),
+                    "crates/ta-submit/src/svn.rs".to_string(),
+                ],
                 severity: "high".to_string(),
             },
         );
@@ -902,6 +946,18 @@ pub fn scan_for_violations(
         };
 
         for (rule_name, rule) in &config.rules {
+            // Skip pattern checks for files explicitly exempted in `allowed_in`.
+            // Normalize separators so "apps/ta-cli/src/..." works on all platforms.
+            let rel_normalized = relative.replace('\\', "/");
+            if !rule.allowed_in.is_empty()
+                && rule
+                    .allowed_in
+                    .iter()
+                    .any(|p| rel_normalized == p.as_str() || rel_normalized.ends_with(p.as_str()))
+            {
+                continue;
+            }
+
             // Check each inject/restore pair.
             for (inject_fn, restore_fn) in rule.inject_fns.iter().zip(rule.restore_fns.iter()) {
                 if content.contains(inject_fn.as_str()) && !content.contains(restore_fn.as_str()) {
@@ -1332,6 +1388,7 @@ fn validate_constitution_cmd(project_root: &Path) -> anyhow::Result<()> {
 
 /// Retrieve the last git-committed content of `.ta/constitution.toml`, if any.
 fn committed_constitution(project_root: &Path) -> Option<String> {
+    // git-only: no adapter equivalent (reads blob at HEAD without a GoalRun/CommitContext)
     let output = std::process::Command::new("git")
         .args(["show", "HEAD:.ta/constitution.toml"])
         .current_dir(project_root)
@@ -1828,9 +1885,11 @@ fn rule_fingerprint(rule: &ConstitutionRule) -> String {
     restore.sort();
     let mut patterns = rule.patterns.clone();
     patterns.sort();
+    let mut allowed = rule.allowed_in.clone();
+    allowed.sort();
     format!(
-        "inject:{:?}|restore:{:?}|patterns:{:?}|severity:{}",
-        inject, restore, patterns, rule.severity
+        "inject:{:?}|restore:{:?}|patterns:{:?}|severity:{}|allowed_in:{:?}",
+        inject, restore, patterns, rule.severity, allowed
     )
 }
 
@@ -2557,6 +2616,7 @@ severity = "high"
                 restore_fns: vec!["restore_claude_md".to_string()],
                 patterns: vec![],
                 severity: "high".to_string(),
+                allowed_in: vec![],
             },
         );
         config.scan = ConstitutionScan {
@@ -2593,6 +2653,7 @@ severity = "high"
                 restore_fns: vec!["restore_claude_md".to_string()],
                 patterns: vec![],
                 severity: "high".to_string(),
+                allowed_in: vec![],
             },
         );
         config.scan = ConstitutionScan {
@@ -2621,6 +2682,7 @@ severity = "high"
                 restore_fns: vec!["restore_claude_md".to_string()],
                 patterns: vec![],
                 severity: "high".to_string(),
+                allowed_in: vec![],
             },
         );
         config.scan = ConstitutionScan {
@@ -2655,6 +2717,7 @@ severity = "high"
                 restore_fns: vec!["restore_claude_md".to_string()],
                 patterns: vec![],
                 severity: "high".to_string(),
+                allowed_in: vec![],
             },
         );
         config.scan = ConstitutionScan {
@@ -2759,6 +2822,7 @@ severity = "high"
                 restore_fns: vec!["fn_a_restore".to_string()],
                 patterns: vec![],
                 severity: "high".to_string(),
+                allowed_in: vec![],
             },
         );
         rules.insert(
@@ -2769,6 +2833,7 @@ severity = "high"
                 restore_fns: vec!["fn_b_restore".to_string()],
                 patterns: vec![],
                 severity: "medium".to_string(),
+                allowed_in: vec![],
             },
         );
         let dups = detect_exact_duplicates(&rules);
@@ -2786,6 +2851,7 @@ severity = "high"
             restore_fns: vec!["fn_x_restore".to_string()],
             patterns: vec!["PATTERN".to_string()],
             severity: "high".to_string(),
+            allowed_in: vec![],
         };
         let mut rules = HashMap::new();
         rules.insert("alpha".to_string(), rule.clone());
@@ -2805,6 +2871,7 @@ severity = "high"
             restore_fns: vec!["fn1_r".to_string()],
             patterns: vec![],
             severity: "low".to_string(),
+            allowed_in: vec![],
         };
         let rule_b = ConstitutionRule {
             description: None,
@@ -2812,6 +2879,7 @@ severity = "high"
             restore_fns: vec!["fn1_r".to_string()],
             patterns: vec![],
             severity: "low".to_string(),
+            allowed_in: vec![],
         };
         rule_a.inject_fns.sort(); // fingerprint sorts them
         let mut rules = HashMap::new();
@@ -2856,6 +2924,7 @@ severity = "high"
             restore_fns: vec!["fn_restore".to_string()],
             patterns: vec![],
             severity: "medium".to_string(),
+            allowed_in: vec![],
         };
         let mut config = ProjectConstitutionConfig::default();
         config.rules.insert("rule_dup_a".to_string(), rule.clone());
@@ -2868,6 +2937,7 @@ severity = "high"
                 restore_fns: vec![],
                 patterns: vec![],
                 severity: "low".to_string(),
+                allowed_in: vec![],
             },
         );
 
@@ -2904,6 +2974,7 @@ severity = "high"
                 restore_fns: vec![],
                 patterns: vec![],
                 severity: "medium".to_string(),
+                allowed_in: vec![],
             },
         );
         let (_, stats) = generate_merged_toml(&config, &[], None);
@@ -2941,6 +3012,7 @@ severity = "high"
                 restore_fns: vec!["my_restore".to_string()],
                 patterns: vec![],
                 severity: "low".to_string(),
+                allowed_in: vec![],
             },
         );
 

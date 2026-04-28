@@ -26,7 +26,7 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use ta_changeset::DraftPackage;
-use ta_goal::GoalRun;
+use ta_goal::CommitContext;
 
 use crate::adapter::{
     CommitResult, MergeResult, PushResult, Result, ReviewResult, ReviewStatus, SavedVcsState,
@@ -239,11 +239,11 @@ impl ExternalVcsAdapter {
 }
 
 impl SourceAdapter for ExternalVcsAdapter {
-    fn prepare(&self, goal: &GoalRun, config: &SubmitConfig) -> Result<()> {
+    fn prepare(&self, ctx: &CommitContext, config: &SubmitConfig) -> Result<()> {
         let params = PrepareParams {
-            goal_id: goal.goal_run_id.to_string(),
-            goal_title: goal.title.clone(),
-            workspace_path: goal.workspace_path.display().to_string(),
+            goal_id: ctx.goal_run_id.to_string(),
+            goal_title: ctx.title.clone(),
+            workspace_path: ctx.workspace_path.display().to_string(),
             branch_prefix: config.git.branch_prefix.clone(),
             co_author: if config.co_author.is_empty() {
                 None
@@ -255,7 +255,12 @@ impl SourceAdapter for ExternalVcsAdapter {
         Ok(())
     }
 
-    fn commit(&self, goal: &GoalRun, pr: &DraftPackage, message: &str) -> Result<CommitResult> {
+    fn commit(
+        &self,
+        ctx: &CommitContext,
+        pr: &DraftPackage,
+        message: &str,
+    ) -> Result<CommitResult> {
         let changed_files: Vec<String> = pr
             .changes
             .artifacts
@@ -268,8 +273,8 @@ impl SourceAdapter for ExternalVcsAdapter {
             .collect();
 
         let params = CommitParams {
-            goal_id: goal.goal_run_id.to_string(),
-            goal_title: goal.title.clone(),
+            goal_id: ctx.goal_run_id.to_string(),
+            goal_title: ctx.title.clone(),
             message: message.to_string(),
             changed_files,
         };
@@ -285,9 +290,9 @@ impl SourceAdapter for ExternalVcsAdapter {
         })
     }
 
-    fn push(&self, goal: &GoalRun) -> Result<PushResult> {
+    fn push(&self, ctx: &CommitContext) -> Result<PushResult> {
         let params = PushParams {
-            goal_id: goal.goal_run_id.to_string(),
+            goal_id: ctx.goal_run_id.to_string(),
         };
         let result: PluginPushResult = self.call("push", serde_json::to_value(&params).unwrap())?;
 
@@ -298,7 +303,7 @@ impl SourceAdapter for ExternalVcsAdapter {
         })
     }
 
-    fn open_review(&self, goal: &GoalRun, pr: &DraftPackage) -> Result<ReviewResult> {
+    fn open_review(&self, ctx: &CommitContext, pr: &DraftPackage) -> Result<ReviewResult> {
         let changed_files: Vec<String> = pr
             .changes
             .artifacts
@@ -313,8 +318,8 @@ impl SourceAdapter for ExternalVcsAdapter {
         let draft_summary = format!("{}\n{}", pr.summary.what_changed, pr.summary.why);
 
         let params = OpenReviewParams {
-            goal_id: goal.goal_run_id.to_string(),
-            goal_title: goal.title.clone(),
+            goal_id: ctx.goal_run_id.to_string(),
+            goal_title: ctx.title.clone(),
             draft_summary,
             changed_files,
         };

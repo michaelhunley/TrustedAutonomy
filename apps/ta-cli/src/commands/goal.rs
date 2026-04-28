@@ -3238,6 +3238,7 @@ fn _old_doctor_impl(config: &GatewayConfig) -> anyhow::Result<()> {
 
     print!("  Git... ");
     if config.workspace_root.join(".git").exists() {
+        // git-only: no adapter equivalent (git status health check has no SourceAdapter context)
         let output = std::process::Command::new("git")
             .args(["status", "--porcelain"])
             .current_dir(&config.workspace_root)
@@ -3351,6 +3352,7 @@ fn _old_doctor_impl(config: &GatewayConfig) -> anyhow::Result<()> {
         match &vcs {
             VcsBackend::Git => {
                 // Verify git status works.
+                // git-only: no adapter equivalent (VCS health check runs before adapter is constructed)
                 let git_ok = std::process::Command::new("git")
                     .args(["status", "--porcelain"])
                     .current_dir(&config.workspace_root)
