@@ -7288,6 +7288,30 @@ pub enum NoteDelivery {
 #### Version: `0.15.29-alpha`
 
 ---
+### v0.15.29.1 — VCS Adapter Enforcement: Remaining Direct Git Calls
+<!-- status: pending -->
+
+**Goal**: Eliminate the direct `Command::new("git")` calls that v0.15.29 left out of scope: the test helper in `release.rs`, and the 20+ calls spread across `draft.rs`, `pr.rs`, `run.rs`, `goal.rs`, `doctor.rs`, `constitution.rs`, `new.rs`, and other CLI commands. After this phase the constitution rule added in v0.15.29 produces zero violations across the workspace.
+
+**Why**: v0.15.29 fixed the highest-impact paths (release pipeline, governed workflow) and established the constitution rule. The reviewer found that `release.rs:2811` contains a `Command::new("git")` call in a `#[cfg(test)]` helper (`git_init_with_commit`) that is not in the constitution's allowed list — only `crates/ta-submit/src/` has a test-fixture blanket exception. The remaining files were correctly out of scope for v0.15.29 but the constitution rule as written will now flag them on every agent run.
+
+**Depends on**: v0.15.29 (constitution rule + SourceAdapter trait extensions)
+
+1. [ ] **Fix `apps/ta-cli/src/commands/release.rs:2811`** test helper: Move `git_init_with_commit` to a shared test-fixtures module (e.g. `crates/ta-submit/src/test_helpers.rs`) that is already in the constitution's allowed list, or add `apps/ta-cli/src/commands/release.rs` cfg(test) blocks to the `allowed_in` list with a comment explaining it is test-only fixture code.
+
+2. [ ] **Audit and fix `apps/ta-cli/src/commands/draft.rs`**: Route remaining direct git calls through `SourceAdapter` or `GitReadHelper`. Likely candidates: status checks, log reads for draft metadata.
+
+3. [ ] **Audit and fix `apps/ta-cli/src/commands/pr.rs`**: Route git calls (branch detection, remote URL lookup) through adapter or `GitReadHelper`.
+
+4. [ ] **Audit and fix `apps/ta-cli/src/commands/run.rs`**: Route git calls (dirty-check before goal start, HEAD SHA lookup) through `SourceAdapter::is_dirty()` and `SourceAdapter::head_sha()`.
+
+5. [ ] **Audit and fix `apps/ta-cli/src/commands/goal.rs`, `doctor.rs`, `constitution.rs`, `new.rs`**: Collect all remaining `Command::new("git")` calls; route each through the adapter or add to `GitReadHelper` for read-only queries with no multi-VCS equivalent (these get a `// git-only: no adapter equivalent` comment and a separate `allowed_in` entry).
+
+6. [ ] **Verify zero constitution violations**: Run `ta constitution check` (or the equivalent scan) across the full workspace and confirm no remaining hits outside the updated allowed list.
+
+#### Version: `0.15.29-alpha.1`
+
+---
 ### v0.15.30 — Agent Framework Abstraction: Remove Shims, Full Enforcement
 <!-- status: pending -->
 
