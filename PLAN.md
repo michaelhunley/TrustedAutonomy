@@ -7333,7 +7333,7 @@ pub enum NoteDelivery {
 
 ---
 ### v0.15.30 — Agent Framework Abstraction: Remove Shims, Full Enforcement
-<!-- status: pending -->
+<!-- status: in_progress -->
 
 **Goal**: Remove the `inject_claude_md()` shim left by v0.15.28, complete the migration of all remaining hardcoded CLAUDE.md references, and activate the constitution enforcement rule across the codebase. After this phase, adding a new agent type requires only a new `AgentContextChannel` implementation and a manifest entry — no changes to TA's core logic.
 
