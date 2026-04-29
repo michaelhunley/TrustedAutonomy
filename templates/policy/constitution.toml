@@ -35,3 +35,13 @@ allow_override = false
 severity    = "block"
 description = "PLAN.md structural validation must pass on every draft apply"
 exception   = "--skip-plan-merge flag (emergency use only — logged to audit trail)"
+
+# ── Release pipeline authority (v0.15.30.2) ─────────────────────────
+# Declares `ta release run` as the authoritative release mechanism.
+# Agents must not create GitHub releases, push tags, or bump Cargo.toml
+# versions outside the pipeline. Direct git-push of tags or manual
+# `gh release create` calls bypass the approval gates and clean-check step.
+[rules.release-pipeline]
+severity    = "block"
+description = "ta release run is the authoritative release mechanism — agents must not push tags, create GitHub releases, or bump versions outside the release pipeline"
+exception   = "hotfix emergency acknowledged via explicit --skip-release-pipeline flag (logged to audit trail)"

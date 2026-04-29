@@ -4,10 +4,284 @@
 //! This is the only location in ta-cli (outside ta-submit) where direct git
 //! calls are permitted for release workflows. Routing through this module
 //! satisfies the VCS adapter enforcement rule (v0.15.29).
+//!
+//! # Release Adapter Interface (v0.15.30.2)
+//!
+//! The `ReleaseAdapter` trait abstracts VCS-specific release operations so the
+//! pipeline can run against non-git repositories. The `GitAdapter` provides the
+//! default implementation. Perforce and SVN adapters return `Err(Unsupported)`
+//! with actionable messages. Custom adapters can be configured via
+//! `.ta/release.yaml` `adapter:` key.
 
 use std::collections::HashSet;
 use std::path::Path;
 use std::process::Command;
+
+// ── Release adapter interface ───────────────────────────────────
+
+/// VCS-agnostic interface for release operations.
+///
+/// Implement this trait to support non-git version control systems.
+/// The `GitAdapter` is the default; `PerforceAdapter` and `SvnAdapter`
+/// return `Err` for all operations (override via `.ta/release.yaml`).
+#[allow(dead_code)]
+pub trait ReleaseAdapter: Send + Sync {
+    /// Bump the version in VCS-tracked files (Cargo.toml, CLAUDE.md, etc.).
+    fn bump_version(&self, root: &Path, new_version: &str) -> anyhow::Result<()>;
+
+    /// Commit staged changes and create a release tag.
+    fn commit_and_tag(&self, root: &Path, message: &str, tag: &str) -> anyhow::Result<()>;
+
+    /// Push the current branch and tags to `remote`.
+    fn push(&self, root: &Path, remote: &str, args: &[&str]) -> anyhow::Result<()>;
+
+    /// Create a release draft on the hosting platform.
+    /// `notes` is the Markdown body from `.release-draft.md`.
+    fn create_release_draft(&self, root: &Path, tag: &str, notes: &str) -> anyhow::Result<()>;
+
+    /// Publish the draft release, making it publicly visible.
+    fn publish_release(&self, root: &Path, tag: &str) -> anyhow::Result<()>;
+
+    /// Dispatch a CI workflow (e.g., GitHub Actions release.yml) for `tag`.
+    fn dispatch_workflow(&self, root: &Path, tag: &str, prerelease: bool) -> anyhow::Result<()>;
+}
+
+/// Default release adapter backed by standard git + gh CLI.
+#[allow(dead_code)]
+pub struct GitAdapter;
+
+impl ReleaseAdapter for GitAdapter {
+    fn bump_version(&self, root: &Path, new_version: &str) -> anyhow::Result<()> {
+        // Delegates to the inline Rust version bumper used by release.rs.
+        // Using a direct file-edit approach so no subprocess is needed here.
+        let cargo_path = root.join("Cargo.toml");
+        if cargo_path.exists() {
+            let content = std::fs::read_to_string(&cargo_path)?;
+            // Very simple bump: replace version in [workspace.package].
+            let updated = content
+                .lines()
+                .scan(false, |in_ws, line| {
+                    let t = line.trim();
+                    if t == "[workspace.package]" {
+                        *in_ws = true;
+                    } else if t.starts_with('[') {
+                        *in_ws = false;
+                    }
+                    if *in_ws && t.starts_with("version") && t.contains('=') {
+                        Some(format!("version = \"{}\"", new_version))
+                    } else {
+                        Some(line.to_string())
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            std::fs::write(&cargo_path, updated)?;
+        }
+        Ok(())
+    }
+
+    fn commit_and_tag(&self, root: &Path, message: &str, tag: &str) -> anyhow::Result<()> {
+        git_add(root, "-A")?;
+        git_commit(root, message)?;
+        let status = Command::new("git")
+            .args(["tag", "-a", tag, "-m", &format!("Release {}", tag)])
+            .current_dir(root)
+            .status()?;
+        if !status.success() {
+            anyhow::bail!(
+                "git tag {} failed — tag may already exist. Check with: git tag -l",
+                tag
+            );
+        }
+        Ok(())
+    }
+
+    fn push(&self, root: &Path, remote: &str, args: &[&str]) -> anyhow::Result<()> {
+        git_push(root, remote, args)
+    }
+
+    fn create_release_draft(&self, root: &Path, tag: &str, notes: &str) -> anyhow::Result<()> {
+        let notes_file = root.join(".release-draft.md");
+        std::fs::write(&notes_file, notes)?;
+        let status = Command::new("gh")
+            .args([
+                "release",
+                "create",
+                tag,
+                "--draft",
+                "--notes-file",
+                ".release-draft.md",
+            ])
+            .current_dir(root)
+            .status()
+            .map_err(|e| anyhow::anyhow!("gh not found: {}. Install: https://cli.github.com", e))?;
+        if !status.success() {
+            anyhow::bail!(
+                "gh release create --draft {} failed. Check: gh auth status",
+                tag
+            );
+        }
+        Ok(())
+    }
+
+    fn publish_release(&self, root: &Path, tag: &str) -> anyhow::Result<()> {
+        let status = Command::new("gh")
+            .args(["release", "edit", tag, "--draft=false"])
+            .current_dir(root)
+            .status()
+            .map_err(|e| anyhow::anyhow!("gh not found: {}", e))?;
+        if !status.success() {
+            anyhow::bail!(
+                "gh release edit {} --draft=false failed. \
+                 The release may not exist yet — run create_release_draft first.",
+                tag
+            );
+        }
+        Ok(())
+    }
+
+    fn dispatch_workflow(&self, root: &Path, tag: &str, prerelease: bool) -> anyhow::Result<()> {
+        let status = Command::new("gh")
+            .args([
+                "workflow",
+                "run",
+                "release.yml",
+                "--field",
+                &format!("tag={}", tag),
+                "--field",
+                &format!("prerelease={}", prerelease),
+            ])
+            .current_dir(root)
+            .status()
+            .map_err(|e| anyhow::anyhow!("gh not found: {}", e))?;
+        if !status.success() {
+            anyhow::bail!(
+                "gh workflow run release.yml failed for tag {}. \
+                 Ensure the workflow file exists and: gh auth status",
+                tag
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Perforce (P4) adapter stub — returns Err(Unsupported) for all operations.
+///
+/// Override via `.ta/release.yaml` `adapter: perforce` to use this adapter.
+/// Actionable next steps are included in each error message.
+#[allow(dead_code)]
+pub struct PerforceAdapter;
+
+impl ReleaseAdapter for PerforceAdapter {
+    fn bump_version(&self, _root: &Path, _new_version: &str) -> anyhow::Result<()> {
+        anyhow::bail!(
+            "Perforce adapter: bump_version is not implemented.\n\
+             Configure an alternative version bump mechanism or use a shell step:\n\
+             run: p4 edit Cargo.toml && sed -i 's/version = .*/version = \"${{VERSION}}\"/' Cargo.toml"
+        )
+    }
+
+    fn commit_and_tag(&self, _root: &Path, _message: &str, _tag: &str) -> anyhow::Result<()> {
+        anyhow::bail!(
+            "Perforce adapter: commit_and_tag is not implemented.\n\
+             Use a shell step with p4 submit and p4 tag:\n\
+             run: p4 submit -d \"Release ${{TAG}}\" && p4 tag -l ${{TAG}} //depot/..."
+        )
+    }
+
+    fn push(&self, _root: &Path, _remote: &str, _args: &[&str]) -> anyhow::Result<()> {
+        anyhow::bail!(
+            "Perforce adapter: push is not applicable — Perforce uses submit, not push.\n\
+             Changes committed via commit_and_tag are already in the depot."
+        )
+    }
+
+    fn create_release_draft(&self, _root: &Path, _tag: &str, _notes: &str) -> anyhow::Result<()> {
+        anyhow::bail!(
+            "Perforce adapter: create_release_draft is not implemented.\n\
+             Consider using a shell step to create a release in your issue tracker."
+        )
+    }
+
+    fn publish_release(&self, _root: &Path, _tag: &str) -> anyhow::Result<()> {
+        anyhow::bail!(
+            "Perforce adapter: publish_release is not implemented.\n\
+             Publish the release manually in your issue tracker or CI system."
+        )
+    }
+
+    fn dispatch_workflow(&self, _root: &Path, _tag: &str, _prerelease: bool) -> anyhow::Result<()> {
+        anyhow::bail!(
+            "Perforce adapter: dispatch_workflow is not implemented.\n\
+             Trigger your CI system manually or use a shell step:\n\
+             run: curl -X POST <your-ci-trigger-url>"
+        )
+    }
+}
+
+/// SVN adapter stub — returns Err(Unsupported) for all operations.
+///
+/// Override via `.ta/release.yaml` `adapter: svn` to use this adapter.
+#[allow(dead_code)]
+pub struct SvnAdapter;
+
+impl ReleaseAdapter for SvnAdapter {
+    fn bump_version(&self, _root: &Path, _new_version: &str) -> anyhow::Result<()> {
+        anyhow::bail!(
+            "SVN adapter: bump_version is not implemented.\n\
+             Use a shell step: svn propset svn:externals ... or edit Cargo.toml manually."
+        )
+    }
+
+    fn commit_and_tag(&self, _root: &Path, _message: &str, _tag: &str) -> anyhow::Result<()> {
+        anyhow::bail!(
+            "SVN adapter: commit_and_tag is not implemented.\n\
+             Use a shell step with svn commit and svn copy for branching/tagging:\n\
+             run: svn commit -m \"Release ${{TAG}}\" && svn copy . ^/tags/${{TAG}} -m \"Tag ${{TAG}}\""
+        )
+    }
+
+    fn push(&self, _root: &Path, _remote: &str, _args: &[&str]) -> anyhow::Result<()> {
+        anyhow::bail!(
+            "SVN adapter: push is not applicable — SVN commits are immediate.\n\
+             Changes committed via commit_and_tag are already in the repository."
+        )
+    }
+
+    fn create_release_draft(&self, _root: &Path, _tag: &str, _notes: &str) -> anyhow::Result<()> {
+        anyhow::bail!(
+            "SVN adapter: create_release_draft is not implemented.\n\
+             Create the release draft manually in your hosting platform."
+        )
+    }
+
+    fn publish_release(&self, _root: &Path, _tag: &str) -> anyhow::Result<()> {
+        anyhow::bail!(
+            "SVN adapter: publish_release is not implemented.\n\
+             Publish the release manually in your hosting platform."
+        )
+    }
+
+    fn dispatch_workflow(&self, _root: &Path, _tag: &str, _prerelease: bool) -> anyhow::Result<()> {
+        anyhow::bail!(
+            "SVN adapter: dispatch_workflow is not implemented.\n\
+             Trigger your CI system manually or use a shell step."
+        )
+    }
+}
+
+/// Resolve a `ReleaseAdapter` from an adapter name string.
+///
+/// Used by the pipeline to select the right adapter based on `.ta/release.yaml`
+/// `adapter:` key. The git adapter is the default.
+#[allow(dead_code)]
+pub fn resolve_adapter(adapter_name: Option<&str>) -> Box<dyn ReleaseAdapter> {
+    match adapter_name.unwrap_or("git") {
+        "perforce" | "p4" => Box::new(PerforceAdapter),
+        "svn" | "subversion" => Box::new(SvnAdapter),
+        _ => Box::new(GitAdapter),
+    }
+}
 
 /// Check whether the working tree has any uncommitted changes (staged or unstaged).
 pub fn git_is_dirty(root: &Path) -> bool {

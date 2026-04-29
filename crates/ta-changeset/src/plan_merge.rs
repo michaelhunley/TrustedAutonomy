@@ -5,6 +5,41 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Returns true if `t` (trimmed line) is an unchecked list item: `- [ ]` or `N. [ ]`.
+pub fn is_unchecked_item(t: &str) -> bool {
+    if t.starts_with("- [ ] ") || t == "- [ ]" {
+        return true;
+    }
+    // Numbered list: `1. [ ] ` or `1. [ ]`
+    let digits_end = t.find(|c: char| !c.is_ascii_digit());
+    if let Some(pos) = digits_end {
+        if pos > 0 {
+            let rest = &t[pos..];
+            return rest.starts_with(". [ ] ") || rest == ". [ ]";
+        }
+    }
+    false
+}
+
+/// Returns true if `t` (trimmed line) is any checkbox list item (checked or unchecked).
+pub fn is_any_item(t: &str) -> bool {
+    if t.starts_with("- [ ] ") || t == "- [ ]" || t.starts_with("- [x] ") || t.starts_with("- [X] ")
+    {
+        return true;
+    }
+    let digits_end = t.find(|c: char| !c.is_ascii_digit());
+    if let Some(pos) = digits_end {
+        if pos > 0 {
+            let rest = &t[pos..];
+            return rest.starts_with(". [ ] ")
+                || rest == ". [ ]"
+                || rest.starts_with(". [x] ")
+                || rest.starts_with(". [X] ");
+        }
+    }
+    false
+}
+
 /// A parsed section of PLAN.md (one `### v0.x.y` block).
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlanSection {
@@ -798,7 +833,7 @@ pub fn check_done_phase_item_consistency(content: &str) -> Vec<PlanValidationIss
             unchecked_count = 0;
         } else if let Some(status) = extract_status_value(t) {
             in_done_phase = status == "done";
-        } else if in_done_phase && (t.starts_with("- [ ] ") || t == "- [ ]") {
+        } else if in_done_phase && is_unchecked_item(t) {
             unchecked_count += 1;
         }
     }
@@ -834,18 +869,13 @@ pub fn auto_correct_done_phase_items(content: &str) -> (String, Vec<(String, usi
             continue;
         }
 
-        if in_done_phase
-            && (t.starts_with("- [ ] ")
-                || t == "- [ ]"
-                || t.starts_with("- [x] ")
-                || t.starts_with("- [X] "))
-        {
+        if in_done_phase && is_any_item(t) {
             item_num += 1;
-            if t.starts_with("- [ ] ") || t == "- [ ]" {
+            if is_unchecked_item(t) {
                 corrections.push((current_phase_id.clone(), item_num));
                 // Replace the first `[ ]` with `[x]` preserving leading whitespace.
-                let fixed = if let Some(pos) = line.find("- [ ]") {
-                    format!("{}{}[x]{}", &line[..pos], "- ", &line[pos + 5..])
+                let fixed = if let Some(pos) = line.find("[ ]") {
+                    format!("{}[x]{}", &line[..pos], &line[pos + 3..])
                 } else {
                     line.to_string()
                 };
