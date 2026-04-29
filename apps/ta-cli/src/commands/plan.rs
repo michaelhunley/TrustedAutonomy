@@ -4192,8 +4192,8 @@ pub fn plan_lint_report(content: &str) -> PlanLintReport {
     let sep_re = Regex::new(r"^-{3,}\s*$").unwrap();
     let phase_header_re = Regex::new(r"^(#{2,3})\s+(v[\d]+\.[\d]+(?:\.[\d]+)*)\s+[—\-]").unwrap();
     let status_re = Regex::new(r"<!--\s*status:\s*(\w+)\s*-->").unwrap();
-    let _item_re = Regex::new(r"^\s*-\s+\[[ x]\]").unwrap();
-    let unchecked_re = Regex::new(r"^\s*-\s+\[ \]").unwrap();
+    let _item_re = Regex::new(r"^\s*(?:-|\d+\.)\s+\[[ x]\]").unwrap();
+    let unchecked_re = Regex::new(r"^\s*(?:-|\d+\.)\s+\[ \]").unwrap();
 
     // 1. Detect consecutive --- runs.
     let mut prev_sep_line: Option<usize> = None;

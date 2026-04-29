@@ -389,6 +389,17 @@ pub struct PipelineStep {
     #[serde(default)]
     pub record_release_history: bool,
 
+    /// If set, update `.release.toml` with the current release tag.
+    /// `stable_tag: true` → set `stable_release_tag` (skipped for prerelease versions).
+    /// `last_tag: true` → set `last_release_tag`, then commit and push.
+    #[serde(default)]
+    pub update_release_toml: Option<UpdateReleaseTOMLConfig>,
+
+    /// If true, verify the working tree is clean after all preceding steps.
+    /// Fails with an actionable message if uncommitted changes remain.
+    #[serde(default)]
+    pub post_release_clean_check: bool,
+
     /// Objective/description for context (used by agent steps and display).
     #[serde(default)]
     pub objective: Option<String>,
@@ -476,6 +487,21 @@ impl Default for GenerateNotesConfig {
     }
 }
 
+/// Configuration for the built-in `update_release_toml` step.
+///
+/// Updates `.release.toml` keys after a successful release.
+/// Place this step after "Commit and tag" (for `stable_tag`) or after "Push" (for `last_tag`).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct UpdateReleaseTOMLConfig {
+    /// Set `stable_release_tag = ${TAG}` in `.release.toml`.
+    /// Skipped automatically when the version contains a prerelease identifier (e.g., `-alpha`).
+    #[serde(default)]
+    pub stable_tag: bool,
+    /// Set `last_release_tag = ${TAG}` in `.release.toml`, then commit and push the change.
+    #[serde(default)]
+    pub last_tag: bool,
+}
+
 impl PipelineStep {
     fn validate(&self) -> anyhow::Result<()> {
         let defined = [
@@ -484,19 +510,25 @@ impl PipelineStep {
             self.generate_notes.is_some(),
             self.constitution_check,
             self.record_release_history,
+            self.update_release_toml.is_some(),
+            self.post_release_clean_check,
         ]
         .iter()
         .filter(|&&x| x)
         .count();
         if defined == 0 {
             anyhow::bail!(
-                "Step '{}': must have one of 'run', 'agent', 'generate_notes', 'constitution_check', or 'record_release_history'",
+                "Step '{}': must have one of 'run', 'agent', 'generate_notes', \
+                 'constitution_check', 'record_release_history', 'update_release_toml', \
+                 or 'post_release_clean_check'",
                 self.name
             );
         }
         if defined > 1 {
             anyhow::bail!(
-                "Step '{}': only one of 'run', 'agent', 'generate_notes', 'constitution_check', or 'record_release_history' may be set",
+                "Step '{}': only one of 'run', 'agent', 'generate_notes', \
+                 'constitution_check', 'record_release_history', 'update_release_toml', \
+                 or 'post_release_clean_check' may be set",
                 self.name
             );
         }
@@ -922,6 +954,10 @@ fn run_pipeline(
             }
         } else if step.record_release_history {
             execute_record_release_history_step(&config.workspace_root, version)?;
+        } else if let Some(ref toml_cfg) = step.update_release_toml {
+            execute_update_release_toml_step(&config.workspace_root, version, toml_cfg)?;
+        } else if step.post_release_clean_check {
+            execute_post_release_clean_check_step(&config.workspace_root, version)?;
         }
 
         println!("[{}/{}] {} — done", i + 1, total, step.name);
@@ -1518,6 +1554,94 @@ fn execute_record_release_history_step(project_root: &Path, version: &str) -> an
     Ok(())
 }
 
+/// Update `.release.toml` with the current release tag as specified by `cfg`.
+///
+/// `stable_tag`: sets `stable_release_tag` — skipped for prerelease versions (version contains `-`).
+/// `last_tag`: sets `last_release_tag`, commits, and pushes the change.
+fn execute_update_release_toml_step(
+    root: &Path,
+    version: &str,
+    cfg: &UpdateReleaseTOMLConfig,
+) -> anyhow::Result<()> {
+    let tag = format!("v{}", version);
+    let is_prerelease = version.contains('-');
+    let toml_path = root.join(".release.toml");
+
+    if !toml_path.exists() {
+        println!("  .release.toml not found — skipping update.");
+        return Ok(());
+    }
+
+    let mut content = std::fs::read_to_string(&toml_path)
+        .map_err(|e| anyhow::anyhow!("Cannot read .release.toml: {}", e))?;
+    let mut changed = false;
+
+    if cfg.stable_tag {
+        if is_prerelease {
+            println!(
+                "  Skipping stable_release_tag update (version '{}' is a prerelease).",
+                version
+            );
+        } else {
+            content = update_toml_key(&content, "stable_release_tag", &tag);
+            println!("  Updated stable_release_tag = {}", tag);
+            changed = true;
+        }
+    }
+
+    if cfg.last_tag {
+        content = update_toml_key(&content, "last_release_tag", &tag);
+        println!("  Updated last_release_tag = {}", tag);
+        changed = true;
+    }
+
+    if changed {
+        std::fs::write(&toml_path, &content)
+            .map_err(|e| anyhow::anyhow!("Cannot write .release.toml: {}", e))?;
+        release_git::git_add(root, ".release.toml")?;
+        release_git::git_commit(
+            root,
+            &format!("chore: update .release.toml for release {}", tag),
+        )?;
+        println!("  Committed .release.toml update.");
+        match release_git::git_push(root, "origin", &[]) {
+            Ok(()) => println!("  Pushed .release.toml update."),
+            Err(e) => println!(
+                "  Warning: push failed ({}). Commit is local — push manually: git push origin",
+                e
+            ),
+        }
+    }
+
+    Ok(())
+}
+
+/// Verify the working tree is clean after all pipeline steps have run.
+///
+/// Fails with an actionable message if uncommitted changes remain, which
+/// indicates a pipeline step wrote files without committing them.
+fn execute_post_release_clean_check_step(root: &Path, version: &str) -> anyhow::Result<()> {
+    if release_git::git_is_dirty(root) {
+        anyhow::bail!(
+            "Post-release clean check failed: working tree has uncommitted changes after release v{}.\n\
+             \n\
+             One or more pipeline steps wrote files without committing them.\n\
+             Run 'git status' to see what is uncommitted, fix the issue, and verify the release.\n\
+             \n\
+             Common causes:\n\
+             - .release.toml was updated but not committed (check 'Update last release tag' step)\n\
+             - version.json or README.md updates failed to commit (check 'Update version tracking')\n\
+             - An amend commit missed staged files\n\
+             \n\
+             After fixing, re-run: ta release validate {}",
+            version,
+            version
+        );
+    }
+    println!("  Post-release clean check passed — working tree is clean.");
+    Ok(())
+}
+
 fn print_step_dry_run(step: &PipelineStep, version: &str, commits: &str, last_tag: Option<&str>) {
     if let Some(ref cmd) = step.run {
         let resolved = substitute_vars(cmd, version, commits, last_tag);
@@ -1542,6 +1666,19 @@ fn print_step_dry_run(step: &PipelineStep, version: &str, commits: &str, last_ta
     } else if step.record_release_history {
         println!("  type: record_history");
         println!("  would: record release in .ta/release-history.json");
+    } else if let Some(ref toml_cfg) = step.update_release_toml {
+        println!("  type: update_release_toml");
+        if toml_cfg.stable_tag {
+            println!(
+                "  would: set stable_release_tag = ${{TAG}} (skipped for prerelease versions)"
+            );
+        }
+        if toml_cfg.last_tag {
+            println!("  would: set last_release_tag = ${{TAG}}, commit, and push .release.toml");
+        }
+    } else if step.post_release_clean_check {
+        println!("  type: post_release_clean_check");
+        println!("  would: verify 'git status' is clean — fail if uncommitted changes remain");
     }
     if step.requires_approval {
         let default_hint = if step.default_approve {
@@ -1701,6 +1838,10 @@ fn show_pipeline(
             "constitution_check"
         } else if step.record_release_history {
             "record_history"
+        } else if step.update_release_toml.is_some() {
+            "update_release_toml"
+        } else if step.post_release_clean_check {
+            "post_release_clean_check"
         } else {
             "unknown"
         };
@@ -2008,6 +2149,12 @@ struct ReleaseEnvironment {
     dev_script_exists: bool,
     /// Commits since last tag (commit text, last tag name).
     commits_since_tag: Result<(String, Option<String>), String>,
+    /// `last_release_tag` from `.release.toml` (None if file missing or key absent).
+    release_toml_last_tag: Option<String>,
+    /// `stable_release_tag` from `.release.toml` (None if file missing or key absent).
+    release_toml_stable_tag: Option<String>,
+    /// Number of git tags that exist after `release_toml_last_tag` (staleness indicator).
+    tags_since_last_release: usize,
 }
 
 impl ReleaseEnvironment {
@@ -2017,13 +2164,87 @@ impl ReleaseEnvironment {
         let existing_tags = release_git::git_tags(root);
         let commits_since_tag = collect_commits_since_last_tag(root).map_err(|e| e.to_string());
 
+        // Read .release.toml for staleness fields.
+        let (release_toml_last_tag, release_toml_stable_tag) = read_release_toml_tags(root);
+
+        // Count tags created after last_release_tag (approximate staleness).
+        let tags_since_last_release = count_tags_since(root, release_toml_last_tag.as_deref());
+
         Self {
             working_tree_clean,
             existing_tags,
             dev_script_exists: root.join("dev").exists(),
             commits_since_tag,
+            release_toml_last_tag,
+            release_toml_stable_tag,
+            tags_since_last_release,
         }
     }
+}
+
+/// Read `last_release_tag` and `stable_release_tag` from `.release.toml`.
+fn read_release_toml_tags(root: &Path) -> (Option<String>, Option<String>) {
+    let path = root.join(".release.toml");
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return (None, None),
+    };
+    let last = extract_toml_string_field(&content, "last_release_tag");
+    let stable = extract_toml_string_field(&content, "stable_release_tag");
+    (last, stable)
+}
+
+/// Extract a `key = "value"` string from TOML content (no parser dep).
+fn extract_toml_string_field(content: &str, key: &str) -> Option<String> {
+    for line in content.lines() {
+        let t = line.trim_start();
+        if let Some(after_key) = t.strip_prefix(key) {
+            if after_key.starts_with(" =") || after_key.starts_with('=') {
+                // Extract the value between quotes.
+                if let Some(start) = after_key.find('"') {
+                    let rest = &after_key[start + 1..];
+                    if let Some(end) = rest.find('"') {
+                        return Some(rest[..end].to_string());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Count git tags that appear after `since_tag` in the tag list.
+///
+/// Uses `git log --oneline <since_tag>..HEAD --simplify-by-decoration` to
+/// estimate how many tagged commits have been made since the last release.
+/// Falls back to 0 on error (non-git repo or tag not found).
+fn count_tags_since(root: &Path, since_tag: Option<&str>) -> usize {
+    let Some(tag) = since_tag else { return 0 };
+    let out = Command::new("git")
+        .args([
+            "tag",
+            "--list",
+            "--sort=-version:refname",
+            "--merged",
+            "HEAD",
+        ])
+        .current_dir(root)
+        .output();
+    let Ok(out) = out else { return 0 };
+    let tags_text = String::from_utf8_lossy(&out.stdout);
+    // Count tags that appear in the list before (i.e., newer than) `since_tag`.
+    let mut count = 0usize;
+    for t in tags_text.lines() {
+        let t = t.trim();
+        if t.is_empty() {
+            continue;
+        }
+        if t == tag {
+            break;
+        }
+        count += 1;
+    }
+    count
 }
 
 fn validate_release(
@@ -2092,6 +2313,10 @@ fn validate_release_with_env(
             "constitution_check"
         } else if step.record_release_history {
             "record_history"
+        } else if step.update_release_toml.is_some() {
+            "update_release_toml"
+        } else if step.post_release_clean_check {
+            "post_release_clean_check"
         } else {
             "unknown"
         };
@@ -2124,6 +2349,63 @@ fn validate_release_with_env(
         Err(e) => {
             warnings.push(format!("Cannot collect commits: {}", e));
             println!("  [warn] Cannot collect commits: {}", e);
+        }
+    }
+
+    // 7. .release.toml staleness checks.
+    if let Some(ref last_tag) = env.release_toml_last_tag {
+        if env.tags_since_last_release > 5 {
+            warnings.push(format!(
+                ".release.toml staleness: last_release_tag is '{}' but {} newer tags exist. \
+                 Consider running `ta release run` or updating .release.toml manually.",
+                last_tag, env.tags_since_last_release
+            ));
+            println!(
+                "  [warn] .release.toml: last_release_tag = '{}' is {} tags behind HEAD",
+                last_tag, env.tags_since_last_release
+            );
+        } else {
+            println!("  [ok] .release.toml: last_release_tag = '{}'", last_tag);
+        }
+    } else {
+        println!("  [ok] .release.toml: last_release_tag not set (first release)");
+    }
+
+    if let (Some(ref stable), Some(ref last)) =
+        (&env.release_toml_stable_tag, &env.release_toml_last_tag)
+    {
+        if stable == last && !version.contains('-') {
+            // Stable and last match — only an issue if this is a stable release
+            // (the new stable tag should differ from the old last tag after we release).
+            println!(
+                "  [ok] .release.toml: stable_release_tag = '{}' (will be updated for stable releases)",
+                stable
+            );
+        } else if !version.contains('-') && stable != last {
+            // stable is behind last — normal for an in-progress release cycle.
+            println!(
+                "  [ok] .release.toml: stable_release_tag = '{}' (last = '{}')",
+                stable, last
+            );
+        } else {
+            // Prerelease — stable tracking is informational only.
+            println!(
+                "  [ok] .release.toml: stable_release_tag = '{}' (prerelease — stable tag not updated)",
+                stable
+            );
+        }
+
+        // Warn if stable_release_tag is not in the known tags set (stale pointer).
+        if !env.existing_tags.contains(stable.as_str()) && !stable.is_empty() {
+            warnings.push(format!(
+                ".release.toml: stable_release_tag = '{}' does not exist in the repository. \
+                 Update .release.toml or run `ta release run` for a stable release.",
+                stable
+            ));
+            println!(
+                "  [warn] .release.toml: stable_release_tag = '{}' not found in git tags",
+                stable
+            );
         }
     }
 
@@ -2265,6 +2547,41 @@ fn bump_version_in_toml(content: &str, new_version: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Update or insert a `key = "value"` line in TOML content (string manipulation, no parser dep).
+///
+/// Replaces the first line where the key appears at the start (trimmed), or appends to the file
+/// if the key is not found. Preserves the original trailing newline.
+fn update_toml_key(content: &str, key: &str, value: &str) -> String {
+    let replacement = format!("{} = \"{}\"", key, value);
+    let mut found = false;
+    let lines: Vec<String> = content
+        .lines()
+        .map(|line| {
+            let t = line.trim_start();
+            if !found {
+                if let Some(after_key) = t.strip_prefix(key) {
+                    if after_key.starts_with(" =") || after_key.starts_with('=') {
+                        found = true;
+                        return replacement.clone();
+                    }
+                }
+            }
+            line.to_string()
+        })
+        .collect();
+    let mut result = lines.join("\n");
+    if content.ends_with('\n') {
+        result.push('\n');
+    }
+    if !found {
+        if !result.ends_with('\n') {
+            result.push('\n');
+        }
+        result.push_str(&format!("{}\n", replacement));
+    }
+    result
 }
 
 /// Poll `gh run list --branch main --limit 1` until CI is green or failed.
@@ -2787,6 +3104,12 @@ steps:
         echo "Updated version tracking and README badges."
       fi
 
+  # Update .release.toml: set stable_release_tag for stable (non-prerelease) releases.
+  # Automatically skipped when the version contains a prerelease identifier (e.g., -alpha).
+  - name: Update stable release tag
+    update_release_toml:
+      stable_tag: true
+
   - name: Push
     requires_approval: true
     run: |
@@ -2796,6 +3119,16 @@ steps:
       git push origin main
       git push origin "${TAG}"
       echo "Pushed ${TAG}. GitHub Actions will build the release."
+
+  # Update .release.toml: set last_release_tag to the newly pushed tag,
+  # commit the change, and push it to the remote.
+  - name: Update last release tag
+    update_release_toml:
+      last_tag: true
+
+  # Final sanity check: ensure no pipeline step left uncommitted files behind.
+  - name: Post-release clean check
+    post_release_clean_check: true
 "#;
 
 // ── Tests ───────────────────────────────────────────────────────
@@ -2852,6 +3185,8 @@ mod tests {
             generate_notes: None,
             constitution_check: false,
             record_release_history: false,
+            update_release_toml: None,
+            post_release_clean_check: false,
             objective: None,
             requires_approval: false,
             default_approve: false,
@@ -2874,6 +3209,8 @@ mod tests {
             generate_notes: None,
             constitution_check: false,
             record_release_history: false,
+            update_release_toml: None,
+            post_release_clean_check: false,
             objective: None,
             requires_approval: false,
             default_approve: false,
@@ -3237,6 +3574,9 @@ steps:
             existing_tags: std::collections::HashSet::new(),
             dev_script_exists: false,
             commits_since_tag: Ok(("".to_string(), None)),
+            release_toml_last_tag: None,
+            release_toml_stable_tag: None,
+            tags_since_last_release: 0,
         };
         // Should pass: clean tree, no conflicting tags.
         validate_release_with_env("1.0.0", &pipeline, &env).unwrap();
@@ -3250,6 +3590,9 @@ steps:
             existing_tags: ["v1.0.0-alpha".to_string()].into_iter().collect(),
             dev_script_exists: false,
             commits_since_tag: Ok(("".to_string(), None)),
+            release_toml_last_tag: None,
+            release_toml_stable_tag: None,
+            tags_since_last_release: 0,
         };
         // Should fail: tag v1.0.0-alpha already exists.
         assert!(validate_release_with_env("1.0.0-alpha", &pipeline, &env).is_err());
@@ -3600,6 +3943,200 @@ steps:
         let config = GatewayConfig::for_project(temp.path());
         // Don't create the dir — should return None, not error.
         assert!(find_latest_draft(&config).unwrap().is_none());
+    }
+
+    // ── update_toml_key tests ──────────────────────────────────────
+
+    #[test]
+    fn update_toml_key_replaces_existing() {
+        let input = "prerelease = true\nlast_release_tag = \"v0.1.0\"\n";
+        let result = update_toml_key(input, "last_release_tag", "v0.2.0");
+        assert!(result.contains("last_release_tag = \"v0.2.0\""));
+        assert!(!result.contains("v0.1.0"));
+    }
+
+    #[test]
+    fn update_toml_key_inserts_missing() {
+        let input = "prerelease = true\n";
+        let result = update_toml_key(input, "last_release_tag", "v0.2.0");
+        assert!(result.contains("last_release_tag = \"v0.2.0\""));
+        assert!(result.contains("prerelease = true"));
+    }
+
+    #[test]
+    fn update_toml_key_preserves_trailing_newline() {
+        let input = "key = \"old\"\n";
+        let result = update_toml_key(input, "key", "new");
+        assert!(result.ends_with('\n'));
+    }
+
+    #[test]
+    fn update_toml_key_no_false_partial_match() {
+        let input = "last_release_tag = \"v0.1.0\"\nlast_release_tag_extra = \"other\"\n";
+        let result = update_toml_key(input, "last_release_tag", "v0.2.0");
+        assert!(result.contains("last_release_tag = \"v0.2.0\""));
+        assert!(result.contains("last_release_tag_extra = \"other\""));
+    }
+
+    // ── update_release_toml step tests ────────────────────────────
+
+    #[test]
+    fn pipeline_step_update_release_toml_deserializes() {
+        let yaml = r#"
+name: test
+steps:
+  - name: update toml
+    update_release_toml:
+      stable_tag: true
+      last_tag: false
+"#;
+        let pipeline: ReleasePipeline = serde_yaml::from_str(yaml).unwrap();
+        let cfg = pipeline.steps[0].update_release_toml.as_ref().unwrap();
+        assert!(cfg.stable_tag);
+        assert!(!cfg.last_tag);
+        pipeline.steps[0].validate().unwrap();
+    }
+
+    #[test]
+    fn pipeline_step_post_release_clean_check_deserializes() {
+        let yaml = r#"
+name: test
+steps:
+  - name: clean check
+    post_release_clean_check: true
+"#;
+        let pipeline: ReleasePipeline = serde_yaml::from_str(yaml).unwrap();
+        assert!(pipeline.steps[0].post_release_clean_check);
+        pipeline.steps[0].validate().unwrap();
+    }
+
+    #[test]
+    fn default_pipeline_has_update_stable_release_tag_step() {
+        let pipeline: ReleasePipeline = serde_yaml::from_str(DEFAULT_PIPELINE_YAML).unwrap();
+        let step = pipeline
+            .steps
+            .iter()
+            .find(|s| {
+                s.update_release_toml
+                    .as_ref()
+                    .map(|c| c.stable_tag)
+                    .unwrap_or(false)
+            })
+            .expect("default pipeline must have an update_release_toml step with stable_tag");
+        assert_eq!(step.name, "Update stable release tag");
+    }
+
+    #[test]
+    fn default_pipeline_has_update_last_release_tag_step() {
+        let pipeline: ReleasePipeline = serde_yaml::from_str(DEFAULT_PIPELINE_YAML).unwrap();
+        let step = pipeline
+            .steps
+            .iter()
+            .find(|s| {
+                s.update_release_toml
+                    .as_ref()
+                    .map(|c| c.last_tag)
+                    .unwrap_or(false)
+            })
+            .expect("default pipeline must have an update_release_toml step with last_tag");
+        assert_eq!(step.name, "Update last release tag");
+    }
+
+    #[test]
+    fn default_pipeline_has_post_release_clean_check_step() {
+        let pipeline: ReleasePipeline = serde_yaml::from_str(DEFAULT_PIPELINE_YAML).unwrap();
+        let last_step = pipeline.steps.last().expect("pipeline must have steps");
+        assert!(
+            last_step.post_release_clean_check,
+            "last step must be post_release_clean_check"
+        );
+        assert_eq!(last_step.name, "Post-release clean check");
+    }
+
+    #[test]
+    fn default_pipeline_new_steps_ordering() {
+        let pipeline: ReleasePipeline = serde_yaml::from_str(DEFAULT_PIPELINE_YAML).unwrap();
+
+        let push_idx = pipeline
+            .steps
+            .iter()
+            .position(|s| s.name == "Push")
+            .expect("must have Push step");
+        let stable_idx = pipeline
+            .steps
+            .iter()
+            .position(|s| s.name == "Update stable release tag")
+            .expect("must have Update stable release tag");
+        let last_idx = pipeline
+            .steps
+            .iter()
+            .position(|s| s.name == "Update last release tag")
+            .expect("must have Update last release tag");
+        let clean_idx = pipeline
+            .steps
+            .iter()
+            .position(|s| s.name == "Post-release clean check")
+            .expect("must have Post-release clean check");
+
+        // Stable tag before Push; last tag and clean check after Push.
+        assert!(
+            stable_idx < push_idx,
+            "stable tag step must come before Push"
+        );
+        assert!(last_idx > push_idx, "last tag step must come after Push");
+        assert!(
+            clean_idx > last_idx,
+            "clean check must come after last tag update"
+        );
+    }
+
+    // ── staleness validation tests ─────────────────────────────────
+
+    #[test]
+    fn validate_release_staleness_warn_many_tags_behind() {
+        let pipeline: ReleasePipeline = serde_yaml::from_str(DEFAULT_PIPELINE_YAML).unwrap();
+        let env = ReleaseEnvironment {
+            working_tree_clean: true,
+            existing_tags: std::collections::HashSet::new(),
+            dev_script_exists: true,
+            commits_since_tag: Ok(("".to_string(), None)),
+            release_toml_last_tag: Some("v0.1.0".to_string()),
+            release_toml_stable_tag: None,
+            tags_since_last_release: 10,
+        };
+        // Should pass (warnings only — no hard error for staleness).
+        validate_release_with_env("1.0.0", &pipeline, &env).unwrap();
+    }
+
+    #[test]
+    fn validate_release_stable_tag_not_in_repo_warns() {
+        let pipeline: ReleasePipeline = serde_yaml::from_str(DEFAULT_PIPELINE_YAML).unwrap();
+        let env = ReleaseEnvironment {
+            working_tree_clean: true,
+            existing_tags: std::collections::HashSet::new(), // empty — stable tag not present
+            dev_script_exists: true,
+            commits_since_tag: Ok(("".to_string(), None)),
+            release_toml_last_tag: Some("v0.5.0".to_string()),
+            release_toml_stable_tag: Some("v0.3.0-nonexistent".to_string()),
+            tags_since_last_release: 0,
+        };
+        // Should pass (warnings only).
+        validate_release_with_env("1.0.0", &pipeline, &env).unwrap();
+    }
+
+    #[test]
+    fn extract_toml_string_field_finds_value() {
+        let toml = "prerelease = true\nlast_release_tag = \"v0.15.15\"\n";
+        assert_eq!(
+            extract_toml_string_field(toml, "last_release_tag"),
+            Some("v0.15.15".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_toml_string_field_missing_returns_none() {
+        let toml = "prerelease = true\n";
+        assert_eq!(extract_toml_string_field(toml, "last_release_tag"), None);
     }
 
     #[test]
