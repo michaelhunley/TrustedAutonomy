@@ -7450,6 +7450,28 @@ pub enum NoteDelivery {
 #### Version: `0.15.30-alpha.4`
 
 ---
+### v0.15.30.5 — Release Pipeline: Agent Timeout Resilience & Step Resume
+<!-- status: pending -->
+
+**Goal**: The release pipeline's agent-driven steps (release notes generation, press release) must be resilient to API stream timeouts. A timeout mid-step must not require restarting the full pipeline — the user resumes from the failed step via `--from-step`, and the agent retries with context preserved.
+
+**Why**: `ta release run --interactive` uses a Claude agent for release notes generation. Long commit ranges (437 commits since v0.15.15.1.1) cause "Stream idle timeout — partial response received" errors. The pipeline has no retry logic, no partial-result preservation, and no user-facing guidance on how to resume. The user is left inside a hung agent session with no clear exit path.
+
+**Depends on**: v0.15.30.4 (approval gate TTY policy)
+
+1. [ ] **Automatic retry with backoff on stream timeout**: Agent-driven pipeline steps (`agent:` step type) catch `ApiError::StreamIdleTimeout` and retry up to 3 times with exponential backoff (5s, 15s, 45s). Log each retry: `[release] stream timeout on step N — retrying (attempt 2/3)`. On third failure, exit cleanly with `--from-step` resume instructions.
+
+2. [ ] **Partial result preservation**: If an agent step produces partial output before timeout (e.g., partial release notes), save to `.ta/release-draft.md`. On retry or `--from-step` resume, inject the partial result as context: `"You previously generated these partial notes: <content>. Please complete them."` Prevents starting from scratch on each retry.
+
+3. [ ] **Clear timeout exit message**: On unrecoverable timeout, print: `"Release notes generation timed out after 3 attempts.\nPartial output saved to .ta/release-draft.md\nResume with: ta release run <version> --from-step 8 --interactive"`. Never leave the user inside a hung agent session.
+
+4. [ ] **Chunked generation for large commit ranges**: When `--from-tag` spans >100 commits, split notes generation into chunks (by date or service area) and merge. Prevents single large requests that exceed idle timeout windows.
+
+5. [ ] **`ta release show` includes step numbers**: `ta release show <version>` output includes the step index alongside the step name so `--from-step N` is self-documenting. Currently requires counting manually.
+
+#### Version: `0.15.30-alpha.5`
+
+---
 
 ## v0.16 — IDE Integration & Developer Experience
 
