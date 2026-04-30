@@ -7402,6 +7402,28 @@ pub enum NoteDelivery {
 #### Version: `0.15.30-alpha.2`
 
 ---
+### v0.15.30.3 — Approval Gate TTY Policy: ta_ask_human or Fail
+<!-- status: pending -->
+
+**Goal**: Any TA command or pipeline step that requires human approval must use `ta_ask_human` when not in a TTY. If `ta_ask_human` is unavailable and the context is non-interactive (daemon, CI, background process), the command must fail with a clear error — never block on stdin reads that can never be answered.
+
+**Why**: Commands like `ta release run` (without `--interactive`) currently block on raw stdin Y/n prompts when invoked from the daemon, Studio, or any non-TTY context. The user cannot answer these prompts — the process hangs indefinitely. The correct behavior is: (1) if `--interactive`, use `ta_ask_human` for all approval gates; (2) if `--auto-approve`/`--yes`, skip gates; (3) if neither and no TTY, fail immediately with: `"approval gate requires --interactive or --auto-approve in non-TTY context"`.
+
+**Constitution rule**: All approval gates in TA commands MUST route through `ta_ask_human` when in non-TTY mode. Raw stdin reads at approval gates are forbidden outside of explicit TTY-detected interactive sessions. `ta constitution check` enforces this pattern.
+
+1. [ ] **Detect non-TTY context at approval gates**: At each approval gate callsite, check `std::io::stdin().is_terminal()` (via `is-terminal` crate). If false and neither `--interactive` nor `--auto-approve` is set, return `Err` with actionable message: `"this step requires human approval — run with --interactive (routes via ta_ask_human) or --auto-approve to skip gates"`.
+
+2. [ ] **Route all approval gates through `ta_ask_human` when `--interactive`**: Replace raw stdin reads in `ta release run`, `ta draft approve`, and any other approval gate with `ta_ask_human(prompt)` calls when `--interactive` is set. `ta_ask_human` works in daemon, Studio, and CLI contexts uniformly.
+
+3. [ ] **Fail fast in silent/daemon mode without `--interactive`**: When TA is invoked as a daemon sub-process (detached, no TTY, no `--interactive`), any command that would reach an approval gate must fail at startup (before executing pipeline steps) with a clear error. No partial execution followed by hang.
+
+4. [ ] **Constitution rule `no-raw-stdin-at-approval-gates`**: Add to `.ta/constitution.toml` — severity `high`. Pattern: `stdin().read_line` or `std::io::stdin` inside approval gate functions outside of the explicit TTY-check guard. Future agents cannot add new blocking stdin reads at approval points.
+
+5. [ ] **Update `ta release run` help text**: Document that `--interactive` is required for daemon/Studio/non-TTY contexts with approval gates. `--auto-approve` skips gates (CI use). No flag + no TTY = fail with instructions.
+
+#### Version: `0.15.30-alpha.3`
+
+---
 
 ## v0.16 — IDE Integration & Developer Experience
 
