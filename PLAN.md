@@ -7385,19 +7385,19 @@ pub enum NoteDelivery {
 
 **Depends on**: v0.15.30.1 (clean injection paths before release)
 
-1. [ ] **Auto-update `stable_release_tag` for non-prerelease runs**: When `--prerelease` is not set, the pipeline sets `stable_release_tag = <label>` in `.release.toml` after tagging and before the final push. No manual edit required.
+1. [x] **Auto-update `stable_release_tag` for non-prerelease runs**: When `--prerelease` is not set, the pipeline sets `stable_release_tag = <label>` in `.release.toml` after tagging and before the final push. No manual edit required.
 
-2. [ ] **Auto-update `last_release_tag` on completion**: After the push step succeeds, the pipeline writes `last_release_tag = <label>` to `.release.toml`, commits it to the current branch, and pushes. This is the final pipeline step — completion leaves the repo in a clean, committed state with accurate metadata for the next release's changelog.
+2. [x] **Auto-update `last_release_tag` on completion**: After the push step succeeds, the pipeline writes `last_release_tag = <label>` to `.release.toml`, commits it to the current branch, and pushes. This is the final pipeline step — completion leaves the repo in a clean, committed state with accurate metadata for the next release's changelog.
 
-3. [ ] **No uncommitted files after release**: After `ta release run` completes, `git status` on the default branch is clean. Pipeline steps that write files (version bump, release history, `.release.toml` metadata) must all commit before the pipeline exits. Add a post-release clean-check step that fails visibly if uncommitted changes remain.
+3. [x] **No uncommitted files after release**: After `ta release run` completes, `git status` on the default branch is clean. Pipeline steps that write files (version bump, release history, `.release.toml` metadata) must all commit before the pipeline exits. Add a post-release clean-check step that fails visibly if uncommitted changes remain.
 
-4. [ ] **Studio release UI**: Add a Release panel to TA Studio that exposes `ta release run` with: version input, pre-release toggle, label field, from-tag override, and an approval gate modal for the two existing approval steps. A non-engineer can complete a full release without touching the terminal. Studio calls the same daemon API as the CLI.
+4. [x] **Studio release UI**: Add a Release panel to TA Studio that exposes `ta release run` with: version input, pre-release toggle, label field, from-tag override, and an approval gate modal for the two existing approval steps. A non-engineer can complete a full release without touching the terminal. Studio calls the same daemon API as the CLI.
 
-5. [ ] **Release adapter interface**: Define a `ReleaseAdapter` trait with: `bump_version()`, `commit_and_tag()`, `push()`, `create_release_draft()`, `publish_release()`, `dispatch_workflow()`. The git implementation is the default. Perforce and SVN adapters return `Err(Unsupported)` with actionable messages. Custom adapters can be provided via `.ta/release.yaml` `adapter:` key.
+5. [x] **Release adapter interface**: Define a `ReleaseAdapter` trait with: `bump_version()`, `commit_and_tag()`, `push()`, `create_release_draft()`, `publish_release()`, `dispatch_workflow()`. The git implementation is the default. Perforce and SVN adapters return `Err(Unsupported)` with actionable messages. Custom adapters can be provided via `.ta/release.yaml` `adapter:` key.
 
-6. [ ] **`ta release validate` pre-flight covers `.release.toml` staleness**: Warn if `last_release_tag` is more than N releases behind HEAD (configurable, default 5 tags). Warn if `stable_release_tag` does not match the last non-prerelease run. These are advisory — pipeline proceeds — but they surface configuration drift early.
+6. [x] **`ta release validate` pre-flight covers `.release.toml` staleness**: Warn if `last_release_tag` is more than N releases behind HEAD (configurable, default 5 tags). Warn if `stable_release_tag` does not match the last non-prerelease run. These are advisory — pipeline proceeds — but they surface configuration drift early.
 
-7. [ ] **Fix `ta plan repair` to handle numbered list items**: `plan repair` and the post-merge validator's unchecked-item regex currently only match `- [ ]` (dash list). PLAN.md uses `1. [ ]` (numbered list) for all phase items — the regex at `plan.rs:2919` and `plan_validation.rs` must also match `^\s*\d+\.\s+\[ \]`. This is why items in done phases keep appearing unchecked after merge.
+7. [x] **Fix `ta plan repair` to handle numbered list items**: `plan repair` and the post-merge validator's unchecked-item regex currently only match `- [ ]` (dash list). PLAN.md uses `1. [ ]` (numbered list) for all phase items — the regex at `plan.rs:2919` and `plan_validation.rs` must also match `^\s*\d+\.\s+\[ \]`. This is why items in done phases keep appearing unchecked after merge.
 
 #### Version: `0.15.30-alpha.2`
 
