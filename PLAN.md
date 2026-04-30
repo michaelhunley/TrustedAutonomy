@@ -7402,7 +7402,33 @@ pub enum NoteDelivery {
 #### Version: `0.15.30-alpha.2`
 
 ---
-### v0.15.30.3 — Approval Gate TTY Policy: ta_ask_human or Fail
+### v0.15.30.3 — `ta init` Template: Pragma Game Services Backend (Kotlin/BMAD)
+<!-- status: pending -->
+
+**Goal**: Add a first-party `ta init` template for [Pragma Engine](https://pragma.gg/docs/2026.1.0) projects — the batteries-included multiplayer game services backend. When initialized, TA understands the Pragma architecture (player management, matchmaking, commerce, social, game data, operations) and sets up a BMAD-methodology planner agent that can analyze an existing Pragma deployment, map the current game's architecture, and help plan the next development milestone.
+
+**Why**: Pragma is a complex, modular platform. A developer joining or evolving a Pragma-backed game needs to quickly understand what services are deployed, how they're configured, and what the next increment should look like. TA's planner agent — loaded with Pragma domain knowledge and BMAD's structured milestone decomposition — replaces hours of doc-reading with an interactive architectural briefing and a concrete plan.
+
+**Kotlin focus**: Pragma's server-side plugin/customization layer is Kotlin. The template configures TA's language detection for Kotlin, sets up appropriate clippy-equivalent lint (`ktlint`) in the verify pipeline, and teaches the agent about Pragma's plugin extension points.
+
+**Depends on**: v0.12.x (agent framework), v0.15.30 (AgentContextChannel)
+
+1. [ ] **`ta init --template pragma` project template**: Scaffolds `.ta/workflow.toml` (Kotlin verify: `./gradlew ktlintCheck test`), `.ta/agents/planner.toml` (BMAD planner manifest, Pragma docs URL injected as context), `.ta/constitution.toml` (Kotlin-appropriate rules), and a `PLAN.md` stub with Pragma service categories as phase groups.
+
+2. [ ] **BMAD planner agent manifest** (`.ta/agents/pragma-planner.toml`): Agent pre-loaded with Pragma 2026.1.0 architecture context — service catalog (player, matchmaking, commerce, social, game-data, ops, portal), Pragma's plugin extension model, and BMAD milestone decomposition methodology. On first run, the agent reads the project's Pragma config files and existing service implementations to build an architecture snapshot.
+
+3. [ ] **Architecture discovery step**: On `ta plan init --pragma`, the planner agent scans for Pragma config files (`pragma-ext-service`, `pragma-core`, Gradle modules), interviews the user about which services are active, and produces a structured architecture summary in PLAN.md preamble: services deployed, custom plugins, SDK integrations (Unreal/Unity), and current tech debt.
+
+4. [ ] **Milestone planning from architecture**: After discovery, the planner produces a concrete next-milestone proposal: goal title, acceptance criteria, affected Pragma services, estimated complexity, and a draft PLAN.md phase entry. User approves or iterates via `ta_ask_human` before the phase is committed.
+
+5. [ ] **Git VCS auto-detection**: `ta init` on a Pragma project detects the existing git repo (no re-init), sets `adapter = "git"` in `workflow.toml`, and reads `git log --oneline -20` to give the planner recent commit context for the architecture snapshot.
+
+6. [ ] **`ta plan --pragma` command alias**: Shortcut to run the Pragma planner interactively at any time: re-scans architecture, shows drift from last snapshot, and offers to update the plan. Useful after Pragma version upgrades or new service additions.
+
+#### Version: `0.15.30-alpha.3`
+
+---
+### v0.15.30.4 — Approval Gate TTY Policy: ta_ask_human or Fail
 <!-- status: pending -->
 
 **Goal**: Any TA command or pipeline step that requires human approval must use `ta_ask_human` when not in a TTY. If `ta_ask_human` is unavailable and the context is non-interactive (daemon, CI, background process), the command must fail with a clear error — never block on stdin reads that can never be answered.
@@ -7421,7 +7447,7 @@ pub enum NoteDelivery {
 
 5. [ ] **Update `ta release run` help text**: Document that `--interactive` is required for daemon/Studio/non-TTY contexts with approval gates. `--auto-approve` skips gates (CI use). No flag + no TTY = fail with instructions.
 
-#### Version: `0.15.30-alpha.3`
+#### Version: `0.15.30-alpha.4`
 
 ---
 
