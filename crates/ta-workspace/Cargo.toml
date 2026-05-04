@@ -23,9 +23,18 @@ tempfile = { workspace = true }
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = { workspace = true }
 
+[features]
+# Enable Windows Projected File System (ProjFS) virtual workspace support.
+# Activating this feature adds Win32_Storage_ProjectedFileSystem to the
+# windows crate, which causes ProjectedFSLib.dll to appear in the binary's
+# import table. Release binaries are built WITHOUT this feature so that
+# ta.exe starts on all Windows machines regardless of ProjFS installation.
+# Users with Client-ProjFS installed get automatic fallback to copy-based
+# staging when this feature is absent.
+projfs = ["windows/Win32_Storage_ProjectedFileSystem"]
+
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.58", features = [
-    "Win32_Storage_ProjectedFileSystem",
     "Win32_Foundation",
     "Win32_System_Registry",
     "Win32_System_LibraryLoader",

@@ -229,7 +229,7 @@ pub struct OverlayWorkspace {
     /// Must outlive the workspace root directory. `None` on non-Windows or
     /// when ProjFS mode is not in use. Held for RAII drop — intentionally
     /// not read after construction.
-    #[cfg(target_os = "windows")]
+    #[cfg(all(target_os = "windows", feature = "projfs"))]
     #[allow(dead_code)]
     projfs_provider: Option<crate::projfs_strategy::ProjFsProvider>,
 }
@@ -315,8 +315,8 @@ impl OverlayWorkspace {
 
         let mut stat = CopyStat::new(effective_copy_strategy);
 
-        // Track the ProjFS provider (Windows only).
-        #[cfg(target_os = "windows")]
+        // Track the ProjFS provider (Windows + projfs feature only).
+        #[cfg(all(target_os = "windows", feature = "projfs"))]
         let mut projfs_provider: Option<crate::projfs_strategy::ProjFsProvider> = None;
 
         match effective_mode {
@@ -332,7 +332,7 @@ impl OverlayWorkspace {
             }
             OverlayStagingMode::ProjFs => {
                 // Start ProjFS virtualization. No file copying needed.
-                #[cfg(target_os = "windows")]
+                #[cfg(all(target_os = "windows", feature = "projfs"))]
                 {
                     match crate::projfs_strategy::ProjFsProvider::start(&source_dir, &staging_dir) {
                         Ok(provider) => {
@@ -355,10 +355,10 @@ impl OverlayWorkspace {
                         }
                     }
                 }
-                #[cfg(not(target_os = "windows"))]
+                #[cfg(not(all(target_os = "windows", feature = "projfs")))]
                 {
-                    // Should not be reachable: resolve_staging_mode maps ProjFs → Smart
-                    // on non-Windows. This is a safety fallback.
+                    // Not reachable: resolve_staging_mode maps ProjFs → Smart when
+                    // the projfs feature is absent. Safety fallback.
                     copy_dir_recursive_smart(
                         &source_dir,
                         &staging_dir,
@@ -411,7 +411,7 @@ impl OverlayWorkspace {
             excludes,
             source_snapshot: snapshot,
             copy_stat: Some(stat),
-            #[cfg(target_os = "windows")]
+            #[cfg(all(target_os = "windows", feature = "projfs"))]
             projfs_provider,
         })
     }
@@ -430,7 +430,7 @@ impl OverlayWorkspace {
             excludes,
             source_snapshot: None, // Snapshot must be loaded separately if needed.
             copy_stat: None,       // Not available when reopening an existing workspace.
-            #[cfg(target_os = "windows")]
+            #[cfg(all(target_os = "windows", feature = "projfs"))]
             projfs_provider: None, // Not available when reopening an existing workspace.
         }
     }
@@ -1235,17 +1235,27 @@ fn resolve_staging_mode(mode: OverlayStagingMode, _staging_dir: &Path) -> Overla
             }
         }
         OverlayStagingMode::ProjFs => {
-            // ProjFS is Windows-only. On non-Windows always fall back to Smart.
-            if crate::windows_features::is_projfs_available() {
-                OverlayStagingMode::ProjFs
-            } else {
+            // ProjFS requires both the projfs Cargo feature AND Client-ProjFS
+            // installed at runtime. Fall back to Smart in either case.
+            #[cfg(all(target_os = "windows", feature = "projfs"))]
+            {
+                if crate::windows_features::is_projfs_available() {
+                    return OverlayStagingMode::ProjFs;
+                }
                 tracing::info!(
                     "projfs requested but Client-ProjFS is not available — \
                      falling back to smart staging. \
                      Enable with: Dism.exe /Online /Enable-Feature /FeatureName:Client-ProjFS /NoRestart"
                 );
-                OverlayStagingMode::Smart
             }
+            #[cfg(not(all(target_os = "windows", feature = "projfs")))]
+            {
+                tracing::info!(
+                    "projfs requested but this binary was built without the projfs feature — \
+                     falling back to smart staging"
+                );
+            }
+            OverlayStagingMode::Smart
         }
         other => other,
     }
