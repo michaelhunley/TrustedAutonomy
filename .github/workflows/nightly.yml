@@ -211,8 +211,15 @@ jobs:
           # Use a fixed semver for MSI since nightly doesn't have a version tag.
           # Read from Cargo.toml to get current version digits.
           $cargoVersion = (Select-String -Path "Cargo.toml" -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches.Groups[1].Value
-          $versionDigits = [regex]::Match($cargoVersion, '(\d+\.\d+\.\d+)').Groups[1].Value
-          $msiVersion = "${versionDigits}.0"
+          $vm = [regex]::Match($cargoVersion, '(\d+)\.(\d+)\.(\d+)')
+          $major = [int]$vm.Groups[1].Value
+          $minor = [int]$vm.Groups[2].Value
+          $patch = [int]$vm.Groups[3].Value
+          $subPatch = 0
+          $sm = [regex]::Match($cargoVersion, '\.(\d+)$')
+          if ($sm.Success) { $subPatch = [int]$sm.Groups[1].Value }
+          $msiPatch = $patch * 100 + $subPatch
+          $msiVersion = "${major}.${minor}.${msiPatch}.0"
           Write-Host "MSI version: $msiVersion (nightly SHA: $ShortSha)"
 
           $env:PATH = [System.Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [System.Environment]::GetEnvironmentVariable('Path', 'User')

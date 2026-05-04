@@ -175,16 +175,29 @@ jobs:
           # Pin to v4.x — v5+ requires OSMF EULA acceptance and uses a different schema.
           dotnet tool install --global wix --version "4.*"
 
-          # Extract version digits from any tag format:
-          # "v0.13.12-alpha" → "0.13.12.0"
-          # "public-alpha-v0.13.12" → "0.13.12.0"
-          $versionMatch = [regex]::Match("$env:TAG", 'v?(\d+\.\d+\.\d+)')
-          if (-not $versionMatch.Success) {
+          # Extract MSI version from tag. MSI versions are a.b.c.d; only a.b.c
+          # are used for upgrade comparisons. To ensure patch releases within the
+          # same semver base (e.g. 0.15.30.2.1 through 0.15.30.2.3) produce
+          # distinct MSI versions that trigger file replacement on upgrade, we
+          # encode patch*100 + subpatch into the c field:
+          #   "public-alpha-v0.15.30.2.3" -> major=0, minor=15, patch=30, sub=3
+          #   msiPatch = 30*100 + 3 = 3003  ->  MSI version "0.15.3003.0"
+          # This keeps a.b.c monotonically increasing across all releases.
+          $m = [regex]::Match("$env:TAG", 'v?(\d+)\.(\d+)\.(\d+)')
+          if (-not $m.Success) {
             Write-Error "Could not extract version from tag '$env:TAG' — aborting MSI build"
             exit 1
           }
-          $msiVersion = $versionMatch.Groups[1].Value + ".0"
-          Write-Host "MSI version: $msiVersion (from tag $env:TAG)"
+          $major = [int]$m.Groups[1].Value
+          $minor = [int]$m.Groups[2].Value
+          $patch = [int]$m.Groups[3].Value
+          # Extract trailing sub-patch number (the last .N in the tag, if any)
+          $subPatch = 0
+          $subMatch = [regex]::Match("$env:TAG", '\.(\d+)$')
+          if ($subMatch.Success) { $subPatch = [int]$subMatch.Groups[1].Value }
+          $msiPatch = $patch * 100 + $subPatch
+          $msiVersion = "${major}.${minor}.${msiPatch}.0"
+          Write-Host "MSI version: $msiVersion (from tag $env:TAG, sub-patch $subPatch)"
 
           # Generate USAGE.html into the release dir for bundling in the MSI.
           # main.wxs references $(var.SourceDir)\USAGE.html as a required file.
