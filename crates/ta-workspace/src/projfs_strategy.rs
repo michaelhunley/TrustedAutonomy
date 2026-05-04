@@ -43,9 +43,9 @@ pub fn load_deletions(scratch_dir: &Path) -> Vec<DeletionRecord> {
         .collect()
 }
 
-// ── Windows implementation ──────────────────────────────────────────────────
+// ── Windows + projfs-feature implementation ─────────────────────────────────
 
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "projfs"))]
 mod windows_impl {
     use crate::error::WorkspaceError;
     use std::collections::HashMap;
@@ -535,28 +535,28 @@ mod windows_impl {
     }
 }
 
-// ── Non-Windows stub ────────────────────────────────────────────────────────
+// ── Stub (non-Windows OR Windows without the projfs feature) ────────────────
 
-/// Non-Windows stub for ProjFS provider.
+/// Stub ProjFS provider used when ProjFS is not compiled in.
 ///
-/// On Linux and macOS `ProjFsProvider` is an empty struct that cannot be
-/// constructed via any public API. Callers hold `Option<ProjFsProvider>` which
-/// is always `None` on non-Windows.
-#[cfg(not(target_os = "windows"))]
+/// On Linux, macOS, or Windows builds without the `projfs` feature,
+/// `ProjFsProvider` is an empty struct with no public constructor. Callers
+/// hold `Option<ProjFsProvider>` which is always `None` in this configuration.
+#[cfg(not(all(target_os = "windows", feature = "projfs")))]
 #[derive(Debug)]
 pub struct ProjFsProvider {
     _private: (),
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(all(target_os = "windows", feature = "projfs")))]
 impl ProjFsProvider {
-    // No public constructor on non-Windows.
-    // The overlay module creates None directly without calling any method here.
+    // No public constructor without the projfs feature.
+    // The overlay module sets None directly without calling any method here.
 }
 
 // ── Re-exports ───────────────────────────────────────────────────────────────
 
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "projfs"))]
 pub use windows_impl::ProjFsProvider;
 
 // ── Cross-platform tests ─────────────────────────────────────────────────────
