@@ -31,9 +31,12 @@
     Language="1033"
     UpgradeCode="A8B3C4D5-E6F7-4A5B-9C8D-1E2F3A4B5C6D">
 
-    <!-- Allow upgrade from prior versions -->
+    <!-- Allow upgrade from prior versions, including same-version patch reinstalls.
+         AllowSameVersionUpgrades="yes" is required because our sub-patch releases
+         (e.g. 0.15.30.2.1 → 0.15.30.2.3) all map to the same MSI major.minor.patch
+         trio — Windows Installer would silently skip without this flag. -->
     <MajorUpgrade
-      AllowSameVersionUpgrades="no"
+      AllowSameVersionUpgrades="yes"
       DowngradeErrorMessage="A newer version of Trusted Autonomy is already installed." />
 
     <MediaTemplate EmbedCab="yes" />
